@@ -6,6 +6,27 @@ import (
 	"path/filepath"
 )
 
+// The orchestrator: one function that drives every surface FR-35 names and
+// hands back the whole corpus, plus the path the checked-in baseline lives
+// at.
+//
+// The cells are built in a fixed order because they are not independent.
+// One seeded deployment feeds the row, schema, retention and prune cells,
+// so they all describe the same ten artifacts rather than four fixtures
+// that could drift apart, and the CLI cells need a binary built from this
+// working tree before they can run anything.
+//
+// Every step returns an error rather than skipping a cell it could not
+// capture. That is the shape Compare is built to punish from the other
+// side: a cell that quietly went missing passes a comparison against
+// nothing, so the capture refuses to produce a corpus with a hole in it in
+// the first place.
+//
+// The cell names are numbered and are part of the checked-in corpus, which
+// makes renaming one a two-sided edit: the old name reads as a cell that
+// stopped being observed and the new one as a cell with no baseline, and
+// Compare reports both.
+
 // CorpusPath is where the checked-in baseline lives.
 const CorpusPath = "testdata/medium-free-surfaces.json"
 

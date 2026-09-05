@@ -10,6 +10,21 @@ import (
 	"github.com/rclone/rclone/fs/accounting"
 )
 
+// The evidence for this package's own doc, which is otherwise a story about
+// rclone's internals that a reader has no way to check.
+//
+// Three of the four cells here are timing assertions, and they are
+// measurements rather than bets because of one property of the token bucket:
+// it starts empty, so the first wait after a limit is set lasts exactly as
+// long as minting the grant takes, decided by the configured rate rather
+// than by the scheduler. The constants below say which side of that
+// arithmetic each bound sits on, and one cell exists purely to fail if the
+// two bounds ever get close enough to meet.
+//
+// The fourth cell is the factor-of-1024 trap, pinned rather than described:
+// a bare number in a bandwidth string is kibibytes, which is why a limit
+// written without a unit is refused instead of silently never engaging.
+
 // The numbers TestClearingTheLimitReallyClearsIt measures against.
 //
 // rclone's newEmptyTokenBucket drains the bucket the moment it makes it, so

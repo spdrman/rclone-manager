@@ -9,6 +9,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
+// The retention override flags, from the flag.FlagSet variables that back
+// them to the resolved policy they fold onto a loaded config.
+//
+// Three steps rather than one, and the middle one is why. Declaring, then
+// resolving into an explicit "what the operator actually said" value, then
+// applying, is what keeps an unset flag distinguishable from a flag set to
+// its zero value: the config layer reads several of these zeros as "the
+// operator did not say", so collapsing the two would silently turn
+// --protect-last-known-good=false into no opinion at all.
+//
+// Nothing here validates. Every value is handed to the config layer
+// unparsed beyond the split, so a mistake typed at a flag is refused for the
+// identical reason, in the identical words, as the same mistake written into
+// the YAML file. An operator who fixed one by reading its message should not
+// meet a different message from the other.
+
 // retentionFlags holds the flag.FlagSet variables backing the FR-18/FR-19
 // retention override flags `backup-manager retention` accepts (issue #111,
 // B3.6, extended by #156, B3.8). Each one is optional: an operator who

@@ -15,6 +15,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// What the artifact detail prints for a backup whose local copy is gone
+// because a move took it away.
+//
+// The fixture walks the move journal's real phases in the real order,
+// writing the placement facts the engine writes at each one, rather than
+// poking two rows into the placements table. It has to build the state by
+// hand for one reason only: a real move needs a reachable medium and no CLI
+// subcommand has one. That the engine really does leave this shape behind is
+// proved separately, end to end, one layer down.
+//
+// The claim is a negative, which is why it is worth a file. An artifact
+// whose bytes have moved offsite must not still be described as having a
+// local copy, and the way that regresses is not an error, it is a stale line
+// on a screen that reads exactly like a healthy one.
+
 var movedFixtureEpoch = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 // stageMovedArtifact drives one artifact from ingestion through a

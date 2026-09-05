@@ -11,6 +11,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
+// Whether the connect ceiling the retry budget is derived from leaves a real
+// handshake room to complete.
+//
+// It is the measured half of a number whose other half is arithmetic, and
+// the split matters. The exact value is pinned elsewhere, sharply, so it
+// cannot move by a second without a test naming the document that has to
+// move with it. What arithmetic cannot answer is whether the number is one a
+// real connect fits inside, and that is the only question this file asks.
+//
+// So it asks it loosely, on purpose. A tight ratio would answer a question
+// about the ceiling by flaking about the host: this fixture is a container
+// on a small Docker VM, its handshake is mostly overhead a real NAS on a LAN
+// never pays, and that overhead is exactly what grows when several gate
+// lanes run at once. The constants below carry their own reasoning for how
+// many samples are taken and how much headroom is demanded.
+
 // handshakeSamples is how many real connects the measurement below makes.
 // One sample is a number the scheduler picked as much as the network did;
 // several of them, worst taken, is a statement about the host.

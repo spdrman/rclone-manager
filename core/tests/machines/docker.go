@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// The one place this package shells out to docker.
+//
+// It is a file with two functions in it because the property that matters is
+// that there is no second route. Every docker call the tier makes is bounded
+// by a timeout and reports a timeout differently from a non-zero exit, and
+// both of those hold only for as long as nothing calls exec.Command directly.
+// #161 is what that costs when it is not true: an unbounded call outran every
+// deadline the retry loops around it thought they had, and the package hung
+// to its go test timeout with no indication of which call was stuck.
+
 // dockerRun is the only place this package shells out to docker, and every
 // call through it is bounded. Before #161 each one was a plain
 // exec.Command with no timeout, which is why the retry loops elsewhere in

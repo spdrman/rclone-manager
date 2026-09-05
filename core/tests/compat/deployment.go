@@ -15,6 +15,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The medium-free deployment every state-backed cell is captured from: the
+// fixed instant verdicts are decided at, the shape of one seeded artifact,
+// the ten of them, and the config YAML they live under.
+//
+// One fixture for all of those cells, so the rows, the schema, the
+// retention verdicts and the prune verdicts are all describing the same
+// deployment. Four separately seeded fixtures would let two cells disagree
+// about what they were looking at, and a corpus in which two cells
+// disagree is one nobody can read a failure out of.
+//
+// The ten artifacts are picked to reach every verdict this product
+// produces rather than to be realistic, and several of them exist to make
+// a specific failure possible: one row carries a retention tier so a
+// backfill that rewrites the column has something to rewrite, and one
+// deliberately has no file on disk so the prune cell contains a refusal
+// rather than only the happy path. Those reasons live on the fields
+// themselves, where somebody editing the fixture will meet them.
+
 // fixedNow is the instant every verdict cell is decided at.
 //
 // It is the same instant internal/retention's own golden baseline uses, on

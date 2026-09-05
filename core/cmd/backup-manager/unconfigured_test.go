@@ -14,6 +14,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The surface for backups whose backup set is no longer configured, and the
+// residue a removal can strand.
+//
+// The fixture plants a row at TRANSFERRING pointing at a .partial file that
+// really is on disk, because that is what a cycle interrupted by a removal
+// leaves behind and a healthy run can never produce it: a healthy run
+// finishes. Writing it through the journal directly is the only way to reach
+// the state the command exists to clear.
+//
+// What the cells are guarding is a category of backup that is invisible,
+// ungoverned and growing. Nothing retains, reconciles or advances these
+// artifacts, so the promises worth checking are that they are still listed,
+// that they are marked where they appear, and that clearing
+// the residue destroys no backup.
+
 var strandedFixtureEpoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
 // stageStrandedArtifact plants the shape a cycle stopped mid-flight by a

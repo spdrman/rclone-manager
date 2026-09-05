@@ -1,6 +1,6 @@
-// Package machines stands up a disposable MinIO server in a container,
-// so the MediumStore contract suite can be run against something that
-// speaks the real S3 API rather than against a hand-written double.
+// The storage medium: a disposable MinIO server in a container, so the
+// MediumStore contract suite runs against something that speaks the real S3
+// API rather than against a hand-written double.
 //
 // It exists for the same reason the source machine does, and it is the same
 // argument: a double answers the way its author expected, and every
@@ -239,8 +239,6 @@ func (f *Medium) NewBucket(t *testing.T) transport.Medium {
 	return f.MediumForBucket(bucket)
 }
 
-// ContainerID is the exact id this fixture created, for a test that needs
-// to address the container itself.
 // HasBucket reports whether the medium's drive holds this bucket.
 //
 // MinIO in single-drive mode keeps one directory per bucket under /data, so
@@ -260,6 +258,8 @@ func (f *Medium) HasBucket(t *testing.T, bucket string) bool {
 	return err == nil
 }
 
+// ContainerID is the exact id this fixture created, for a test that needs
+// to address the container itself.
 func (f *Medium) ContainerID() string { return f.containerID }
 
 func waitUntilLive(t *testing.T, f *Medium) {

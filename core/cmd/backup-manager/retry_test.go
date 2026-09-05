@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+// Whether the retry verb can be found, and whether it can be asked for
+// wrongly without anything being opened.
+//
+// Findability carries more weight here than for most verbs. This is the only
+// way out of FAILED, so the operator who needs it is already dealing with
+// something that went wrong, and the usage line has to say that nothing does
+// it automatically: somebody who assumes a stuck backup will sort itself out
+// never comes back to it.
+//
+// The refusal cases run with no resolvable config at all, which is what makes
+// them evidence about ordering. A check that leaked past the argument
+// handling would fail opening a state database and return the failure code
+// rather than the usage code, so the exit status alone tells the two apart.
+
 // TestRetryIsDiscoverableFromTheCommandLine. A verb absent from the
 // command table cannot be run and a verb absent from the usage block
 // cannot be found; the second is how `backup-set remove` shipped

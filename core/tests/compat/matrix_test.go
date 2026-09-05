@@ -9,6 +9,22 @@ import (
 	"testing"
 )
 
+// Whether docs/conformance/epic-e-matrix.md is still describing this
+// repository, or has quietly become prose.
+//
+// It lives in this package because it is the same failure the corpus is
+// built around, one level up. A cell that captured nothing passes every
+// comparison; a PASS row citing a suite that does not exist reads clean
+// and certifies nothing at all. Both are declarations that cannot fail,
+// and this repository has shipped that shape before.
+//
+// So every path a PASS row names is resolved against the tree, and a PASS
+// row that cites nothing is refused outright, since a claim with no
+// evidence is the cheapest kind to write. BLOCKED rows are exempt from the
+// existence check and only from that one: naming a file that does not
+// exist yet is what being blocked means, and they still have to name the
+// issue that would unblock them.
+
 // matrixPath is the conformance matrix this package's cells are cited by.
 const matrixPath = "../../../docs/conformance/epic-e-matrix.md"
 

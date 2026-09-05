@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+// Whether a restore can be found, and whether it can happen by accident.
+//
+// This is the one operation in the product that costs money and takes hours,
+// so both halves matter more here than elsewhere. Discoverability is checked
+// because an operator finding the verb by reading the source is not an
+// acceptable answer, and the acknowledgement is checked because the flag is
+// the entire mechanism standing between a mistyped command and a bill.
+//
+// The refusal cells run before anything is opened, which is what makes them
+// evidence about billing rather than about argument parsing: a refusal that
+// arrived after the service was built would already have talked to the
+// provider.
+
 // TestRestoreIsDiscoverableFromTheCommandLine. A verb absent from the
 // command table cannot be run, and a verb absent from the usage block
 // cannot be found; the second is how `backup-set remove` shipped

@@ -8,6 +8,26 @@ import (
 	"testing"
 )
 
+// The gate itself: capture every FR-35 surface from this working tree and
+// hold it against the corpus checked in beside it.
+//
+// One test, because there is one question. Splitting it per cell would
+// mean capturing the deployment several times over for no extra evidence,
+// and would lose the property that matters most on a failure: every
+// finding for every surface arrives in one message, so a change that moved
+// four cells is read once rather than fixed one red cell at a time.
+//
+// COMPAT_UPDATE=1 rewrites the corpus instead of comparing against it.
+// That is the only way to change a pinned line, and it is deliberately an
+// environment variable and not a flag: it has to be something a person
+// types on purpose, with the reason going into the commit message, rather
+// than something a gate could ever set for itself.
+//
+// The failure text below is part of the mechanism. A reader who meets this
+// gate for the first time is meeting it while something is red, so the
+// message says which cells may grow, which may not, and what regenerating
+// actually claims.
+
 // TestMediumFreeSurfacesAreUnchanged is EPIC E's FR-35 gate.
 //
 // It drives every surface FR-35 names against a medium-free deployment and

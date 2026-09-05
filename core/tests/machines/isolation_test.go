@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+// Whether two machines started by the same test process are genuinely two
+// identities.
+//
+// The bug it holds the line on (#250) is gone by construction rather than by
+// repair: no key is baked into an image any more, so two machines cannot
+// inherit one another's authorized_keys through a shared tag. That is
+// exactly the kind of claim that stops being true quietly, which is why it
+// is a test and not a note in the harness.
+//
+// It asserts at the protocol level, and it puts its positive control first,
+// because both of the cheap ways to write this pass for the wrong reason: two
+// distinct key files can still both be authorized on both servers, and a
+// machine that refuses everybody produces the same refusal as a machine that
+// is properly isolated.
+
 // TestTwoSourceMachinesDoNotShareAClientKey is #250, held under the
 // mechanism that replaced the one it was filed against.
 //

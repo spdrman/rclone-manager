@@ -1,6 +1,6 @@
-// Package machines stands up a disposable SFTP server in Docker so the
-// Phase-1 gate tests can drive the real rclone sftp backend against a real
-// server, rather than reasoning about the API from the outside.
+// The source machine: a disposable SFTP server in a container, so a test
+// drives the real rclone sftp backend against a real server rather than
+// reasoning about the API from the outside.
 //
 // It uses atmoz/sftp (OpenSSH's sshd, chrooted, forced into internal-sftp)
 // because that gives us a genuine SSH/SFTP endpoint with real host-key
@@ -773,6 +773,15 @@ func (f *Source) reclaimNetwork() {
 	_, _, _ = dockerRun(dockerNetworkTimeout, "network", "rm", f.network)
 }
 
+// teardown removes the container and the run directory, once, however the
+// test ended.
+//
+// Every error is dropped on purpose. This runs from a cleanup path and from
+// the watchdog's hard stop, and by the time either reaches it the thing worth
+// reporting has already been reported: a removal that fails because the
+// container is already gone is the ordinary case, and one that fails for any
+// other reason would be reported as a test failure long after the test's own
+// verdict was decided.
 func (f *Source) teardown() {
 	f.teardownOnce.Do(func() {
 		f.mu.Lock()
@@ -835,6 +844,24 @@ func (f *Source) watch(t *testing.T) {
 	}()
 }
 
+// containerDied is one of the watchdog's two verdicts: the fixture stopped
+// existing, so whatever the test was doing was never going to succeed.
+//
+// It says so in the test's own failure rather than leaving the test to
+// discover it as a transport error, because those two read identically from
+// the inside and cost 25 minutes apart. The account it prints comes from
+// docker's own view of how the container ended, plus the log tail while there
+// is still a container to read one from.
+//
+// Then it cancels and waits rather than stopping the process outright. An
+// operation running on Context() unwinds in about a second and its caller can
+// tell which of the two stories this was, so the graceful path gives the test
+// its own verdict; the hard stop is the fallback for a test that does not
+// take the hint, and it exists so this cannot degrade into retrying against a
+// corpse until the package's own timeout.
+//
+// A death the test asked for is logged rather than failed. That is what makes
+// the cells proving this mechanism possible at all.
 func (f *Source) containerDied(t *testing.T, testName, id string, st containerState, removed bool, grace time.Duration) {
 	_, name, _ := f.current()
 	cause := &ContainerDiedError{
@@ -881,6 +908,19 @@ func (f *Source) containerDied(t *testing.T, testName, id string, st containerSt
 	}
 }
 
+// budgetExceeded is the watchdog's other verdict: nothing died, and nothing
+// finished either.
+//
+// The distinction it draws is the whole point of having two. A container that
+// is still running rules out the death above, so what is left is a genuine
+// hang in the code under test; no container at all means setup never got that
+// far, which points at docker or at this host instead. The stage string is
+// what makes the second half nameable, and it is why the watchdog is armed
+// before the first external call rather than after the last one.
+//
+// It ends the process with all goroutine stacks, because a hang's evidence is
+// where every goroutine is parked and that evidence does not survive the
+// package being killed by its own timeout.
 func (f *Source) budgetExceeded(t *testing.T, testName string, budget, grace time.Duration) {
 	id, name, stage := f.current()
 	verdict := fmt.Sprintf("It never reached a running container: the fixture was still at %q. That points at docker or at this host, not at the code under test.", stage)
@@ -932,6 +972,14 @@ func (f *Source) hardStop(report string) {
 	panic(report)
 }
 
+// durationFromEnv reads an override for one of the watchdog's budgets, and
+// falls back silently on anything it cannot use.
+//
+// Silently, and that is deliberate for this one knob. These variables exist so
+// somebody debugging on a slow machine can widen a budget from the shell, and
+// refusing to run over a typo in one of them would turn a debugging aid into
+// a way to break the suite. A non-positive value is treated the same way as an
+// unparseable one: a zero budget would arm a watchdog that fires immediately.
 func durationFromEnv(key string, fallback time.Duration) time.Duration {
 	raw := os.Getenv(key)
 	if raw == "" {
@@ -953,6 +1001,14 @@ type containerState struct {
 	Status    string
 }
 
+// inspectContainer asks docker how a container is doing, and tells "it is
+// gone" apart from "the daemon could not answer".
+//
+// The two are different facts and the caller branches on which it got: a
+// container that no longer exists is the death the watchdog is there to
+// report, while a daemon that did not answer says nothing about the container
+// at all. Docker expresses the first as a failed command, so the sentinel is
+// recovered from the message; everything else is passed back as an error.
 func inspectContainer(id string) (containerState, error) {
 	out, errOut, err := dockerRun(dockerProbeTimeout, "inspect", "--format",
 		"{{.State.Running}} {{.State.ExitCode}} {{.State.OOMKilled}} {{.State.Status}}", id)

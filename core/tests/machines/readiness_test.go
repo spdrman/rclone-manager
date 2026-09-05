@@ -1,12 +1,3 @@
-// The readiness probe, against servers whose answer is decided in advance.
-//
-// These three came from core/internal/transport/rclone/ssh_test.go with
-// #448. They were always pure (a real SSH server in this process, no
-// container at all), and they were always about a harness probe rather than
-// about the rclone adapter, so this is where they belong. What they point
-// at is waitForSSHAuth, which is the probe every machine this package
-// starts has to satisfy before Start returns.
-
 package machines
 
 import (
@@ -24,6 +15,15 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+// The readiness probe, against servers whose answer is decided in advance.
+//
+// These three came from core/internal/transport/rclone/ssh_test.go with
+// #448. They were always pure (a real SSH server in this process, no
+// container at all), and they were always about a harness probe rather than
+// about the rclone adapter, so this is where they belong. What they point
+// at is waitForSSHAuth, which is the probe every machine this package
+// starts has to satisfy before Start returns.
 
 // throwawayClientKey generates an ed25519 client identity for a test. It
 // lives only under the test's temp directory and authenticates only against

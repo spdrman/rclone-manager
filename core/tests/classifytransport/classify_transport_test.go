@@ -8,6 +8,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// Whether the classifying decorator still does something, now that the
+// adapter it was written to compensate for classifies its own errors.
+//
+// The original cell here asserted the defect: a raw call came back
+// unclassified and the same call through Wrap came back categorised. The
+// defect is fixed, so asserting it would now be asserting a lie, and simply
+// deleting the file would drop the property that still matters. What is left
+// is idempotency, which is what the decorator actually meets everywhere
+// today: wrapping an already-classified error must neither lose the category
+// nor change it.
+//
+// The raw adapter's own classification is checked first, in the same run.
+// Without it, an idempotency assertion passes just as happily over an
+// adapter that has silently stopped classifying anything.
+
 // TestWrap_ClassifiesWhatTheRealAdapterLeavesUnclassified is the positive
 // control for this package's whole reason for existing: proof that the
 // same real adapter call that internal/transport/rclone's own

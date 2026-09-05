@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+// Whether the simulated VPS still has one definition, and whether the
+// placement seam still has a driver on the other side of it.
+//
+// Both cells read files rather than running anything, and that is the honest
+// scope: the first is guarding against a second copy of the source machine
+// Dockerfile reappearing, and the second against the in-container placement
+// this package supports becoming code no driver exercises. Neither question
+// is answerable by running the tier, because the tier is what runs inside
+// the thing being checked.
+//
+// They check the properties the two callers actually depend on rather than
+// the whole text of either file. A test that pinned the Dockerfile line for
+// line would fail on every legitimate edit to it, which trains people to
+// update the expectation without reading it, and the guard is against the
+// definition MOVING rather than against it changing.
+
 // TestTheSourceMachineHasOneDefinition is #451's third acceptance criterion
 // held as a test: two-machine-backup.sh and this harness build the source
 // machine from one Dockerfile text.

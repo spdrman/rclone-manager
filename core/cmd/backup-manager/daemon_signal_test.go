@@ -12,6 +12,19 @@ import (
 	"time"
 )
 
+// What the daemon exits with when it is asked to stop.
+//
+// A stop that was requested and performed is a successful stop, and getting
+// that wrong is expensive in a way no in-process assertion can see: under
+// systemd a non-zero status on `systemctl stop` marks the unit failed, so
+// every routine restart counts against the burst limit and alerts.
+//
+// The status is a property of a process rather than of a function call, so
+// this observes one from outside. The child is this same test binary
+// re-executed with a guard variable set, which is both cheaper and more
+// faithful than building the command: it runs the same dispatch the shipped
+// binary runs, so what it exits with is what an operator would get.
+
 // The daemon's exit status after a signal is a property of the process,
 // not of a function call, so it can only be observed from outside one.
 // These two environment variables turn this test binary into the daemon

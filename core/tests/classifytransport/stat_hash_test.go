@@ -15,6 +15,16 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// The positive control for the decorator next door: the exact real-pipeline
+// scenario that gets stuck without it runs to completion with it.
+//
+// It is a whole pipeline rather than a unit assertion on purpose. What
+// WithStatHash affects is whether FR-16's re-identification can reach a
+// strong enough confidence to authorise deleting a remote original, and that
+// verdict is reached several layers above Stat. Asserting that the decorated
+// Stat returns a hash would prove the decorator works and say nothing about
+// the thing the decorator was for.
+
 // TestWithStatHash_LetsAGenuinelySafeDeleteProceed is the positive control
 // for this file's whole reason for existing: the exact real-pipeline
 // scenario internal/discovery/a213_defect_test.go proves gets stuck at

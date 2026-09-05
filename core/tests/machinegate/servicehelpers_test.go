@@ -11,6 +11,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// A deliberate copy of two of core/service's own test helpers, and the one
+// number that had to change on the way over.
+//
+// The copy is the smaller cost. The alternative is exporting a test scaffold
+// from core/service so a single machine-tier test can reach it, which puts
+// it on that package's public API permanently for the sake of one caller,
+// while two dozen pure tests keep the original.
+//
+// What is not copied is the deadline arithmetic the original does against
+// `go test -timeout`. This tier does not run under a fixed timeout at all: it
+// runs under a watchdog that derives its bound from observed progress. So
+// the budget here is a single stated number with its own reasoning, rather
+// than a fraction of a deadline that does not exist.
+
 // The two helpers below are core/service's own openTestService and
 // waitForTerminalStatus, restated here rather than shared.
 //

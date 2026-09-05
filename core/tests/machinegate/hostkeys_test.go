@@ -9,6 +9,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
+// FR-6's host-key posture, held against real servers: the recorded key
+// works, an address nothing has recorded is refused, and an address that
+// answers with a different key is refused.
+//
+// The second and third cases are the reason this needs machines at all.
+// Both are about a server whose identity does not match what was written
+// down, and the only honest way to produce one is to have a second server.
+// A double would be answering the question by construction.
+//
+// The positive control runs first and is not optional. Every refusal below
+// is indistinguishable from a fixture that is simply broken, so the value of
+// the whole file rests on having shown the good path working on the same
+// machines in the same run.
+
 // TestSFTPHostKeyVerification is FR-6's host-key posture, held against real
 // servers: the recorded key works, an address known_hosts has never seen is
 // refused, and the same address answering with a different key is refused.

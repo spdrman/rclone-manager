@@ -18,6 +18,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/migrations"
 )
 
+// The cell that upgrades a populated database in place, rather than
+// migrating an empty one and putting rows in afterwards.
+//
+// Every other state cell here creates a database, applies every migration,
+// and only then seeds. That is a new deployment, and FR-35 is not about
+// new deployments: against an empty schema the spec's own planted
+// violation for this clause, a backfill that rewrites retention_tier,
+// updates zero rows and passes. The gate did pass it, and
+// scripts/compat/selftest.sh is what said so, which is the argument for
+// running a planted violation against every cell before believing any of
+// them.
+//
+// So this builds an operator's database at the oldest schema this binary
+// knows, with artifacts and their transition history already in it, and
+// runs the real migration runner over it. Every migration after the first
+// then executes against populated tables, which is where a backfill can
+// actually do damage and where the next one to land will run.
+
 // captureUpgrade is the cell the rest of this package needed and did not
 // have.
 //

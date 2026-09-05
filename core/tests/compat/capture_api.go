@@ -8,6 +8,30 @@ import (
 	"strings"
 )
 
+// FR-35 clause 3, "identical API responses except for additive fields",
+// turned into two cells a machine can decide.
+//
+// Neither one stands a server up. Comparing response bodies would need a
+// running deployment and would still only cover the shapes some fixture
+// happened to reach, whereas api/v1/openapi.json is where the promise
+// actually lives: every binding on both sides of the wire is generated
+// from it and check-contract-drift.sh already holds them to it. Pinning
+// the contract therefore pins the responses, and does it exhaustively.
+//
+// The two cells exist because one comparison cannot answer both halves of
+// the clause. A flat list of promises compared additively lets EPIC E add
+// endpoints and fields, and refuses anything removed, retyped or made
+// required. That list cannot see the other break: an operation that gains
+// a requirement breaks every caller that already worked, and a gained
+// requirement is an addition. So the second cell puts each operation's and
+// each request schema's whole requirement set on one line, where gaining
+// one rewrites an existing line instead of adding a new one.
+//
+// Several projection choices below (one line per enum value, "(none)" for
+// an empty requirement set) exist because the first main this gate met
+// reported ordinary additive changes as breaks. Each is argued where it is
+// made.
+
 // captureAPIContract projects api/v1/openapi.json down to the list of
 // promises it makes, one promise per line, sorted.
 //

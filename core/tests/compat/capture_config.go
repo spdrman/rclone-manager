@@ -10,6 +10,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
+// FR-35 clause 1: every config fixture under testdata/configs put through
+// the exact load-then-validate path a daemon boots with, with both
+// possible answers written down.
+//
+// A refusal is recorded as its literal text and an acceptance as the
+// policy it resolved to, and neither choice is cosmetic. The words a
+// refusal comes in are what an operator's runbook is written against, and
+// what an acceptance is worth is the defaults Validate filled in, since
+// "it validated" is the one thing about a valid config that cannot regress
+// in an interesting way.
+//
+// The fixture directory is the unit of coverage here: a config shape
+// nobody wrote a fixture for is a shape this cell says nothing about, so
+// adding a fixture is how this clause grows.
+
 // captureConfigValidation runs every fixture under testdata/configs
 // through the exact path the daemon uses (config.Load, then Validate) and
 // writes down what came back.
