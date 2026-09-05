@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9";
+export const CONTRACT_SHA256 = "33f93dd33b2f81b90b24414a778840901d9c570a64323932df0cf228e998c6a7";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1543,6 +1543,21 @@ export interface WireRestoreOperationRequest {
   window_days: number;
 }
 
+/** One backup this plan would relocate, and both ends of the move
+ *  (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
+ *  else: planning one never adds a backup to the keep set and never
+ *  removes one, which is why moves travel beside the verdicts rather
+ *  than inside them. There is deliberately no field here for what a
+ *  provider would charge to run this, how long a provider might take,
+ *  or the key material that reaches either end, and there never will
+ *  be: this product holds none of those three, so a field for one
+ *  could only be filled with a guess. */
+export interface WireRetentionMove {
+  artifact: string;
+  from_medium: string;
+  to_medium: string;
+}
+
 /** One backup set's OWN retention policy, exactly as its
  *  configuration file carries it: unresolved, with every omitted
  *  field still omitted. An override names the WHOLE chain (a tiers
@@ -1574,11 +1589,13 @@ export interface WireRetentionPlan {
   expires_at: string;
   inventory_revision: string;
   keep_count: number;
+  moves?: WireRetentionMove[];
   operation_id?: string;
   plan_id: string;
   reclaim_bytes: number;
   retention: WireRetentionSettings;
   retention_is_override: boolean;
+  unconfirmed_placements?: string[];
   verdicts: WireRetentionVerdict[];
 }
 
@@ -1635,6 +1652,7 @@ export interface WireRetentionTierSelection {
 export interface WireRetentionVerdict {
   action: string;
   artifact: string;
+  medium?: string;
   reason: string;
   tier_selections?: WireRetentionTierSelection[];
   tiers?: string[];

@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9"
+const ContractSHA256 = "33f93dd33b2f81b90b24414a778840901d9c570a64323932df0cf228e998c6a7"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1250,6 +1250,21 @@ type RestoreOperationRequest struct {
 	WindowDays   int    `json:"window_days"`
 }
 
+// RetentionMove is one backup this plan would relocate, and both ends of the move
+// (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
+// else: planning one never adds a backup to the keep set and never
+// removes one, which is why moves travel beside the verdicts rather
+// than inside them. There is deliberately no field here for what a
+// provider would charge to run this, how long a provider might take,
+// or the key material that reaches either end, and there never will
+// be: this product holds none of those three, so a field for one
+// could only be filled with a guess.
+type RetentionMove struct {
+	Artifact   string `json:"artifact"`
+	FromMedium string `json:"from_medium"`
+	ToMedium   string `json:"to_medium"`
+}
+
 // RetentionOverride is one backup set's OWN retention policy, exactly as its
 // configuration file carries it: unresolved, with every omitted
 // field still omitted. An override names the WHOLE chain (a tiers
@@ -1275,18 +1290,20 @@ type RetentionOverride struct {
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
 // id; it never proposes what to delete.
 type RetentionPlan struct {
-	BackupSetID         string             `json:"backup_set_id"`
-	ConfigRevision      string             `json:"config_revision"`
-	DeleteCount         int                `json:"delete_count"`
-	ExpiresAt           string             `json:"expires_at"`
-	InventoryRevision   string             `json:"inventory_revision"`
-	KeepCount           int                `json:"keep_count"`
-	OperationID         string             `json:"operation_id,omitempty"`
-	PlanID              string             `json:"plan_id"`
-	ReclaimBytes        int64              `json:"reclaim_bytes"`
-	Retention           RetentionSettings  `json:"retention"`
-	RetentionIsOverride bool               `json:"retention_is_override"`
-	Verdicts            []RetentionVerdict `json:"verdicts"`
+	BackupSetID           string             `json:"backup_set_id"`
+	ConfigRevision        string             `json:"config_revision"`
+	DeleteCount           int                `json:"delete_count"`
+	ExpiresAt             string             `json:"expires_at"`
+	InventoryRevision     string             `json:"inventory_revision"`
+	KeepCount             int                `json:"keep_count"`
+	Moves                 []RetentionMove    `json:"moves,omitempty"`
+	OperationID           string             `json:"operation_id,omitempty"`
+	PlanID                string             `json:"plan_id"`
+	ReclaimBytes          int64              `json:"reclaim_bytes"`
+	Retention             RetentionSettings  `json:"retention"`
+	RetentionIsOverride   bool               `json:"retention_is_override"`
+	UnconfirmedPlacements []string           `json:"unconfirmed_placements,omitempty"`
+	Verdicts              []RetentionVerdict `json:"verdicts"`
 }
 
 // RetentionSchema is the closed value sets and bounds a retention chain is validated
@@ -1342,6 +1359,7 @@ type RetentionTierSelection struct {
 type RetentionVerdict struct {
 	Action         string                   `json:"action"`
 	Artifact       string                   `json:"artifact"`
+	Medium         string                   `json:"medium,omitempty"`
 	Reason         string                   `json:"reason"`
 	TierSelections []RetentionTierSelection `json:"tier_selections,omitempty"`
 	Tiers          []string                 `json:"tiers,omitempty"`
@@ -1610,6 +1628,7 @@ var SchemaTypes = map[string]any{
 	"OperationRestore":            OperationRestore{},
 	"Placement":                   Placement{},
 	"RestoreOperationRequest":     RestoreOperationRequest{},
+	"RetentionMove":               RetentionMove{},
 	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
