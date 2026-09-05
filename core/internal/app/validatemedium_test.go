@@ -50,6 +50,10 @@ type validateMedium struct {
 	// NotFound, which is what an unreachable endpoint looks like.
 	down bool
 
+	// downFor is down for one medium id only, so a test can hold two
+	// copies where one endpoint answers and the other does not.
+	downFor map[string]bool
+
 	// attests makes ObjectChecksum answer with a real SHA-256 of the
 	// stored bytes. It is false by default because that is what rclone
 	// v1.75.0's s3 backend does: Fs.Hashes() returns only MD5, so no s3
@@ -63,7 +67,7 @@ type validateMedium struct {
 }
 
 func newValidateMedium() *validateMedium {
-	return &validateMedium{objects: map[string][]byte{}}
+	return &validateMedium{objects: map[string][]byte{}, downFor: map[string]bool{}}
 }
 
 func (m *validateMedium) put(key, content string) {
@@ -79,11 +83,11 @@ func (m *validateMedium) unreachable() *transport.Error {
 	}
 }
 
-func (m *validateMedium) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
+func (m *validateMedium) StatObject(_ context.Context, med transport.Medium, key string) (transport.ObjectInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stats++
-	if m.down {
+	if m.down || m.downFor[med.ID] {
 		return transport.ObjectInfo{}, m.unreachable()
 	}
 	b, ok := m.objects[key]
@@ -93,11 +97,11 @@ func (m *validateMedium) StatObject(_ context.Context, _ transport.Medium, key s
 	return transport.ObjectInfo{Key: key, Size: int64(len(b))}, nil
 }
 
-func (m *validateMedium) OpenObject(_ context.Context, _ transport.Medium, key string) (io.ReadCloser, error) {
+func (m *validateMedium) OpenObject(_ context.Context, med transport.Medium, key string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.opens++
-	if m.down {
+	if m.down || m.downFor[med.ID] {
 		return nil, m.unreachable()
 	}
 	b, ok := m.objects[key]
@@ -107,11 +111,11 @@ func (m *validateMedium) OpenObject(_ context.Context, _ transport.Medium, key s
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
 }
 
-func (m *validateMedium) ObjectChecksum(_ context.Context, _ transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+func (m *validateMedium) ObjectChecksum(_ context.Context, med transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.checksums++
-	if m.down {
+	if m.down || m.downFor[med.ID] {
 		return transport.ChecksumAttestation{}, m.unreachable()
 	}
 	if !m.attests {
@@ -140,10 +144,10 @@ func (m *validateMedium) ListObjects(context.Context, transport.Medium, string) 
 	panic("validate must never enumerate a medium")
 }
 
-func (m *validateMedium) RestoreStatus(_ context.Context, _ transport.Medium, key string) (*transport.RestoreState, error) {
+func (m *validateMedium) RestoreStatus(_ context.Context, med transport.Medium, key string) (*transport.RestoreState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.down {
+	if m.down || m.downFor[med.ID] {
 		return nil, m.unreachable()
 	}
 	if _, ok := m.objects[key]; !ok {
@@ -703,4 +707,96 @@ func TestValidateArtifact_UnresolvedValidatorIsStillRefusedOnAMedium(t *testing.
 		t.Fatal("ValidateArtifact reported on an artifact whose backup set names a validator nothing resolved; want a refusal")
 	}
 	mustStayComplete(t, f)
+}
+
+// addSecondMediumPlacement gives the fixture's artifact a second ACTIVE
+// copy on medium id, declaring it in the configuration only when declare
+// is true. The object is never seeded, so a declared, reachable second
+// medium answers "not there".
+func addSecondMediumPlacement(t *testing.T, f movedFixture, id string, declare bool) {
+	t.Helper()
+	ctx := context.Background()
+	size := int64(len(f.content))
+	p := state.PlacementUpdate{
+		Medium: id, Location: "rclone-manager/second/" + f.artifact.Name, Size: &size,
+		Hash: f.hash, HashAlg: "sha256",
+		VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+	}
+	if _, err := f.journal.RecordTransition(ctx, state.Transition{
+		Artifact: f.artifact, Key: f.artifact.String() + ":placement:" + id,
+		From: string(lifecycle.Complete), To: string(lifecycle.Complete), OccurredAt: epoch, Placement: &p,
+	}); err != nil {
+		t.Fatalf("recording the %s placement: %v", id, err)
+	}
+	if declare {
+		f.svc.Config.StorageMediums = append(f.svc.Config.StorageMediums, config.StorageMedium{
+			ID: id, Type: config.StorageMediumTypeS3, Region: "us-east-1", Bucket: "second-bucket",
+		})
+	}
+}
+
+// TestValidateArtifact_AFailedCopyBesideAnUndeclaredOneIsNotAQuarantine is
+// the fail-open this shape invites, and it is subtle enough that I wrote
+// it into the first version of checkMediumCopies myself.
+//
+// One copy was asked and is not there. The other sits on a medium the
+// configuration no longer declares, so nothing could look at it, and it
+// may very well still be there. "Every copy failed" is what quarantine
+// means, and this is not that: it is "one copy failed and the other was
+// never asked", which leaves "no verified copy remains" unproven. So it is
+// an error and the artifact is left alone.
+func TestValidateArtifact_AFailedCopyBesideAnUndeclaredOneIsNotAQuarantine(t *testing.T) {
+	f := moveToMedium(t, newCommittedFixture(t), newValidateMedium(), config.StorageClassStandard, false)
+	ctx := context.Background()
+	addSecondMediumPlacement(t, f, "forgotten_offsite", false)
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err == nil {
+		t.Fatalf("ValidateArtifact returned a verdict (%+v) while one of the artifact's copies was never asked about; want an error", result)
+	}
+	if !strings.Contains(err.Error(), "forgotten_offsite") {
+		t.Errorf("err = %v, want it to name the copy that could not be asked", err)
+	}
+	mustStayComplete(t, f)
+}
+
+// TestValidateArtifact_AFailedCopyBesideAnUnreachableOneIsNotAQuarantine
+// is the same rule for the other way a copy goes unasked: the medium is
+// declared, and its endpoint did not answer.
+func TestValidateArtifact_AFailedCopyBesideAnUnreachableOneIsNotAQuarantine(t *testing.T) {
+	f := moveToMedium(t, newCommittedFixture(t), newValidateMedium(), config.StorageClassStandard, false)
+	ctx := context.Background()
+	addSecondMediumPlacement(t, f, "warm_offsite", true)
+	f.store.downFor["warm_offsite"] = true
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err == nil {
+		t.Fatalf("ValidateArtifact returned a verdict (%+v) while one of the artifact's endpoints did not answer; want an error", result)
+	}
+	if !strings.Contains(err.Error(), "warm_offsite") {
+		t.Errorf("err = %v, want it to name the medium that did not answer", err)
+	}
+	mustStayComplete(t, f)
+}
+
+// TestValidateArtifact_EveryCopyAskedAndEveryCopyFailedDoesQuarantine is
+// the control for the two above. Without it they would both be satisfied
+// by a build that never quarantines anything at all, which is its own
+// fail-open: the whole point of the check is that a backup nobody can find
+// stops being counted as a restore point.
+func TestValidateArtifact_EveryCopyAskedAndEveryCopyFailedDoesQuarantine(t *testing.T) {
+	f := moveToMedium(t, newCommittedFixture(t), newValidateMedium(), config.StorageClassStandard, false)
+	ctx := context.Background()
+	addSecondMediumPlacement(t, f, "warm_offsite", true)
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("ValidateArtifact: %v", err)
+	}
+	if result.Passed {
+		t.Fatalf("result = %+v, want a failed verdict: both mediums answered and neither holds the object", result)
+	}
+	if result.NewState != lifecycle.QuarantinedLost {
+		t.Errorf("NewState = %q, want %q", result.NewState, lifecycle.QuarantinedLost)
+	}
 }

@@ -175,21 +175,28 @@ func (s *Service) checkMediumCopies(ctx context.Context, rec state.Record, ps []
 		}
 	}
 
-	if !anyPassed {
-		// Nothing carried the artifact, so the two ways a copy can go
-		// unasked stop being footnotes: each of them leaves "no verified
-		// copy remains" unproven, and that is the only thing quarantine
-		// may mean.
+	// Nothing carried the artifact, so the two ways a copy can go unasked
+	// stop being footnotes. Either of them leaves "no verified copy
+	// remains" unproven, and that sentence is the ONLY thing a failing
+	// verdict from here may mean, so a single unasked copy is enough to
+	// turn the whole answer into an open question.
+	//
+	// This is the subtle half, and I wrote the fail-open version of it
+	// first. It is easy to see that an unreachable medium beside no other
+	// evidence must not quarantine. It is easier to miss that one copy
+	// answering "not there" beside one copy nobody could ask is the same
+	// situation: the artifact may be sitting perfectly safely in the
+	// bucket that was never looked in, and quarantining it says the
+	// opposite. Quarantine needs every copy ASKED and every copy failed.
+	if !anyPassed && (didNotAnswer != nil || len(unasked) > 0) {
+		open := append([]string(nil), details...)
 		if didNotAnswer != nil {
-			return checkOutcome{}, fmt.Errorf(
-				"%s could not be checked: %w; a medium that did not answer is not evidence that a backup is gone, so the artifact is left as it is",
-				rec.Artifact, didNotAnswer)
+			open = append(open, didNotAnswer.Error())
 		}
-		if len(details) == 0 {
-			return checkOutcome{}, fmt.Errorf(
-				"%s has no local copy to check and none of its copies on storage mediums could be asked: %s",
-				rec.Artifact, strings.Join(unasked, "; "))
-		}
+		open = append(open, unasked...)
+		return checkOutcome{}, fmt.Errorf(
+			"%s: no copy of this artifact could be verified, and not every copy could be asked, so it is not established that no verified copy remains: %s; the artifact is left as it is",
+			rec.Artifact, strings.Join(open, "; "))
 	}
 
 	// A pass another copy carried has to say which copies it did not hear

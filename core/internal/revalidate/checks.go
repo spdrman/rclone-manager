@@ -192,14 +192,44 @@ func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidati
 	// otherwise mean.
 	if !anyPassed {
 		switch {
+		case len(details) > 0 && (didNotAnswer != nil || notConfigured != ""):
+			// A copy was asked and FAILED, and another copy could not be
+			// asked at all. Neither existing branch tells that truthfully
+			// (issue #435 found it while writing the operator-triggered
+			// twin of these checks): the unconfigured branch below said
+			// "none of them is in the configuration, so nothing was
+			// checked", which is two false statements at once when a
+			// medium answered and its copy is gone.
+			//
+			// Quarantine is still out of the question, and that part was
+			// always right: the copy nobody could ask may be perfectly
+			// fine, and FR-31 quarantines only when no other ACTIVE
+			// verified placement remains. What changes is where this
+			// lands and what it says. A copy proved missing is the
+			// definition of "somebody should find out why", so it goes to
+			// the error channel, naming the copy that is gone AND the
+			// copy nobody could ask, rather than to an unchecked finding
+			// an operator reads past.
+			open := append([]string(nil), details...)
+			if didNotAnswer != nil {
+				open = append(open, didNotAnswer.Error())
+			}
+			if notConfigured != "" {
+				open = append(open, fmt.Sprintf(
+					"the copy on storage medium %q was not checked, because that medium is not in the configuration", notConfigured))
+			}
+			return false, false, "", "", fmt.Errorf(
+				"no copy of this artifact could be verified, and not every copy could be asked, so it is not established that no verified copy remains: %s",
+				strings.Join(open, "; "))
 		case didNotAnswer != nil:
 			// A medium that was there to ask and did not answer: an error,
 			// because somebody should find out why.
 			return false, false, "", "", didNotAnswer
 		case notConfigured != "":
-			// A medium this deployment was never configured to reach: a
-			// configuration fact rather than a backup nobody could check,
-			// and an unchecked finding rather than an error.
+			// A medium this deployment was never configured to reach, with
+			// nothing asked anywhere, so there is no evidence in either
+			// direction: a configuration fact rather than a backup nobody
+			// could check, and an unchecked finding rather than an error.
 			return false, true, "", fmt.Sprintf(
 				"this artifact's durable copies are on storage mediums (%s), and none of them is in the configuration, so nothing was checked", mediumIDs(ps)), nil
 		}
