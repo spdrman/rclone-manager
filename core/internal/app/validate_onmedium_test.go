@@ -10,6 +10,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// Issue #434's refusal, kept after issue #435 replaced most of it.
+//
+// The Critical was that an artifact successfully moved to a storage medium had
+// no readable local path, three callers read that as no durable copy, and the
+// first moved artifact was marked QUARANTINED_LOST. Where the copy is is not a
+// verdict about whether it exists.
+//
+// #435 went on to check those copies where they actually are, so the general
+// refusal became a real check. This case is what is left underneath it: a
+// deployment with no way to reach a medium at all still refuses, still says
+// where the copy is, and still leaves the artifact exactly as it was. That is
+// the one branch where there is genuinely nothing to ask, and it is also the
+// branch a fail-open would be easiest to slip into, because inventing a
+// verdict costs nothing and looks like a tidier code path.
+
 // TestValidateArtifact_RefusesWhenTheDurableCopyIsOnAMedium is issue
 // #434's pin for the operator door.
 //

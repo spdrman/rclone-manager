@@ -12,6 +12,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-20: the file where this package actually deletes a backup.
+//
+// retention.go computes classification and touches nothing. This is the
+// other side of that split, and everything unusual about the shapes here
+// comes from one requirement: an administrator confirms a plan on a screen,
+// and some seconds or minutes later something applies it. What must not
+// happen in between is the applied plan quietly becoming a different plan.
+//
+// That is why the instant and the record snapshot are parameters rather than
+// things this code reads for itself. GFS tiers are anchored on a civil date,
+// so the same journal and the same configuration produce a different and
+// entirely correct verdict set either side of a day boundary, and two
+// derivations that each read their own clock cannot be compared at all.
+// core/service pins one instant and one snapshot and passes both to the
+// preview and to the apply, which is what makes "is this still the plan you
+// confirmed" a question with an answer. PrunePlan.Records is carried for the
+// same reason and only for that caller.
+//
+// Pinning the decision does not pin the safety check. internal/retention's
+// PruneApply re-runs containment, symlink and last-known-good checks against
+// the real disk immediately before every delete, so the reviewed thing is the
+// decision and the fresh thing is the evidence.
+//
+// The plan_id, the TTL and the staleness comparison all live in core/service
+// and are deliberately invisible here, the same way RunCycle knows nothing
+// about an Idempotency-Key header.
+
 // PrunePlan is one backup set's current FR-20 KEEP/DELETE/REFUSE verdict
 // set (internal/retention.PruneDecide's/PruneApply's own output), plus the
 // exact journal snapshot (Records) that verdict set was computed against.

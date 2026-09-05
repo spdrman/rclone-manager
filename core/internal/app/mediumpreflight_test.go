@@ -14,6 +14,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Issue #443, and the two refusals an operator has to be able to tell apart.
+//
+// The happy case is a run against a store that behaves. What the rest of the
+// file protects is that an undeclared medium and a declared medium this
+// deployment cannot reach come back as different answers: one is a typo
+// somebody can fix, and reporting the other the same way sends them looking
+// for a typo that is not there.
+//
+// FR-33's containment is the case that is easy to weaken.
+// mediumcheck.Report carries this product's own sentences, and the classified
+// cause names a path on this host or an environment variable, so it goes to
+// the operator's log and never onto the report. The test asserts the split in
+// both directions, because an implementation that put the cause in both would
+// satisfy a check for either one alone.
+//
+// The last case is structural rather than behavioural: nothing on a schedule
+// may call this, because it writes a probe object into somebody's bucket.
+// That is fine when a person asked and unreasonable every poll interval
+// forever, and a structural check is the only kind that survives somebody
+// wiring it into a cycle for convenience.
+
 // preflightStore is a MediumStore that behaves like a working bucket, so
 // the tests here are about what this package DOES with a preflight rather
 // than about the preflight itself (internal/mediumcheck owns that).

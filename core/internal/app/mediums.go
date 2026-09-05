@@ -39,10 +39,25 @@ type MediumResolver []config.StorageMedium
 // fails loudly" structural rather than careful. placement.Verify never
 // falls back, so a medium whose required class is Attested against an
 // endpoint that cannot attest produces ErrClassUnavailable and the move
-// refuses. Measured against rclone v1.75.0, no s3 medium can attest at
-// all, so that refusal is not hypothetical: it is what an operator who
-// writes `upload_verification: attested` today gets, loudly, at the point
-// a move would otherwise have deleted a local copy.
+// refuses. Measured against rclone v1.75.0, no s3 medium can attest at all.
+//
+// An operator no longer reaches that refusal, and the reason is worth
+// knowing before anyone concludes this branch is dead code.
+// config.validateUploadVerificationIsAchievable refuses
+// `upload_verification: attested` on an s3 medium at load, so the
+// configuration never starts, and the older reading of this paragraph, that
+// the operator finds out at the point a move would otherwise have deleted a
+// local copy, described the product before that check existed. Refusing at
+// load is strictly better: the same answer, hours earlier, without a cycle
+// having to reach a medium to produce it.
+//
+// The class returned here is the second of the two, not a duplicate of it.
+// The load-time check reads a table of which TYPES can attest, which is a
+// static claim; this one puts the requirement in front of a verification
+// that queries the endpoint's real capability at the moment of the move. A
+// medium type added to that table on the strength of a backend that turns
+// out not to serve the digest still refuses here, before a source copy is
+// deleted, which is where the guarantee has to hold.
 //
 // Existence is deliberately unreachable from any configuration. It proves
 // only that an object is there at the recorded size, and a source copy

@@ -12,6 +12,36 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/reconcile"
 )
 
+// FR-1's processing cycle: the one piece of work `run` performs once and
+// `daemon` repeats.
+//
+// The cycle order is not an implementation choice and is not free to change:
+// reconcile before discovery, discovery before the per-artifact walk,
+// retention preview last, against whatever this cycle's own work just
+// changed. RunCycle's doc spells out each step; what the file is arranged
+// around is the two guarantees that come from its SHAPE rather than from its
+// steps.
+//
+// The first is that no two passes over a backup set overlap. That is true
+// because this is a single sequential loop with no goroutine in it, and
+// because Daemon never starts the next call until this one has returned. It
+// is a construction, not a lock somebody has to remember to take, and it
+// stops being true the moment anyone puts a `go` in here.
+//
+// The second is that a shutdown never leaves a half-written backup. The
+// context is re-checked before each set, before each artifact, and again
+// inside every step of processArtifact, so a cancelled cycle stops at a
+// boundary where the worst outcome is work that has to be redone.
+//
+// Everything else here is failure isolation, at three widths: one artifact's
+// problem stays inside processArtifact, one set's systemic problem stays in
+// its own BackupSetCycleResult, and the deployment-wide move pass reports
+// separately because it belongs to no set. The subtle one is
+// BackupSetCycleResult.Err, which since edit holds landed carries two
+// different meanings; SystemicFailure and StoppedForEditing are how to ask
+// which, and comparing against the error directly is how an ordinary edit
+// gets reported as a backup that broke.
+
 // BackupSetCycleResult is what one processing cycle did for one backup
 // set: FR-17's reconciliation report, FR-8's discovery result, and the
 // FR-18/FR-19 retention preview computed at the end, once whatever this

@@ -6,6 +6,34 @@ import (
 	"sync/atomic"
 )
 
+// Issue #350: stopping a cycle from running over a backup set somebody is
+// editing.
+//
+// Without this, a cycle mid-transfer against the old remote path and an
+// operator changing that path are two writers on one definition, and
+// whichever finishes last wins silently. A hold makes the cycle yield, and it
+// does two things rather than one: RunCycle will not START a pass over a held
+// set, and a hold landing while a pass is already inside one cancels that
+// set's own context.
+//
+// Cancelling rather than waiting is safe for a reason that lives in
+// pipeline.go: every step re-checks its context immediately before acting, so
+// an interrupted artifact stays at a pre-durable state and a later cycle
+// picks it up. Nothing half-written is ever presented as a committed backup.
+//
+// Two details here are load-bearing and both are argued at the functions
+// themselves. Changed() is read before Held() on every iteration of the
+// watcher, or a hold placed in the gap closes a channel nobody is listening
+// on yet and the cancellation is lost until something unrelated wakes it. And
+// the fired flag is set before cancel and never after, so anything that
+// observes the cancellation can also see the reason for it.
+//
+// The registry rides on the context rather than on the Service for the reason
+// progress.go gives for the observer, plus one this file has of its own: the
+// registry that owns holds outlives the Service, it has a lease and expiry
+// policy that belongs in core/service, and the dependency direction forbids
+// this package importing that one.
+
 // BackupSetHolds answers, for a cycle in flight, which backup sets must
 // not be processed right now (issue #350).
 //

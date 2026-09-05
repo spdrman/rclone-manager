@@ -13,6 +13,19 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The one place a diagnostic is proven to reach a log rather than only a
+// database column.
+//
+// state_transitions.detail is where a lifecycle step records why it refused,
+// and until it is read back somewhere an operator looks, it may as well not
+// exist. This drives a real verification failure and asserts the journal's
+// own text appears in the structured log, so the two cannot drift into
+// carrying different explanations of the same event.
+//
+// The distinction being protected is between the detail the journal recorded
+// and whatever sentence the logging call happens to construct. Only the first
+// one is the reason the artifact is where it is.
+
 // decodeNDJSONLines parses buf as newline-delimited JSON, one object per
 // line, mirroring internal/obs's own test helper (events_test.go's
 // decodeLines) since that one is unexported and this package cannot reach

@@ -13,6 +13,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// Rebuilding the journal from what is on the disk, when the journal is the
+// thing that was lost.
+//
+// Every other read in this package treats the journal as the truth and a
+// sidecar manifest as something written beside an artifact for later. This
+// file is the one place that runs the other way round, for the one situation
+// where it has to: the database is gone or unreadable, the backups are all
+// still there, and the manifests are the only record of what they are.
+//
+// That inversion is exactly why nothing here overwrites. A sidecar is an
+// untrusted PROPOSAL, not a source of truth (FR-32), so a row that already
+// exists is left alone, and a sidecar that disagrees with an existing row
+// about a hash, a size or a retention timestamp is reported as a conflict and
+// applied to nothing. Resolving a disagreement in the sidecar's favour would
+// be a path by which a stale or tampered file on the backup root rewrites
+// what retention keeps and what verification compares against, which is a
+// much worse failure than a rebuild that needs a person to look at it.
+//
+// CONFLICT and ALREADY_PRESENT are separate outcomes for the same reason: to
+// a person reading the report they mean opposite things, one being "nothing
+// to do here" and the other "two things that should agree do not".
+
 // CatalogRebuildAction classifies what RebuildCatalog did, or would do,
 // for one artifact whose sidecar recovery manifest it read.
 type CatalogRebuildAction string
@@ -402,6 +424,13 @@ func manifestConflicts(rec state.Record, m recovery.Manifest) []string {
 	return out
 }
 
+// validationUpdateFrom carries a sidecar's FR-13 validation outcome onto a
+// reconstructed row, and carries nothing when the sidecar recorded none.
+//
+// A nil ValidationPassed and a false one are different facts and the nil
+// pointer is what keeps them apart: nothing ran, against it ran and failed.
+// Flattening them would let a rebuild write "this artifact failed its
+// restore test" onto every artifact whose manifest predates the field.
 func validationUpdateFrom(m recovery.Manifest) *state.ValidationUpdate {
 	if m.ValidationPassed == nil {
 		return nil

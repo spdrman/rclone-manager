@@ -11,6 +11,36 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The four things an operator may do about a backup this manager stopped
+// trusting.
+//
+// Quarantine is deliberately a dead end for automation: nothing in a cycle
+// takes an artifact out of it, because every route out is a judgement about
+// whether a backup can be believed and that judgement is a person's. This
+// file is where those judgements are spelled out, and the useful way to read
+// it is as four different answers to "and then what".
+//
+// Revalidate checks and writes nothing, so an operator can look before
+// deciding. Retry ingestion throws the local copy away and fetches again from
+// a source that still exists. Retry a FAILED ingestion is the same door for
+// an artifact that never got far enough to be quarantined. Reinstate keeps
+// the local copy and restores the artifact's standing, and it is the only one
+// of the four available to a QUARANTINED_LOST artifact, because that state is
+// reached only from COMPLETE, which is the state that confirms the remote
+// source was already deleted.
+//
+// The refusals get their own sentinels rather than a shared generic error
+// because the layers above turn each into a different named response, and
+// because they say genuinely different things: "this backup is not waiting
+// for your judgement" is not "this backup is not stuck", and neither is "there
+// is nothing left anywhere to re-ingest".
+//
+// An artifact whose backup set the configuration no longer names is refused
+// by all of them, through unconfiguredSet, and that is not an oversight about
+// removed sets. Every action here needs the set's policy to act under: the
+// checks run under its validation config, and a retry hands the row back to a
+// pipeline that only walks configured sets.
+
 // ErrNotQuarantined is returned when an artifact named for one of the two
 // quarantine actions below is not in QUARANTINED or QUARANTINED_LOST. It
 // is a distinct error, not a generic failure, because the API layer turns

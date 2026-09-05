@@ -9,6 +9,26 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
+// FR-1's long-running mode, and why the loop is here rather than in the CLI.
+//
+// The loop is nine lines and cmd/backup-manager could hold it. It does not,
+// because two of this product's guarantees are properties of the loop's
+// shape: no two passes over a backup set ever overlap, and a shutdown stops
+// work at a boundary where nothing is half-written. Both are argued from the
+// code being a plain for loop with a timer rather than a ticker, and an
+// argument like that is only worth something if it is made somewhere a test
+// can exercise it without sending the process a real signal.
+//
+// So the split is that the CLI decides what a signal MEANS and turns it into
+// a cancelled context, and this file decides what happens next. Nothing here
+// installs a signal handler, and nothing here should.
+//
+// The alerting pass beside the cycle loop is the one thing that runs on its
+// own timer instead of at the end of a cycle. That is not tidiness: the
+// condition most worth reporting is a daemon that is up and producing
+// nothing, and a cycle wedged on one slow transfer never reaches its own
+// tail. See AlertTick.
+
 // Daemon is FR-1's `daemon` execution mode: it runs RunCycle once
 // immediately, then again every interval, until ctx is done.
 //

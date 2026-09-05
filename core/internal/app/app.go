@@ -271,6 +271,20 @@ type Service struct {
 	// wrong once.
 	MediumStore transport.MediumStore
 
+	// The only mutable state on a Service, and the only reason it needs a
+	// lock at all.
+	//
+	// A cycle is sequential and every field above is written once at
+	// construction, so nothing else here is contended. These two are,
+	// because Daemon runs its alerting pass on a goroutine beside the
+	// cycle loop (daemon.go): that pass builds a health report, which
+	// reads lastPollAt and lastRetentionAt for every backup set, while the
+	// cycle is writing them for the set it is on.
+	//
+	// Both are in memory and nothing persists them, which is why a
+	// short-lived `status` process reports them as unknown rather than
+	// inventing a value; BuildHealthReport's doc carries the consequence
+	// and the follow-up it needs.
 	mu            sync.Mutex
 	lastPoll      map[model.BackupSetID]time.Time
 	lastRetention map[model.BackupSetID]time.Time
@@ -381,6 +395,15 @@ func nonNegative(n int64) uint64 {
 	return uint64(n)
 }
 
+// now is every clock reading this package makes, normalised to UTC even
+// when a caller injected its own Now.
+//
+// The normalisation is not cosmetic. Retention anchors its tiers on the
+// civil date an instant falls in, in the chain's own configured timezone,
+// so an instant carrying a location is a second, silent answer to "which
+// day is this". Converting here means the conversion happens once, in the
+// one place a clock is read, rather than at each of the several places
+// that go on to compare or format the result.
 func (s *Service) now() time.Time {
 	if s.Now == nil {
 		return time.Now().UTC()
@@ -390,6 +413,14 @@ func (s *Service) now() time.Time {
 
 func (s *Service) logger() *obs.Logger { return s.Logger }
 
+// retryPolicy is the caller's policy when they set one and
+// DefaultRetryPolicy otherwise.
+//
+// The test is against the whole zero struct rather than against any one
+// field, so a caller who deliberately wants a single attempt has to say so
+// with a policy that is non-zero somewhere. A per-field fallback would
+// merge a caller's partial policy with the default's other half and
+// produce a schedule nobody wrote down.
 func (s *Service) retryPolicy() retry.Policy {
 	if s.RetryPolicy != (retry.Policy{}) {
 		return s.RetryPolicy

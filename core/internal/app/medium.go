@@ -8,6 +8,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Naming a configured medium for a caller that only wants to reach it.
+//
+// This package has two functions that turn a config.StorageMedium into a
+// transport.Medium, and the split is deliberate rather than a duplication
+// somebody missed. MediumResolver.Resolve (mediums.go) is the move engine's
+// seam: it also answers what a copy must ACHIEVE there before a source may
+// be deleted, it refuses config.MediumLocal by name, and it refuses a
+// declared type this build has no backend for, because everything asking it
+// is about to do something irreversible on the strength of the answer.
+//
+// MediumFor is for the callers that only need somewhere to address: a
+// restore request, and the conformance suite's own reader. They pass the
+// value straight to the store, so the store's own refusal is the check, and
+// adding a class they would ignore would mean deciding FR-31's mapping in a
+// second place. The cost of the split is that MediumFor is the more
+// permissive of the two, and a caller that grows a destructive step wants
+// Resolve instead.
+//
+// What both share is the property transport.Medium's own tests pin: the
+// value carries a reference to a credential and never a credential, so it is
+// safe to log and safe to put in an error. That is what makes
+// ErrMediumNotDeclared able to name the medium it refused.
+
 // ErrMediumNotDeclared is what MediumFor returns for a medium id this
 // configuration does not declare.
 //

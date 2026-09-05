@@ -9,6 +9,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
 
+// FR-18 and FR-19 classification: which backups are KEPT, and nothing about
+// deleting them.
+//
+// The pairing to read this against is prune.go. This file answers "what does
+// the policy say about these artifacts", and stops at the answer; prune.go
+// takes a verdict set and actually removes files, under FR-20's containment
+// and symlink checks. They are separate because the first is safe to compute
+// constantly, on any surface, for a set nobody is going to touch, and the
+// second is not.
+//
+// Two things travel on the report that are not retention decisions, and both
+// are here rather than in internal/retention on purpose. FR-32 forbids that
+// package from seeing a placement at all, which is exactly what keeps a
+// storage medium from being able to influence a KEEP, and
+// placement.TestRetentionReadsNoMediumSuppliedValue fails the build if it
+// ever does. So FR-27's home plan and the per-artifact locations are derived
+// one layer up, here, where they are a rendering concern rather than an
+// input to a verdict.
+//
+// Every derivation in this file is done in one pass over one snapshot, for a
+// reason that generalises: a second pass reads a journal the cycle has since
+// written to, and a chain a hot reload may have replaced, so the moves and
+// the locations beside a verdict set would describe a policy that did not
+// produce them.
+
 // RetentionSetReport is one backup set's FR-18/FR-19 classification: every
 // managed, completed artifact's GFS verdict, unioned with FR-19's
 // last-known-good protection, exactly as internal/retention.DecideKeep

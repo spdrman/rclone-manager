@@ -21,6 +21,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
 )
 
+// An artifact that cannot be verified because the source went away, and why
+// that is not a failure.
+//
+// A verification against an unreachable source has measured nothing. Calling
+// it a failed artifact would quarantine a backup over an outage, so the
+// pipeline stalls instead: the artifact stays where it is, the cycle does not
+// count it against itself, and after a bounded number of attempts an operator
+// is told. Each of those three is a separate case here because each is a
+// different way the stall could be got wrong.
+//
+// Two of them are about the budget rather than the behaviour. The stall budget
+// is derived from the operator's own retry policy rather than from a constant,
+// so a deployment that widened its retries does not get a stall that gives up
+// first; that is pinned, because a derivation is exactly the kind of thing a
+// later change replaces with a literal. And the budget has to survive a crash
+// without spending two attempts, since a stall that lost count on every
+// restart would reach an operator either far too early or never.
+//
+// RetryFailedIngestion is tested here rather than beside the other quarantine
+// actions because this is where a FAILED artifact of the kind it exists to
+// rescue is actually produced, by the real pipeline, rather than written by
+// hand.
+
 // unreachableSource is the failure #388 measured, reproduced as a value:
 // rclone's own connect timeout, classified Transient, with
 // context.DeadlineExceeded still reachable through Unwrap. The second part

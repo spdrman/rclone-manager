@@ -8,6 +8,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The listing's filters, and the refusal that keeps an empty answer meaning
+// one thing.
+//
+// The filter cases are ordinary. The refusal cases are issue #187 and they
+// assert the error's Kind and Name rather than that some error came back,
+// because a filter that refused for an unrelated reason (an unreadable
+// journal, say) satisfies "err != nil" while telling the operator nothing
+// about the name they typed.
+//
+// The rows with no expected Kind are positive controls and they are not
+// decoration. One of them, a Set with no Source, is the case that breaks if
+// resolution is ever rewritten as a count of how many sets matched: a source
+// configured with no backup sets matches nothing either, and calling that "no
+// such source" names the wrong thing. The pair of "uploads exists, staging
+// exists, staging/uploads does not" is FR-7's source-plus-set identity stated
+// as a test.
+//
+// Two backup sets in one fixture need two fake transports, because
+// fakeTransport is keyed on remote path alone and ignores the Source
+// entirely, so a shared one lets each set discover the other's objects.
+
 func TestListArtifacts_FiltersBySourceAndSet(t *testing.T) {
 	prodBS := testBackupSet(t, t.TempDir())
 	prodBS.Name = "postgres-primary"

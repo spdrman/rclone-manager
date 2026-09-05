@@ -10,6 +10,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Work Package 3.5: turning verdicts this product already reached into
+// notifications, and never reaching a new one.
+//
+// Nothing in this file decides whether a backup is stale, whether a disk is
+// filling or whether a host key changed. internal/health, internal/capacity
+// and the transport's own refusal classification decide all three, and this
+// collects them. That is the whole design: a second freshness rule here would
+// drift from decideState, and an operator would eventually be alerted about a
+// condition their status page does not show.
+//
+// The part that is easy to get wrong is silence. Dispatcher.Observe reads its
+// argument as the complete picture, so a condition missing from it has
+// resolved and is forgotten, and the next occurrence alerts again. That is
+// the right reading of a pass that looked and saw nothing wrong and the wrong
+// reading of a pass that could not look, and there are four ways this pass
+// cannot look. evaluateAlerts answers each one explicitly rather than by
+// omission, which is what the separate unevaluated list is for.
+//
+// Host keys are the one condition that does not resolve on absence.
+// Re-trusting a changed key takes a deliberate administrator action, so
+// HOST_KEY_CHANGED clears only on positive evidence that the connection
+// verifies again, which is a set that ran a whole cycle with no error.
+// halt.go writes the durable form of that same fact off the same CycleReport,
+// so the notification and the record cannot disagree.
+
 // EnableAlerts installs sink as this Service's proactive-alert delivery
 // mechanism (docs/EPIC-B-multi-nas.md §71, Work Package 3.5) and reports
 // whether alerting is now on.

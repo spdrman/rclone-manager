@@ -14,6 +14,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// Recovering the journal from the disk, and never the other way round.
+//
+// Every case here starts from an artifact that genuinely exists, produced by
+// a real cycle, and then takes the database away. That is what makes the
+// reconstruction meaningful: the manifests under test were written by the
+// product rather than by the test, so a change to what a sidecar carries
+// shows up here as a rebuild that can no longer put the row back.
+//
+// Three refusals matter more than the reconstruction itself. A manifest that
+// cannot be read is reported and does not abort the artifacts around it, so
+// one corrupt sidecar cannot cost an operator the rest of their catalog. A
+// manifest belonging to a different backup set is an error and writes no row,
+// because adopting it would file somebody's artifact under the wrong set's
+// policy. And the whole operation never touches a local or a remote file,
+// which is asserted directly rather than argued: a rebuild that repaired
+// anything on disk would be doing recovery work nobody reviewed.
+//
+// The reconcile-afterwards case is the one that proves the rebuild produced a
+// row the rest of the product can actually use, rather than one that merely
+// looks right in a report.
+
 // openJournalAt opens a real, on-disk journal at an explicit path, unlike
 // openJournal (helpers_test.go), which always picks a fresh one inside its
 // own t.TempDir(). This file's tests need to control the path: they close

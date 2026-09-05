@@ -16,6 +16,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Work Package 3.5, and the half of it that is about staying quiet.
+//
+// Firing an alert is the easy direction and it gets one test per condition.
+// The rest of this file is the hard direction: a pass that could not look
+// must not be read as a pass that looked and saw nothing. Dispatcher.Observe
+// treats its argument as the whole picture, so anything a pass omits is
+// forgotten and alerts again next time, which turns a transient journal
+// error or an unmounted volume into a stream of duplicate notifications about
+// a condition that never changed.
+//
+// So there is a case per way of not being able to look: a cancelled context,
+// an unreadable journal, an unreadable free-space reading, and a host key
+// nothing this pass could check. Each asserts that the de-duplication state
+// survives, which is a claim about what did NOT happen and is therefore the
+// kind of test that quietly stops meaning anything if the fixture drifts.
+// The disabled-set case is the opposite refusal: a set an operator switched
+// off ages past stale_after forever and must never alert, or the product
+// nags about exactly the thing it was told to stop doing.
+//
+// The shipped-defaults case pins something no other test would notice: a
+// deployment that configures no capacity thresholds gets no storage alerts.
+// A default that started firing would reach every existing deployment at
+// once, on upgrade, with nothing wrong.
+
 // recordingSink stands in for whatever platform notifier a provider app
 // wires in at the apps/ layer: core/ cannot import apps/ (§7.1), so the
 // delivery mechanism always arrives through this seam.

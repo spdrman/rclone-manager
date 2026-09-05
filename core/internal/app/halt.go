@@ -7,6 +7,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The durable "this manager cannot get in" (issue #245), and the two halves
+// that have to agree.
+//
+// One half is which failures count. Only the three FR-22 categories that can
+// happen BEFORE a session exists qualify, because those are the only ones
+// that are evidence about the connection rather than about something behind
+// it; haltReasonFor carries the boundary and the reasons a fourth category
+// would be wrong.
+//
+// The other half is when the fact is written, cleared, or left alone, and
+// that is the half with a trap in it. There are three outcomes and not two:
+// a clean pass clears, a classified refusal records, and everything else
+// writes nothing at all. The missing third case is how a real halt quietly
+// disappears, because absence of a refusal in one unrelated failure is not
+// evidence that a key verifies again.
+//
+// Both live in this file so that adding a category and forgetting the write
+// policy, or loosening the write policy without looking at what qualifies,
+// means editing next to the other one. They are also both driven off the
+// same CycleReport the transient alerting pass reads (alerts.go), so the
+// durable record and the notification cannot disagree about which sets were
+// refused.
+
 // haltReasonFor translates one backup set's cycle error into the durable
 // refusal internal/state records, or reports that this error says nothing
 // about whether the manager could connect.

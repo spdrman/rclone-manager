@@ -15,6 +15,38 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
 )
 
+// One artifact, one step at a time: the walk every command in this package
+// shares.
+//
+// RunCycle, Fetch and the retry actions all end up here, which is the point.
+// There is one implementation of "drive this artifact as far forward as it
+// can safely go", so a `fetch` and a scheduled cycle cannot come to disagree
+// about what happens to the same journal row.
+//
+// Two things in this file carry more weight than their size suggests.
+//
+// attemptKey is the idempotency boundary. internal/state replays a key across
+// the whole transitions table rather than per artifact, so the key has to
+// carry the artifact's own identity, and it is built from RetryCount because
+// nothing increments that while an artifact is making progress. So a crash
+// mid-cycle reproduces exactly the same key and the same logical attempt
+// resumes, while a genuine retry from an exceptional state has already moved
+// the counter and gets a fresh one. Change what goes into it and either
+// resumption or retry breaks, quietly.
+//
+// The context re-check immediately before every step is where this package's
+// shutdown-safety claim actually lives. It is not defensive repetition: the
+// steps are ordered so that a cancellation between any two of them leaves the
+// artifact at a pre-durable state that a later cycle picks up, and the one
+// step that must never begin speculatively is the source delete. Moving a
+// check, or hoisting one out of the loop as an optimisation, is a change to
+// that proof.
+//
+// The state-set predicates (terminalFailure, durable, acquiring) are shared
+// vocabulary rather than local helpers. Other files count with them, so a
+// state added to one set and not another is how two commands start reporting
+// different numbers for the same cycle.
+
 // discoverOne runs internal/discovery.Discover for one backup set,
 // retrying the whole call under Service.retryPolicy when it fails with a
 // transport.Transient-classified error.

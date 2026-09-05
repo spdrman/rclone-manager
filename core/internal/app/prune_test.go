@@ -14,6 +14,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// FR-20 end to end, where a file really is removed.
+//
+// This is the one test in the package that lets a backup be deleted, so it is
+// built to fail if the wrong one goes. Two artifacts are driven all the way
+// through real cycles, so both are genuine COMPLETE rows with real bytes
+// underneath them, and the assertions are on the disk rather than on the
+// verdicts: after the preview both files are still there, and after the apply
+// exactly one of them is.
+//
+// Both halves of that matter. Asserting the verdicts alone would pass against
+// an implementation that computes the right answer and deletes the wrong
+// path, which is precisely what FR-20's containment and symlink checks exist
+// to prevent. Asserting only that the doomed file went would pass against one
+// that deletes on preview, which is the promise the preview/apply split is
+// made of.
+
 // pruneDailyOnlyRetention narrows the daily window to exactly "today" and
 // disables the weekly/monthly tiers, so a managed-complete artifact
 // discovered outside that one-day window is a GFS delete candidate purely

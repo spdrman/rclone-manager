@@ -11,6 +11,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The two read-only artifact queries, and the one place a name that does not
+// exist gets refused.
+//
+// ListArtifacts and GetArtifactDetail are the reads underneath `backup-manager
+// artifacts` and the backups screen. Neither writes, neither reaches a
+// remote, and both are worth reading for what they refuse rather than for
+// what they return.
+//
+// A filter naming a source or a backup set the configuration does not have
+// is a *NotFoundError, never an empty list, because an empty list has to keep
+// meaning one thing: this set exists and has no rows yet. Collapse the two
+// and a renamed set reads to an operator as "your backups are gone" instead
+// of "you asked about something that does not exist", and those call for
+// opposite responses.
+//
+// The other refusal is subtler and runs the other way. Since a backup set's
+// configuration can be removed while its journal rows stay, the unfiltered
+// list has to widen to sets the configuration no longer names, or the backups
+// a removal explicitly promised to keep vanish from the screen that promised
+// it. That widening is opt-in per caller, because the same read also feeds
+// the quarantine screen, whose three actions all need a configured set to act
+// under. ListArtifacts's own doc has the full argument, including why health,
+// capacity and retention walk the configuration alone and always will.
+
 // ArtifactFilter narrows ListArtifacts to a subset of configured backup
 // sets. An empty Source matches every source; an empty Set matches every
 // backup set within whatever sources match Source. This mirrors config's

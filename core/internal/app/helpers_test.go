@@ -16,6 +16,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The fixtures every other test file in this package is built on.
+//
+// Reading this file before writing a test here saves rediscovering two
+// things the hard way. fakeTransport is source-blind: it is keyed on remote
+// path alone, so two backup sets sharing one instance each discover the
+// other's objects, and a test with more than one set needs one fake per set.
+// And the doubles are deliberately narrow rather than one general failure
+// switch, because a test that wants a transfer to fail almost always wants
+// discovery to have succeeded first, and a broad switch silently gives it a
+// perfectly clean cycle instead.
+//
+// The layout mirrors the idiom internal/discovery's and internal/reconcile's
+// own tests already use, so a reader moving between packages finds the same
+// shapes in the same places.
+
 // --- shared fixtures, mirroring the idiom internal/discovery/discovery_test.go
 // and internal/reconcile's own tests already use in this codebase ---
 
@@ -59,11 +74,29 @@ func mustWriteFile(t *testing.T, path string, content string) {
 // fake exists purely to prove this package's own sequencing is correct on
 // its own terms, independent of that separately-reported gap.
 
+// fakeObject is one remote object: its bytes, and the modification time
+// discovery's completion strategies read. The hash is derived from the bytes
+// on demand rather than stored, so a test cannot construct an object whose
+// recorded hash disagrees with its content by accident.
 type fakeObject struct {
 	data    []byte
 	modTime int64
 }
 
+// fakeTransport is keyed on remote path and knows nothing about which source
+// asked, which is the one thing to remember about it.
+//
+// Everything below is addressed by path alone, so two backup sets pointed at
+// one instance see the same objects, and a test covering more than one set
+// wants one fake each. failForSourceID is the single exception, and it exists
+// precisely because there was no other way to make ONE set's remote go away
+// without taking the rest of a shared fixture down with it.
+//
+// The other fields are narrow on purpose: one switch per method rather than
+// one switch for the transport. That is not fussiness. A test that wants a
+// transfer to fail wants discovery to have worked first, and a broad failure
+// switch hands it a cycle where nothing was ever discovered, which passes for
+// the wrong reason.
 type fakeTransport struct {
 	objects map[string]*fakeObject
 
@@ -234,6 +267,14 @@ var _ transport.Transport = (*fakeTransport)(nil)
 // boundary without needing any change to internal/lifecycle or
 // internal/state.
 
+// hookJournal wraps the real journal so a test can act at the instant a
+// specific transition lands, which is what makes the shutdown-safety proof
+// possible without touching internal/lifecycle or internal/state.
+//
+// The hook runs AFTER the write and only when it succeeded, so a test
+// cancelling from inside it cancels at a boundary the product has genuinely
+// reached. Running it before the write would let a test prove something about
+// a state the journal never held.
 type hookJournal struct {
 	*state.Journal
 	onRecordTransition func(t state.Transition, out state.Outcome)
