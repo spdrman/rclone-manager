@@ -14,6 +14,34 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the MediumStore half of the contract suite, and it is
+// smaller than the Transport half for a structural reason rather than
+// because it is less finished.
+//
+// A Transport reads objects some producer wrote, so its fixture has to be
+// able to write them; a MediumStore writes its own, so every case below
+// places what it needs through the interface under test. That is why
+// MediumFixtures has a NewMedium and no Put: the suite that exercises
+// upload has no reason to be handed a second way of getting bytes onto a
+// medium, and a second way is a second thing that can disagree with the
+// first.
+//
+// The two backends this runs against sit on opposite sides of the question
+// FR-31 cares most about. rclone's local backend hashes a file it can
+// read, so it attests; rclone's s3 backend on v1.75.0 serves MD5 from the
+// ETag and nothing else, so it cannot, and must refuse. AttestsSHA256 is
+// how a fixture declares which side it is on, and both branches are
+// asserted, because a capability rule whose "no" branch is untested is a
+// rule that only holds where it was never going to be broken.
+//
+// The convergence case is the one to read before changing anything here.
+// MediumStore.UploadFromLocal deliberately overwrites an occupied key
+// instead of refusing it, so that a move interrupted between the upload
+// and the journal entry can simply run the upload again; the alternative
+// puts a DELETE on a recovery path. That decision only stays safe while
+// two uploads to one key leave exactly one object holding the second
+// upload's bytes, which is what upload_converges_on_the_same_key watches.
+
 // MediumFixtures is everything one transport.MediumStore implementation
 // needs in order to run RunMedium: an isolated medium to operate against,
 // and an honest answer about whether the backend can attest a full-object
@@ -71,6 +99,12 @@ func putLocal(t *testing.T, name string, content []byte) string {
 	return path
 }
 
+// testMediumRoundTrip is the base case every other case here assumes: an
+// upload lands at the key it was given, a stat agrees about it, and the
+// bytes read back are the bytes that went in. It checks the reported key
+// explicitly, because an upload that chose its own destination would leave
+// every later case addressing an object that is not where the journal
+// says it is.
 func testMediumRoundTrip(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	ctx := context.Background()
 	medium := fx.NewMedium(t)
@@ -224,6 +258,16 @@ func testMediumChecksumAlgorithm(t *testing.T, store transport.MediumStore, fx M
 	}
 }
 
+// testMediumList pins two things a catalog rebuild depends on: a prefix
+// enumerates what is under it, and it does NOT enumerate a sibling prefix.
+// The staging/ object exists purely so the second half can fail; without
+// it the case would pass against an implementation that ignored the prefix
+// entirely and listed the whole medium.
+//
+// The empty-prefix probe at the end is the other half of the same
+// distinction. "There is nothing here" has to arrive as an empty result,
+// never as an error, because a rebuild that cannot tell it from "the
+// medium could not be reached" concludes the medium lost everything.
 func testMediumList(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	ctx := context.Background()
 	medium := fx.NewMedium(t)
@@ -271,6 +315,11 @@ func testMediumList(t *testing.T, store transport.MediumStore, fx MediumFixtures
 	}
 }
 
+// testMediumNotFound asserts the CATEGORY and not merely that an error
+// came back. The whole point of NotFound on this boundary is that a mover
+// can tell "the medium answered and the object is not there" from "the
+// medium could not be reached to ask", and an unclassified error collapses
+// those two into one answer that gets read as the first.
 func testMediumNotFound(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	ctx := context.Background()
 	medium := fx.NewMedium(t)
@@ -291,6 +340,11 @@ func testMediumNotFound(t *testing.T, store transport.MediumStore, fx MediumFixt
 	}
 }
 
+// testMediumDelete uploads a sibling under the same prefix so that a
+// delete which took the prefix rather than the key has something to
+// destroy. Without it this case would pass against an implementation that
+// removed everything under production/pg/, which is the shape of mistake
+// that costs a deployment its backups rather than one artifact.
 func testMediumDelete(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	ctx := context.Background()
 	medium := fx.NewMedium(t)
@@ -319,6 +373,11 @@ func testMediumDelete(t *testing.T, store transport.MediumStore, fx MediumFixtur
 	}
 }
 
+// testMediumDeleteAbsent pins the deliberate difference from
+// Transport.DeleteRemote, which refuses an absent path. A mover that
+// crashed between deleting an object and recording that it had must be
+// able to finish the delete on the next pass, so "already gone" is the
+// caller's intent already satisfied rather than a failure to report.
 func testMediumDeleteAbsent(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	ctx := context.Background()
 	medium := fx.NewMedium(t)
@@ -328,6 +387,11 @@ func testMediumDeleteAbsent(t *testing.T, store transport.MediumStore, fx Medium
 	}
 }
 
+// testMediumCancel checks both readings of one cancelled upload: it
+// unwraps to context.Canceled, so a caller holding a stdlib sentinel still
+// recognises it, and it classifies as Cancelled, so lifecycle code reading
+// the category does not mistake an operator's stop for a network fault and
+// retry it.
 func testMediumCancel(t *testing.T, store transport.MediumStore, fx MediumFixtures) {
 	medium := fx.NewMedium(t)
 	ctx, cancel := context.WithCancel(context.Background())

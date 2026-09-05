@@ -14,6 +14,13 @@ import "context"
 // HashAlgorithm names a checksum the manager may ask a backend for.
 type HashAlgorithm string
 
+// SHA256 is the only algorithm this boundary speaks, and the absence of a
+// second constant is the enforcement rather than an omission. FR-32's rule
+// that an ETag is never a content hash only holds if there is no way to
+// ASK a backend for the MD5 an ETag would hand back, and config.Validation
+// accepts "" or "sha256" and nothing else, so a second value here would be
+// a capability no configuration could reach and a comparison nothing
+// should make.
 const SHA256 HashAlgorithm = "sha256"
 
 // Source identifies one configured remote.
@@ -124,8 +131,26 @@ type RemoteArtifact struct {
 
 // TransferResult reports what a copy actually did.
 type TransferResult struct {
+	// BytesTransferred is what the destination reports it holds after the
+	// copy, read off the written object rather than counted on the way
+	// past, so it is a statement about what landed and not about what was
+	// sent.
 	BytesTransferred int64
-	Checksummed      bool
+
+	// Checksummed says the copy itself compared a hash, which rclone's
+	// operations.Copy does whenever source and destination share one. It
+	// matters because internal/lifecycle/verify.go treats it as a
+	// verification already performed and skips its own RemoteHash call.
+	//
+	// The rclone adapter never sets it. operations.Copy does not report
+	// which hash type it settled on (or whether it found one at all), and
+	// CopyToLocal does not go looking, so this is false out of every
+	// production copy and verify.go's shortcut is unreachable in practice.
+	// That is the safe direction of the two, since it means verification
+	// asks the backend itself rather than trusting a claim nobody made,
+	// and it is written down here so the next reader does not conclude
+	// from the field's existence that the shortcut is live.
+	Checksummed bool
 }
 
 // Transport is the only surface lifecycle code is allowed to depend on.

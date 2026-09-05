@@ -14,6 +14,40 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the Transport half of the contract suite: the assertions
+// every transport.Transport implementation has to satisfy, written once so
+// a second implementation costs a Fixtures value rather than a second
+// suite.
+//
+// It runs against the local backend on every gate and against a real
+// Docker SFTP server in the integration tier, and that ordering is the
+// point rather than a convenience. A suite that only ever ran against the
+// hard backend cannot tell "this backend is wrong" from "this suite is
+// wrong", so the easy backend runs first and the expensive run is left
+// checking the thing it is expensive for.
+//
+// Two shapes recur through the cases below and both are deliberate.
+//
+// Every capability question is asked in BOTH directions. A backend that
+// says it can hash has to produce the right digest, and one that says it
+// cannot has to REFUSE rather than answer with an empty string and a nil
+// error, because the second is how a caller records "verified" for a check
+// nobody ran (FR-13). testHashCapability exercises a supported and an
+// unsupported algorithm against the same object in the same test for
+// exactly that reason.
+//
+// And a case that could pass for the wrong reason carries a positive
+// control. The same-size replacement case asserts the two captures really
+// did come out the same size and really did hash differently before it
+// draws any conclusion from Changed, because a fixture that quietly failed
+// to replace anything would otherwise satisfy every remaining assertion.
+//
+// What is deliberately NOT asserted matters as much. List is checked with
+// flat files only: the interface promises no recursion, the rclone adapter
+// happens to recurse, and a shared contract that pinned behaviour the
+// interface does not promise would make a future backend fail for
+// disagreeing with an implementation detail rather than with a contract.
+
 // Fixtures builds everything one transport.Transport implementation needs in
 // order to run Suite: an isolated Source to operate against, and the ability
 // to place, replace and restrict objects within it. Suite itself knows
@@ -110,6 +144,12 @@ func testList(t *testing.T, tr transport.Transport, fx Fixtures) {
 	}
 }
 
+// testStat holds ModTime to a loose window rather than to a value,
+// because a backend is allowed to report none at all (0) and the ones that
+// do report it are reporting the fixture's own write, not something this
+// suite handed them. A minute either side of now is wide enough for a slow
+// CI host and narrow enough that a backend answering with an epoch, or
+// with a time in the wrong unit, still fails.
 func testStat(t *testing.T, tr transport.Transport, fx Fixtures) {
 	ctx := context.Background()
 	source := fx.NewSource(t)
@@ -203,6 +243,12 @@ func testHashCapability(t *testing.T, tr transport.Transport, fx Fixtures) {
 	})
 }
 
+// testDelete checks the object is gone through Stat AND through List,
+// which is not redundant. They are different code paths on every backend
+// this suite has run against (an object lookup versus a directory walk),
+// and a delete that unlinked the object while leaving a listing entry
+// behind is exactly the state that makes discovery re-ingest something
+// that is not there.
 func testDelete(t *testing.T, tr transport.Transport, fx Fixtures) {
 	ctx := context.Background()
 	source := fx.NewSource(t)
@@ -249,6 +295,13 @@ func testCancel(t *testing.T, tr transport.Transport, fx Fixtures) {
 	}
 }
 
+// testNotFound asks all four read/write methods about the same absent
+// path rather than picking a representative one. Each of them reaches the
+// backend differently, and the failure this guards against is per-method:
+// a DeleteRemote that treats an absent object as success is a defensible
+// design somewhere else in this repository (MediumStore.DeleteObject does
+// exactly that, deliberately), so the fact that Transport does NOT is a
+// property that has to be asserted where it lives rather than inferred.
 func testNotFound(t *testing.T, tr transport.Transport, fx Fixtures) {
 	ctx := context.Background()
 	source := fx.NewSource(t)
@@ -269,6 +322,14 @@ func testNotFound(t *testing.T, tr transport.Transport, fx Fixtures) {
 	}
 }
 
+// testPermissionDenied exercises the two methods that actually READ the
+// object's bytes, and deliberately not Stat. On a POSIX filesystem a stat
+// of an unreadable file succeeds, so asserting a refusal there would be
+// asserting something the platform does not do; the failure that matters
+// is the one that arrives mid-read, which is where a copy or a hash finds
+// it. Fixtures.Deny is expected to skip rather than lie when the
+// environment cannot express denial at all, running as root being the
+// case that comes up.
 func testPermissionDenied(t *testing.T, tr transport.Transport, fx Fixtures) {
 	ctx := context.Background()
 	source := fx.NewSource(t)
@@ -389,6 +450,11 @@ func testChangedObjectDetection(t *testing.T, tr transport.Transport, fx Fixture
 	})
 }
 
+// sha256Hex computes the digest this suite compares a backend's answer
+// against. It is computed here, from the bytes the fixture was handed,
+// rather than taken from anything the backend said, so a backend that
+// reported its own hash back as both the expected and the actual value
+// could not agree with itself into a pass.
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
