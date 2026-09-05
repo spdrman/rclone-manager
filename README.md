@@ -1122,9 +1122,9 @@ for each one that is not. It used to skip those checks and still print
 `==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
 
 The Docker daemon is the same rule with a bigger blast radius. With it stopped, the crash
-matrix, the SFTP integration suite and the whole `apps/generic/tests/dockercli` package
-call `t.Skip`, `go test` still exits 0, and nothing would reach the ledger. A full run
-refuses to start without a reachable daemon.
+matrix, the SFTP integration suite, `distribution/tests/adapterstacks` and the whole
+`apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and nothing
+would reach the ledger. A full run refuses to start without a reachable daemon.
 
 That refusal is about the start of the run, and the start of the run is not the run (#457).
 Docker Desktop's Resource Saver stops the hypervisor after five idle minutes, and this gate

@@ -88,10 +88,18 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 # The marker every process this gate starts can read: "you are running inside
 # the local gate", as opposed to a developer running one suite by hand. The
-# Docker fixtures key on it to tell "this laptop has no Docker" (skip, which
-# is honest outside the gate) from "the daemon this gate already used has
-# gone away" (a failure, because the gate refused to start without it). The
-# name is load-bearing in core/tests; do not rename it here alone.
+# Docker fixtures key on it to tell "this laptop has no Docker", an honest
+# skip when somebody runs one suite by hand, from "the daemon this gate
+# already used has gone away", which is a failure because a full run refuses
+# to start without one.
+#
+# CI_LOCAL_SKIP_DOCKER=1 is the exception at both ends. It is how a run says
+# out loud that it is proceeding without a daemon, this script ledgers it so
+# the run cannot end ok, and it is already in the environment of everything
+# below. A fixture that turns a skip into a failure under CI_LOCAL=1 has to
+# honour it, or that opt-out stops working.
+#
+# The name is load-bearing in core/tests; do not rename it here alone.
 export CI_LOCAL=1
 
 # Running as a git hook (pre-commit) means git has GIT_INDEX_FILE (a path
@@ -215,7 +223,7 @@ gate_step "apps/common go build, vet, test"
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-gate_step "distribution go build, vet, test"
+gate_docker_step "distribution go build, vet, test"
 (cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 
 gate_step "distribution golangci-lint"

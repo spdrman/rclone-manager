@@ -160,7 +160,7 @@ gate_require_js_deps() {
 
 # The Docker-backed suites, named once so the refusal, the ledger entry and
 # the documentation cannot drift apart.
-GATE_DOCKER_SUITES="core/tests/... (the crash matrix), the SFTP integration tests in core/internal/transport/rclone, and apps/generic/tests/dockercli"
+GATE_DOCKER_SUITES="core/tests/... (the crash matrix), the SFTP integration tests in core/internal/transport/rclone, distribution/tests/adapterstacks, and apps/generic/tests/dockercli"
 
 # gate_docker_state  ->  available | unavailable
 # `docker info` rather than `command -v docker`: the binary being installed
