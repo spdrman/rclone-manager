@@ -70,6 +70,14 @@ set -e
 
 export PATH="/opt/homebrew/bin:$PATH"
 
+# The marker every process this gate starts can read: "you are running inside
+# the local gate", as opposed to a developer running one suite by hand. The
+# Docker fixtures key on it to tell "this laptop has no Docker" (skip, which
+# is honest outside the gate) from "the daemon this gate already used has
+# gone away" (a failure, because the gate refused to start without it). The
+# name is load-bearing in core/tests; do not rename it here alone.
+export CI_LOCAL=1
+
 # Running as a git hook (pre-commit) means git has GIT_INDEX_FILE (a path
 # relative to the repo root, e.g. ".git/index"), GIT_DIR, GIT_WORK_TREE, etc.
 # set in the environment for the in-progress commit. The dependency-rules
@@ -90,10 +98,14 @@ FAST="${CI_LOCAL_FAST:-0}"
 # call itself ok should not depend on that holding.
 . "$(cd "$(dirname "$0")" && pwd)/lib/ci-local-gate.sh"
 
-# Every exit from here on carries a verdict line. Without this, a run that
-# died under `set -e` printed no "==> ci-local: ..." marker at all, so the
-# one outcome a reader most needs to grep for was the one with no marker.
-trap 'gate_exit_marker $?' EXIT
+# Every exit from here on carries a verdict line, and drops anything this run
+# started. Without the marker, a run that died under `set -e` printed no
+# "==> ci-local: ..." line at all, so the one outcome a reader most needs to
+# grep for was the one with no marker. Installed through one function rather
+# than as `trap ... EXIT` here, because a trap is set and not appended: a
+# second EXIT trap later in this file would silently replace this one. See
+# gate_install_traps.
+gate_install_traps
 
 if ! command -v golangci-lint >/dev/null 2>&1; then
   echo "==> golangci-lint not found. Install it (brew install golangci-lint) and re-run." >&2
@@ -115,8 +127,37 @@ if [ "$FAST" != "1" ]; then
   gate_require_docker
 fi
 
+# Not a refusal, and deliberately not one: Resource Saver being on is normal,
+# the sentinel below makes it harmless, and the per-step probes turn what it
+# still breaks into a named failure. It is printed because it is the first
+# thing to check when the daemon dies at minute 18 (#457).
+gate_warn_resource_saver
+
+# The daemon is now known good (or the run said out loud that it is not merge
+# evidence). Keep it that way: Docker Desktop's Resource Saver measures IDLE,
+# and this gate has several Docker-free stretches longer than its five-minute
+# timer, so every run used to cold-start the VM somewhere in the middle. One
+# container that sleeps for the life of the run means the daemon is never
+# idle, on any machine, without depending on a GUI setting (#457).
+gate_start_docker_sentinel
+
 if [ "$FAST" = "1" ]; then
   gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+fi
+
+# The documentation anchor check, added under separate work. Guarded on the
+# file rather than assumed, because this branch and the branch that writes it
+# are in flight at the same time; once it has landed the guard can go and the
+# step becomes unconditional, which is the shape every other step here has
+# for #160's reason (a step that quietly skips itself when its own file is
+# missing is a silent skip wearing a different hat). It runs here, before the
+# first Go build, because it costs about a second and it is the check most
+# likely to be broken by the edit being committed.
+if [ -f scripts/selftest/check-anchors.sh ]; then
+  gate_step "documentation anchors resolve (scripts/selftest/check-anchors.sh)"
+  bash scripts/selftest/check-anchors.sh
+else
+  echo "==> anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run"
 fi
 
 gate_step "core/ go build"
@@ -129,7 +170,7 @@ gate_step "core/ golangci-lint"
 (cd core && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ "$FAST" = "1" ]; then
-  gate_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
+  gate_docker_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
   (cd core && GOWORK=off go test ./internal/...)
 else
   # tests/crashmatrix, tests/sftpintegration and tests/miniointegration
@@ -145,10 +186,10 @@ else
   # derived from this run's own measured pace instead (issue #247's
   # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
   # is no fixed number to outgrow.
-  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
+  gate_docker_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
   (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
 
-  gate_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch (issue #256: no fixed go test -timeout)"
+  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch (issue #256: no fixed go test -timeout)"
   (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
 fi
 
@@ -165,7 +206,7 @@ gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ -f apps/generic/go.mod ]; then
-  gate_step "apps/generic go build, vet, test"
+  gate_docker_step "apps/generic go build, vet, test"
   (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 
   gate_step "apps/generic golangci-lint"
@@ -311,7 +352,7 @@ if [ "$FAST" != "1" ]; then
   if [ "${CI_LOCAL_SKIP_TWO_MACHINE:-0}" = "1" ]; then
     gate_note_skip "the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install can pull a real backup off a real machine (CI_LOCAL_SKIP_TWO_MACHINE=1)"
   else
-    gate_step "two throwaway machines, one temporary network, one real backup (#356)"
+    gate_docker_step "two throwaway machines, one temporary network, one real backup (#356)"
     # Not under `set -e`: exit 3 is a verdict this script has to READ, and
     # `set -e` would end the run on it before the ledger ever saw it.
     set +e
@@ -431,7 +472,7 @@ if [ "$FAST" != "1" ]; then
   # certifies nothing. This plants nine violations in real product files,
   # including the gate line's own, and each one has to turn the suite red
   # AND name the promise it broke.
-  gate_step "the composed conformance cells can actually fail (mutation self-test, #242)"
+  gate_docker_step "the composed conformance cells can actually fail (mutation self-test, #242)"
   bash scripts/conformance/selftest.sh
 
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
