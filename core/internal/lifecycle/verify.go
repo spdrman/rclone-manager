@@ -240,12 +240,23 @@ type VerificationStalledError struct {
 	Err error
 }
 
+// Error puts the attempt count and the budget in the message rather than
+// leaving them to a caller that might not print them. This error is the one
+// an operator sees repeatedly for the same artifact, once per cycle, and
+// "attempt 3 of 5" is what turns a wall of identical lines into something
+// with a visible end: it says both that the artifact is not being ignored
+// and how long it has before somebody has to look at it.
 func (e *VerificationStalledError) Error() string {
 	return fmt.Sprintf(
 		"lifecycle: verify: %s could not be checked (attempt %d of %d before this is handed to an operator): %v",
 		e.Artifact, e.Attempt, e.Budget, e.Err)
 }
 
+// Unwrap keeps the classified failure reachable, so a caller can still ask
+// errors.Is what actually went wrong. The stall bookkeeping is a fact about
+// this artifact's history; the wrapped error is the fact about the world,
+// and losing the second to report the first would make an unreachable NAS
+// indistinguishable from a backend that cannot hash.
 func (e *VerificationStalledError) Unwrap() error { return e.Err }
 
 // AsVerificationStalled reports whether err is, or wraps, a
@@ -336,7 +347,15 @@ func Verify(ctx context.Context, d Deps, p VerifyParams) (state.Outcome, error) 
 // attempt bookkeeping this type has no way to know.
 type unfinishedCheck struct{ err error }
 
+// Error passes the underlying message straight through, adding no prefix of
+// its own. This type is a marker rather than a wrapper: it exists so decide
+// can return a third kind of answer, and any text it added would end up
+// duplicated inside the VerificationStalledError that a caller actually
+// sees.
 func (u *unfinishedCheck) Error() string { return u.err.Error() }
+
+// Unwrap keeps the cause reachable, which is what lets Verify classify the
+// failure after unwrapping the marker.
 func (u *unfinishedCheck) Unwrap() error { return u.err }
 
 // recordStall is what Verify does with a check that could not be
@@ -768,6 +787,15 @@ type boundedWriter struct {
 	limit int
 }
 
+// Write always reports the full length as accepted, even for the bytes it
+// throws away.
+//
+// That is the whole point of the type. The writer is on the far end of a
+// pipe from an untrusted process, and reporting a short write or an error
+// would surface to that process as a failed write or a blocked pipe, which
+// changes its behaviour: a validator that logs verbosely would start failing
+// for reasons that have nothing to do with the artifact it was asked about.
+// So the excess is discarded silently and the process is never told.
 func (w *boundedWriter) Write(p []byte) (int, error) {
 	if room := w.limit - w.buf.Len(); room > 0 {
 		if room > len(p) {
@@ -778,6 +806,13 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// String marks a truncated buffer as truncated.
+//
+// Without the marker, output that was cut off is indistinguishable from
+// output that simply ended, and the difference matters exactly when it is
+// least obvious: a validator whose real error message arrived after the
+// limit would leave a journal detail that reads as a complete but
+// unhelpful explanation.
 func (w *boundedWriter) String() string {
 	if w.buf.Len() >= w.limit {
 		return w.buf.String() + "... (truncated)"

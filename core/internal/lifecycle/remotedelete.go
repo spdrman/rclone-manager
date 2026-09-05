@@ -145,6 +145,16 @@ type DeleteRemoteRequest struct {
 	DeleteSafetyDelay time.Duration
 }
 
+// The three suffixes DeleteRemote appends to a caller's AttemptKey, one per
+// durable write it can make.
+//
+// They exist because the journal replays a repeated key as the same logical
+// attempt, so the three writes of one delete attempt have to be told apart
+// by something. Deriving them from the caller's key rather than generating
+// them means a retry of the same attempt lands on the same three keys and
+// converges, which is what makes a crash anywhere in this sequence safe to
+// resume. They are constants rather than inline strings so a refusal write
+// and the test asserting on it cannot drift.
 const (
 	deleteAttemptTagIntent   = "remote-delete-pending"
 	deleteAttemptTagRefused  = "remote-delete-refused"
@@ -161,6 +171,11 @@ const stableSafetyDelayCheck = "stable completion safety delay"
 // on it and the tests asserting it cannot drift apart.
 const reinstatementCheck = "quarantine reinstatement"
 
+// key derives one of this attempt's three journal keys from the caller's
+// AttemptKey. It is a method rather than a bare concatenation at each call
+// site so the separator and the ordering are stated once: a key built the
+// other way round, or with a different separator, would not be recognised as
+// a replay of the attempt it belongs to.
 func (r DeleteRemoteRequest) key(tag string) string {
 	return r.AttemptKey + ":" + tag
 }
@@ -203,6 +218,15 @@ type RemoteDeleteRefusalError struct {
 	Confidence    model.Confidence
 }
 
+// Error renders the comparison fields only when there was a comparison.
+//
+// The two forms exist because a verdict and a confidence attached to a
+// refusal that never compared anything would be zero values printed as if
+// they meant something, and this is the one refusal in the product an
+// operator is expected to see routinely rather than during an incident. A
+// line reading verdict= and confidence= with empty values on every cycle
+// against a hardened SFTP account is how a message people should read
+// becomes one they filter out.
 func (e *RemoteDeleteRefusalError) Error() string {
 	if e.HasComparison {
 		return fmt.Sprintf(
@@ -695,6 +719,14 @@ func expectedLocalSize(rec state.Record) (size int64, source string, err error) 
 	}
 }
 
+// sha256File reads path in full and returns its SHA-256, in hex.
+//
+// This is the same ten lines internal/reconcile's sha256File and
+// internal/revalidate's recomputeLocalHash already have, kept as a third
+// copy on the convention this tree already follows: a package that needs to
+// hash a file keeps its own reader rather than growing a dependency on
+// another package for it. See recomputeLocalHash's comment, which is where
+// that convention is written down.
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

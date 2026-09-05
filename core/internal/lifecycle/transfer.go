@@ -159,10 +159,19 @@ type TransferParams struct {
 // apart from the real thing. Only an operator, looking at the collision by
 // hand, can decide what the existing file actually is.
 type FinalNameCollisionError struct {
+	// Artifact is which transfer was refused, and Path is the file already
+	// sitting where its final copy would go. Both are needed: the artifact
+	// says what did not happen, and the path is what an operator has to go
+	// and look at, since deciding what that file actually is is the whole
+	// reason this refuses rather than resolving it.
 	Artifact model.ArtifactID
 	Path     string
 }
 
+// Error names the path, which is the actionable half. This refusal is
+// resolved by a person looking at a specific file and deciding whether it is
+// a real backup or residue, so a message that named only the artifact would
+// leave them searching for it.
 func (e *FinalNameCollisionError) Error() string {
 	return fmt.Sprintf(
 		"lifecycle: transfer: refusing to overwrite an existing final-name file for %s at %s",
@@ -229,6 +238,15 @@ func IsPartialPath(path string) bool {
 	return strings.HasSuffix(path, partialSuffix)
 }
 
+// partialPath is the final path with FR-12's non-restorable suffix on the
+// end.
+//
+// It is derived from finalPath rather than composed independently, which is
+// the same reason recovery's ManifestObjectKey derives a sidecar key from
+// the artifact's own key: the two names have to be siblings in the same
+// directory for the commit step's hard link to work at all, and two
+// independent joins are one refactor away from disagreeing about which
+// directory that is.
 func partialPath(localDir string, artifact model.ArtifactID) (string, error) {
 	final, err := finalPath(localDir, artifact)
 	if err != nil {

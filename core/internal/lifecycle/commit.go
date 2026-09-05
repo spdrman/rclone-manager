@@ -148,6 +148,17 @@ type CommitInput struct {
 	CommittedKey  string
 }
 
+// validate refuses an input Commit cannot act on, before anything touches
+// the disk or the journal.
+//
+// The last clause is the one that is not just a missing-field check. The two
+// keys have to DIFFER, because they identify two separate durable writes and
+// the journal replays a repeated key as the same logical attempt. Given the
+// same key twice, the second write would be recognised as a replay of the
+// first and silently do nothing, so an artifact would be recorded as
+// COMMITTING and never as COMMITTED while every call reported success. That
+// is a caller bug with no visible symptom, which is exactly the kind worth
+// refusing up front.
 func (in CommitInput) validate() error {
 	switch {
 	case in.Artifact.Name == "" || in.Artifact.Set.IsZero():
@@ -568,10 +579,19 @@ var testHookAfterRename func() error
 // known-good backup." Neither the .partial file nor whatever already
 // exists at FinalPath is touched.
 type FinalPathCollisionError struct {
+	// Both paths are carried because the refusal is about their
+	// relationship: something is at FinalPath, it is not the file at
+	// PartialPath, and an operator has to look at both to decide which one
+	// is the real backup.
 	PartialPath string
 	FinalPath   string
 }
 
+// Error leads with the occupied path, because that is the file the operator
+// has to make a decision about, and says explicitly that it is not the
+// artifact being committed. Without that clause the message would read like
+// an ordinary "already exists" and invite somebody to delete the obstacle,
+// which is precisely the known-good backup FR-12 is protecting.
 func (e *FinalPathCollisionError) Error() string {
 	return fmt.Sprintf("lifecycle: %s already exists and is not %s, refusing to overwrite it", e.FinalPath, e.PartialPath)
 }
@@ -582,10 +602,18 @@ func (e *FinalPathCollisionError) Error() string {
 // Commit runs, so this is not a crash window Commit can retry through: the
 // local copy is actually gone, or the caller passed the wrong paths.
 type ArtifactFileMissingError struct {
+	// Both paths are named because the interesting fact is that NEITHER
+	// exists. Reporting one would leave the reader unsure whether the other
+	// had been looked at, and the two together are what distinguishes "the
+	// local copy is gone" from "Commit was handed the wrong directory".
 	PartialPath string
 	FinalPath   string
 }
 
+// Error names both paths for the reason the struct carries both: this is
+// not a crash window to retry through, so the message has to give an
+// operator enough to tell a vanished file from a misconfigured local_path,
+// and only seeing both candidates does that.
 func (e *ArtifactFileMissingError) Error() string {
 	return fmt.Sprintf("lifecycle: neither %s nor %s exists on disk", e.PartialPath, e.FinalPath)
 }
