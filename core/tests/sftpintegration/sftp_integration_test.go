@@ -37,9 +37,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
-
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -48,6 +45,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
@@ -550,16 +548,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	// adapter, over a slow link rather than a bandwidth limit, by
 	// transport/rclone's TestPhase1Gate/ContextCancellation.
 	const bwLimit = "1Mi"
-	bwCtx, ci := fs.AddConfig(f.Context())
-	if err := (&ci.BwLimit).Set(bwLimit); err != nil {
-		t.Fatalf("set bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	unthrottle := func() {
-		unthrottled, _ := fs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	}
-	t.Cleanup(unthrottle)
+	bwCtx := bwlimit.Throttle(t, f.Context(), bwLimit)
 
 	// A quarter of the payload: far enough in that the copy is
 	// unambiguously under way, far enough from the end that finishing
@@ -612,8 +601,9 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	// Resume with the same AttemptKey, unthrottled: must converge to a
 	// correct, complete TRANSFERRED. The throttle is lifted here rather
 	// than only in the Cleanup, because "unthrottled" was not true of the
-	// resume while the Cleanup was the only thing lifting it.
-	unthrottle()
+	// resume while the Cleanup was the only thing lifting it, and because
+	// the way it used to be lifted did not lift it at all: the resume ran
+	// at 1MiB/s and so did every test after this one in the package.
 	if _, err := lifecycle.Transfer(f.Context(), deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	}); err != nil {

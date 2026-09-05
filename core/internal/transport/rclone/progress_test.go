@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 )
 
 // TestCopyToLocal_ReportsIntermediateProgressForARealTransfer is the
@@ -57,10 +58,10 @@ func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	progressSampleInterval = sampleInterval
 	t.Cleanup(func() { progressSampleInterval = restore })
 
-	// throttleBandwidth rather than StartTokenBucket-and-put-it-back,
-	// because putting it back that way does not work and this test's own
-	// 1MiB/s limit was outliving it. See bandwidth_test.go.
-	bwCtx := throttleBandwidth(t, bwLimit)
+	// bwlimit.Throttle rather than StartTokenBucket-and-put-it-back, because
+	// putting it back that way does not work and this test's own 1MiB/s
+	// limit was outliving it. See that package's doc.
+	bwCtx := bwlimit.Throttle(t, context.Background(), bwLimit)
 
 	srcRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcRoot, "big.bin"), make([]byte, size), 0o644); err != nil {
