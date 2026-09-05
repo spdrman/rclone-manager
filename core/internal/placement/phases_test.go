@@ -12,6 +12,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This file turns phases.go's prose into properties of the graph.
+//
+// The safety argument over there is written as a paragraph and a diagram:
+// the source is deleted only after VERIFIED is durably recorded, VERIFIED
+// is the disposability boundary so nothing is abandoned after it, and a
+// destination that fails at the last moment goes back to COPYING with the
+// source intact. A paragraph does not fail when somebody adds a row to the
+// table, and a diagram in a comment fails even less. So each of those
+// sentences is asserted below as a fact about the edges: which phases
+// precede SOURCE_DELETE_PENDING, which have an ABANDONED edge, that every
+// phase is both reachable and escapable, and that every pair NOT in the
+// table is refused.
+//
+// The last test is the #372 guard rather than a phase rule: a phase can be
+// declared, be well-formed, and still have no case in the engine's driver,
+// which is how rows sit in a state nothing looks at again. It walks the
+// list this package derives rather than one written out here, so a phase
+// added with no way out fails a test instead of stalling a move.
+
 // TestThePhaseVocabularyIsExactlyTheSchemas is the drift guard between
 // this package, which owns what a phase means, and 0007_placements.sql,
 // whose CHECK constraint decides what can be stored. A phase added here

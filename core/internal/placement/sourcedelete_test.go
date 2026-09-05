@@ -227,6 +227,11 @@ func TestTheGuardRefusesADestinationRecordedAtAWeakerClass(t *testing.T) {
 }
 
 func TestTheGuardRefusesADestinationRecordedAsUnverified(t *testing.T) {
+	// The same clause as the test above, at the other end of the ladder:
+	// the row records no class at all. It gets its own case because an
+	// empty class is what a placement carries before anything has looked
+	// at it, so it is the value a half-written journal actually produces,
+	// where "existence" has to be written deliberately.
 	f := newFixture(t, fixtureOpts{})
 	size := int64(len(f.content))
 	a := deleteAttempt{
@@ -241,6 +246,10 @@ func TestTheGuardRefusesADestinationRecordedAsUnverified(t *testing.T) {
 }
 
 func TestTheGuardRefusesADestinationPlacementThatIsNotActive(t *testing.T) {
+	// DELETE_PENDING on the destination means the journal has already
+	// decided to get rid of it. A copy the journal is in the middle of
+	// disposing of cannot be the reason another copy is disposable, and
+	// the recorded content verification does not change that.
 	f := newFixture(t, fixtureOpts{})
 	size := int64(len(f.content))
 	at := testNow2
@@ -274,6 +283,11 @@ func TestTheGuardRefusesADestinationRecordedAtADifferentKey(t *testing.T) {
 }
 
 func TestTheGuardRefusesWhenTheTwoCopiesRecordDifferentHashes(t *testing.T) {
+	// Both rows are otherwise impeccable: ACTIVE, content class, the right
+	// key, verified, recently. They simply describe different bytes, and
+	// no verification class can rescue that, because a class says how hard
+	// somebody looked rather than what they were comparing against. The
+	// two rows come from different writes, so they can genuinely disagree.
 	f := newFixture(t, fixtureOpts{})
 	size := int64(len(f.content))
 	at := testNow2
@@ -315,6 +329,11 @@ func TestTheGuardRefusesWithoutARetentionTierGuard(t *testing.T) {
 }
 
 func TestTheGuardRefusesWhenATierStillSelectsTheSourceMedium(t *testing.T) {
+	// FR-30's last question, and the one refusal here that is not about
+	// safety: the destination is fine and the source is still wanted where
+	// it is. The count at the end is what makes this evidence about the
+	// clause rather than about the fixture, since a green run with the
+	// tier guard never consulted would mean the plumbing was wrong.
 	f := newFixture(t, fixtureOpts{})
 	a := deleteAttempt{
 		afterPlant: func(_ *testing.T, f *fixture) {
@@ -331,6 +350,10 @@ func TestTheGuardRefusesWhenATierStillSelectsTheSourceMedium(t *testing.T) {
 }
 
 func TestTheGuardRefusesWhenTheTierGuardCannotAnswer(t *testing.T) {
+	// The other half of the same clause. A guard that returns an error is
+	// a refusal and never a pass: an engine that could not find out
+	// whether a tier still wants this copy has not proved the source is
+	// unwanted, and uncertainty preserves the source.
 	f := newFixture(t, fixtureOpts{})
 	a := deleteAttempt{
 		afterPlant:  func(_ *testing.T, f *fixture) { f.tiers.err = fmt.Errorf("the retention chain could not be evaluated") },

@@ -14,6 +14,15 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file holds the doubles the rest of this package's tests are built
+// on, in one place rather than one copy per file.
+//
+// That is not tidiness. The counters below are how this package proves the
+// things that must NOT happen, and a counter is only worth having if every
+// test that reads it agrees about what increments it. Two near-identical
+// doubles in two files is how "a read never starts a restore" ends up true
+// in one suite and quietly untested in the other.
+
 func glacierMedium() transport.Medium {
 	return transport.Medium{ID: "cold-store", Type: transport.MediumTypeS3, Bucket: "b", StorageClass: config.StorageClassGlacier}
 }
@@ -59,16 +68,19 @@ type fakeMedium struct {
 	initiatedWindows []int
 }
 
+// counts reports every call this double has taken, with restore statuses
+// counted apart from the other three on purpose.
+//
+// Asking whether a restore is running is how an access state is derived
+// honestly, and it is not the expensive thing: it moves no bytes, it
+// starts nothing and it is the one request this package's refusals are
+// allowed to spend. Stats, opens and checksums are the ones a test means
+// when it asserts that nothing went to the medium about the object.
 func (f *fakeMedium) counts() (stats, opens, checksums, restoreStatuses, initiates int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stats, f.opens, f.checksums, f.restoreStatuses, f.initiates
 }
-
-// spentARequestOnTheObject reports whether anything actually went to the
-// medium about the object's bytes or metadata. Restore status is excluded
-// deliberately: asking whether a restore is running is how an access state
-// is derived honestly, and it is not the expensive thing.
 
 func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, _ string) (transport.ObjectInfo, error) {
 	f.mu.Lock()
