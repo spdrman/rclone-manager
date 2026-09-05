@@ -57,6 +57,7 @@ var commands = map[string]func([]string) int{
 	"validate":   cmdValidate,
 	"catalog":    cmdCatalog,
 	"quarantine": cmdQuarantine,
+	"medium":     cmdMedium,
 	"restore":    cmdRestore,
 	"settings":   cmdSettings,
 	"version":    cmdVersion,
@@ -102,6 +103,13 @@ commands:
                                                   act on one quarantined artifact: revalidate re-checks it and moves
                                                   nothing; retry re-enters the pipeline from DISCOVERED; reinstate
                                                   trusts it again in place and forfeits any future remote delete
+  medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
+                                                  carrying a real backup does: it writes a probe object with the
+                                                  medium's own storage class, reads it back byte for byte, checks
+                                                  the class it landed in against the one the configuration claims,
+                                                  asks whether the medium's declared upload_verification can
+                                                  actually be achieved there, and deletes the probe. Exits non-zero
+                                                  when any check fails (#443)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force
