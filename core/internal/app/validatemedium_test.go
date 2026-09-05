@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -655,4 +656,51 @@ func TestReinstateQuarantined_ExistenceAloneIsNotEnoughEvidence(t *testing.T) {
 	if after.State != string(lifecycle.QuarantinedLost) {
 		t.Errorf("journal State = %q, want the artifact left in %q", after.State, lifecycle.QuarantinedLost)
 	}
+}
+
+// TestValidateArtifact_NamesTheRestoreTestHookThatDidNotRun is FR-13's
+// honesty rule where it is easiest to lose.
+//
+// The restore-test hook opens the artifact, and off local disk opening it
+// means downloading it, so it does not run against a copy on a medium. An
+// operator who configured one and reads back a green tick has been told
+// less than they asked for, and a check that quietly stops running is how
+// a safety feature becomes decorative. So the pass names the tier that did
+// not run.
+func TestValidateArtifact_NamesTheRestoreTestHookThatDidNotRun(t *testing.T) {
+	f := newMovedFixture(t)
+	ctx := context.Background()
+
+	f.svc.Config.Sources[0].BackupSets[0].Validation = config.Validation{
+		Command: &config.Command{Executable: "/nonexistent/restore-test", Timeout: config.Duration(10 * time.Second)},
+	}
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("ValidateArtifact: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("result = %+v, want Passed", result)
+	}
+	if !strings.Contains(result.Reason, "restore-test hook did not run") {
+		t.Errorf("Reason = %q, want it to name the configured restore-test hook that did not run", result.Reason)
+	}
+}
+
+// TestValidateArtifact_UnresolvedValidatorIsStillRefusedOnAMedium keeps
+// the one combination that must never read as "no validator configured"
+// refused on this path too. A ValidatorID nothing resolved into a runnable
+// command is a wiring problem, and reporting a moved artifact as passing
+// while its backup set names a validator nobody could find is the same
+// fail-open FR-13 exists to prevent, reached through the newest door.
+func TestValidateArtifact_UnresolvedValidatorIsStillRefusedOnAMedium(t *testing.T) {
+	f := newMovedFixture(t)
+	ctx := context.Background()
+
+	f.svc.Config.Sources[0].BackupSets[0].Validation = config.Validation{ValidatorID: "never-resolved"}
+
+	if _, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{}); err == nil {
+		t.Fatal("ValidateArtifact reported on an artifact whose backup set names a validator nothing resolved; want a refusal")
+	}
+	mustStayComplete(t, f)
 }
