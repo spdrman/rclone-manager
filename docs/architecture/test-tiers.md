@@ -59,9 +59,10 @@ an `ssh-keygen rsa 2048` and a container start to every one of them.
 
 Failure shapes and probes are methods: `LimitConnections` and
 `RemoveConnectionLimit` (#264), `Kill` (#161), `EstablishedConnections`,
-`AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor`, and
-later a blackhole. The rule for adding one is in the last section: if the
-harness cannot do what a test needs, the capability goes into the harness.
+`AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor` and
+its negative control `DecoyKnownHostsFor`, and later a blackhole. The rule
+for adding one is in the last section: if the harness cannot do what a test
+needs, the capability goes into the harness.
 
 The source machine is built from `scripts/e2e/source-machine.Dockerfile`,
 which `two-machine-backup.sh` builds too. One definition of "the simulated
