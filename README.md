@@ -758,6 +758,14 @@ trusting whatever answers first. `core/internal/transport/rclone/ssh.go` refuses
 connection at all without both a real key file and a real `known_hosts` file; there's no
 password fallback and no way to disable host-key checking.
 
+It checks the key's whole ancestry, not just the key file's own mode, and that surprises
+people the first time (it is what refused the first two cycles of the run on the NAS in
+#263). Any group- or world-writable directory anywhere above the key means somebody holding
+that bit can replace the key whatever the key file itself says, so the connection is
+refused and the message names the exact `chmod go-w` to run. The installer creates its own
+directories `0700` and tightens ones that already exist for this reason, but a directory
+you made yourself is yours to fix.
+
 That hardening has a direct consequence for verification and delete safety, and it's
 important enough to state here instead of only in the setup doc: **rclone's SFTP hashing
 works by running a hash command over the SSH session, and a shell-less
@@ -962,6 +970,23 @@ Every reconciliation transition is idempotency-keyed so a crash mid-reconciliati
 to retry. `backup-manager reconcile` runs it for every configured backup set, and `run` and
 `daemon` run it for each backup set before touching that set (`core/internal/app/cycle.go`
 is the ordering).
+
+There is a row EPIC E added, and it is the one that would otherwise be catastrophic: no
+local copy at all, because the artifact's durable copy is on a storage medium, which is
+what a completed move leaves behind. That is not `invalid` and it is not a verdict about
+the artifact at all. Reconciliation has no way to read a medium and no mandate to, since
+FR-31 makes anything beyond an existence check operator-initiated, so it leaves a moved
+artifact alone and `core/internal/revalidate` is what runs the existence check. A caller
+that collapsed this into "the local file is missing" would record a healthy backup as an
+irrecoverable loss.
+
+An interrupted MOVE is reconciled by the move engine rather than here, and it has no
+separate resume path: `RunCycle` reconciles every non-terminal move and plans new ones, and
+both end up in the same advance loop. That is deliberate. A crash suite that drives an
+artifact through a state machine of its own proves things about that machine, and the
+product's own driver can be missing a case for a state with nobody noticing; here there is
+one driver, its switch is checked against the phase table's own list of non-terminal
+phases, and the crash harness cannot spell a phase at all.
 
 ### Quarantine
 
