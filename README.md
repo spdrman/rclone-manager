@@ -417,8 +417,13 @@ what replaced it carefully rather than assuming it generalises.
 `docker` with no passwordless sudo) with `scripts/install/install_docker_host.py`, and then
 exercised the product on it rather than stopping at "the command exited 0": the engine's own
 Docker health status read back from the daemon, the Web UI serving the first-run flow, both
-containers surviving a restart, uninstall and re-install behaving as documented, and a real
-backup set running a full cycle whose artifacts came out `COMMITTED` with the set `HEALTHY`.
+containers surviving a restart, uninstall and re-install behaving as documented, and a
+backup set running a full cycle whose artifacts came out `COMMITTED` with the set
+`HEALTHY`. Be precise about that last one: the source was a real SFTP endpoint standing on
+the NAS itself rather than a production server, because the NAS's own sshd ships no SFTP
+subsystem and so cannot be its own source. The cycle was real, the transport was real, and
+the machine it pulled from was a stand-in. Pointing this at the actual production hosts is
+#264, and it is blocked on a credential.
 Two refusals happened during that run and both were the product being right: the ancestry
 key-permission check refused a world-writable directory holding the SSH key and named the
 exact `chmod`, and the remote delete declined because the deletion-safety delay had not
@@ -430,7 +435,9 @@ verbatim evidence.
 repository has a TrueNAS, Unraid, OpenMediaVault, Synology, Proxmox VE, CasaOS, ZimaOS,
 Portainer or Dockge machine to execute them on. The procedures are written, reviewed and
 specific, and they are prose until somebody runs them. A UGREEN NAS running a generic
-Docker install is not any of those platforms' packaging, so it certifies none of them.
+Docker install is not any of those platforms' packaging, so it certifies none of them, and
+the UGOS procedure it could in principle certify has no `.UPK` to install yet, which is
+#83.
 
 [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) is the generated
 record and it says the same thing from the other side: thirty-six cells across nine
