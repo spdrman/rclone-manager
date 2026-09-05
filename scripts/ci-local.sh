@@ -241,6 +241,25 @@ fi
 gate_step "every tracked Go file is gofmt-clean, including the ones outside every module (#417)"
 bash scripts/format/check-gofmt.sh
 
+# What `go doc` prints for every package, against a recorded baseline
+# (#526). A comment adjacent to `package` IS the package doc, and go/doc
+# concatenates every one of them across a package in sorted file order. Six
+# documentation lanes put per-file openers there, so `go doc ./core/service`
+# opened with "This file is the operator's activity feed" and the real
+# overview was several topics down the list.
+#
+# Every step in this gate was green for the whole of it. Nothing here had
+# ever assembled a package overview and looked at it: go build and go vet do
+# not care where a comment sits, and none of the linters .golangci.yml
+# enables reads package documentation. So this assembles it, through
+# go/doc's own Package.Doc rather than by shaping text, and records the
+# files each overview is built from alongside a digest of it, because a
+# promoted opener shows up as a new carrier in a line a reviewer can read.
+#
+# A second, like the sweep above, and it belongs here for the same reason.
+gate_step "every package's go doc overview still matches its baseline, carriers included (#526)"
+bash scripts/docs/check-package-doc.sh
+
 # The same blind spot, for the checks that actually find bugs (#417). Being
 # outside every module does not only cost those two files their formatting:
 # this gate vets and lints per module too, so nothing has ever vetted or
@@ -618,6 +637,20 @@ if [ "$FAST" != "1" ]; then
   # cannot make. A second on a warm cache.
   gate_step "the formatting gate can actually fail (mutation self-test, #417)"
   bash scripts/format/selftest.sh
+
+  # And the package-documentation gate, shown to fire, in a pair (#526). One
+  # control promotes a comment to sit adjacent to `package` in the real
+  # core/service/activity.go and requires check-package-doc.sh to go red and
+  # name the file. Its complement runs the SAME mutation past
+  # check-comments-only.sh and requires that one to stay silent, because a
+  # promotion changes what `go doc` prints and changes no token: without the
+  # pair, "the check went red" is also what a checker that fires on any edit
+  # would produce, and the two halves of #526's fix would not be measuring
+  # different things. A third control renames a function so the silent half
+  # is shown able to speak. The plant goes into the real file and is put
+  # back, and the last control checks the putting back. A second or two.
+  gate_step "the package-documentation gate can actually fail, and its independent half stays quiet (mutation self-test, #526)"
+  bash scripts/docs/selftest.sh
 
   # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
   # is a wall of "nothing about a medium-free deployment moved" assertions,

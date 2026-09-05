@@ -325,6 +325,19 @@ make_full_tree() {
     >"$tree/scripts/format/check-gofmt.sh"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/format/selftest.sh"
 
+  # The package-documentation baseline check and its own mutation
+  # self-test (#526), for the tenth and eleventh time for the same reason.
+  # The real check runs core/cmd/docguard over every package in the
+  # repository and compares against scripts/docs/package-doc.baseline, and
+  # the real self-test plants a promoted comment in core/service and puts
+  # it back; this fixture has neither, and a gate step pointed at a path it
+  # does not have exits 127 under `set -e` and takes Group D's control down
+  # with it.
+  mkdir -p "$tree/scripts/docs"
+  for docs in check-package-doc selftest; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/docs/$docs.sh"
+  done
+
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
   # measures which steps the gate chooses to run, not what those steps do,
