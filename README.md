@@ -1125,9 +1125,10 @@ itself: a submitted policy goes through the identical `config.Validate` a hand-e
 `config.yaml` goes through at boot, so half a chain is refused with the same sentence in
 the browser, at the terminal and in the file.
 
-One rollback note: unknown keys are a parse error, so a config file carrying a set-level
-`retention:` block cannot be read by a build from before this feature. Writing one is a
-one-way door for a deployment that might need to go back.
+One rollback note, and it applies to `storage_mediums` and a tier's `medium` key just as
+much: unknown keys are a parse error, so a config file carrying a set-level `retention:`
+block cannot be read by a build from before that feature. Writing one is a one-way door for
+a deployment that might need to go back.
 
 ### Which timestamp puts a backup in a bucket
 
@@ -1244,6 +1245,15 @@ Two ways to see what a policy would do before it does it:
 the week start and each tier so you can compare policies without editing config; and
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
+
+Since #430 a preview carries the moves it would make and the medium each deletion happens
+on, both surfaces alike. The medium is spelled by ABSENCE when it is local, which is what
+keeps a deployment that declares no medium seeing exactly the response it saw before the
+field existed, and it is the question FR-30 wants answered before an apply: "delete 40
+backups" means a different thing when half of them are objects in a bucket somebody else is
+billed for. A move never adds a backup to the keep set and never removes one, which is why
+moves travel beside the verdicts rather than inside them, and there is no field for what a
+provider would charge or how long it would take, because this product holds neither number.
 
 ## Where a durable copy actually lives (EPIC E)
 
