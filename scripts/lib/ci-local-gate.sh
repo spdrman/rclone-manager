@@ -2,7 +2,7 @@
 # Helpers that keep scripts/ci-local.sh's last line honest (issue #160).
 # Sourced by that script, never executed on its own.
 #
-# Three jobs, and they are the same job seen from three ends:
+# Four jobs, and the first three are the same job seen from three ends:
 #
 #   1. Tell "this capability is not part of this tree/machine" apart from
 #      "it is part of this tree but nobody made it usable". A JS workspace
@@ -15,6 +15,15 @@
 #   3. Say the same thing in the exit code that the last line says, because a
 #      program reading this gate cannot read prose. ok is 0, INCOMPLETE is
 #      GATE_INCOMPLETE (3), an actual failure is whatever failed.
+#   4. Keep the Docker daemon true for the whole run rather than only at the
+#      preflight (issue #457). A capability probed once at minute 0 says
+#      nothing about minute 18, and on a Mac the two really do come apart:
+#      Docker Desktop's Resource Saver stops the hypervisor after five idle
+#      minutes, this gate has Docker-free stretches longer than that, and a
+#      daemon that dies in the middle turns every Docker-backed suite into a
+#      t.Skip that reports ok. So: a sentinel container keeps the daemon
+#      from ever being idle, and gate_docker_step re-probes before each step
+#      that needs it. That is job 1 again, in time rather than in space.
 #
 # Why this exists: the gate used to treat a missing node_modules/ as "print a
 # note and carry on", then finish with "==> ci-local: ok" regardless.
@@ -245,6 +254,11 @@ gate_require_docker() {
 # Returns 1 in that last case, which under the caller's `set -e` ends the run.
 gate_recheck_docker() {
   if [ "$(gate_docker_state)" = available ]; then
+    # Arm the guard from here too, not only from the preflight. A FAST run
+    # never runs the preflight probe, and a daemon that answered the first
+    # Docker step and not the fourth is the same event this function exists
+    # for however the run first learned the daemon was there.
+    gate_docker_verified=1
     return 0
   fi
 

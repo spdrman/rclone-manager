@@ -40,6 +40,22 @@
 # the daemon; CI_LOCAL_SKIP_DOCKER=1 is the out-loud opt-out and ends
 # INCOMPLETE.
 #
+# The daemon being up at the START is not the same claim as the daemon
+# being up for the RUN, and on a Mac they come apart on their own. Docker
+# Desktop's Resource Saver stops the hypervisor after five idle minutes,
+# and this script has several Docker-free stretches longer than that (the
+# compat self-test, the api, perf and architecture self-tests), so every
+# run used to cold-start the VM somewhere in the middle. Two runs died of
+# that on 2026-09-04 and neither looked like a failure, because a daemon
+# that goes away at minute 18 is invisible to a probe that ran at minute 0
+# and turns every Docker-backed suite into a t.Skip (#457). So: a sentinel
+# container sleeps for the life of the run, which means the daemon is
+# never idle and Resource Saver never fires, and every Docker-dependent
+# step re-probes the daemon before it runs, which costs about 100ms and
+# turns a VM that died mid-run into a named failure at the step that
+# needed it. CI_LOCAL_SENTINEL=0 turns the container off;
+# CI_LOCAL_SENTINEL_IMAGE picks a different one.
+#
 # A missing Playwright Chromium is the third instance of the same shape,
 # and gets the same answer: the browser e2e step refuses and names the
 # install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that

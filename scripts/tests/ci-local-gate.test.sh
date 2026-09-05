@@ -924,6 +924,235 @@ $bare_removals"
     'VOLUME /var/lib/docker' "$(cat "$proof_script")"
 fi
 
+# ------------- Group J: a daemon that dies in the middle of a run (#457)
+
+echo "==> J. the Docker daemon during the run, not only at the preflight"
+
+# Docker Desktop's Resource Saver stops the hypervisor after five idle
+# minutes and cold-starts it on the next API call. This gate has several
+# Docker-free stretches longer than that, so every run was restarting the VM
+# somewhere in the middle, and two runs on 2026-09-04 died of it: one VM came
+# up and died 86ms later racing the previous hypervisor over Docker.raw, and
+# one `images/create` returned HTTP 500 for 2m31s.
+#
+# Neither showed up as a failure. The gate probed the daemon once, at the
+# top, so a VM that died at minute 18 turned every Docker-backed suite into a
+# t.Skip, `go test` exited 0, and the run reported on tests that never ran.
+# That is #160's defect again, arriving through the machine rather than
+# through the checkout.
+#
+# This stub is that shape exactly: a daemon that answers the preflight probe
+# and then stops answering. It also records every call, which is how the two
+# sentinel cases below watch a container they cannot create for real.
+set_docker_recording() { # <tree>
+  cat >"$1/bin/docker" <<'STUB'
+#!/bin/sh
+# Records every invocation, and stops answering `docker info` after
+# DOCKER_STUB_MAX_INFO of them. Everything else always succeeds, so the
+# number of non-info calls the gate makes cannot change what a case measures.
+if [ -n "${DOCKER_STUB_LOG:-}" ]; then printf '%s\n' "$*" >>"$DOCKER_STUB_LOG"; fi
+if [ "${1:-}" = info ]; then
+  count_file="${DOCKER_STUB_LOG:-/dev/null}.info"
+  n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" >"$count_file" 2>/dev/null || true
+  if [ "$n" -gt "${DOCKER_STUB_MAX_INFO:-99}" ]; then exit 1; fi
+fi
+exit 0
+STUB
+  chmod +x "$1/bin/docker"
+}
+
+# J1: the headline. One `docker info` answered, every one after it refused,
+# and the run must FAIL by name at the step that needed the daemon.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=1
+assert_nonzero "J1 a daemon that dies mid-run fails the run" "$status"
+assert_not_contains "J1 a daemon that dies mid-run cannot report success" \
+  'ci-local: ok' "$out"
+assert_not_contains "J1 a daemon that dies mid-run is not a ledgered skip" \
+  'ci-local: INCOMPLETE' "$out"
+assert_contains "J1 the failure names the step that needed the daemon" \
+  'ci-local: FAILED (core/ go test ./...' "$out"
+assert_contains "J1 the failure says the daemon died during the run" \
+  'it was at the start of this run' "$out"
+assert_contains "J1 the failure points at Resource Saver" 'Resource Saver' "$out"
+# The positive control for "this is a mid-run failure and not the preflight
+# refusal wearing a different hat": the run really did get past the preflight
+# and do work first.
+assert_contains "J1 the run got past the preflight before it failed" \
+  'core/ go build' "$out"
+
+# J2: J1's control. Same tree, same stub, same everything except that the
+# daemon keeps answering. Without this, J1 would also pass against a gate
+# that had simply lost the ability to finish at all.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=99
+assert_contains "J2 a daemon that stays up reports success" 'ci-local: ok' "$out"
+assert_eq "J2 a daemon that stays up exits 0" 0 "$status"
+
+# J3: the sentinel. Resource Saver measures IDLE, so the fix that does not
+# depend on anyone's GUI settings is to never be idle. J2's run is reused
+# through its recorded call log: one `docker run` of a sleeping container,
+# and one removal of that same container on the way out.
+docker_log="$(cat "$tree/docker.log" 2>/dev/null || true)"
+assert_contains "J3 the gate starts a sentinel container" \
+  'run -d --rm --name ci-local-sentinel-' "$docker_log"
+assert_contains "J3 the sentinel just sleeps" 'sleep infinity' "$docker_log"
+assert_contains "J3 the sentinel is labelled" \
+  '--label rclone-manager-ci-local-sentinel=1' "$docker_log"
+assert_contains "J3 the gate removes the sentinel on the way out" \
+  'rm -f ci-local-sentinel-' "$docker_log"
+# Same container, not just some container of each shape: a start and a
+# removal that name different containers is the leak this case is about.
+sentinel_started="$(printf '%s\n' "$docker_log" | sed -n 's/.*--name \(ci-local-sentinel-[0-9]*\).*/\1/p' | head -1)"
+sentinel_removed="$(printf '%s\n' "$docker_log" | sed -n 's/^rm -f \(ci-local-sentinel-[0-9]*\)$/\1/p' | head -1)"
+if [ -n "$sentinel_started" ] && [ "$sentinel_started" = "$sentinel_removed" ]; then
+  pass "J3 the container that was started is the container that was removed"
+else
+  fail "J3 the container that was started is the container that was removed" \
+    "started [$sentinel_started], removed [$sentinel_removed]"
+fi
+# Nothing after the removal, so the sentinel cannot outlive the run.
+assert_eq "J3 the removal is the last thing the gate asks docker for" \
+  "rm -f $sentinel_started" "$(printf '%s\n' "$docker_log" | tail -1)"
+
+# J4: the removal is not conditional on the run going well. A sentinel that
+# survives a failed run is #150's leak wearing a different label, and a
+# failed run is the common case for a gate that runs on every commit.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+printf 'package stub\n\nthis is not go\n' >"$tree/core/stub.go"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=99
+assert_nonzero "J4 the broken tree fails the run" "$status"
+docker_log="$(cat "$tree/docker.log" 2>/dev/null || true)"
+assert_contains "J4 a failed run still starts its sentinel" \
+  'run -d --rm --name ci-local-sentinel-' "$docker_log"
+assert_contains "J4 a failed run still removes its sentinel" \
+  'rm -f ci-local-sentinel-' "$docker_log"
+
+# J5: the sentinel's label must NOT be the one core/tests/dockerlease
+# sweeps. That sweep removes labelled containers older than fifteen minutes,
+# and a full gate run is twenty-five, so sharing the label would delete the
+# sentinel out from under the run it exists to protect, at almost exactly the
+# halfway point. Read out of the Go source rather than copied here, because
+# the failure this guards against is the two constants drifting together.
+lease_source="$REPO_ROOT/core/tests/dockerlease/dockerlease.go"
+if [ ! -f "$lease_source" ]; then
+  fail "J5 core/tests/dockerlease/dockerlease.go is where this expects it"
+else
+  lease_key="$(sed -n 's/^[[:space:]]*LabelKey = "\(.*\)"$/\1/p' "$lease_source" | head -1)"
+  sentinel_key="$(sh -c ". '$GATE_LIB' && printf '%s' \"\$GATE_SENTINEL_LABEL_KEY\"")"
+  if [ -n "$lease_key" ] && [ -n "$sentinel_key" ] && [ "$lease_key" != "$sentinel_key" ]; then
+    pass "J5 the sentinel does not carry the label dockerlease sweeps"
+  else
+    fail "J5 the sentinel does not carry the label dockerlease sweeps" \
+      "dockerlease LabelKey [$lease_key], sentinel [$sentinel_key]"
+  fi
+fi
+
+# J6: an interrupt is the other way a sentinel outlives its run, and it is
+# not a rare path on a gate that takes twenty-five minutes from a pre-commit
+# hook. Driven against the library directly, because run_gate has no way to
+# send a signal into the middle of a run.
+int_log="$SANDBOX/interrupt-docker.log"
+cat >"$SANDBOX/interrupt-docker" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$DOCKER_STUB_LOG"
+exit 0
+STUB
+chmod +x "$SANDBOX/interrupt-docker"
+mkdir -p "$SANDBOX/intbin"
+cp "$SANDBOX/interrupt-docker" "$SANDBOX/intbin/docker"
+cat >"$SANDBOX/interrupted-run.sh" <<'RUN'
+set -e
+. "$1"
+gate_install_traps
+gate_start_docker_sentinel >/dev/null
+gate_step "core/ tests/crashmatrix under gotestwatch" >/dev/null
+kill -INT $$
+echo "REACHED-THE-LINE-AFTER-THE-SIGNAL"
+RUN
+int_out="$(DOCKER_STUB_LOG="$int_log" PATH="$SANDBOX/intbin:$PATH" \
+  sh "$SANDBOX/interrupted-run.sh" "$GATE_LIB" 2>&1)"
+int_status=$?
+assert_eq "J6 an interrupted run exits 130" 130 "$int_status"
+assert_not_contains "J6 an interrupted run stops where it was interrupted" \
+  'REACHED-THE-LINE-AFTER-THE-SIGNAL' "$int_out"
+assert_contains "J6 an interrupted run still prints a verdict naming the step" \
+  'ci-local: FAILED (core/ tests/crashmatrix under gotestwatch, interrupted by SIGINT)' "$int_out"
+assert_contains "J6 an interrupted run removes its sentinel" \
+  'rm -f ci-local-sentinel-' "$(cat "$int_log" 2>/dev/null || true)"
+
+# J7: CI_LOCAL=1 reaches the processes the gate starts. The Docker fixtures
+# key on it to tell "this laptop has no Docker", which is an honest skip
+# outside the gate, from "the daemon this gate already used has gone away",
+# which is a failure. Measured through a child process rather than in this
+# shell, because being exported is the whole point.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "CI-LOCAL-ENV=[${CI_LOCAL:-unset}]"\nexit 0\n' \
+  >"$tree/scripts/perf/selftest.sh"
+run_gate "$tree"
+assert_contains "J7 the gate exports CI_LOCAL=1 to the steps it runs" \
+  'CI-LOCAL-ENV=[1]' "$out"
+
+# J8: the anchors step. The file is written under separate work, so the gate
+# guards on its existence; these two cases are what stops that guard from
+# being a permanent silent skip. A tree that has the script must run it, and
+# a tree whose script fails must fail the run.
+tree="$(make_full_tree)"
+mkdir -p "$tree/scripts/selftest"
+printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-RAN"\nexit 0\n' \
+  >"$tree/scripts/selftest/check-anchors.sh"
+run_gate "$tree"
+assert_contains "J8 a tree with an anchors script runs it" 'ANCHORS-STUB-RAN' "$out"
+assert_contains "J8 the anchors step is announced" 'documentation anchors resolve' "$out"
+assert_eq "J8 a passing anchors script leaves the run green" 0 "$status"
+
+tree="$(make_full_tree)"
+mkdir -p "$tree/scripts/selftest"
+printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-FAILED"\nexit 1\n' \
+  >"$tree/scripts/selftest/check-anchors.sh"
+run_gate "$tree"
+assert_nonzero "J8 a failing anchors script fails the run" "$status"
+assert_contains "J8 the failure names the anchors step" \
+  'ci-local: FAILED (documentation anchors resolve' "$out"
+# And it fails EARLY: the point of putting a one-second check near the top is
+# that nobody waits twenty-five minutes to hear about a broken link.
+assert_not_contains "J8 a failing anchors script fails before the Go suites" \
+  'core/ go test' "$out"
+
+# J9: the Resource Saver reading, both answers and both ways of having no
+# answer. It is a warning and never a refusal, so every one of these paths
+# has to return 0: a gate that refused over a Docker Desktop preference
+# would be unrunnable on the machine that has it on, which is this one.
+rs_dir="$SANDBOX/resource-saver"
+mkdir -p "$rs_dir"
+printf '{"UseResourceSaver": true, "Other": 1}\n' >"$rs_dir/on.json"
+printf '{"UseResourceSaver":false}\n' >"$rs_dir/off.json"
+printf '{"SomethingElse":true}\n' >"$rs_dir/nokey.json"
+for rs_case in on off nokey missing; do
+  case "$rs_case" in
+    on) want=on ;;
+    off) want=off ;;
+    *) want=unknown ;;
+  esac
+  got="$(GATE_DOCKER_SETTINGS_FILE="$rs_dir/$rs_case.json" \
+    sh -c ". '$GATE_LIB' && gate_resource_saver_state")"
+  assert_eq "J9 Resource Saver reads $rs_case as $want" "$want" "$got"
+  warn_out="$(GATE_DOCKER_SETTINGS_FILE="$rs_dir/$rs_case.json" \
+    sh -c ". '$GATE_LIB' && gate_warn_resource_saver" 2>&1)"
+  assert_eq "J9 the $rs_case warning never fails the run" 0 $?
+  if [ "$rs_case" = on ]; then
+    assert_contains "J9 the warning names the setting" 'Resource Saver' "$warn_out"
+    assert_contains "J9 the warning says where it lives" \
+      'Docker Desktop > Settings > Resources > Advanced' "$warn_out"
+  else
+    assert_eq "J9 $rs_case prints no warning" "" "$warn_out"
+  fi
+done
+
 # ------------------------------------------------------------------ result
 
 echo
