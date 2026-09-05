@@ -106,9 +106,30 @@ func TestValidate_StorageMediumFieldRules(t *testing.T) {
 // half of the two closed-set rules above. Without it a validator that
 // refused every value would still pass the refusal table.
 func TestValidate_AcceptsEveryStorageClassAndVerificationMode(t *testing.T) {
+	// mediumsConfig's one medium is named by a tier, so an archive class
+	// on it is the pairing #442 refuses. The class itself is still
+	// accepted, on a medium no tier delivers to, which is the case the
+	// restore operation exists for; that is what the second branch
+	// checks, and archiveclass_test.go carries the refusal side.
+	archived := map[string]bool{}
+	for _, class := range ArchiveStorageClasses() {
+		archived[class] = true
+	}
 	for _, class := range StorageClasses() {
 		t.Run("storage_class "+class, func(t *testing.T) {
 			c := mediumsConfig()
+			if archived[class] {
+				c.StorageMediums = append(c.StorageMediums, StorageMedium{
+					ID:           "offsite_cold",
+					Type:         StorageMediumTypeS3,
+					Region:       "us-east-1",
+					Bucket:       "nas-backups-cold",
+					StorageClass: class,
+					Credentials:  MediumCredentials{Env: "BACKUP_S3_COLD"},
+				})
+				mustValidate(t, &c)
+				return
+			}
 			c.StorageMediums[0].StorageClass = class
 			mustValidate(t, &c)
 		})
@@ -527,6 +548,14 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Credentials:        MediumCredentials{File: "/var/lib/backup-manager/s3/offsite_s3.creds"},
 		},
 		{
+			ID:           "offsite_annual",
+			Type:         "s3",
+			Region:       "us-east-1",
+			Bucket:       "nas-backups-annual",
+			StorageClass: StorageClassStandardIA,
+			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backup-manager/s3-annual"}},
+		},
+		{
 			ID:           "offsite_cold",
 			Type:         "s3",
 			Region:       "us-east-1",
@@ -555,7 +584,13 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 		}
 	}
 
-	wantTierMediums := []string{"", "offsite_s3", "offsite_cold"}
+	// The annual tier names a colder-but-readable class rather than an
+	// archive one. That changed with #442: an archive-class medium a tier
+	// delivers to is refused at load, so the fixture that has to Validate
+	// at the end of this test cannot spell that pairing. The DEEP_ARCHIVE
+	// medium is still declared and still parsed, referenced by nothing,
+	// which is the half of the shape that stays legal.
+	wantTierMediums := []string{"", "offsite_s3", "offsite_annual"}
 	if len(cfg.Retention.Tiers) != len(wantTierMediums) {
 		t.Fatalf("parsed %d tier(s), want %d", len(cfg.Retention.Tiers), len(wantTierMediums))
 	}

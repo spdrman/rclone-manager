@@ -187,6 +187,17 @@ type Engine struct {
 	// destination that keeps failing verification before abandoning the
 	// move. Zero means defaultMaxCopyAttempts.
 	MaxCopyAttempts int
+
+	// StagingFreeBytes reports how many bytes are available on the
+	// filesystem that would hold a medium-to-medium move's staging copy.
+	// Nil means capacity.StatPath, which is the real reading.
+	//
+	// It is a seam for the reason Now is one. The refusal it feeds is
+	// about a disk with no room on it, and a test cannot have one of
+	// those; the alternative to injecting the reading is a refusal that
+	// is never exercised, which is the same as not having it. See
+	// staging.go.
+	StagingFreeBytes func(dir string) (int64, error)
 }
 
 const defaultMaxCopyAttempts = 2
@@ -251,10 +262,11 @@ type Outcome struct {
 // move an artifact, as opposed to something failing.
 //
 // It is the question every caller of RunCycle actually has. A refused plan
-// is normal (an artifact with two ACTIVE copies, a medium-to-medium hop, a
-// destination whose storage class cannot support the verification its
-// medium requires), and a cycle full of them is a configuration to look
-// at, not an incident. A journal that will not open is an incident.
+// is normal (an artifact with two ACTIVE copies, a destination whose
+// storage class cannot support the verification its medium requires, a
+// medium-to-medium hop on a deployment with nowhere to stage the copy),
+// and a cycle full of them is a configuration to look at, not an
+// incident. A journal that will not open is an incident.
 func (o Outcome) PolicyRefusal() bool { return errors.Is(o.Err, ErrNotEligible) }
 
 // CycleReport is what one RunCycle did.
@@ -446,13 +458,19 @@ func (e *Engine) eligibleSource(rec state.Record, destination string) (state.Pla
 			ErrNotEligible, rec.Artifact, src.Medium, transport.SHA256)
 	}
 	if src.Medium != config.MediumLocal && destination != config.MediumLocal {
-		// Medium to medium would need a local staging copy and a second
-		// set of failure modes. FR-27's home rule only ever produces
-		// local-to-medium and medium-to-local, so this is refused rather
-		// than half-built.
-		return state.Placement{}, fmt.Errorf(
-			"%w: moving %s from %q to %q is medium-to-medium, which this engine does not do",
-			ErrNotEligible, rec.Artifact, src.Medium, destination)
+		// Medium to medium goes through a local staging copy (#429). This
+		// clause used to refuse it outright, with a comment saying FR-27's
+		// home rule only ever produces local-to-medium and medium-to-local;
+		// that is false for a chain with two medium tiers, which is the
+		// chain the phase 2 exit gate names. staging.go is the work the
+		// same comment's first sentence named, and this is now only the
+		// part of it that is decidable for free: a deployment with nowhere
+		// to stage is refused before a move row exists.
+		if err := e.canStage(rec.Artifact); err != nil {
+			return state.Placement{}, fmt.Errorf(
+				"%w: moving %s from %q to %q is medium-to-medium, which goes through a staging copy on the backup set's own disk, and %v",
+				ErrNotEligible, rec.Artifact, src.Medium, destination, err)
+		}
 	}
 	if err := e.destinationCanBeVerified(destination); err != nil {
 		return state.Placement{}, fmt.Errorf(
@@ -690,11 +708,29 @@ func (e *Engine) copy(ctx context.Context, mv state.Move) (state.Move, error) {
 	}
 
 	var bytes int64
-	switch mv.DestinationMedium {
-	case config.MediumLocal:
+	switch {
+	case mv.DestinationMedium == config.MediumLocal:
 		bytes, err = e.copyToLocal(ctx, mv, src)
-	default:
+	case mv.SourceMedium == config.MediumLocal:
 		bytes, err = e.copyToMedium(ctx, mv, src)
+	default:
+		// Both ends are mediums, so the bytes go through a staging copy
+		// on the backup set's own disk (#429). See staging.go.
+		bytes, err = e.copyMediumToMedium(ctx, mv, src)
+	}
+	if errors.Is(err, ErrClassRefused) {
+		// A refusal no retry can change, on the SOURCE end this time, and
+		// handled exactly as verifyDestination handles one on the
+		// destination end. Going back to COPYING would ask an archived
+		// object for its bytes again and be told InvalidObjectState again,
+		// twice, before giving up, and each attempt is a billable request
+		// on a class that also bills for retrieval. Nothing was copied and
+		// the source was never touched, so abandoning is the honest end.
+		why := fmt.Sprintf("%s cannot be copied from %q to %q: %v", mv.Artifact, mv.SourceMedium, mv.DestinationMedium, err)
+		if mv.Error != "" {
+			why = strings.TrimSuffix(mv.Error, ".") + "; " + why
+		}
+		return e.abandon(ctx, mv, why)
 	}
 	if err != nil {
 		// Record WHY on the move row before giving the error back.
@@ -999,6 +1035,8 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	result, want, err := e.verifyCopy(ctx, mv, src, false)
 	switch {
 	case errors.Is(err, ErrClassUnavailable):
+		// This branch RECORDS its reason and changes nothing else. See
+		// noteOnRow for why the recording is not optional.
 		// "I could not check it" is not "I checked and it is wrong", and
 		// at this phase the difference decides whether a good copy gets
 		// destroyed. The destination here is not the disposable one it was
@@ -1020,9 +1058,9 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		// it. That is the same standing refusal guardSourceDelete's own
 		// clauses produce, and it is reached the same way: by returning
 		// rather than by advancing.
-		return mv, fmt.Errorf(
+		return e.noteOnRow(ctx, mv, fmt.Errorf(
 			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
-			mv.Artifact, mv.DestinationMedium, want, err)
+			mv.Artifact, mv.DestinationMedium, want, err))
 	case err != nil:
 		return e.recopyOrAbandon(ctx, mv, SourceDeletePending, fmt.Sprintf(
 			"the destination copy on %q could not be re-verified at %s class immediately before the source delete: %v",
@@ -1055,12 +1093,14 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	switch {
 	case errors.Is(err, errSourceAlreadyGone):
 		// The delete already happened and the process died before it could
-		// say so. Recording DONE below is the whole remaining work.
+		// say so. Recording DONE below is the whole remaining work, and
+		// nothing is noted on the row because nothing refused.
 	case err != nil:
-		return mv, err
+		return e.noteOnRow(ctx, mv, err)
 	default:
 		if err := e.remove(ctx, target); err != nil {
-			return mv, fmt.Errorf("placement: deleting %s's source copy on %q: %w", mv.Artifact, mv.SourceMedium, err)
+			return e.noteOnRow(ctx, mv, fmt.Errorf(
+				"placement: deleting %s's source copy on %q: %w", mv.Artifact, mv.SourceMedium, err))
 		}
 	}
 
@@ -1070,6 +1110,49 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		OccurredAt: e.now(),
 		Placements: []state.PlacementUpdate{src.Update().WithStatus(state.PlacementGone)},
 	}))
+}
+
+// noteOnRow records WHY a move stopped where it is, without moving it and
+// without changing a single placement.
+//
+// # What was wrong with returning the error and nothing else
+//
+// Every path this serves is a STANDING refusal: the destination could not
+// be re-verified, or one of guardSourceDelete's clauses could not be
+// proved, or the delete itself failed. All of them are deliberate, all of
+// them preserve every copy, and all of them are reached by returning
+// rather than by advancing, which is exactly right. What was missing is
+// the account. The move row read SOURCE_DELETE_PENDING with an empty error
+// column, so the only record of what the engine had decided lived in the
+// cycle report, which is in memory and gone by the time an operator looks.
+//
+// That is the same hole copy() closed for a failed copy, and this is
+// deliberately the same shape so the two read consistently: a From == To
+// write, which phases.go names as the one legal non-transition precisely
+// because it is how a caller records a fact without claiming progress.
+//
+// # It makes a decision visible; it does not turn one into a fault
+//
+// The phase does not change, no placement changes, and nothing here is
+// terminal. A move parked here is still open and still legitimately
+// waiting, and it will be re-driven and re-refused on the next cycle,
+// which is the intended behaviour. The one thing that changes is that the
+// reason is now durable and readable, which is what FR-24's health surface
+// needs to tell "this move is waiting on something a person has to fix"
+// from "this move started ten seconds ago". Without it those two are the
+// same row.
+//
+// The error given back is the caller's own, unwrapped and unchanged, so
+// every errors.Is a caller was already asking still gets the same answer.
+// A failure to write the note is folded into it rather than replacing it,
+// because the reason the move stopped matters more than the reason it
+// could not be written down.
+func (e *Engine) noteOnRow(ctx context.Context, mv state.Move, why error) (state.Move, error) {
+	noted, noteErr := e.step(ctx, mv, Phase(mv.Phase), Phase(mv.Phase), why.Error())
+	if noteErr != nil {
+		return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", why, noteErr)
+	}
+	return noted, why
 }
 
 // recopyOrAbandon takes the destination away and either copies again or
@@ -1104,8 +1187,17 @@ func (e *Engine) recopyOrAbandon(ctx context.Context, mv state.Move, from Phase,
 	return mv, nil
 }
 
-// abandon cleans up the destination and leaves the source exactly where it
-// was. It is the only terminal outcome other than DONE.
+// abandon cleans up the destination and the staging copy, and leaves the
+// source exactly where it was. It is the only terminal outcome other than
+// DONE.
+//
+// The staging copy is cleaned up here and not in recopyOrAbandon, which is
+// the other exit from a failed copy, because the two are going different
+// places. recopyOrAbandon is arranging another attempt, and that attempt
+// checks the staging copy and reuses it when it is the artifact, which is
+// how an interrupted move avoids paying the egress twice. This is the end
+// of the move, so what is left is one artifact-sized file on the backup
+// set's own disk with nothing coming to collect it.
 func (e *Engine) abandon(ctx context.Context, mv state.Move, why string) (state.Move, error) {
 	rec, err := e.Journal.Get(ctx, mv.Artifact)
 	if err != nil {
@@ -1124,6 +1216,9 @@ func (e *Engine) abandon(ctx context.Context, mv state.Move, why string) (state.
 		return mv, err
 	}
 	if err := e.discardDestination(ctx, mv); err != nil {
+		return mv, err
+	}
+	if err := e.discardStaging(ctx, mv); err != nil {
 		return mv, err
 	}
 	return mv, nil

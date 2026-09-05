@@ -90,23 +90,84 @@ two years, and then advances the clock and lets `GFSDecide`,
 tells the engine where an artifact belongs.
 
 Composing them turned up two things no unit suite could have, and both are
-now issues rather than rows: an archive-class tier can never take delivery
-of an artifact (#428), and a chain with two medium tiers needs a
-medium-to-medium move, which the engine refuses (#429). Neither loses data.
+now closed: an archive-class tier can never take delivery of an artifact
+(#428), and a chain with two medium tiers needs a medium-to-medium move,
+which the engine refused (#429). Neither ever lost data.
 
-#428 has since been answered at the engine by #437: a move to an
-archive-class destination is refused at PLAN time, for nothing, and
-reported again every cycle rather than abandoned and retried. That answer
-is also what made the composed scenario's own annual rung untestable, since
-the rung stopped producing anything to observe, so the scenario's annual
-tier is now an ordinary `s3` medium and the archive pairing has a cell of
-its own that asserts the refusal, the zero move rows and the zero objects.
-What the suite can and cannot claim about a cold class as a result is
-spelled out in P2.1 and P2.6, and again at the bottom of this file. #442,
-which would move the same refusal into `config.Validate`, is the next place
-it belongs, and the conformance suite no longer stands in its way: no cell
-needs a tier on an archive class to LOAD, and the one that builds such a
-chain says in its own failure message that it is the cell to move.
+#428 was answered at the engine by #437, which refuses a move to an
+archive-class destination at PLAN time, for nothing, and reports it again
+every cycle rather than abandoning and retrying. #442 then moved the same
+refusal one layer earlier, into `config.Validate`, so the pairing is
+refused where an operator writes it and a deployment on one never starts.
+The engine's refusal is still there as the second line of defence, for a
+journal written by an older build or a bucket that grew a lifecycle rule,
+and its falsification moved to `internal/placement/archiveupload_test.go`
+because the composed suite can no longer reach it: the config it would need
+does not load. The scenario's annual tier is an ordinary `s3` medium, the
+GLACIER medium stays DECLARED and unreferenced (which is the half #442
+leaves legal, for #241's restores), and the archive pairing has a cell of
+its own that asserts the load refusal, the control that the same file
+loads with one field changed, and the declared-medium half. What the suite
+can and cannot claim about a cold class is spelled out in P2.1 and P2.6,
+and again at the bottom of this file.
+
+#429 is answered by a staging copy. A move between two mediums reads the
+source down to a `.moves` directory under the backup set's own
+`local_path`, proves what arrived hashes to what the journal recorded at
+ingestion, uploads that, and removes it; the source stays ACTIVE and
+content-verified throughout, so FR-30's standing invariant rests on it for
+the whole copy phase and the staging file is never a placement. The
+composed second hop asserts arrival now rather than refusal, and P2.1 is
+PASS.
+
+Extending that crash matrix over the staged hop found three more things,
+and none of them was in the phase machine, which is worth saying because
+the argument for extending it was that the phase machine is unchanged and
+that is exactly the kind of argument an exception hides in. The staging
+happens INSIDE the copy phase, so the boundaries really are the same ones,
+and the cells confirmed that rather than assuming it.
+
+What a real SIGKILL did find is a leak no planted fixture would have
+produced. `artifactstore.Local.Put` writes through a temporary file and
+links it into place, and removes the temporary name on every path out of
+itself; a SIGKILL takes none of those paths, so a process killed part-way
+through a staged download leaves a temp file behind and nothing at the
+staging name at all. Nothing collected it, because the name is random and
+belongs to no artifact, so an interrupted hop cost one artifact-sized file
+on the backup set's own disk, for ever, on the disk the NEXT hop's size
+check is about. The staged copy path sweeps them now, before the size check
+rather than after, and cell S1 is what says the sweep is looking for the
+right thing: if that temporary prefix ever changes, the cell fails with the
+actual leftover name in its message.
+
+The other two were in the suite rather than the product, and both are the
+copy-identity defect described below found in two more places. The crash
+guards, in the harness and in the restarting process, each subtracted the
+copy being deleted by LOCATOR, so deleting the source subtracted the
+destination and every staged cell reported a breach that had not happened.
+And the harness's corrupt helper wrote into the FIRST medium's bucket
+whatever medium it was handed, so a staged cell corrupted the source and
+read as the engine refusing a source delete on a size mismatch. Nothing
+about the key could have caught either, because both mediums give one
+artifact the same key.
+
+Running the composed suite also turned up a defect in this suite's own
+watcher, which is worth recording because it is the shape that makes a
+guard useless rather than noisy. The watcher identified a copy by its LOCATOR, and FR-28's key
+is `<prefix>/<source>/<set>/<artifact-name>`, so two mediums declaring no
+prefix give one artifact the same key on both buckets. Nothing had two
+medium copies at once until the second hop did. Keyed that way, deleting
+the source subtracted the destination as well and the watcher reported a
+breach that had not happened; the dangerous direction is the same bug
+seen from the other side, where a stale entry for one medium masks a live
+copy on another and a real breach reads clean. The set is keyed by medium
+AND locator now, the same fix is applied to `internal/placement`'s own
+fixture guard and to both crash-matrix guards, and the composed cell
+asserts that the two keys really do collide so the coverage cannot
+evaporate the day somebody adds a prefix. Four guards had it, in three
+suites, and every one of them was written by somebody who knew what a copy
+was; what none of them had was a world in which one artifact had two
+medium copies at the same time.
 
 #239's rows (P2.4 and V6) are PASS as of this run, and what changed is more
 than a word. Its code is in the tree. The prune cell that used to pin
@@ -145,12 +206,12 @@ cells on evidence read out of a pull request description.
 
 | # | Outcome | Certifies | Where | Falsification |
 | --- | --- | --- | --- | --- |
-| P2.1 | PARTIAL (#429) | A three-tier chain (daily local, monthly `s3`, annual `s3` cold) runs end to end against MinIO, with the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness rather than sampled. | `core/tests/conformance` (`threetier_test.go` runs the chain, `watcher_test.go` is the watcher, `sampler_test.go` is the control that gives "continuously" its meaning) | The gate line's own, and it fires: the source released one phase early opens a window in which neither copy is verified, and the SAME run judged two ways has the sampler seeing nothing and the watcher failing at "after the journal wrote phase COPIED". A completed move that never removes the source copy is caught too (`still has a local copy after a completed move to "annual_s3"`), which is what holds the third rung's delivery to more than a journal row. Both automated in `scripts/conformance/selftest.sh`. What is now PASS-shaped: all THREE rungs take delivery in one run, each from a local copy, with the bytes read back off each bucket. Two things keep it PARTIAL. The hop from one medium rung to the next is medium-to-medium and the engine refuses it (#429), so an artifact reaches any rung from local and never walks along the chain. And the annual rung is not a cold class here and cannot be, for two independent reasons that are each written down as a check: this MinIO refuses every archive class (`archiveboundary_test.go`), and the product refuses a tier-to-archive move before it costs anything (#428, answered by #437, asserted in `TestAnArchiveClassTierIsRefusedBeforeItCostsAnything`). |
-| P2.2 | PASS | The crash matrix passes: a forced crash at every move phase boundary, restart reconciliation, and the move either completed or abandoned with the source intact. | `core/tests/movecrash` (eleven cells against rclone's local backend) and `core/tests/conformance/crashmatrix_test.go` (the same eleven against MinIO, through the same harness binary) | The spec's own, run and caught: the source delete issued before `VERIFIED` is durably recorded, which takes three edits (the phase edge, the driver's case, and the phase `intendSourceDelete` names as the one it is leaving) and is refused as an illegal write with only two. Automated in `scripts/conformance/selftest.sh`, together with a destination trusted instead of re-verified, which turns the two hostile-endpoint cells red on the bytes rather than on the phase. |
+| P2.1 | PASS (except the cold class, which cannot be run here) | A three-tier chain (daily local, monthly `s3`, annual `s3`) runs end to end against MinIO, with the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness rather than sampled. | `core/tests/conformance` (`threetier_test.go` runs the chain, `watcher_test.go` is the watcher, `sampler_test.go` is the control that gives "continuously" its meaning) | The gate line's own, and it fires: the source released one phase early opens a window in which neither copy is verified, and the SAME run judged two ways has the sampler seeing nothing and the watcher failing at "after the journal wrote phase COPIED". A completed move that never removes the source copy is caught too (`still has a local copy after a completed move to "annual_s3"`). All three rungs take delivery in one run, with the bytes read back off each bucket, and the artifact now WALKS the chain: the second hop is medium to medium, which the engine refused until #429 and which now goes through a staging copy on the backup set's own disk. Two more falsifications are automated for that hop in `scripts/conformance/selftest.sh` and both watched red: the old outright refusal put back (`want DONE (refusal:`), and the staging copy never removed (`the staging copy is still at`). What this row still does NOT claim is the gate line's word "cold": the annual rung is an ordinary class here and cannot be anything else, for two independent reasons each written down as a check. This MinIO refuses every archive class (`archiveboundary_test.go`), and a retention tier on an archive class is refused when the config loads (#428, answered by #437 and then by #442, asserted in `TestAnArchiveClassTierIsRefusedAtLoad`). |
+| P2.2 | PASS | The crash matrix passes: a forced crash at every move phase boundary, restart reconciliation, and the move either completed or abandoned with the source intact. Since #429 that includes a hop whose two ends are both mediums, which goes through a staging copy on the backup set's own disk. | `core/tests/movecrash` (eleven cells against rclone's local backend, plus seven over the staged hop) and `core/tests/conformance/crashmatrix_test.go` (the same eighteen against MinIO, through the same harness binary) | The spec's own, run and caught: the source delete issued before `VERIFIED` is durably recorded, which takes three edits (the phase edge, the driver's case, and the phase `intendSourceDelete` names as the one it is leaving) and is refused as an illegal write with only two. Automated in `scripts/conformance/selftest.sh`, together with a destination trusted instead of re-verified, which turns the two hostile-endpoint cells red on the bytes rather than on the phase. The staged cells carry three falsifications of their own, all run and caught: the temporary-file sweep removed (S1 goes red naming the leftover), an existing staging copy ignored and downloaded again (S2 goes red on the COUNT of source reads rather than on the outcome, because a build that re-downloaded would converge just as well and cost twice as much), and `-kill-during-stage` mutated to fire AFTER the staging write instead of during it (S1 goes red on `the download had finished and this cell did not interrupt one`, which is the "died somewhere harmless" way a crash cell passes for the wrong reason). |
 | P2.3 | PASS | Moving an artifact does not change its retention bucketing: verdicts before and after are bit-identical. | `TestAMoveDoesNotChangeARetentionVerdict` in `core/tests/conformance` for the across-a-move half, plus cells `04-retention-verdicts` and `11-upgraded-retention-verdicts` in `core/tests/compat` for the migration half | Both halves caught. Rewriting the journal's discovery timestamp turns cell 11 red (`scripts/compat/selftest.sh`), and bucketing an artifact by when its copy was VERIFIED rather than when it was discovered, which is the value a move itself writes and therefore the likeliest way FR-32 would be broken by one, turns the across-a-move check red (`scripts/conformance/selftest.sh`). The comparison is bit-identical rather than tier-for-tier, because a move that shifted a bucket by a month would keep the artifact under a tier name that still looked right and change which artifact each bucket keeps. |
 | P2.4 | PASS | Prune against a medium refuses on identity mismatch, and the mandatory dry-run names the medium for every proposed deletion. | `core/tests/conformance/prune_test.go` for both halves composed over MinIO, on an artifact this same process really moved onto a bucket; `core/internal/placement/reclaim_test.go` for the FR-16 re-check against a double, including the same-length swap a size comparison cannot see and this endpoint cannot show; `core/internal/retention/pruneonmedium_test.go` for the refusal-first decision table; `core/cmd/backup-manager/retention_placement_test.go` for the dry-run's `medium=` field and the control that a local artifact's line did not grow one | The spec's own, run and caught: a fixture that swaps the object behind a key before prune, and the apply has to refuse and leave the object where it is. Four mutations automated in `scripts/conformance/selftest.sh` and all four watched red: the medium copy sent down FR-20's local path (`is REFUSE, want DELETE`), a medium delete reported but never made (`PruneApply asked the medium pruner for []`), the FR-16 re-check run and its answer ignored (`prune's verdict is DELETE, not REFUSE`), and a dry-run that stops naming the medium (`does not say where its deletion would happen`). The composed cell's own control is that one pass produces three different answers over artifacts on three different mediums, so a build that refused everything or deleted everything fails it. The local half of the same rule stays live: cell `05-prune-verdicts` goes red when prune is mutated to delete a file it could not stat instead of refusing. |
 | P2.5 | PASS | A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests. The same gate stands in front of a backup set's own chain (`PUT /backup-sets/{source}/{set}/retention`) and the CLI's `backup-set retention --policy-file`, since an override can name a medium per tier too. | `core/service/placements_test.go` (the deny, allow, does-not-ask-again and per-set halves against the real service), `apps/common/webhost/placements_contract_test.go` (the typed `MEDIUM_DISCLOSURE_REQUIRED` refusal on both routes, and the acknowledgment crossing the seam), `core/cmd/backup-manager/backupsetretention_test.go` (the CLI half) | The spec's own: the gate removed from `core/service.UpdateSettings` and from `SetBackupSetRetention`, each run and caught by its refuses-a-first-mapping test; the per-set gate reading the deployment's chain instead of the set's own, run, caught; the handler mapping the refusal onto `INVALID_REQUEST`, run, caught; the acknowledgment dropped at the HTTP seam or echoed back out, each run, caught; the CLI flag not wired, run, caught. |
-| P2.6 | PARTIAL (#428) | An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA. | `TestTheContractServesNoCostFigureAndNoInventedETA` in `core/tests/compat`, and `core/tests/conformance/archiveboundary_test.go` for the access-state derivation and the ceiling that follows from it | Three things are now caught. The no-cost half fires in both directions: a cost field, and an invented ETA plus a percentage. An archived copy allowed to claim content class turns the ceiling check red, and an existence-class placement allowed to satisfy the standing invariant turns its own check red; both automated in `scripts/conformance/selftest.sh`. A fourth is now caught: an archive-class destination refused after planning instead of before turns `TestAnArchiveClassTierIsRefusedBeforeItCostsAnything` red on `for a move it refused before planning`, and the mutant shows exactly the shape #437 measured, a move row per cycle accumulating for ever. So what an archive tier DOES is asserted rather than described: the chain plans it, the engine refuses it as a policy refusal naming `GLACIER`, no move row is written, no object is created, and the next cycle says the same thing and spends the same nothing. PARTIAL is the END TO END archive half, and it is not blocked on code that has not been written: it cannot be run here at all. This MinIO takes 1 of the 7 storage classes the config accepts and answers `InvalidStorageClass` to the other six, so no archived object can be created to observe, let alone restored, and #428 records that the product could not complete the move even against an endpoint that took it. That is written down as a check rather than a caveat, so the day either fact changes this suite says so. |
+| P2.6 | PARTIAL (the end-to-end archive half cannot be run here) | An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA. | `TestTheContractServesNoCostFigureAndNoInventedETA` in `core/tests/compat`, and `core/tests/conformance/archiveboundary_test.go` for the access-state derivation and the ceiling that follows from it | Three things are now caught. The no-cost half fires in both directions: a cost field, and an invented ETA plus a percentage. An archived copy allowed to claim content class turns the ceiling check red, and an existence-class placement allowed to satisfy the standing invariant turns its own check red; both automated in `scripts/conformance/selftest.sh`. A fourth is now caught: the tier-to-medium pairing accepted at load turns `TestAnArchiveClassTierIsRefusedAtLoad` red on `the config loaded with the annual tier on a GLACIER medium`, and the mutant shows exactly the shape #437 measured, a move row per cycle accumulating for ever on a deployment that started and looked healthy. So what an archive tier DOES is asserted rather than described: the config naming one does not load, the message says which tier, which medium, which class and what to write instead, the same file with one field changed loads, and the archive-class medium stays declared and unreferenced, which is the half #442 leaves legal for #241's restores. The engine's own plan-time refusal is still the second line of defence and its falsification lives in `internal/placement/archiveupload_test.go`, because the composed suite can no longer reach it. PARTIAL is the END TO END archive half, and it is not blocked on code that has not been written: it cannot be run here at all. This MinIO takes 1 of the 7 storage classes the config accepts and answers `InvalidStorageClass` to the other six, so no archived object can be created to observe, let alone restored, and #428 records that the product could not complete the move even against an endpoint that took it. That is written down as a check rather than a caveat, so the day either fact changes this suite says so. |
 | P2.7 | PASS | FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral difference through config validation, retention verdicts, API responses (minus additive fields) and CLI output. | `core/tests/compat`, twelve cells | The spec's own: a migration variant that rewrites `retention_tier` during backfill. Run, caught by cell `10-upgraded-artifact-rows`, and caught again by `TestUpgradingAndInstallingFreshAgreeWithEachOther` when the corpus is regenerated around it. |
 | P2.8 | PASS | `check-contract-drift.sh` and `check-client-paths.sh` pass with the new operations; the layer manifest classifies every new file; `verify-core-without-distribution.sh` still passes. | `scripts/api/check-contract-drift.sh`, `scripts/api/check-client-paths.sh`, `scripts/architecture/check-layer-manifest.sh`, `scripts/architecture/verify-core-without-distribution.sh` | All four run in `scripts/ci-local.sh` and all four have mutation self-tests (`scripts/api/selftest.sh` for the first two). #240 landed the API lane: five schemas, four new fields on existing shapes and one new error code, all additive, and deliberately no new client path (placements ride the artifact surface, mediums ride settings, the consent rides the two retention writes), so `check-client-paths.sh` had nothing new to admit and `check-contract-drift.sh` regenerated cleanly. The contract-level falsification that did fire on the way in: the no-cost gate (P2.6) refused two field names on the new ladder schema, `cost` and `costs_egress`, and they were renamed rather than exempted. |
 
@@ -178,25 +239,28 @@ records its planted violation actually failing. This is that ledger.
 
 ## What this matrix does not claim
 
-It does not claim the three-tier chain works end to end, and it is now
-precise about which half is which. All three rungs take delivery, each
-from a local copy, in one run against a real endpoint, with the bytes read
-back off each bucket. What does not happen is an artifact walking from one
-medium rung to the next, because that is a medium-to-medium move and the
-engine refuses it (#429). The refusal keeps the artifact and keeps the
-invariant, and it is asserted rather than hoped for, so the day #429 is
-fixed the check goes red and the row gets re-read.
+It does claim the three-tier chain works end to end now, which it did not
+before #429. All three rungs take delivery in one run against a real
+endpoint, with the bytes read back off each bucket, and an artifact walks
+from one medium rung to the next: the second hop is medium to medium and
+goes through a staging copy on the backup set's own disk. What a reader
+should take from that is one operational consequence, spelled out in
+`docs/storage-mediums.md`: a chain with two medium tiers needs transient
+room on the NAS for the largest artifact that will ever hop between them,
+even though nothing is stored there permanently. A hop that will not fit is
+refused before anything is downloaded.
 
 It does not claim the annual rung is a cold class, which is what the gate
 line literally asks for. It cannot be one here and it should not be one
 here, and those are two different statements. It cannot, because this MinIO
 refuses every archive class outright. It should not, because a retention
 tier on an archive class can never take delivery of an artifact at all
-(#428) and the product now refuses that pairing before it costs anything
-(#437), so a scenario built on it would demonstrate a rung that no
-deployment anywhere can use while failing to demonstrate the one it can.
-The archive pairing is a cell of its own instead, asserting the refusal,
-and #442 is where the same refusal wants to move next.
+(#428), and since #442 a config that names that pairing does not load, so a
+scenario built on it could not stand up, let alone demonstrate a rung that
+no deployment anywhere can use. The archive pairing is a cell of its own
+instead, asserting the load refusal, the control that the same file loads
+with one field changed, and the declared-but-unreferenced medium that stays
+legal.
 
 It does not claim anything about an archive storage class beyond two
 refusals and one fixture fact. The archive rows rest on the product's own

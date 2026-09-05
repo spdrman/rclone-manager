@@ -136,7 +136,7 @@ func TestTheSourceDeleteHasExactlyOneCaller(t *testing.T) {
 		{"copiesOf", []string{"guardSourceDelete"}},
 
 		// observe is the one entry here that is not part of the delete
-		// ordering, and it now has two callers rather than one.
+		// ordering, and it now has three callers rather than one.
 		//
 		// Everything above it destroys something or authorises destroying
 		// something, and for those "exactly one caller" IS the safety
@@ -151,10 +151,23 @@ func TestTheSourceDeleteHasExactlyOneCaller(t *testing.T) {
 		// reading it, and refusing before the read is what stops the
 		// engine spending a GET and then treating InvalidObjectState as a
 		// failed verification worth retrying. It reads and refuses; it
-		// deletes nothing. The list is spelled out rather than relaxed to
-		// "one or more" so that a third caller still has to be argued for
-		// here.
-		{"observe", []string{"copiesOf", "verifyCopy"}},
+		// deletes nothing.
+		//
+		// sourceCanBeStaged is the third, and its argument is verifyCopy's
+		// applied to the other end of a move. A medium-to-medium move has
+		// to READ its source down onto local disk before it can upload it
+		// anywhere (#429, staging.go), which is a content-class
+		// capability, so it asks the same question about the source that
+		// verifyCopy asks about the destination and for the same reason:
+		// an archived object answers InvalidObjectState to a GET, that
+		// costs a billable request, and an engine that reads the answer as
+		// a failed copy retries it. It reads and refuses; it deletes
+		// nothing, and the answer is used to decline a move rather than to
+		// authorise one.
+		//
+		// The list is spelled out rather than relaxed to "one or more" so
+		// that a fourth caller still has to be argued for here.
+		{"observe", []string{"copiesOf", "verifyCopy", "sourceCanBeStaged"}},
 	} {
 		got := callers[tc.method]
 		want := map[string]bool{}

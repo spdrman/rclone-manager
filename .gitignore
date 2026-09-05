@@ -113,3 +113,12 @@ __pycache__/
 # go.work itself IS tracked and IS classified. The workspace definition is a
 # decision somebody made, and its checksum file is a cache.
 go.work.sum
+
+# `go build ./tests/movecrash/harness` run by hand from core/ writes the
+# 44MB crash harness binary to core/harness, because go names the output
+# after the package directory and puts it in the working directory. Both
+# crash suites build it into a temp directory of their own, so this path
+# only ever appears when somebody builds it by hand to check it compiles,
+# which is exactly when they are least likely to look at what `git add -A`
+# picked up. It has been committed once already.
+/core/harness
