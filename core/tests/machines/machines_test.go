@@ -351,7 +351,7 @@ func TestLimitConnectionsStillSkipsAKernelThatWillNotCapOutsideTheGate(t *testin
 func TestHelperLimitConnectionsAgainstARefusingKernel(t *testing.T) {
 	skipUnlessHelper(t)
 	m := Start(t)
-	m.Source.LimitConnections(t, 2)
+	m.Source(t).LimitConnections(t, 2)
 	fmt.Println(limitReturnedMarker)
 	t.Fatal("LimitConnections returned though the rule could not be installed")
 }

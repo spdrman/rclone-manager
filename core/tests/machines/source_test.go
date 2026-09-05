@@ -16,7 +16,7 @@
 // runs many worktrees against one docker daemon, so a scan-shaped
 // assertion could be answered by another agent's container and would prove
 // nothing about this one.
-package sftpfixture
+package machines
 
 import (
 	"bytes"
@@ -36,16 +36,16 @@ import (
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
 
-// helperEnv guards the helper tests below so they only run in a child
+// sourceHelperEnv guards the helper tests below so they only run in a child
 // process this file started, never as part of a normal `go test ./...`.
-const helperEnv = "SFTPFIXTURE_HELPER"
+const sourceHelperEnv = "MACHINES_SOURCE_HELPER"
 
 // containerMarker is how a helper hands its container id back to the parent.
 const containerMarker = "FIXTURE_CONTAINER="
 
-func skipUnlessHelper(t *testing.T) {
+func skipUnlessSourceHelper(t *testing.T) {
 	t.Helper()
-	if os.Getenv(helperEnv) == "" {
+	if os.Getenv(sourceHelperEnv) == "" {
 		t.Skip("helper process only; driven by the fail-fast tests in this file")
 	}
 }
@@ -67,14 +67,14 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// runHelper re-executes this test binary for one helper test and reports
+// runSourceHelper re-executes this test binary for one helper test and reports
 // what happened within window. exited is false when the child was still
 // running at the end of the window, which is the shape of the #161 hang.
-func runHelper(t *testing.T, name string, window time.Duration, extraEnv ...string) (out string, exited bool, code int) {
+func runSourceHelper(t *testing.T, name string, window time.Duration, extraEnv ...string) (out string, exited bool, code int) {
 	t.Helper()
 
 	cmd := exec.Command(os.Args[0], "-test.run=^"+name+"$", "-test.v=true", "-test.timeout="+(4*window).String())
-	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	cmd.Env = append(os.Environ(), sourceHelperEnv+"=1")
 	cmd.Env = append(cmd.Env, extraEnv...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -180,22 +180,22 @@ func hangingDocker(t *testing.T) string {
 // about which step is stuck.
 func TestFixtureFailsFastWhenDockerStopsAnswering(t *testing.T) {
 	// Positive control, on the checker rather than the subject: prove
-	// runHelper reports a child that outlives its window as "did not
+	// runSourceHelper reports a child that outlives its window as "did not
 	// exit". If it reported an exit for that, "the subject exited in
 	// time" below would be true no matter how badly the fixture hung.
-	if _, exited, _ := runHelper(t, "TestHelperSleepsPastItsWindow", 2*time.Second); exited {
-		t.Fatal("runHelper claimed a helper that sleeps far past its window had exited; it cannot tell a fail-fast from a hang, so nothing below would prove anything")
+	if _, exited, _ := runSourceHelper(t, "TestHelperSleepsPastItsWindow", 2*time.Second); exited {
+		t.Fatal("runSourceHelper claimed a helper that sleeps far past its window had exited; it cannot tell a fail-fast from a hang, so nothing below would prove anything")
 	}
 
 	const window = 45 * time.Second
 	shim := hangingDocker(t)
-	out, exited, code := runHelper(t, "TestHelperFixtureAgainstAHangingDocker", window,
+	out, exited, code := runSourceHelper(t, "TestHelperFixtureAgainstAHangingDocker", window,
 		"RCLONE_MANAGER_SFTP_TEST_BUDGET=5s",
 		"RCLONE_MANAGER_SFTP_DEATH_GRACE=2s",
 		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if !exited {
-		t.Fatalf("sftpfixture.Start never came back from a docker that answers nothing, %s in: this is #161, where the whole package hangs to its 25-minute go test timeout instead of naming the stuck step.\nhelper output:\n%s", window, out)
+		t.Fatalf("machines.Start never came back from a docker that answers nothing, %s in: this is #161, where the whole package hangs to its 25-minute go test timeout instead of naming the stuck step.\nhelper output:\n%s", window, out)
 	}
 	if code == 0 {
 		t.Fatalf("the helper exited SUCCESSFULLY against a docker that answers nothing; a fixture that cannot reach docker must fail or skip loudly, never pass.\nhelper output:\n%s", out)
@@ -208,13 +208,13 @@ func TestFixtureFailsFastWhenDockerStopsAnswering(t *testing.T) {
 }
 
 func TestHelperSleepsPastItsWindow(t *testing.T) {
-	skipUnlessHelper(t)
+	skipUnlessSourceHelper(t)
 	time.Sleep(60 * time.Second)
 }
 
 func TestHelperFixtureAgainstAHangingDocker(t *testing.T) {
-	skipUnlessHelper(t)
-	f := Start(t)
+	skipUnlessSourceHelper(t)
+	f := Start(t).Source(t)
 	fmt.Println(containerMarker + f.ContainerID())
 	t.Fatal("Start returned against a docker that answers nothing, which should be impossible")
 }
@@ -233,7 +233,7 @@ func TestFixtureNamesAGenuineHangAndLeavesNoContainer(t *testing.T) {
 	requireDocker(t)
 
 	const window = 90 * time.Second
-	out, exited, code := runHelper(t, "TestHelperFixtureHangsWithAHealthyContainer", window,
+	out, exited, code := runSourceHelper(t, "TestHelperFixtureHangsWithAHealthyContainer", window,
 		"RCLONE_MANAGER_SFTP_TEST_BUDGET=5s", "RCLONE_MANAGER_SFTP_DEATH_GRACE=2s")
 
 	if !exited {
@@ -258,8 +258,8 @@ func TestFixtureNamesAGenuineHangAndLeavesNoContainer(t *testing.T) {
 }
 
 func TestHelperFixtureHangsWithAHealthyContainer(t *testing.T) {
-	skipUnlessHelper(t)
-	f := Start(t)
+	skipUnlessSourceHelper(t)
+	f := Start(t).Source(t)
 	fmt.Println(containerMarker + f.ContainerID())
 	select {}
 }
@@ -274,7 +274,7 @@ func TestFixtureRemovesItsContainerWhenTheTestPanics(t *testing.T) {
 	requireDocker(t)
 
 	const window = 90 * time.Second
-	out, exited, code := runHelper(t, "TestHelperFixturePanicsMidTest", window)
+	out, exited, code := runSourceHelper(t, "TestHelperFixturePanicsMidTest", window)
 	if !exited {
 		t.Fatalf("a panicking test never finished within %s.\nhelper output:\n%s", window, out)
 	}
@@ -294,8 +294,8 @@ func TestFixtureRemovesItsContainerWhenTheTestPanics(t *testing.T) {
 }
 
 func TestHelperFixturePanicsMidTest(t *testing.T) {
-	skipUnlessHelper(t)
-	f := Start(t)
+	skipUnlessSourceHelper(t)
+	f := Start(t).Source(t)
 	fmt.Println(containerMarker + f.ContainerID())
 	panic("deliberate panic, standing in for any hard failure mid-test")
 }
@@ -505,7 +505,7 @@ func TestFixtureDoesNotPullWhenTheImageIsAlreadyOnTheDaemon(t *testing.T) {
 	shim, logPath := recordingDocker(t)
 
 	const window = 150 * time.Second
-	out, exited, code := runHelper(t, "TestHelperStartsAFixtureAndReturns", window,
+	out, exited, code := runSourceHelper(t, "TestHelperStartsAFixtureAndReturns", window,
 		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if !exited {
 		t.Fatalf("the helper that just starts a fixture was still running %s later.\nhelper output:\n%s", window, out)
@@ -549,8 +549,8 @@ func flatten(invocations [][]string) []string {
 // docker command the start ran, from a log the child's own PATH shim wrote,
 // after the child and its cleanup are both finished.
 func TestHelperStartsAFixtureAndReturns(t *testing.T) {
-	skipUnlessHelper(t)
-	f := Start(t)
+	skipUnlessSourceHelper(t)
+	f := Start(t).Source(t)
 	fmt.Println(containerMarker + f.ContainerID())
 }
 
@@ -558,7 +558,7 @@ func TestHelperStartsAFixtureAndReturns(t *testing.T) {
 
 // helperImageEnv carries the image reference a helper process should try to
 // obtain, so the parent can hand its child a name that exists nowhere.
-const helperImageEnv = "SFTPFIXTURE_HELPER_IMAGE"
+const helperImageEnv = "MACHINES_SOURCE_HELPER_IMAGE"
 
 // ensureReturnedMarker is how a helper reports that ensureImage came back
 // normally. It has to be distinguishable from a refusal AND from a skip: a
@@ -658,7 +658,7 @@ func TestEnsureImageFetchesAMissingImageAndRidesOutATransientFailure(t *testing.
 	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv(pullBackoffEnv, "200ms")
 
-	f := &Fixture{}
+	f := &Source{}
 	started := time.Now()
 	f.ensureImage(t, absent)
 	elapsed := time.Since(started)
@@ -682,12 +682,12 @@ func TestEnsureImageFetchesAMissingImageAndRidesOutATransientFailure(t *testing.
 	}
 }
 
-// refusalVerdict reports whether a child run REFUSED, meaning it failed and
+// imageRefusalVerdict reports whether a child run REFUSED, meaning it failed and
 // said so, rather than skipping or quietly passing. It is deliberately a
 // value the test can check both ways, because "this fixture refuses" is
 // only worth asserting if the check would notice a skip, and a skip exits 0
 // exactly like a pass.
-func refusalVerdict(out string, code int) error {
+func imageRefusalVerdict(out string, code int) error {
 	if strings.Contains(out, "--- SKIP") {
 		return errors.New("the run SKIPPED, which is the failure mode this is here to catch: the suite silently leaves the gate and the gate still says ok")
 	}
@@ -719,17 +719,17 @@ func TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained(t *tes
 	// same verdict, and the verdict has to reject it. Without this, a
 	// check that called everything a refusal would pass below and prove
 	// nothing at all.
-	skipOut, skipExited, skipCode := runHelper(t, "TestHelperEnsureImageSkipsInstead", 45*time.Second,
+	skipOut, skipExited, skipCode := runSourceHelper(t, "TestHelperEnsureImageSkipsInstead", 45*time.Second,
 		helperImageEnv+"="+absent)
 	if !skipExited {
 		t.Fatalf("the skipping control helper never finished, so the control says nothing.\nhelper output:\n%s", skipOut)
 	}
-	if err := refusalVerdict(skipOut, skipCode); err == nil {
-		t.Fatalf("refusalVerdict ACCEPTED a run that skipped in exactly the shape this test forbids, so it cannot tell a refusal from a silent skip and its verdict on the real fixture below would mean nothing.\ncontrol helper output:\n%s", skipOut)
+	if err := imageRefusalVerdict(skipOut, skipCode); err == nil {
+		t.Fatalf("imageRefusalVerdict ACCEPTED a run that skipped in exactly the shape this test forbids, so it cannot tell a refusal from a silent skip and its verdict on the real fixture below would mean nothing.\ncontrol helper output:\n%s", skipOut)
 	}
 
 	shim, logPath := registryDocker(t, 1000, "")
-	out, exited, code := runHelper(t, "TestHelperEnsureImageAgainstAnUnobtainableImage", 60*time.Second,
+	out, exited, code := runSourceHelper(t, "TestHelperEnsureImageAgainstAnUnobtainableImage", 60*time.Second,
 		helperImageEnv+"="+absent,
 		pullBackoffEnv+"=200ms",
 		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -740,7 +740,7 @@ func TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained(t *tes
 	if strings.Contains(out, ensureReturnedMarker) {
 		t.Fatalf("ensureImage RETURNED for an image it never obtained, so the fixture would carry on to `docker run` with nothing to run.\nhelper output:\n%s", out)
 	}
-	if err := refusalVerdict(out, code); err != nil {
+	if err := imageRefusalVerdict(out, code); err != nil {
 		t.Fatalf("the fixture did not refuse an image it cannot obtain: %v.\nSkipping here takes the SFTP suite out of the gate while the gate goes on saying ok, which is #160's hole and is worse than the network failure it would be papering over.\nhelper output:\n%s", err, out)
 	}
 	if !strings.Contains(out, absent) {
@@ -757,12 +757,12 @@ func TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained(t *tes
 // not on this daemon and that the stand-in registry in front of it will
 // never hand over.
 func TestHelperEnsureImageAgainstAnUnobtainableImage(t *testing.T) {
-	skipUnlessHelper(t)
+	skipUnlessSourceHelper(t)
 	ref := os.Getenv(helperImageEnv)
 	if ref == "" {
 		t.Fatalf("%s was not set, so this helper has no image to ask for", helperImageEnv)
 	}
-	f := &Fixture{}
+	f := &Source{}
 	f.ensureImage(t, ref)
 	fmt.Println(ensureReturnedMarker)
 	t.Fatal("ensureImage returned for an image that cannot be obtained")
@@ -773,196 +773,6 @@ func TestHelperEnsureImageAgainstAnUnobtainableImage(t *testing.T) {
 // It exists only as the positive control: nothing here is called by the
 // fixture.
 func TestHelperEnsureImageSkipsInstead(t *testing.T) {
-	skipUnlessHelper(t)
-	t.Skipf("sftpfixture: SKIPPING (missing capability: %s could not be pulled)", os.Getenv(helperImageEnv))
-}
-
-// --- docker is not available at all ---------------------------------------
-
-// These are issue #456. This fixture already failed a WEDGED daemon, with a
-// comment saying that skipping would silently remove the SFTP suite from
-// the gate, and then skipped an UNREACHABLE one three lines below that
-// comment. A Docker VM that dies in the middle of a gate run is unreachable
-// rather than wedged, so it took the skip. In one stored gate log it did:
-// 13 of the 14 conformance mutation cells printed `ok ... 0.08s` against a
-// dead daemon and the run stayed green.
-//
-// The skip is still right on a laptop with no docker, so both directions
-// are asserted. A test that only checked the new branch would let the
-// laptop case regress silently, which is the mirror image of how this got
-// here in the first place.
-//
-// Nothing stops the real daemon to make this true. Several worktrees on
-// this machine share one, so stopping it would take everybody else's run
-// down; DOCKER_HOST is pointed at an endpoint nothing listens on and the
-// real docker client gives the real answer.
-
-// deadDockerHost is an endpoint nothing listens on. `docker info` against
-// it fails in milliseconds with the daemon's own unreachable message.
-const deadDockerHost = "tcp://127.0.0.1:1"
-
-// startReturnedMarker is printed if Start ever comes back on a path where
-// it cannot. A fixture that shrugged and carried on would otherwise look
-// like an ordinary failure further down.
-const startReturnedMarker = "START_RETURNED"
-
-// wantInfraMarker is the marker a refusal has to carry, written out as its
-// own literal rather than read from fixture.go's constant on purpose. The
-// marker is a contract with whoever reads a gate log, so renaming it on the
-// production side has to turn this red rather than follow along quietly.
-const wantInfraMarker = "INFRA:"
-
-// gateRefusalVerdict is refusalVerdict plus the marker. A refusal that does
-// not say INFRA leaves a reader unable to sort a gate log into a machine
-// that broke and a product that broke, which is half of what #456 asked
-// for.
-func gateRefusalVerdict(out string, code int) error {
-	if err := refusalVerdict(out, code); err != nil {
-		return err
-	}
-	if !strings.Contains(out, wantInfraMarker) {
-		return fmt.Errorf("the run failed but never said %q, so nothing in the log says this was the machine rather than the product", wantInfraMarker)
-	}
-	return nil
-}
-
-// laptopSkipVerdict is the opposite: the run left the suite out, out loud,
-// and did not fail.
-func laptopSkipVerdict(out string, code int) error {
-	if code != 0 {
-		return fmt.Errorf("the run exited %d rather than skipping, so a developer machine with no docker now has a red package", code)
-	}
-	if !strings.Contains(out, "--- SKIP") {
-		return errors.New("the run exited 0 without skipping anything, so the fixture never reported the missing capability at all")
-	}
-	if strings.Contains(out, wantInfraMarker) {
-		return fmt.Errorf("the run skipped but still printed %q, which reads in a log as an infrastructure failure that did not happen", wantInfraMarker)
-	}
-	return nil
-}
-
-// requireTheDaemonIsUnreachable checks the premise the simulation rests on.
-// A docker context can name an endpoint of its own, and if DOCKER_HOST were
-// ignored the child would reach the REAL daemon, start a real SFTP server
-// and fail somewhere else entirely, which the assertions below would
-// happily read as a refusal.
-func requireTheDaemonIsUnreachable(t *testing.T) {
-	t.Helper()
-	cmd := exec.Command("docker", "info")
-	cmd.Env = append(os.Environ(), "DOCKER_HOST="+deadDockerHost)
-	if out, err := cmd.CombinedOutput(); err == nil {
-		t.Fatalf("`docker info` SUCCEEDED with DOCKER_HOST=%s, so this machine's docker ignores it and nothing below simulates an unreachable daemon at all:\n%s", deadDockerHost, out)
-	}
-}
-
-// TestStartRefusesAnUnreachableDaemonInsideTheGate is #456 itself.
-func TestStartRefusesAnUnreachableDaemonInsideTheGate(t *testing.T) {
-	requireDocker(t)
-	requireTheDaemonIsUnreachable(t)
-
-	const window = 60 * time.Second
-
-	// The positive control, and it is the same helper against the same
-	// dead endpoint with only CI_LOCAL removed. That makes it a control on
-	// two things at once: the verdict really can tell a skip from a
-	// refusal, and the environment is the only thing deciding which one
-	// happens.
-	skipOut, skipExited, skipCode := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", window,
-		"CI_LOCAL=", "DOCKER_HOST="+deadDockerHost)
-	if !skipExited {
-		t.Fatalf("the control helper never finished, so the control says nothing.\nhelper output:\n%s", skipOut)
-	}
-	if err := gateRefusalVerdict(skipOut, skipCode); err == nil {
-		t.Fatalf("gateRefusalVerdict ACCEPTED a run that skipped in exactly the shape #456 is about, so it cannot tell a refusal from a silent skip and its verdict below would mean nothing.\ncontrol helper output:\n%s", skipOut)
-	}
-
-	out, exited, code := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", window,
-		"CI_LOCAL=1", "CI_LOCAL_SKIP_DOCKER=", "DOCKER_HOST="+deadDockerHost)
-	if !exited {
-		t.Fatalf("Start never came back from a daemon it cannot reach.\nhelper output:\n%s", out)
-	}
-	if strings.Contains(out, startReturnedMarker) {
-		t.Fatalf("Start RETURNED against a daemon it cannot reach, so the suite would carry on against nothing.\nhelper output:\n%s", out)
-	}
-	if err := gateRefusalVerdict(out, code); err != nil {
-		t.Fatalf("the fixture did not refuse an unreachable daemon under CI_LOCAL=1: %v.\nThis is #456: a Docker VM that dies mid-run is 'not reachable', the fixture skips, and the gate goes on printing ok with the SFTP suite silently empty.\nhelper output:\n%s", err, out)
-	}
-}
-
-// TestStartStillSkipsAnUnreachableDaemonOutsideTheGate is the half that a
-// fix for the one above breaks if the skip is deleted rather than made
-// conditional.
-func TestStartStillSkipsAnUnreachableDaemonOutsideTheGate(t *testing.T) {
-	requireDocker(t)
-	requireTheDaemonIsUnreachable(t)
-
-	out, exited, code := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", 60*time.Second,
-		"CI_LOCAL=", "DOCKER_HOST="+deadDockerHost)
-	if !exited {
-		t.Fatalf("the helper never finished.\nhelper output:\n%s", out)
-	}
-	if err := laptopSkipVerdict(out, code); err != nil {
-		t.Fatalf("with CI_LOCAL unset, an unreachable daemon no longer skips: %v.\nEvery developer without a running docker would now have a red package, which is why the skip is conditional and not gone.\nhelper output:\n%s", err, out)
-	}
-}
-
-// TestStartRefusesAMissingDockerBinaryInsideTheGate asks the same question
-// of the other path into "docker is not available". A gate machine with no
-// docker on PATH is as broken as one whose daemon died, and if the two
-// answered differently the hole would just move.
-func TestStartRefusesAMissingDockerBinaryInsideTheGate(t *testing.T) {
-	out, exited, code := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", 60*time.Second,
-		"CI_LOCAL=1", "CI_LOCAL_SKIP_DOCKER=", "PATH="+t.TempDir())
-	if !exited {
-		t.Fatalf("the helper never finished.\nhelper output:\n%s", out)
-	}
-	if strings.Contains(out, startReturnedMarker) {
-		t.Fatalf("Start RETURNED with no docker on PATH at all.\nhelper output:\n%s", out)
-	}
-	if err := gateRefusalVerdict(out, code); err != nil {
-		t.Fatalf("the fixture did not refuse a missing docker binary under CI_LOCAL=1: %v.\nhelper output:\n%s", err, out)
-	}
-}
-
-// TestStartStillSkipsAMissingDockerBinaryOutsideTheGate is the laptop case
-// in its purest form: docker is genuinely not installed, and that is not
-// this repository's problem to be red about.
-func TestStartStillSkipsAMissingDockerBinaryOutsideTheGate(t *testing.T) {
-	out, exited, code := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", 60*time.Second,
-		"CI_LOCAL=", "PATH="+t.TempDir())
-	if !exited {
-		t.Fatalf("the helper never finished.\nhelper output:\n%s", out)
-	}
-	if err := laptopSkipVerdict(out, code); err != nil {
-		t.Fatalf("with CI_LOCAL unset, a machine with no docker installed no longer skips: %v.\nhelper output:\n%s", err, out)
-	}
-}
-
-// TestTheGatesOwnOptOutStillSkips keeps the gate's documented escape hatch
-// honest. CI_LOCAL_SKIP_DOCKER=1 is scripts/ci-local.sh's out-loud opt-out
-// for a run with the daemon down and it already ledgers that run as
-// INCOMPLETE, so this fixture honours it rather than overruling it. Without
-// this, the flag would quietly stop working the moment CI_LOCAL landed.
-func TestTheGatesOwnOptOutStillSkips(t *testing.T) {
-	requireDocker(t)
-	requireTheDaemonIsUnreachable(t)
-
-	out, exited, code := runHelper(t, "TestHelperStartAgainstAnUnavailableDocker", 60*time.Second,
-		"CI_LOCAL=1", "CI_LOCAL_SKIP_DOCKER=1", "DOCKER_HOST="+deadDockerHost)
-	if !exited {
-		t.Fatalf("the helper never finished.\nhelper output:\n%s", out)
-	}
-	if err := laptopSkipVerdict(out, code); err != nil {
-		t.Fatalf("CI_LOCAL_SKIP_DOCKER=1 no longer gets past this fixture: %v.\nThat flag is documented as proceeding with the daemon down and ending the run INCOMPLETE, so overruling it here would make the documentation a lie.\nhelper output:\n%s", err, out)
-	}
-}
-
-// TestHelperStartAgainstAnUnavailableDocker drives the real entry point.
-// Which of the two unavailable-docker paths it takes is decided by the
-// environment its parent gave it.
-func TestHelperStartAgainstAnUnavailableDocker(t *testing.T) {
-	skipUnlessHelper(t)
-	Start(t)
-	fmt.Println(startReturnedMarker)
-	t.Fatal("Start returned against a docker that is not available, which should be impossible")
+	skipUnlessSourceHelper(t)
+	t.Skipf("machines: SKIPPING (missing capability: %s could not be pulled)", os.Getenv(helperImageEnv))
 }
