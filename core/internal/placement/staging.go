@@ -180,6 +180,22 @@ func (e *Engine) copyMediumToMedium(ctx context.Context, mv state.Move, src stat
 	if err != nil {
 		return 0, err
 	}
+	// The one direct os call in this package's production code, and it is
+	// worth saying why it is allowed to be one.
+	//
+	// destructive_test.go's rule is that every byte this package DESTROYS
+	// or OVERWRITES goes through LocalStore or MediumStore, because those
+	// are the two seams a guard sits on. MkdirAll destroys nothing and
+	// overwrites nothing: it creates a directory, and it fails rather than
+	// replacing anything that is already at the path. The seam has no
+	// method for it, and adding one would widen an interface whose whole
+	// value is how narrow it is.
+	//
+	// It fails when the path is occupied by a file, which is the one
+	// collision a subdirectory leaves: an artifact may legitimately be
+	// named ".moves". That is a refusal with the source untouched, which
+	// is the direction every uncertainty in this engine falls, and
+	// TestAStagingAreaThatCannotBeCreatedRefusesTheMove pins it.
 	if err := os.MkdirAll(filepath.Dir(staged), 0o750); err != nil {
 		return 0, fmt.Errorf("preparing the staging area for %s: %w", mv.Artifact, err)
 	}
@@ -203,6 +219,19 @@ func (e *Engine) copyMediumToMedium(ctx context.Context, mv state.Move, src stat
 	// one the next move measures. A move engine that cannot delete from
 	// the backup root has a problem worth stopping on, given that
 	// deleting from the backup root is half of what it does.
+	//
+	// The cost of that choice, stated rather than glossed: a removal that
+	// keeps failing leaves the move at COPYING, and the next cycle stages
+	// again (reusing the file, so no egress) and uploads again. That is a
+	// PUT per cycle, which is the shape #437 exists to prevent, so it is
+	// worth being clear about why it is acceptable here and was not
+	// there. #437's loop was reachable from a configuration an operator
+	// could write and validate; this one needs the backup set's own root
+	// to have become unwritable, which has already stopped ingestion, and
+	// the destination cannot be an archive class because config refuses
+	// that pairing at load, so no discarded copy buys a minimum billing
+	// period. It is loud in the cycle report every cycle, and everything
+	// still exists.
 	rmErr := e.Local.Remove(ctx, staged)
 	switch {
 	case uploadErr != nil && rmErr != nil:
