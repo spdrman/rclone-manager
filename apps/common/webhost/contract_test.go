@@ -103,6 +103,10 @@ var contractBindings = map[string]contractBinding{
 	"revalidateArtifact":     {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
 	"retryArtifactIngestion": {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
 	"reinstateArtifact":      {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
+	// Issue #443's medium preflight. Its path parameter is a single
+	// segment, unlike the artifact routes above, because a medium id is a
+	// single segment: config refuses one carrying a separator.
+	"preflightStorageMedium": {"/api/v1/storage-mediums/{id}/preflight", nil, mediumPreflightResponse{}, "/api/v1/storage-mediums/offsite_s3/preflight"},
 	"setBackupSetEnabled":    {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
 	"setBackupSetReadOnly":   {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 

@@ -320,7 +320,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
     const options = Array.from(picker.options).map((o) => o.textContent);
     expect(options).toContain("Local backup root");
     expect(options).toContain("offsite_s3 (STANDARD_IA)");
-    expect(options).toContain("offsite_cold (DEEP_ARCHIVE, needs a restore to read)");
+    expect(options).toContain("offsite_cold (DEEP_ARCHIVE, cannot receive backups: reads need a restore)");
     // The inherited mapping is what the picker starts on: the editor
     // pre-fills from the chain in force, medium included.
     expect((tier(3).getByLabelText("Storage medium for tier 3") as HTMLSelectElement).value).toBe("offsite_s3");

@@ -63,6 +63,26 @@ type ValidateResult struct {
 // already established), so `validate` can prove an artifact still actually
 // restores, not merely that its bytes are unchanged.
 //
+// # An artifact whose copy is on a storage medium (issue #435)
+//
+// Since EPIC E a durable copy can be an object on a storage medium
+// instead of a local file, which is what a completed move leaves. There
+// is nothing for the local check above to open, and that is a fact about
+// WHERE the copy is rather than a verdict about the artifact: reading it
+// as a verdict is what marked the first successfully moved artifact
+// QUARANTINED_LOST (#434).
+//
+// So the check forks. With no ACTIVE local placement and at least one
+// ACTIVE medium placement, the copies on the mediums are verified through
+// Service.MediumStore, at the strongest class the medium can give for
+// free, and at placement.Content when ValidateOptions.Content asks for it.
+// FR-31 makes a content check of a medium copy operator-initiated because
+// it downloads the object, and this command is the operator initiating it.
+// checkMediumCopies (validatemedium.go) is that fork, and its doc carries
+// the rules; the one worth repeating here is that a medium which could not
+// be asked comes back as an error rather than as a failed verdict, because
+// an unreachable bucket is not evidence that a backup is gone.
+//
 // # Which artifacts this accepts
 //
 // Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or (issue #315)
@@ -97,7 +117,7 @@ type ValidateResult struct {
 // reset that package's own due-ness clock, a concept `validate` has no
 // use for since it is not on any schedule), there is no due-ness clock
 // here to reset, so a clean result has no side effect to record.
-func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (ValidateResult, error) {
+func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID, opts ValidateOptions) (ValidateResult, error) {
 	rec, err := s.Journal.Get(ctx, id)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
@@ -117,7 +137,7 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		return ValidateResult{}, fmt.Errorf("app: validate: %s has no configured backup set", id.Set)
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, opts)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
 	}
@@ -166,7 +186,14 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 // of damage. The caller gets a refusal and the artifact is left exactly
 // as it was, which is how the restore-test hook's own error is already
 // handled below.
-func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation) (checkOutcome, error) {
+//
+// opts is what the operator asked for beyond the defaults, and today that
+// is only whether a copy on a storage medium may be downloaded and
+// re-hashed (issue #435). The two quarantine actions that also call this
+// pass the zero value: `quarantine revalidate` and `quarantine reinstate`
+// name no artifact-specific cost the operator has authorised, so neither
+// spends egress, and neither can reach the one class that would.
+func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation, opts ValidateOptions) (checkOutcome, error) {
 	cmd, err := validation.ResolvedCommand()
 	if err != nil {
 		return checkOutcome{}, err
@@ -182,31 +209,20 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	localPath, hasLocal := rec.ReadableLocalPath()
 	if !hasLocal {
 		// An artifact whose durable copy is on a storage medium has no
-		// local copy for this command to check, and that is a fact about
-		// where the copy is rather than a verdict about the artifact. It
-		// gets the same treatment as an unresolved validator above: a
-		// refusal that leaves the artifact exactly as it was. The
-		// alternative, a failed verdict, routed a COMPLETE artifact into
+		// local copy for this command to open, and that is a fact about
+		// where the copy is rather than a verdict about the artifact.
+		// Reading it as a verdict routed a COMPLETE artifact into
 		// QUARANTINED_LOST the first time an operator ran `validate`
-		// against a moved one, over a copy that was there and verified.
+		// against a moved one, over a copy that was there and verified
+		// (#434).
 		//
-		// Checking the medium copy from here is real work this command
-		// does not do yet: an existence check is free and a content check
-		// costs egress, and FR-31 makes the latter operator-initiated,
-		// which `validate` is. Until it does, the refusal says where the
-		// copy is and what does check it.
+		// So the copy is checked where it actually is (#435). The
+		// restore-test hook below is not attempted against it: that hook
+		// opens the artifact, which off local disk means downloading it,
+		// and checkMediumCopies says so rather than quietly reporting a
+		// pass for a tier that stopped running.
 		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
-			ids := make([]string, 0, len(mediums))
-			for _, p := range mediums {
-				class := p.VerificationClass
-				if class == "" {
-					class = "unverified"
-				}
-				ids = append(ids, fmt.Sprintf("%q (%s)", p.Medium, class))
-			}
-			return checkOutcome{}, fmt.Errorf(
-				"%s has no local copy to check: its durable copy is on storage medium %s; validate checks the local copy only, and the copy on the medium is existence-checked by scheduled revalidation (FR-31), so the artifact is left as it is",
-				rec.Artifact, strings.Join(ids, ", "))
+			return s.checkMediumCopies(ctx, rec, mediums, opts, cmd != nil)
 		}
 		if len(rec.Placements) > 0 {
 			return checkOutcome{Checked: true, Reason: "no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING"}, nil

@@ -86,10 +86,12 @@
           "ARTIFACT_IRRECOVERABLE",
           "REINSTATEMENT_REFUSED",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+          "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
           "MEDIUM_DISCLOSURE_REQUIRED",
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
-          "COPY_NOT_FOUND"
+          "COPY_NOT_FOUND",
+          "MEDIUM_NOT_FOUND"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -129,10 +131,12 @@
           "ARTIFACT_IRRECOVERABLE": "wire",
           "REINSTATEMENT_REFUSED": "wire",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
+          "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED": "wire",
           "MEDIUM_DISCLOSURE_REQUIRED": "wire",
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
-          "COPY_NOT_FOUND": "wire"
+          "COPY_NOT_FOUND": "wire",
+          "MEDIUM_NOT_FOUND": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -167,7 +171,8 @@
             "BACKUP_SET_NOT_FOUND",
             "OPERATION_NOT_FOUND",
             "RETENTION_PLAN_NOT_FOUND",
-            "ARTIFACT_NOT_FOUND"
+            "ARTIFACT_NOT_FOUND",
+            "MEDIUM_NOT_FOUND"
           ],
           "throttling": [
             "RATE_LIMITED"
@@ -717,6 +722,11 @@
           "action": {
             "type": "string"
           },
+          "medium": {
+            "type": "string",
+            "description": "Where the copy this verdict is about lives, when that is a configured storage medium (EPIC E, FR-30). ABSENT means the implicit local medium, which is where every copy in a deployment that declares no storage medium is; spelling local by absence is what keeps such a deployment's response exactly what it was before this field existed, and the command-line dry-run states the same asymmetry the same way. It is also absent on the two REFUSE verdicts that establish nothing at all, a location the journal records twice (a move in flight) and a backup whose local path could not be resolved; each says so in its own reason, and a kept one is additionally named in the plan's unconfirmed_placements. A DELETE always establishes its medium, so on a deletion absent means local and nothing else, which is the question FR-30 asks this field to answer: \"delete 40 backups\" means something very different when half of them are objects in a bucket somebody else pays for.",
+            "x-go-omitempty": true
+          },
           "reason": {
             "type": "string"
           },
@@ -741,6 +751,30 @@
           "artifact",
           "action",
           "reason"
+        ]
+      },
+      "RetentionMove": {
+        "type": "object",
+        "description": "One backup this plan would relocate, and both ends of the move (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing else: planning one never adds a backup to the keep set and never removes one, which is why moves travel beside the verdicts rather than inside them. There is deliberately no field here for what a provider would charge to run this, how long a provider might take, or the key material that reaches either end, and there never will be: this product holds none of those three, so a field for one could only be filled with a guess.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "The backup's own name, not its fully-qualified id. A plan is already scoped to one backup set, so re-spelling the set on every row would be noise a client has to strip to render a table."
+          },
+          "from_medium": {
+            "type": "string",
+            "description": "Where the one confirmed copy is today: \"local\" for the backup set's own directory on this machine, or the id of a configured storage medium, spelled exactly as Placement.medium spells it."
+          },
+          "to_medium": {
+            "type": "string",
+            "description": "The medium the first tier in chain order that selects this backup names as its home. Always different from from_medium: a backup already at home is not a move."
+          }
+        },
+        "required": [
+          "artifact",
+          "from_medium",
+          "to_medium"
         ]
       },
       "RetentionPlan": {
@@ -789,6 +823,22 @@
               "$ref": "#/components/schemas/RetentionVerdict"
             }
           },
+          "moves": {
+            "type": "array",
+            "description": "Every backup this plan would relocate, in verdict order (EPIC E, FR-27). Absent in a deployment that declares no storage medium, which is every deployment before EPIC E. It travels with the plan rather than behind a second call because an apply is confirmed against a plan_id, and what that plan_id commits to has to be the whole of what was shown: a moves section fetched separately could be rendered beside verdicts it does not belong to.",
+            "items": {
+              "$ref": "#/components/schemas/RetentionMove"
+            },
+            "x-go-omitempty": true
+          },
+          "unconfirmed_placements": {
+            "type": "array",
+            "description": "Every kept backup whose current location could not be established, in verdict order: the journal holds no confirmed copy of it, or holds more than one, which is a move already in flight. No move is planned for one, and that is exactly why the list exists rather than the backup being quietly skipped: \"I could not confirm where this is\" and \"this is already where it belongs\" produce the same silence and are not the same claim. Absent in a deployment that declares no storage medium, where there is nowhere else a copy could be and the answer would be noise on every backup an upgrade inherits.",
+            "items": {
+              "type": "string"
+            },
+            "x-go-omitempty": true
+          },
           "retention": {
             "$ref": "#/components/schemas/RetentionSettings"
           },
@@ -826,19 +876,23 @@
         ]
       },
       "CreateBackupSetRequest": {
-        "description": "POST /backup-sets. The backup-set spec, plus the one thing only a create can ask for: that the new set also runs at once.",
+        "description": "POST /backup-sets. The backup-set spec, plus the two things only a create can ask for: that the new set also runs at once, and that it may take over history already on its id.",
         "allOf": [
           {
             "$ref": "#/components/schemas/BackupSetSpec"
           },
           {
             "type": "object",
-            "description": "The create-only addition on top of the spec itself.",
+            "description": "The create-only additions on top of the spec itself.",
             "additionalProperties": false,
             "properties": {
               "run_immediately": {
                 "type": "boolean",
                 "description": "Also submit a run_cycle. This branch, and only this branch, is subject to the destructive gate."
+              },
+              "acknowledge_repoint": {
+                "type": "boolean",
+                "description": "Confirm creating this backup set somewhere other than where the history already on its id came from. Removing a backup set frees its id up, and a set created over an id that already has artifacts on record takes every one of them, so creating it at a different host, remote_path or local_path is the same move an edit makes. Needed only when this id has artifacts on record AND one of those three differs from what is recorded for them; re-creating a set exactly where it was removed from asks nothing. It is not a field of the backup set and nothing persists it: it answers one refusal, for one request."
               }
             },
             "required": []
@@ -1915,7 +1969,7 @@
       },
       "BackupSetHealth": {
         "type": "object",
-        "description": "One backup set's freshness verdict. This is the backup half of health, and it deliberately carries no process or build fact: a running service is not evidence that backups are landing.",
+        "description": "One backup set's health verdict: whether its backups are fresh and trustworthy, and whether they are on the storage medium its retention policy says they belong on. This is the backup half of health, and it deliberately carries no process or build fact: a running service is not evidence that backups are landing. The placement figures come from durable state rather than from the last pass, so a deployment nobody has run a cycle in front of still reports relocations that have been failing for weeks.",
         "additionalProperties": false,
         "properties": {
           "backup_set_id": {
@@ -2023,6 +2077,49 @@
               "CRITICAL"
             ],
             "x-go-omitempty": true
+          },
+          "away_from_home": {
+            "type": "integer",
+            "description": "How many backups in this set have their durable copy somewhere other than the storage medium this set's retention policy says they belong on. On its own this is not a complaint: a policy pass that has just decided a backup belongs offsite puts it here, and the relocation that carries it there runs in the same pass. Zero is a real reading, not a missing one, so it is always present.",
+            "format": "int32"
+          },
+          "away_from_home_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest of those copies has existed where it currently sits. Read it for exactly that: it is an upper bound on how long the backup has been in the wrong place, because nothing durable records when a policy last changed where a backup belongs, so a policy edited this morning makes a year-old copy away-from-home this morning and this still reports a year. failed_move_oldest_age_seconds is the figure measured from a moment this manager actually wrote down. Absent when away_from_home is zero: there is nothing for it to be the age of.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "unconfirmed_location": {
+            "type": "integer",
+            "description": "How many backups in this set could not be placed at all: no durable copy recorded yet, or a relocation in flight leaving two answers to 'where is this'. They are NOT thereby in the right place, and reporting them as if they were is the collapse away_from_home exists to prevent. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "open_moves": {
+            "type": "integer",
+            "description": "How many relocations this set has that have not finished, in any phase. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "open_move_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest unfinished relocation has been open, whether or not anything has been recorded against it. It is reported separately from failed_move_oldest_age_seconds because not every way a relocation gets stuck leaves a reason behind: the refusal that fires immediately before the original copy is deleted deliberately changes nothing at all, so such a relocation is open and not failed, and this is the figure that still grows. It changes no state, because 'open for a while' has no honest threshold: a single large copy can legitimately outlast one cycle. Absent when open_moves is zero.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "failed_moves": {
+            "type": "integer",
+            "description": "How many unfinished relocations had their last attempt fail. This is the one figure here that turns an otherwise-healthy backup set DEGRADED, and it is what makes a week of failing relocations reach this endpoint at all: everything else about a relocation's outcome describes a single pass and is gone by the time anybody reads a status page. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "failed_move_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest failing relocation has been open, measured from when this manager wrote it down. It is the difference between a blip and a wedge: a transient failure clears on the next cycle, and one that does not turns this into days and then weeks. Absent when failed_moves is zero.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "failed_move_reason": {
+            "type": "string",
+            "description": "What was recorded against that oldest failing relocation. Served beside the count rather than instead of it, because a count alone cannot tell an operator whether to look at a storage policy, a credential or a network, and this sentence is the only account of the failure that outlives the pass that hit it. Absent when failed_moves is zero.",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -2039,7 +2136,11 @@
           "quarantined_lost_count",
           "reinstated_remote_retained_count",
           "read_only_retained_count",
-          "free_bytes_known"
+          "free_bytes_known",
+          "away_from_home",
+          "unconfirmed_location",
+          "open_moves",
+          "failed_moves"
         ]
       },
       "HealthResponse": {
@@ -2666,6 +2767,77 @@
             "x-go-omitempty": true
           }
         }
+      },
+      "MediumPreflightCheck": {
+        "type": "object",
+        "description": "One step of a storage-medium preflight. There is deliberately no field here for key material of any kind, and there never will be (FR-33): `detail` is one of the engine's own sentences, never the text of what actually came back, because that names a path on the host or the name of an environment variable. The classified cause goes to this manager's log instead.",
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "reach",
+              "deliverable",
+              "write",
+              "read_back",
+              "storage_class",
+              "verification",
+              "delete"
+            ],
+            "description": "What this step proves. `credentials` is whether the credential the medium declares can be obtained at all, which is a question for the host; `reach` is whether the endpoint answers and holds the bucket with that credential, which is a question for the provider. `deliverable` is whether an artifact can be delivered to this medium's storage class at all: an archive class cannot take delivery, and is refused without writing anything, because a probe object there is billed for a minimum duration measured in months. `write`, `read_back` and `delete` are a real object written, read back byte for byte and removed again, because read access is not what a move needs and a write nobody can read is not a backup. `storage_class` is whether the object came back in the class the configuration asked for. `verification` is whether the class this medium's upload_verification declares can actually be achieved here, asked of the endpoint rather than looked up."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ],
+            "description": "`skipped` is a real answer and not a quiet pass: it means an earlier step failed in a way that makes this one meaningless. A surface that renders a skipped write as anything but \"this was never tried\" has told an operator their bucket is writable on the strength of a credential that was never obtained."
+          },
+          "category": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "The transport category a failure classified as, absent when the step did not fail. It is the machine-readable half: a client branches on this and never on `detail`."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What this step found, in words, for a person to act on."
+          }
+        },
+        "required": [
+          "step",
+          "outcome",
+          "detail"
+        ]
+      },
+      "MediumPreflightResponse": {
+        "type": "object",
+        "description": "The result of proving one storage medium works. The preflight writes a small probe object to the medium, reads it back byte for byte, checks the storage class it landed in against the one the configuration claims, asks whether the verification class the medium declares can actually be achieved there, and deletes the probe. That is deliberately more than a reachability ping: a wrong region, a policy that denies PutObject and an endpoint that silently ignores storage_class all answer a ping perfectly well and then fail a move, in the middle of a cycle, after an artifact has already been chosen to leave local disk. A medium that does not work is a 200 with `ok` false, not an error: a bucket that is not there is what an operator did, not what broke, exactly as a failed backup-set connection test reports itself. The operation takes an id and never a candidate medium, unlike that connection test: a medium is declared in the configuration file and nowhere else, and the only fields that would make a candidate one meaningful are the three credential references, so a request body for one would make a path on this host into something an API caller sends (FR-33). Nothing schedules this; it is a real side effect on somebody's bucket and it runs only because a person asked.",
+        "additionalProperties": false,
+        "properties": {
+          "medium": {
+            "type": "string",
+            "description": "The medium id this ran against."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when no step failed."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediumPreflightCheck"
+            },
+            "description": "One entry per step, in the order the engine performs them. Always the full list, so a surface renders a fixed set of rows rather than discovering which steps happened to run."
+          }
+        },
+        "required": [
+          "medium",
+          "ok",
+          "checks"
+        ]
       }
     },
     "responses": {}
@@ -3539,6 +3711,19 @@
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH",
               "DESTRUCTIVE_OPERATIONS_DISABLED"
+            ]
+          },
+          "409": {
+            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED. This id already has artifacts on record and the set would be created somewhere other than where they came from; re-send with acknowledge_repoint once the message has been read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
             ]
           },
           "500": {
@@ -6687,6 +6872,101 @@
             },
             "x-error-codes": [
               "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/preflight": {
+      "post": {
+        "operationId": "preflightStorageMedium",
+        "summary": "Prove one declared storage medium actually works, before a cycle carrying a real backup does.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The medium may or may not have passed: read `ok`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumPreflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This configuration declares no storage medium with that id. Mediums are declared in the configuration file and nowhere else, so a name that worked before is a name somebody removed; GET /settings lists the ones that are there.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
             ]
           }
         },

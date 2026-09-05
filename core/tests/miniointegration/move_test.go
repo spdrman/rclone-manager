@@ -3,8 +3,10 @@ package miniointegration_test
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,3 +297,122 @@ func seedArtifactOnLocal(t *testing.T, j *state.Journal, artifact model.Artifact
 // errNoSuchMedium is the resolver's own refusal, a value rather than a
 // formatted string so a caller can recognise it.
 var errNoSuchMedium = errors.New("no medium with that id is configured")
+
+// countedStore records what a move actually asks a real endpoint for.
+//
+// It sits between the engine and the rclone adapter rather than inside
+// MinIO, which is the honest place for a cost assertion: what has to be
+// true is that the engine never ASKS for the bytes twice, and this records
+// every ask, including one a backend might have answered from a cache.
+type countedStore struct {
+	inner placement.MediumStore
+
+	stats, opens, uploads, deletes, restores atomic.Int64
+}
+
+func (s *countedStore) StatObject(ctx context.Context, m transport.Medium, key string) (transport.ObjectInfo, error) {
+	s.stats.Add(1)
+	return s.inner.StatObject(ctx, m, key)
+}
+
+func (s *countedStore) UploadFromLocal(ctx context.Context, m transport.Medium, localPath, key string, o transport.UploadOptions) (transport.UploadResult, error) {
+	s.uploads.Add(1)
+	return s.inner.UploadFromLocal(ctx, m, localPath, key, o)
+}
+
+func (s *countedStore) OpenObject(ctx context.Context, m transport.Medium, key string) (io.ReadCloser, error) {
+	s.opens.Add(1)
+	return s.inner.OpenObject(ctx, m, key)
+}
+
+func (s *countedStore) ObjectChecksum(ctx context.Context, m transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	return s.inner.ObjectChecksum(ctx, m, key, alg)
+}
+
+func (s *countedStore) DeleteObject(ctx context.Context, m transport.Medium, key string) error {
+	s.deletes.Add(1)
+	return s.inner.DeleteObject(ctx, m, key)
+}
+
+func (s *countedStore) RestoreStatus(ctx context.Context, m transport.Medium, key string) (*transport.RestoreState, error) {
+	s.restores.Add(1)
+	return s.inner.RestoreStatus(ctx, m, key)
+}
+
+// TestAMoveToS3ReadsTheObjectBackOnce is issue #439's measurement, taken
+// against a real S3 API rather than against a double.
+//
+// The issue reported uploads=1 opens=2: the whole artifact downloaded
+// twice, once to reach VERIFIED and once again in deleteSource immediately
+// before the source delete. On a 100 GB artifact that is 200 GB of egress
+// to move one file.
+//
+// It has to be measured here as well as in the engine's own suite, because
+// the saving depends on something only a real endpoint can supply. The
+// pre-delete proof stands only while the medium reports the same size, mod
+// time and storage class for the object as it did immediately before the
+// read, and a backend that reports no mod time at all gives that check
+// nothing to work with and falls back to the full read, correctly and
+// silently. A double can be told to report one. MinIO has to actually do
+// it, and if it stopped, this is the test that would say so rather than a
+// bill that would.
+func TestAMoveToS3ReadsTheObjectBackOnce(t *testing.T) {
+	fixture := machines.Start(t).Medium(t)
+	medium := fixture.Medium()
+	ctx := context.Background()
+
+	root := t.TempDir()
+	content := []byte("one artifact, uploaded to a real S3 API and read back from it exactly once")
+
+	set := model.BackupSetID{Source: "production", Set: "postgres-primary"}
+	artifact := model.ArtifactID{Set: set, Name: "2026-09-03T03-00-00Z.dump"}
+	localPath := filepath.Join(root, artifact.Name)
+	if err := os.WriteFile(localPath, content, 0o600); err != nil {
+		t.Fatalf("writing the local artifact: %v", err)
+	}
+
+	journal := openJournal(t)
+	seedArtifactOnLocal(t, journal, artifact, localPath, content, time.Now().UTC())
+
+	local, err := artifactstore.NewLocal(root)
+	if err != nil {
+		t.Fatalf("building the local store: %v", err)
+	}
+	store := &countedStore{inner: rclone.New()}
+	engine := &placement.Engine{
+		Journal:          journal,
+		Store:            store,
+		Local:            local,
+		Mediums:          minioResolver{medium: medium},
+		Sets:             minioSets{set: config.BackupSet{Name: set.Set, ID: set, LocalPath: root}},
+		Tiers:            nothingSelectsIt{},
+		MaxMovesPerCycle: 4,
+	}
+
+	report, err := engine.RunCycle(ctx, []placement.Plan{{Artifact: artifact, DestinationMedium: medium.ID}})
+	if err != nil {
+		t.Fatalf("the cycle failed: %v", err)
+	}
+	if report.Completed != 1 {
+		t.Fatalf("the move did not complete, so these counts are of something else: %+v", report.Outcomes)
+	}
+	if _, err := os.Lstat(localPath); err == nil {
+		t.Fatal("the local copy is still on disk after a completed move, so nothing here measured a finished move")
+	}
+
+	if got := store.uploads.Load(); got != 1 {
+		t.Errorf("the move uploaded %d times, want 1", got)
+	}
+	if got := store.opens.Load(); got != 1 {
+		t.Errorf("the move downloaded the object %d times, want 1. This is #439's number and it was 2. "+
+			"If it is 2 again, the pre-delete proof is not standing against a real endpoint, and the most likely reason "+
+			"is that the backend has stopped reporting a mod time for the object", got)
+	}
+	if got := store.stats.Load(); got != 2 {
+		t.Errorf("the move spent %d metadata calls on the destination, want 2: one immediately before the read the proof is "+
+			"about, one immediately before the delete", got)
+	}
+	if got := store.restores.Load(); got != 0 {
+		t.Errorf("the move asked about a restore %d times for an object on a class that reads on demand", got)
+	}
+}

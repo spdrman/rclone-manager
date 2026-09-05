@@ -32,6 +32,7 @@ import type {
   WireListOperationsResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
+  WireMediumPreflightResponse,
   WireOperation,
   WirePlacement,
   WireRetentionOverride,
@@ -56,6 +57,7 @@ import type {
   CreateBackupSetRequest,
   CreatedBackupSet,
   ManagerStorage,
+  MediumPreflight,
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
@@ -247,7 +249,16 @@ function wireBackupSetSpec(req: CreateBackupSetRequest): WireBackupSetSpec {
 }
 
 function wireCreateBackupSetRequest(req: CreateBackupSetRequest): WireCreateBackupSetRequest {
-  return { ...wireBackupSetSpec(req), run_immediately: req.runImmediately };
+  const body: WireCreateBackupSetRequest = {
+    ...wireBackupSetSpec(req),
+    run_immediately: req.runImmediately
+  };
+  // Only when the caller actually set it, exactly as wireBackupSetPatch
+  // does for the edit path's copy of this field: a create that carried it
+  // unconditionally would be pre-acknowledged, and the refusal it answers
+  // could then never fire at all.
+  if (req.acknowledgeRepoint !== undefined) body.acknowledge_repoint = req.acknowledgeRepoint;
+  return body;
 }
 
 function wireConnectionTestParams(params: ConnectionTestParams) {
@@ -413,10 +424,26 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
     // chain beside the wrong source.
     retention: fromWireRetentionSettings(wire.retention),
     retentionIsOverride: wire.retention_is_override,
+    // Issue #430: EPIC E's placement facts. Both arrays are normalised to
+    // [], because the wire OMITS them for a deployment that declares no
+    // storage medium and an optional array has a third reading ("the
+    // server did not say") that is never true here.
+    moves: (wire.moves ?? []).map((m) => ({
+      artifact: m.artifact,
+      fromMedium: m.from_medium,
+      toMedium: m.to_medium
+    })),
+    unconfirmedPlacements: wire.unconfirmed_placements ?? [],
     verdicts: wire.verdicts.map((v) => ({
       artifact: v.artifact,
       action: v.action as RetentionVerdictAction,
       reason: v.reason,
+      // Carried through exactly as it arrives, undefined included: see
+      // RetentionVerdict.medium (types/backup.ts). Undefined means the
+      // implicit local medium on a DELETE, and means "nothing was
+      // established" on the two REFUSE shapes that name no place at all,
+      // so defaulting it here would turn the second into a claim.
+      medium: v.medium,
       // tier_selections, not tiers: the two carry the same tiers in the
       // same order and this UI needs the placement on every one of them
       // (issue #218), so reading the bare list as well would be a second
@@ -1390,6 +1417,25 @@ export const httpApi: BackupManagerApi = {
       method: "PATCH",
       body: JSON.stringify(wireUpdateSettings(req))
     }).then(fromWireSettingsResponse),
+
+  // Issue #443. Like reinstate above, this one reads its response: a
+  // preflight that reaches the backend and comes back saying the bucket
+  // denies writes is a 200, and a caller that ignored the body could not
+  // tell that from a medium that works.
+  preflightStorageMedium: (mediumId) =>
+    request<WireMediumPreflightResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/preflight",
+      { method: "POST" }
+    ).then((r) => ({
+      medium: r.medium,
+      ok: r.ok,
+      checks: r.checks.map((c) => ({
+        step: c.step as MediumPreflight["checks"][number]["step"],
+        outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
+        category: c.category ?? "",
+        detail: c.detail
+      }))
+    })),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

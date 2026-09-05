@@ -14,6 +14,30 @@ version: "2"
 # still someone's job to think about once, the same way the ones already
 # checked were; this list exists so linting doesn't force re-litigating the
 # same, already-settled question 27 times over.
+
+# Formatting is checked, not merely encouraged (#417). It was not, and the
+# way that surfaced is the reason it is here: two files in this repository
+# were not gofmt-clean, one of them since it was written, and nothing
+# anywhere noticed. `go build`, `go vet` and every linter enabled below are
+# all indifferent to layout, so an unformatted file produces exactly the
+# same output as a formatted one, which is this repository's recurring
+# shape: a check that is silently not checking.
+#
+# gofmt rather than gofumpt: gofmt is what `go fmt`, every editor's
+# format-on-save and every Go developer's fingers already do, so enabling
+# it makes the gate agree with the tools rather than adding a second
+# opinion nobody's editor implements.
+#
+# This half covers the five Go modules, because golangci-lint is invoked
+# per module. scripts/format/check-gofmt.sh is the other half: two Go files
+# in this repository (scripts/api/gen-bindings.go and
+# scripts/architecture/ownership.go) live outside every module and outside
+# go.work, so no per-module lint run has ever been able to see them at all.
+# One of those two was the unformatted one.
+formatters:
+  enable:
+    - gofmt
+
 linters:
   enable:
     - errcheck

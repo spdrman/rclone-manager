@@ -76,7 +76,7 @@ func (s *Service) RevalidateQuarantined(ctx context.Context, id model.ArtifactID
 		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", unconfiguredSet(id.Set))
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, ValidateOptions{})
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", err)
 	}
@@ -222,7 +222,7 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 		return ReinstateResult{}, fmt.Errorf("app: reinstate: %w", unconfiguredSet(id.Set))
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, ValidateOptions{})
 	if err != nil {
 		return ReinstateResult{}, fmt.Errorf("app: reinstate: %w", err)
 	}

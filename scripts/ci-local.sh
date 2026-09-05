@@ -72,6 +72,39 @@
 # exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
 # is the out-loud opt-out.
 #
+# Every `go test` in this script carries -race (#417), with one named
+# exception that says why on its own line (distribution/packaging, below).
+# It is a flag on the steps that already exist rather than a step of its
+# own, for two reasons.
+# A separate step would run the same suites twice, and -race replaces
+# nothing: everything the plain run asserted, the instrumented run asserts
+# too, plus the detector. And a separate step is one more thing that can be
+# commented out, skipped or quietly reordered, which is the failure this
+# gate is built around (#160); a flag on the step that has to run anyway
+# cannot be left out without deleting the step. It also settles what a
+# detected race does: the step it is on is the step this gate already had
+# to run, so a race is a red suite and a red suite is a FAILED verdict
+# naming it. There is no opt-out variable, and no ledger entry, because a
+# ledgered race would be this gate reporting on a defect it decided not to
+# act on.
+#
+# Measured on this machine rather than estimated, warm cache, with five
+# other worktrees running their own suites at the time, so the pairs are
+# the reading and not the absolutes:
+#
+#   core/ minus the four Docker-backed suites   135s, 128s -> 174s, 177s
+#   those four, under gotestwatch                     143s -> 147s
+#   distribution minus packaging                       69s ->  64s
+#   apps/generic                                       43s ->  51s
+#   apps/synology                                       9s ->  17s
+#   apps/common                                         6s ->  31s
+#   distribution/packaging (left out)                  44s -> 521s
+#
+# About ninety seconds added on a gate that runs for twenty-five. The four
+# Docker-backed suites were the ones worth measuring before committing
+# them, and they turned out to be the cheapest: they wait on containers and
+# on a real rclone, so the instrumentation is nearly free.
+#
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
 # failed for "ci-local: FAILED".
@@ -187,11 +220,41 @@ fi
 # other step here has for #160's reason (a step that quietly skips itself
 # when its own file is missing is a silent skip wearing a different hat).
 if [ -f scripts/selftest/check-anchors.sh ]; then
-  gate_step "mutation anchors in the compat and conformance selftests still match the tree (#458)"
+  gate_step "mutation anchors in the compat, conformance and race selftests still match the tree (#458)"
   bash scripts/selftest/check-anchors.sh
 else
   echo "==> mutation anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run (#458)"
 fi
+
+# Formatting, over every tracked Go file in the repository (#417). Half a
+# second, so it belongs up here with the anchors check rather than behind
+# twenty minutes of Go suites.
+#
+# It is not the same check as the gofmt formatter .golangci.yml now
+# enables, and neither one makes the other redundant. golangci-lint is
+# invoked per module below (`cd core && ...`, `cd apps/common && ...`), and
+# two Go files in this repository live outside every module and outside
+# go.work: scripts/api/gen-bindings.go and scripts/architecture/ownership.go.
+# No per-module lint run has ever been able to see either, and the
+# unformatted one of the pair was gen-bindings.go, which is how a file
+# stayed unformatted for its whole life with every gate step green.
+gate_step "every tracked Go file is gofmt-clean, including the ones outside every module (#417)"
+bash scripts/format/check-gofmt.sh
+
+# The same blind spot, for the checks that actually find bugs (#417). Being
+# outside every module does not only cost those two files their formatting:
+# this gate vets and lints per module too, so nothing has ever vetted or
+# linted them either. `go vet` needs no module when it is handed file
+# paths, and golangci-lint gets a throwaway module per unowned directory,
+# which resolves offline because every unowned file here is standard-library
+# only. A few seconds, and it belongs up here with the sweep for the same
+# reason.
+#
+# Deliberately NOT with the other scripts/architecture checks further down:
+# those run after the Go suites, and a Go file nobody checks is worth
+# hearing about before twenty minutes of Docker-backed tests, not after.
+gate_step "every Go file no module owns still passes go vet and golangci-lint (#417)"
+bash scripts/architecture/check-unowned-go.sh
 
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
@@ -203,8 +266,8 @@ gate_step "core/ golangci-lint"
 (cd core && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ "$FAST" = "1" ]; then
-  gate_docker_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
-  (cd core && GOWORK=off go test ./internal/...)
+  gate_docker_step "core/ go test -race ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
+  (cd core && GOWORK=off go test -race ./internal/...)
 else
   # tests/crashmatrix, tests/sftpintegration and tests/miniointegration
   # run separately, under cmd/gotestwatch instead of `go test`'s own
@@ -219,44 +282,70 @@ else
   # derived from this run's own measured pace instead (issue #247's
   # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
   # is no fixed number to outgrow.
-  gate_docker_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
-  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
+  gate_docker_step "core/ go test -race ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
+  (cd core && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
 
-  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch (issue #256: no fixed go test -timeout)"
-  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
+  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch, -race (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -race -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
 fi
 
-gate_step "apps/common go build, vet, test"
-(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_step "apps/common go build, vet, test -race"
+(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-gate_docker_step "distribution go build, vet, test"
-(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_docker_step "distribution go build, vet, test -race (every package but packaging, which runs next)"
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -v '/packaging$'))
+
+# The one Go suite in this gate that does NOT run under the detector, and
+# the only one, which is why it gets a paragraph rather than a flag.
+#
+# distribution/packaging is a static-analysis suite: it reads this
+# repository's own manifests, matrices, READMEs and release records and
+# asserts they agree with each other. It starts no goroutine of its own:
+# no `go` statement in product code or in tests, no t.Parallel anywhere,
+# and one sync.Once memoising a fixture. The only concurrency in the whole
+# package is os/exec's internal pipe plumbing, which is the standard
+# library's and is not what a race in this repository would look like. So
+# -race there has nothing of ours to report on.
+#
+# What it can do is cost. This is also the most CPU-bound package in the
+# repository (four of its epic-matrix cases alone are 14.5s, 7.4s, 7.1s and
+# 6.9s of pure graph and text analysis), which is exactly the shape race
+# instrumentation multiplies: 44s becomes 521s, and that one package was
+# the whole of this module's -race cost.
+#
+# So it is left out on purpose, marked on the command line so the gate's
+# own self-test can see it, and Group K of that self-test asserts this is
+# the ONLY line carrying that marker. A second one appearing without
+# somebody deciding to add it is the thing that would make this exclusion
+# rot.
+gate_step "distribution/packaging (the static-analysis suite, no -race: see above)"
+(cd distribution && GOWORK=off go test ./packaging/) # no -race: no goroutine of its own, so nothing here to detect, and 44s becomes 521s
 
 gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ -f apps/generic/go.mod ]; then
-  gate_docker_step "apps/generic go build, vet, test"
-  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_docker_step "apps/generic go build, vet, test -race"
+  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/generic golangci-lint"
   (cd apps/generic && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/synology/go.mod ]; then
-  gate_step "apps/synology go build, vet, test"
-  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/synology go build, vet, test -race"
+  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/synology golangci-lint"
   (cd apps/synology && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/ugos/backend/go.mod ]; then
-  gate_step "apps/ugos/backend go build, vet, test"
-  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/ugos/backend go build, vet, test -race"
+  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/ugos/backend golangci-lint"
   (cd apps/ugos/backend && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
@@ -485,6 +574,32 @@ if [ "$FAST" != "1" ]; then
 
   gate_step "architecture rules can actually fail (mutation self-test)"
   bash scripts/architecture/selftest.sh
+
+  # The detector itself, shown to fire (#417). Every `go test` above now
+  # carries -race, and -race is the kind of check this repository has
+  # learnt to distrust on sight: it exits 0 whether it looked or not, so a
+  # tree with no race and a detector that was never asked produce the same
+  # output. This plants a real data race in real product source, in a copy
+  # of the tree, and requires the detector to catch it AND to name the
+  # write that planted it AND to be the reason it was caught, by showing
+  # the same mutant going green with the flag off. One package, one test,
+  # three runs: about ten seconds on a warm cache, because the mutant is
+  # one file deep in a leaf package and Go's build cache is
+  # content-addressed, so each copy rebuilds core/service and nothing
+  # under it.
+  gate_step "the race detector can actually catch a race (mutation self-test, #417)"
+  bash scripts/race/selftest.sh
+
+  # And the formatting gate, shown to fire (#417). Same argument as the
+  # block above, applied to the check that turned out to be missing
+  # altogether: two Go files in this tree were not gofmt-clean and nothing
+  # noticed, because `go build`, `go vet` and every linter that was enabled
+  # are all indifferent to layout. Both halves get a planted violation
+  # here, the sweep and .golangci.yml's own formatter, including one
+  # planted outside every module, which is the case the per-module linter
+  # cannot make. A second on a warm cache.
+  gate_step "the formatting gate can actually fail (mutation self-test, #417)"
+  bash scripts/format/selftest.sh
 
   # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
   # is a wall of "nothing about a medium-free deployment moved" assertions,

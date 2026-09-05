@@ -1293,6 +1293,76 @@ const (
 	StorageClassDeepArchive        = "DEEP_ARCHIVE"
 )
 
+// archiveStorageClasses is the subset of the classes above whose objects
+// cannot be read at all until somebody has asked for an explicit restore
+// and waited for it, in the fixed order StorageClasses uses.
+//
+// # Why this package carries a second copy of a fact it does not own
+//
+// internal/archive owns what a storage class MEANS: one table, one row per
+// class, and its own doc explains at length why meaning lives there and
+// the NAMES live here. This is a second copy of two rows of that table,
+// and it exists because the edge only runs one way. archive imports this
+// package (its table is keyed by the constants above), so this package
+// cannot import archive back to ask, and the alternative to copying is
+// leaving the validator unable to answer a question it has to answer at
+// load: does this retention tier deliver to somewhere an artifact can
+// never arrive?
+//
+// Two copies of a fact drift, so this one is pinned against the original
+// in BOTH directions by TestTheArchiveClassSetMatchesInternalArchive,
+// in the external test package, which is the only package that may import
+// both. That is the same arrangement archive/class_test.go already uses to
+// pin its table against StorageClasses(), one direction further round the
+// same loop.
+//
+// GLACIER_IR is deliberately not here. It carries the word Glacier and it
+// reads on demand, and a rule written against the name rather than against
+// the table would refuse a class that works perfectly well.
+var archiveStorageClasses = []string{StorageClassGlacier, StorageClassDeepArchive}
+
+// isArchiveStorageClass reports whether class holds objects that need a
+// restore before anything can read them.
+//
+// The empty string resolves to STANDARD, exactly as EffectiveStorageClass
+// resolves it, so a medium that named no class answers false rather than
+// falling through to the unknown-class branch.
+//
+// A class this build does not recognise answers FALSE here, which is the
+// opposite of the direction archive.IsArchive takes for the same input,
+// and the difference is about who is asking. archive.IsArchive is a
+// predicate in the middle of a decision about deleting a copy, where "you
+// cannot read this" is the answer whose cost when wrong is a refusal. This
+// one runs inside Validate, in the same pass that refuses an unrecognised
+// class at the key that carries it, so answering true would report one
+// typo twice and send the operator to the retention chain to fix a
+// mistake in the mediums block.
+func isArchiveStorageClass(class string) bool {
+	if class == "" {
+		class = StorageClassStandard
+	}
+	for _, c := range archiveStorageClasses {
+		if c == class {
+			return true
+		}
+	}
+	return false
+}
+
+// ArchiveStorageClasses returns every storage class whose objects need a
+// restore before they can be read, as a fresh slice the caller may keep or
+// sort without moving this package's own copy.
+//
+// Exported for StorageClasses' reason and for one more. A settings form
+// has to be able to grey out the mediums a retention tier cannot deliver
+// to, using the set Validate actually enforces rather than a list
+// transcribed into a frontend; and the pinning test that keeps this set
+// and internal/archive's table together has to be able to read it from
+// outside the package.
+func ArchiveStorageClasses() []string {
+	return append([]string(nil), archiveStorageClasses...)
+}
+
 // UploadVerificationReadback and UploadVerificationAttested are the two
 // ways a medium may be asked to prove an upload arrived intact before the
 // local copy is deleted (FR-31).

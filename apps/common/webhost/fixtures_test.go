@@ -132,6 +132,13 @@ type syncFakeBackend struct {
 	errOnPreview error
 	errOnApply   error
 
+	// previewPlan, when non-nil, is applied to the fixture plan below
+	// before it is stored and returned. It is how a test gives a preview
+	// EPIC E's placement facts (a per-verdict medium, a planned move, a
+	// placement nothing could confirm) without a second fake backend, and
+	// without every other retention test having to grow them.
+	previewPlan func(service.RetentionPlan) service.RetentionPlan
+
 	// errOnStorage is ListStorageStatus's equivalent, so a test can drive
 	// systemStorage's own 500 branch (handlers_storage.go) rather than
 	// only its success path.
@@ -156,25 +163,28 @@ type syncFakeBackend struct {
 	reinstateResult           service.ArtifactReinstatement
 	persistedConnectionResult service.ConnectionTestResult
 
-	errOnArtifacts      error
-	errOnActivity       error
-	errOnListOperations error
-	errOnHealth         error
-	errOnCatalog        error
-	errOnRevalidate     error
-	errOnRetry          error
-	errOnReinstate      error
-	errOnSetEnabled     error
-	errOnSetReadOnly    error
-	errOnRemove         error
-	errOnSetRetention   error
-	errOnTestPersisted  error
+	errOnArtifacts       error
+	errOnActivity        error
+	errOnListOperations  error
+	errOnHealth          error
+	errOnCatalog         error
+	errOnRevalidate      error
+	errOnRetry           error
+	errOnMediumPreflight error
+	mediumPreflight      service.MediumPreflight
+	errOnReinstate       error
+	errOnSetEnabled      error
+	errOnSetReadOnly     error
+	errOnRemove          error
+	errOnSetRetention    error
+	errOnTestPersisted   error
 
 	lastArtifactFilter    service.ArtifactFilter
 	lastActivityLimit     int
 	lastOperationsLimit   int
 	lastRevalidated       string
 	lastRetried           string
+	lastPreflightedMedium string
 	lastReinstated        string
 	lastRemoved           string
 	lastSetEnabled        setEnabledCall
@@ -232,13 +242,25 @@ func (f *syncFakeBackend) PreviewRetention(_ context.Context, source, set string
 			// (issue #218), so the wire shape cannot be satisfied by a
 			// single per-verdict attribution, and one DELETE, which
 			// carries no tiers and so no attribution either.
-			{Artifact: "kept.dump", Action: "KEEP", Reason: "kept by the DAILY and MONTHLY tiers (test fixture)", Tiers: []service.RetentionTierSelection{
+			//
+			// Both name the implicit local medium, which is what
+			// core/service really reports for every verdict in a
+			// deployment that declares no storage medium (EPIC E FR-30,
+			// #239). Spelling it here rather than leaving it empty is
+			// what lets the medium-free response test in
+			// handlers_retention_test.go prove the wire does not grow a
+			// `"medium": "local"` on every verdict of every deployment
+			// that had nothing to do with EPIC E.
+			{Artifact: "kept.dump", Action: "KEEP", Medium: "local", Reason: "kept by the DAILY and MONTHLY tiers (test fixture)", Tiers: []service.RetentionTierSelection{
 				{Tier: "DAILY", SelectedBy: "DISCOVERY"},
 				{Tier: "MONTHLY", SelectedBy: "PRODUCER"},
 				{Tier: "LAST_KNOWN_GOOD", SelectedBy: "PROTECTION"},
 			}},
-			{Artifact: "backup.dump", Action: "DELETE", Reason: "no GFS tier selects this artifact (test fixture)"},
+			{Artifact: "backup.dump", Action: "DELETE", Medium: "local", Reason: "no GFS tier selects this artifact (test fixture)"},
 		},
+	}
+	if f.previewPlan != nil {
+		plan = f.previewPlan(plan)
 	}
 	f.plans[plan.PlanID] = plan
 	return plan, nil
@@ -621,6 +643,16 @@ func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) e
 	return nil
 }
 
+func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (service.MediumPreflight, error) {
+	if f.errOnMediumPreflight != nil {
+		return service.MediumPreflight{}, f.errOnMediumPreflight
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastPreflightedMedium = id
+	return f.mediumPreflight, nil
+}
+
 func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
 	if f.errOnReinstate != nil {
 		return service.ArtifactReinstatement{}, f.errOnReinstate
@@ -884,6 +916,10 @@ func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.
 }
 
 func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
 
 func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
 	return service.ArtifactReinstatement{}, nil

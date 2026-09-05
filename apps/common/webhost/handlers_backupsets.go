@@ -66,11 +66,11 @@ type backupSetSpec struct {
 }
 
 // backupSetRequest is POST /api/v1/backup-sets' request body: the spec
-// above plus the one thing only a create can ask for.
+// above plus the two things only a create can ask for.
 //
 // The embedded struct marshals inline, so the wire shape is unchanged
-// from when this was one flat type; what changed is that the field below
-// is now declared on the operation that honours it and on no other.
+// from when this was one flat type; what changed is that the fields below
+// are declared on the operation that honours them and on no other.
 type backupSetRequest struct {
 	backupSetSpec
 	// RunImmediately is the wizard's "Save, enable & run" tier (as
@@ -81,6 +81,15 @@ type backupSetRequest struct {
 	// issue's scope is exactly the four endpoints named in its own
 	// title, and a per-backup-set-scoped run is not one of them.
 	RunImmediately bool `json:"run_immediately"`
+
+	// AcknowledgeRepoint answers the refusal a create over an id that
+	// already has artifacts on record gets when it points somewhere other
+	// than where that history came from (issue #411,
+	// core/service/backupsetrepoint.go). It is not a field of the backup
+	// set and nothing persists it, which is why it sits here and not on
+	// backupSetSpec: first-run shares that spec, and a first configuration
+	// is not a create over anything.
+	AcknowledgeRepoint bool `json:"acknowledge_repoint"`
 }
 
 // backupSetResponse is the wire shape of one backup set, shared by
@@ -229,6 +238,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		Disabled:           body.Disabled,
 		ReadOnly:           body.ReadOnly,
 		RunImmediately:     body.RunImmediately,
+		AcknowledgeRepoint: body.AcknowledgeRepoint,
 		Actor:              actorFromContext(r.Context()),
 	}
 
@@ -236,9 +246,8 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if result.Set.ID == "" {
 			// Creation itself never happened — nothing was persisted, so
-			// the ordinary error mapping (400 or 500, per the failure
-			// kind: writeBackupSetError has no conflict branch, and this
-			// route declares no 409) is the whole story.
+			// the ordinary error mapping (400, 409 or 500, per the
+			// failure kind) is the whole story.
 			writeBackupSetError(w, err)
 			return
 		}
@@ -338,6 +347,13 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrSSHKeyNotFound):
 		writeError(w, http.StatusBadRequest, "SSH_KEY_NOT_FOUND", "the referenced ssh_key_id does not exist; import a key first")
+	case errors.Is(err, service.ErrHistoryRepointNotAcknowledged):
+		// 409 for the same reason the edit's own refusal below is one,
+		// and its own code because the two are not interchangeable to a
+		// client: this one is about an id rather than a resource that
+		// exists, and what it offers an operator is "create anyway"
+		// rather than "save anyway". Safe to echo on the same terms.
+		writeError(w, http.StatusConflict, "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", err.Error())
 	case errors.Is(err, service.ErrRepointNotAcknowledged):
 		// 409 rather than 400, because this is not a malformed request:
 		// it is a well-formed one whose consequences the caller has to

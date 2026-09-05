@@ -54,11 +54,13 @@ the way its predecessor did.
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
 | `reconcile` | run FR-17 reconciliation for every backup set |
-| `validate` | re-check one artifact's durable local copy |
+| `validate` | re-check one artifact's durable copy, wherever it is. A copy on a storage medium is checked at the strongest verification class that costs nothing; `--content` downloads it and re-hashes it, which costs egress, so FR-31 makes that something an operator asks for (issue #435) |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
+| `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
+| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because a 180-day minimum billing period is not a thing to discover empirically (issue #443) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
 
@@ -252,6 +254,18 @@ volume moved, has a real change to make. Add `--acknowledge-repoint` (or
 has been read. If the new location holds a *different* dataset, make it a separate backup
 set instead. `--port` and `--user` are not in that list: neither changes which directory on
 which machine holds the data.
+
+**`backup-set create` asks the same question, for the same reason.** A backup set is
+identified by its source and its name, so `backup-set remove` frees that id up and a set
+created over it again takes every artifact the removed one left on record. That is what
+undoing a removal needs, and re-creating the set exactly where it was removed from costs
+nothing and says nothing. Creating it somewhere else is the repoint above with no edit in
+front of it, so it is refused the same way, under its own code
+(`BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED`), with the same `--acknowledge-repoint` out of
+it and **Create anyway** in the wizard. What it compares against is the address the set was
+pointing at when it was removed, which the removal records for exactly this; for an id whose
+configuration went away some other way, what is left to compare is where its artifacts
+actually landed, and that is what gets checked.
 
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
@@ -760,8 +774,10 @@ its final committed path if quarantined afterward by reconciliation. See
 turns those rows into a countable, actionable picture, and `backup-manager quarantine` is
 how an operator acts on one by hand, in one of three ways (issue #277):
 
-- `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-local-copy
-  checks and reports the verdict, moving nothing either way. **This is not `validate` under
+- `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-copy checks and
+  reports the verdict, moving nothing either way. Where the durable copy is an object on a
+  storage medium rather than a local file, that is where it looks (issue #435), at the
+  strongest verification class that costs nothing. **This is not `validate` under
   a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
   (`COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE`) and refuses a `QUARANTINED` or
   `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
@@ -1065,7 +1081,7 @@ If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this ca
 `backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
 what try automatically. To act on it yourself right now, without waiting for a cycle, see
 [Quarantine](#quarantine) above: `quarantine revalidate <source/backup-set/artifact>`
-re-checks the durable local copy and reports the verdict without moving anything,
+re-checks the durable copy, wherever it is, and reports the verdict without moving anything,
 `quarantine retry` re-enters the pipeline from a fresh fetch, and `quarantine reinstate`
 trusts the local copy again in place. (`backup-manager validate` is a different command: it
 only ever re-checks a *healthy* restore point and refuses a `QUARANTINED` artifact outright.)
@@ -1095,8 +1111,13 @@ This repository is four Go modules stitched together by `go.work`: `core/`, `app
 cd core
 go build ./...
 go vet ./...
-go test ./...
+go test -race ./...
 ```
+
+`-race` rather than a bare `go test`, because that is what the gate runs (see below) and
+because this engine's core loop is a scheduler handing a config snapshot to a cycle while
+service methods swap that snapshot underneath it. Drop the flag for a quick single-package
+loop if you like; do not form an opinion about a change from a run without it.
 
 ### The local gate
 
@@ -1142,6 +1163,118 @@ Everything the gate starts gets `CI_LOCAL=1` in its environment, which is how th
 fixtures in `core/tests` tell "this laptop has no Docker", an honest skip when you are
 running one suite by hand, from "the daemon this gate already used has gone away", which is
 a failure.
+
+Every `go test` the gate runs carries `-race` (#417). Until that landed it ran none at all,
+anywhere, which is the same shape as every other hole this gate has had to close: `go test`
+exits 0 whether the detector looked or not, so "this tree has no data race" and "nobody
+asked" were the same output. On this product that gap sat over the code most likely to have
+one. The `{inner, revision}` pair, the edit-holds registry and the journal are all shared
+across goroutines, and one test in `core/service` says in its own doc that it proves nothing
+except under the detector, which until now it had never once been run under.
+
+It is a flag on the steps that already exist rather than a step of its own. A separate step
+would run the same suites a second time and buy nothing, since `-race` replaces no
+assertion: everything a plain run checks, the instrumented run checks too, plus the
+detector. And a separate step is one more thing that can be commented out while the suites
+still run and still report `ok`. So Group K of the gate's own self-test pins the rule that
+follows: not "there is a race step" but "no `go test` in this gate runs without the
+detector", which is a rule a new module cannot be added around by accident.
+
+A detected race fails the run rather than joining the skip ledger, and there is no opt-out
+variable for it. That falls out of it being a flag: the step it is on is the step the gate
+already had to run, so a race is a red suite and a red suite is `==> ci-local: FAILED`
+naming it. A ledgered race would be a check reporting on a defect it decided not to act on,
+which is the one thing this gate is not allowed to do.
+
+Measured on the machine this was written on, warm cache, with five other worktrees running
+their own suites at the time, so read the pairs rather than the absolutes:
+
+| suite | plain | `-race` |
+|---|---|---|
+| `core/`, minus the four Docker-backed suites | 135s, 128s | 174s, 177s |
+| those four, under `gotestwatch` | 143s | 147s |
+| `distribution`, minus `packaging` | 69s | 64s |
+| `apps/generic` | 43s | 51s |
+| `apps/synology` | 9s | 17s |
+| `apps/common` | 6s | 31s |
+| `distribution/packaging`, the one exclusion | 44s | 521s |
+
+About ninety seconds added on a gate that runs for twenty-five minutes. The four
+Docker-backed suites under `core/tests/` were the ones worth measuring before committing
+them, and they turned out to be the cheapest of the lot: they spend their time waiting on
+containers and on a real rclone, so the instrumentation is nearly free.
+
+`distribution/packaging` is the one Go suite the gate runs without the detector, and it says
+so on its own command line. It is a static-analysis suite: it reads this repository's own
+manifests, matrices, READMEs and release records and asserts they agree with each other. It
+starts no goroutine of its own: no `go` statement in product code or in tests, no
+`t.Parallel` anywhere, and one `sync.Once` memoising a fixture. The only concurrency in the
+whole package is `os/exec`'s internal pipe plumbing, which is the standard library's and is
+not what a race in this repository would look like. What it does have is the most CPU-bound
+work in the repository, which is exactly the shape instrumentation multiplies, and that one
+package was the whole of `distribution`'s `-race` cost. Group K asserts that this is the
+only line in the whole script carrying a `# no -race:` marker, and a mutation that adds a
+second one proves that count can fail. An exclusion nobody can enumerate is how a gate ends
+up not running what it says it runs.
+
+Turning it on found two things in `core/internal/transport/rclone` on the first run, and
+neither was a flake. One is a real data race, in rclone v1.75.0's `lib/atexit` rather than
+here: it publishes its signal channel in a plain package-level variable and writes `nil`
+over it in `IgnoreSignals` while the goroutine `Register` started is reading it, which
+`DisableSignalExit` reaches. Nothing on this side can add a synchronisation edge between two
+accesses in another module, and the shipped daemon disables signals before its first
+transfer so it never installs that handler at all, so the one row that provokes it runs
+under a suppression that `TestDisableSignalExit` holds to account: the child says what it
+suppressed, and the test asserts that exactly the provoking row used it and no other row
+did. When rclone fixes it, that assertion goes red and the file gets deleted. The other was
+a sampling assertion whose odds move with machine load, which the detector's slowdown pushed
+over; the claim it carried now lives in a row where no coin is tossed.
+
+Turning the detector on is also how formatting got checked at all. Chasing one of the
+`-race` failures turned up a Go file that was not `gofmt`-clean, and then a second, and then
+the thing actually worth writing down: **nothing in this repository looked**. `go build`,
+`go vet` and every linter `.golangci.yml` enabled are all indifferent to layout, so an
+unformatted file produced exactly the same output as a formatted one, forever. That is the
+same defect as a skipped suite reporting `ok`, arriving through a third door.
+
+It is closed in two places, because one of them cannot reach everything. `.golangci.yml` now
+enables the `gofmt` formatter, which covers the five Go modules. `scripts/format/check-gofmt.sh`
+sweeps every tracked `.go` file in about half a second, and it is not redundant with the
+first: `golangci-lint` is invoked per module, and two Go files here live outside every module
+and outside `go.work` (`scripts/api/gen-bindings.go` and `scripts/architecture/ownership.go`),
+so no per-module run has ever been able to see either of them. One of those two was the
+unformatted one. They are compiled by the `go run` that invokes them, so a syntax error would
+surface; nothing else about them is checked by anything, which is worth knowing before adding
+a third.
+
+`scripts/format/selftest.sh` is the control, with seven cells: the real tree clean, the two
+out-of-module files still out of module (a standing precondition, checked by
+`check-anchors.sh` in half a second), a planted unformatted file inside a module, one outside
+every module, one staged but not committed because that is the state the pre-commit hook
+runs in, and `.golangci.yml`'s own formatter turning red on unformatted code and green on the
+same file formatted.
+
+Formatting was only the half of that blind spot that happened to be visible. This gate vets
+and lints per module too, so those same two files had never been vetted or linted by anything
+either, in a repository whose gate otherwise vets and lints everything.
+`scripts/architecture/check-unowned-go.sh` closes that, in a few seconds and without a
+a `go.mod` of its own under `scripts/`: `go vet` needs no module at all when it is handed file paths, and
+`golangci-lint` gets a throwaway module per unowned directory, which resolves offline because
+every unowned file here is standard-library only. Both files pass today, so nothing had to be
+fixed, only looked at. Its controls live with the other architecture controls in
+`scripts/architecture/selftest.sh`: one planted defect `go vet` catches, and one it does not
+and the linter does, which is what stops the lint half from being decoration on the vet half.
+
+Neither check needs `scripts/` to become a module, and neither touches `go.work`. That was
+the deciding constraint: a sixth module would add a row to the layer manifest and change what
+the core dependency proof deletes and re-runs, which is a much larger change than looking at
+two files.
+
+`scripts/race/selftest.sh` is the control for all of it, in the shape #242 established for
+the compatibility and conformance cells: it plants a real data race in real product source
+in a copy of the tree, requires the detector to catch it and to name the write that planted
+it, and then runs the same mutant with the flag off and requires it to go green. That last
+cell is the one that makes the other two mean anything.
 
 Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
 says which tier a test belongs to (unit, integration, or a machine reached through
@@ -1259,6 +1392,7 @@ core/internal/
   discovery/     turns a raw remote listing into artifacts proven complete
   health/        process and backup-set health computation
   lifecycle/     the state machine plus every step: transfer, verify, commit, delete
+  mediumcheck/   proves a declared storage medium can actually take and return a backup, before a real one arrives
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging

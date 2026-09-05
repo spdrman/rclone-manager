@@ -259,6 +259,18 @@ type BackupServiceClient interface {
 	RetryArtifactIngestion(ctx context.Context, id string) error
 	ReinstateArtifact(ctx context.Context, id, note string) (service.ArtifactReinstatement, error)
 
+	// PreflightStorageMedium backs POST
+	// /api/v1/storage-mediums/{id}/preflight (issue #443): the medium
+	// equivalent of TestBackupSetConnection above, and deliberately a
+	// stronger check than that one. It writes a probe object, reads it
+	// back, compares the class it landed in against the class the
+	// configuration claims, asks whether the verification class the
+	// medium declares can actually be achieved there, and deletes the
+	// probe. A medium that does not work comes back as a report saying
+	// so, never as an error; the error is for an id this configuration
+	// does not declare.
+	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
+
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)

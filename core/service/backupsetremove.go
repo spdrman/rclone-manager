@@ -49,14 +49,30 @@
 // CreateBackupSet says out loud how much history a new set adopted
 // (backupsets.go).
 //
-// The case this does NOT cover, said plainly rather than left to be
-// found: remove a set, then create one with the same id pointing at a
-// different remote_path or local_path, and you have exactly the repoint
-// backupsetrepoint.go refuses on the update path, with no acknowledgement
-// asked for, because the create path has never had one. Removal is what
-// opens that route. Closing it belongs on create, with the same
-// acknowledgement update already has, and it is filed rather than folded
-// in here.
+// The case that used to be left open here, and now is not: remove a set,
+// then create one with the same id pointing at a different remote_path or
+// local_path, and you have exactly the repoint backupsetrepoint.go
+// refuses on the update path. Removal is what opens that route, so
+// removal is also where the one thing needed to close it is written down.
+// This method records the address the set was pointing at as it takes the
+// set out of the configuration (state.BackupSetAddress, migration 0008),
+// and CreateBackupSet compares a later create over the same id against
+// it (issue #411).
+//
+// That record is not a tombstone and does not put the set back in the
+// catalog in any form: nothing lists it, no read surface can see it, and
+// GET on the id still answers 404. It says where a set that used to exist
+// was pointing, which is a question only the next create over that id
+// ever asks.
+//
+// It is written BEFORE the configuration is rewritten, with the same
+// discipline as every other fallible step in this sequence: everything
+// that can fail happens while nothing has been persisted, so a failure
+// here is a removal that did not happen rather than a removal with no
+// record behind it. Refusing the removal outright is the point. The
+// alternative is a removal that succeeds having quietly given up the only
+// thing standing between the next create and a silent adoption, which is
+// exactly the failure this is here to prevent.
 //
 // # The sequence, and the one step that is not shared with the others
 //
@@ -105,10 +121,17 @@
 // What a stopped pass can leave behind is worth knowing: an interrupted
 // transfer leaves a .partial file and a journal row short of a terminal
 // state, and FR-17 reconcile is what would normally tidy that up on the
-// next cycle. Reconcile only runs for configured sets, so after a removal
-// nothing ever will. It is not a retained backup and no promise covers
-// it, but it is residue on a disk, and an operator should read that here
-// rather than discover it.
+// next cycle. Reconcile only runs for configured sets, so no cycle ever
+// will. It is not a retained backup and no promise covers it, but it is
+// residue on a disk.
+//
+// That is issue #418, and it now has an answer rather than only a
+// warning. The event below counts what this removal stranded, so the
+// moment it happens says so; `backup-manager unconfigured` lists it
+// afterwards along with everything else this set still holds; and
+// internal/app's ClearStranded (unconfigured.go) is the operator-driven
+// sweep that removes the .partial and ends the row. None of that touches
+// a retained backup, and this removal still does not either.
 package service
 
 import (
@@ -118,9 +141,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // RemoveBackupSet removes one backup set's configuration and hot-reloads,
@@ -158,6 +183,7 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 	}
 
 	found := false
+	var removedSet config.BackupSet
 	for i := range cfg.Sources {
 		if cfg.Sources[i].Name != sourceName {
 			continue
@@ -167,6 +193,9 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 			if sets[j].Name != setName {
 				continue
 			}
+			// Copied out before the splice below, which overwrites this
+			// element with its successor.
+			removedSet = sets[j]
 			// The source itself stays, even when this was its last set.
 			// It carries issue #282's source-level ReadOnly default, and
 			// dropping the source would drop that declaration and hand
@@ -187,6 +216,13 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 		// or the set was never there. Either way nothing was taken, so
 		// nothing is given back.
 		return wrapNotFound(id)
+	}
+
+	// Where this set was pointing, on the record, before anything is
+	// written: see this file's own doc for what reads it and why a failure
+	// here refuses the removal rather than proceeding without it.
+	if err := b.recordRemovedAddress(ctx, sourceName, setName, removedSet); err != nil {
+		return err
 	}
 
 	// The set is on disk and this call is the one taking it out. The hold
@@ -240,6 +276,11 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 		"backup set configuration removed",
 		slog.String("backup_set", id),
 		slog.Int("retained_artifacts", b.artifactCountFor(ctx, id)),
+		// Issue #418. The removal is the one moment that knows it just
+		// stranded these, and a count of zero here is the ordinary case
+		// worth stating: it is the difference between "this removal left
+		// nothing half-done" and "nobody looked".
+		slog.Int("stranded_artifacts", b.strandedCountFor(ctx, id)),
 	)
 	return nil
 }
@@ -254,20 +295,87 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 // is already written by the time this runs, and a logging call is not
 // allowed to turn a completed write into an error.
 func (b *BackupService) artifactCountFor(ctx context.Context, id string) int {
-	if b.journal == nil {
-		return -1
-	}
-	sourceName, setName, ok := splitBackupSetID(id)
+	records, ok := b.recordsFor(ctx, id)
 	if !ok {
 		return -1
 	}
+	return len(records)
+}
+
+// strandedCountFor is how many of those rows this removal just stranded
+// mid-acquisition: rows in DISCOVERED through COMMITTING, which nothing
+// will ever advance once the set stops being configured (issue #418).
+//
+// It is a second read rather than a second return value from the count
+// above, because that method has another caller in the create path and
+// this lane does not own that file. -1 for the same reason, and it is the
+// sharper case here: a removal that logged "0 stranded" when it could not
+// look would be claiming the tidiest possible outcome for a question
+// nobody can re-ask later, since the next reader has no way to know what
+// the journal held at this instant.
+func (b *BackupService) strandedCountFor(ctx context.Context, id string) int {
+	records, ok := b.recordsFor(ctx, id)
+	if !ok {
+		return -1
+	}
+	stranded := 0
+	for _, rec := range records {
+		if app.IsAcquisitionState(rec.State) {
+			stranded++
+		}
+	}
+	return stranded
+}
+
+// recordsFor is the journal read both counts above share, and the one
+// place their "I could not look" answer is decided.
+func (b *BackupService) recordsFor(ctx context.Context, id string) ([]state.Record, bool) {
+	if b.journal == nil {
+		return nil, false
+	}
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return nil, false
+	}
 	setID, err := model.NewBackupSetID(sourceName, setName)
 	if err != nil {
-		return -1
+		return nil, false
 	}
 	records, err := b.journal.ListByBackupSet(ctx, setID)
 	if err != nil {
-		return -1
+		return nil, false
 	}
-	return len(records)
+	return records, true
+}
+
+// recordRemovedAddress writes down where bs was pointing, so a later
+// create over the same id can be checked against it
+// (backupsetrepoint.go's requireCreateRepointAcknowledgement).
+//
+// The id is built through model.NewBackupSetID rather than read off
+// bs.ID: this method's config was read with config.Load and never
+// validated (the validation happens after the set is spliced out), and
+// Load does not resolve ids, so bs.ID is still zero here.
+//
+// A BackupService with no journal has nowhere to write it and nothing
+// that could ever read it back, so it records nothing: that is the
+// in-memory construction core/ tests use, never a deployment.
+func (b *BackupService) recordRemovedAddress(ctx context.Context, sourceName, setName string, bs config.BackupSet) error {
+	if b.journal == nil {
+		return nil
+	}
+	setID, err := model.NewBackupSetID(sourceName, setName)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBackupSetNotFound, err)
+	}
+	if err := b.journal.RecordBackupSetAddress(ctx, state.BackupSetAddress{
+		Set:        setID,
+		Host:       bs.Remote.Host,
+		RemotePath: bs.RemotePath,
+		LocalPath:  bs.LocalPath,
+		RecordedAt: now(),
+	}); err != nil {
+		return fmt.Errorf("service: recording where %s was pointing before removing it: %w", setID, err)
+	}
+	return nil
 }

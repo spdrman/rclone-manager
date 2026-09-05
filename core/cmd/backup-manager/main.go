@@ -44,22 +44,24 @@ func run(args []string) int {
 }
 
 var commands = map[string]func([]string) int{
-	"run":        cmdRun,
-	"daemon":     cmdDaemon,
-	"check":      cmdCheck,
-	"status":     cmdStatus,
-	"sources":    cmdSources,
-	"backup-set": cmdBackupSet,
-	"artifacts":  cmdArtifacts,
-	"fetch":      cmdFetch,
-	"retention":  cmdRetention,
-	"reconcile":  cmdReconcile,
-	"validate":   cmdValidate,
-	"catalog":    cmdCatalog,
-	"quarantine": cmdQuarantine,
-	"restore":    cmdRestore,
-	"settings":   cmdSettings,
-	"version":    cmdVersion,
+	"run":          cmdRun,
+	"daemon":       cmdDaemon,
+	"check":        cmdCheck,
+	"status":       cmdStatus,
+	"sources":      cmdSources,
+	"backup-set":   cmdBackupSet,
+	"artifacts":    cmdArtifacts,
+	"fetch":        cmdFetch,
+	"retention":    cmdRetention,
+	"reconcile":    cmdReconcile,
+	"validate":     cmdValidate,
+	"catalog":      cmdCatalog,
+	"quarantine":   cmdQuarantine,
+	"unconfigured": cmdUnconfigured,
+	"medium":       cmdMedium,
+	"restore":      cmdRestore,
+	"settings":     cmdSettings,
+	"version":      cmdVersion,
 }
 
 func usage() {
@@ -93,15 +95,38 @@ commands:
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
-                                                  preview GFS/last-known-good retention decisions; each retention flag
-                                                  overrides the loaded config's own resolved value for this preview only
+                                                  preview GFS/last-known-good retention decisions. It deletes nothing in
+                                                  either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
+                                                  through the API's retention preview/apply pair, against a reviewed plan_id.
+                                                  Each retention flag overrides the loaded config's own resolved value for
+                                                  this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
+  validate <source/backup-set/artifact> [--content]
+                                                  where that copy is on a storage medium instead, check it there: the
+                                                  strongest class that costs nothing, by default, and with --content a
+                                                  full download and re-hash, which costs egress, so FR-31 makes it
+                                                  something an operator asks for rather than something that happens
+                                                  (#435)
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
                                                   act on one quarantined artifact: revalidate re-checks it and moves
                                                   nothing; retry re-enters the pipeline from DISCOVERED; reinstate
                                                   trusts it again in place and forfeits any future remote delete
+  unconfigured                                   list the backup sets the journal remembers and the configuration no
+                                                  longer names, what they still hold on storage, and the retention
+                                                  policy governing them, which is none (#418)
+  unconfigured clear <source/backup-set> [--acknowledge]
+                                                  clear the .partial residue a removal stranded mid-transfer, and end
+                                                  the journal rows nothing will ever advance. It never touches a
+                                                  retained backup; without --acknowledge it only prints what it would do
+  medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
+                                                  carrying a real backup does: it writes a probe object with the
+                                                  medium's own storage class, reads it back byte for byte, checks
+                                                  the class it landed in against the one the configuration claims,
+                                                  asks whether the medium's declared upload_verification can
+                                                  actually be achieved there, and deletes the probe. Exits non-zero
+                                                  when any check fails (#443)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force

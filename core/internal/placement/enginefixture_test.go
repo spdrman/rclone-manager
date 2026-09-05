@@ -102,21 +102,69 @@ type fakeMedium struct {
 	// object actually does.
 	archiveRefusesReads bool
 
+	// modTimes is what StatObject reports for each key, in unix seconds,
+	// which is exactly what the rclone adapter reports: toObjectInfo
+	// carries o.ModTime(ctx).Unix() and leaves the field at zero when the
+	// backend has none.
+	//
+	// A fake that left it at zero for everything could not exercise the
+	// pre-delete proof at all, because a mod time is one of the three
+	// things that proof rests on. It advances on every write, the way an
+	// endpoint's does.
+	modTimes map[string]int64
+
+	// endpointClock is the fake endpoint's own clock, in unix seconds. It
+	// is separate from the engine's clock on purpose: the two are the
+	// same clock nowhere in production, and the pre-delete proof compares
+	// mod times only against other mod times for exactly that reason.
+	endpointClock int64
+
+	// noModTime makes StatObject report no mod time at all, which is what
+	// a backend with no mod-time support gives. It is the negative
+	// control for the proof: with nothing to compare, every move pays for
+	// the second read.
+	noModTime bool
+
+	// statClass overrides the storage class StatObject reports, so a test
+	// can transition an object under a move the way a bucket lifecycle
+	// rule does. Empty means the medium's own configured class.
+	statClass string
+
+	// afterOpen runs at the end of a SUCCESSFUL OpenObject, with the
+	// mutex already held, so it must touch the fake's fields directly and
+	// must not call back into a locking method.
+	//
+	// It exists because one refusal in this engine can only be reached by
+	// an endpoint whose answers change between two calls. deleteSource
+	// reads the destination's bytes back and then guardSourceDelete asks
+	// the medium whether a restore of that object is in effect; a restore
+	// window that lapses between those two calls is the case the eighth
+	// clause's own comment describes, and it is the only case in which
+	// the read can succeed and the clause can still refuse. A fake whose
+	// world is fixed for the whole cycle cannot produce it, so a test
+	// written against one is testing the capability refusal in front of
+	// the clause and calling it the clause.
+	afterOpen func(*fakeMedium)
+
 	uploadErr  error
 	statErr    error
 	openErr    error
 	deleteErr  error
 	restoreErr error
 
-	uploads, opens, stats, deletes, restoreStatuses int
-	uploadedKeys                                    []string
+	uploads, opens, stats, checksums, deletes, restoreStatuses int
+	uploadedKeys                                               []string
 }
 
 func newFakeMedium() *fakeMedium {
-	return &fakeMedium{objects: map[string][]byte{}}
+	return &fakeMedium{
+		objects:       map[string][]byte{},
+		modTimes:      map[string]int64{},
+		endpointClock: testNow2.Add(-time.Hour).Unix(),
+	}
 }
 
-func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
+func (f *fakeMedium) StatObject(_ context.Context, medium transport.Medium, key string) (transport.ObjectInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stats++
@@ -127,7 +175,33 @@ func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, key strin
 	if !ok {
 		return transport.ObjectInfo{}, &transport.Error{Category: transport.NotFound, Op: "stat", Cause: errors.New("no such key")}
 	}
-	return transport.ObjectInfo{Key: key, Size: int64(len(b))}, nil
+	class := medium.StorageClass
+	if f.statClass != "" {
+		class = f.statClass
+	}
+	info := transport.ObjectInfo{Key: key, Size: int64(len(b)), StorageClass: class}
+	if !f.noModTime {
+		info.ModTime = f.modTimes[key]
+	}
+	return info, nil
+}
+
+// putLocked writes b at key and stamps it with a fresh mod time, which is
+// what a real endpoint does to an object somebody overwrites. The caller
+// already holds the mutex, so it is callable from afterOpen.
+func (f *fakeMedium) putLocked(key string, b []byte) {
+	f.endpointClock++
+	f.objects[key] = append([]byte(nil), b...)
+	f.modTimes[key] = f.endpointClock
+}
+
+// touchLocked stamps a fresh mod time on an object whose bytes are
+// unchanged. It is how a test says "something wrote here" without saying
+// "and what it wrote is wrong", which is the difference between the proof
+// being void and the artifact being bad.
+func (f *fakeMedium) touchLocked(key string) {
+	f.endpointClock++
+	f.modTimes[key] = f.endpointClock
 }
 
 func (f *fakeMedium) UploadFromLocal(_ context.Context, _ transport.Medium, localPath, key string, _ transport.UploadOptions) (transport.UploadResult, error) {
@@ -148,7 +222,7 @@ func (f *fakeMedium) UploadFromLocal(_ context.Context, _ transport.Medium, loca
 	case f.truncate > 0 && f.truncate < len(b):
 		b = b[:f.truncate]
 	}
-	f.objects[key] = b
+	f.putLocked(key, b)
 	return transport.UploadResult{Key: key, BytesUploaded: int64(len(b))}, nil
 }
 
@@ -173,12 +247,16 @@ func (f *fakeMedium) OpenObject(_ context.Context, medium transport.Medium, key 
 	if !ok {
 		return nil, &transport.Error{Category: transport.NotFound, Op: "open", Cause: errors.New("no such key")}
 	}
+	if f.afterOpen != nil {
+		f.afterOpen(f)
+	}
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
 }
 
 func (f *fakeMedium) ObjectChecksum(_ context.Context, _ transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.checksums++
 	if !f.attests {
 		// Exactly what rclone v1.75.0's s3 backend forces: it exposes MD5
 		// from the ETag and refuses every other algorithm, so no S3
@@ -243,6 +321,18 @@ func (f *fakeMedium) openCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.opens
+}
+
+func (f *fakeMedium) statCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stats
+}
+
+func (f *fakeMedium) checksumCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checksums
 }
 
 func (f *fakeMedium) restoreStatusCount() int {
@@ -325,14 +415,56 @@ type guard struct {
 	mu         sync.Mutex
 	violations []string
 	deletes    []string
+
+	// tolerated is one breach this fixture's world already had before the
+	// engine was started, rendered exactly as CheckInvariant renders it.
+	// See tolerateExistingBreach.
+	tolerated string
+}
+
+// tolerateExistingBreach declares that this world ALREADY breaks FR-30's
+// standing invariant, before the engine has done anything.
+//
+// Four of the source-delete guard cells build exactly that world on
+// purpose: a destination placement the journal cannot rely on, plus a
+// source already at DELETE_PENDING, leaves no ACTIVE content-class copy.
+// That is not a defect being tolerated, it IS the world guardSourceDelete's
+// clauses exist to refuse a delete in, and a cell that could not build it
+// could not test them.
+//
+// It went unnoticed until the engine started recording a reason on the
+// move row when it refuses (noteOnRow). That write changes nothing about
+// the copies, but it is a journal write, and this guard checks after every
+// one, so the planted breach became visible at the first write rather than
+// never.
+//
+// The tolerated value is the rendered message rather than a boolean, and
+// that is the whole point: CheckInvariant's text carries every placement's
+// medium, status and class, so any change to the copies produces a
+// different string and is still reported. This forgives the exact state
+// the cell planted and nothing else.
+func (g *guard) tolerateExistingBreach(t *testing.T) {
+	t.Helper()
+	rec, err := g.journal.Get(context.Background(), g.artifact)
+	if err != nil {
+		t.Fatalf("reading the journal to declare the planted breach: %v", err)
+	}
+	broke := placement.CheckInvariant(rec, g.sufficient...)
+	if broke == nil {
+		t.Fatal("this cell declared that its planted world breaks FR-30's invariant, and it does not; " +
+			"a declaration that forgives nothing is a declaration that will forgive something else later")
+	}
+	g.mu.Lock()
+	g.tolerated = broke.Error()
+	g.mu.Unlock()
 }
 
 func (g *guard) check(what string) error {
-	return g.checkSurviving(what, "")
+	return g.checkSurviving(what, "", "")
 }
 
-// checkSurviving asserts FR-30's invariant, and, when a locator is given,
-// asserts it will STILL hold once the copy at that locator is gone.
+// checkSurviving asserts FR-30's invariant, and, when a copy is named,
+// asserts it will STILL hold once that copy is gone.
 //
 // The second half is the one that matters and it was added after a planted
 // mutation walked past the first. A guard that only re-reads the journal
@@ -342,7 +474,16 @@ func (g *guard) check(what string) error {
 // it through. Requiring a surviving copy that is NOT the one being deleted
 // is what closes that, and it is also the honest reading of the invariant:
 // the point was never that a row exists, it was that a copy does.
-func (g *guard) checkSurviving(what, locator string) error {
+//
+// A copy is a medium AND a locator. Filtering on the locator alone was
+// enough while an artifact never had two medium copies at once, and the
+// staged medium-to-medium move (#429) ended that: FR-28's key carries the
+// medium's prefix and nothing else that distinguishes the medium, so two
+// mediums declaring no prefix give one artifact the same key on both. The
+// conformance watcher had the same defect and it fired there, on a chain
+// whose mediums have no prefixes; here the two prefixes differ, so this is
+// the same fix applied before it has anything to catch.
+func (g *guard) checkSurviving(what, medium, locator string) error {
 	rec, err := g.journal.Get(context.Background(), g.artifact)
 	if err != nil {
 		return fmt.Errorf("reading the journal to check the invariant before %s: %w", what, err)
@@ -356,20 +497,22 @@ func (g *guard) checkSurviving(what, locator string) error {
 	surviving := rec
 	surviving.Placements = nil
 	for _, p := range rec.Placements {
-		if samePlace(p.Location, locator) {
+		if p.Medium == medium && samePlace(p.Location, locator) {
 			continue
 		}
 		surviving.Placements = append(surviving.Placements, p)
 	}
 	if err := placement.CheckInvariant(surviving, g.sufficient...); err != nil {
-		return g.violation(what, fmt.Errorf("once the copy at %q is gone, %w", locator, err))
+		return g.violation(what, fmt.Errorf("once the copy at %q on %q is gone, %w", locator, medium, err))
 	}
 	return nil
 }
 
 func (g *guard) violation(what string, err error) error {
 	g.mu.Lock()
-	g.violations = append(g.violations, fmt.Sprintf("%s: %v", what, err))
+	if g.tolerated == "" || err.Error() != g.tolerated {
+		g.violations = append(g.violations, fmt.Sprintf("%s: %v", what, err))
+	}
 	g.mu.Unlock()
 	return fmt.Errorf("the standing invariant does not hold, so %s is refused: %w", what, err)
 }
@@ -377,11 +520,11 @@ func (g *guard) violation(what string, err error) error {
 // beforeDelete is the guard on the two destructive calls: the durable
 // journal has to say another good copy, one that is not this one, exists
 // before either of them may proceed.
-func (g *guard) beforeDelete(what, locator string) error {
+func (g *guard) beforeDelete(what, medium, locator string) error {
 	g.mu.Lock()
 	g.deletes = append(g.deletes, what+":"+locator)
 	g.mu.Unlock()
-	return g.checkSurviving(what+" "+locator, locator)
+	return g.checkSurviving(what+" "+locator, medium, locator)
 }
 
 func (g *guard) fail() {
@@ -437,7 +580,7 @@ type guardedMedium struct {
 }
 
 func (m *guardedMedium) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
-	if err := m.guard.beforeDelete("deleting the destination object", key); err != nil {
+	if err := m.guard.beforeDelete("deleting the destination object", medium.ID, key); err != nil {
 		return err
 	}
 	return m.fakeMedium.DeleteObject(ctx, medium, key)
@@ -445,16 +588,45 @@ func (m *guardedMedium) DeleteObject(ctx context.Context, medium transport.Mediu
 
 // guardedLocal refuses a local delete the invariant does not authorise.
 // This is the one that catches a source delete issued too early.
+//
+// It also counts, for the reason fakeMedium counts. A move HOME has its
+// content check on the local end, and #439's double read is a double read
+// there too: no egress, but the whole artifact off the disk twice. Nothing
+// could see that before, because the local store was the one seam in this
+// fixture with no accounting on it.
 type guardedLocal struct {
 	artifactstore.Local
 	guard *guard
+
+	mu           sync.Mutex
+	opens, stats int
 }
 
-func (l guardedLocal) Remove(ctx context.Context, locator string) error {
-	if err := l.guard.beforeDelete("removing the local copy", locator); err != nil {
+func (l *guardedLocal) Remove(ctx context.Context, locator string) error {
+	if err := l.guard.beforeDelete("removing the local copy", state.MediumLocal, locator); err != nil {
 		return err
 	}
 	return l.Local.Remove(ctx, locator)
+}
+
+func (l *guardedLocal) Open(ctx context.Context, locator string) (io.ReadCloser, error) {
+	l.mu.Lock()
+	l.opens++
+	l.mu.Unlock()
+	return l.Local.Open(ctx, locator)
+}
+
+func (l *guardedLocal) Stat(ctx context.Context, locator string) (artifactstore.Stat, error) {
+	l.mu.Lock()
+	l.stats++
+	l.mu.Unlock()
+	return l.Local.Stat(ctx, locator)
+}
+
+func (l *guardedLocal) openCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.opens
 }
 
 // --- the fixture -------------------------------------------------------
@@ -466,6 +638,7 @@ type fixture struct {
 	guarded  *guardedJournal
 	guard    *guard
 	medium   *fakeMedium
+	local    *guardedLocal
 	engine   *placement.Engine
 	tiers    *tierGuard
 	sets     fixedSets
@@ -497,6 +670,14 @@ type fixtureOpts struct {
 	// storageClass is the class the medium writes with. Empty means the
 	// medium names none, which internal/archive reads as STANDARD.
 	storageClass string
+	// clockStep is how far the engine's clock advances on every reading.
+	// Zero means one second, which is what every test that does not care
+	// gets.
+	//
+	// A test that wants a move to take longer than the pre-delete proof's
+	// validity window has no other way to say so: the window is a bound on
+	// elapsed time and a test cannot wait out a real one.
+	clockStep time.Duration
 }
 
 func newFixture(t *testing.T, opts fixtureOpts) *fixture {
@@ -557,13 +738,18 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 	if err != nil {
 		t.Fatalf("building the local store: %v", err)
 	}
+	counted := &guardedLocal{Local: local, guard: g}
 
 	guarded := &guardedJournal{Journal: journal, guard: g}
 	clock := testNow2
+	step := opts.clockStep
+	if step <= 0 {
+		step = time.Second
+	}
 
 	f := &fixture{
 		t: t, ctx: ctx, journal: journal, guarded: guarded, guard: g,
-		medium: medium, tiers: tiers, sets: sets,
+		medium: medium, local: counted, tiers: tiers, sets: sets,
 		artifact: artifact, content: content, hash: sha256Hex(content),
 		localDir: localDir, root: root, clock: clock,
 	}
@@ -575,14 +761,14 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 	f.engine = &placement.Engine{
 		Journal: guarded,
 		Store:   &guardedMedium{fakeMedium: medium, guard: g},
-		Local:   guardedLocal{Local: local, guard: g},
+		Local:   counted,
 		Mediums: fixedMediums{
 			medium: transport.Medium{ID: testMedium, Type: transport.MediumTypeS3, Bucket: "nas-backups", Prefix: "rclone-manager", StorageClass: opts.storageClass},
 			class:  class,
 		},
 		Sets:             sets,
 		Tiers:            tiers,
-		Now:              func() time.Time { f.clock = f.clock.Add(time.Second); return f.clock },
+		Now:              func() time.Time { f.clock = f.clock.Add(step); return f.clock },
 		MaxMovesPerCycle: 4,
 	}
 	return f

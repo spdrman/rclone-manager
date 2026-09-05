@@ -329,8 +329,9 @@ type MoveProgress struct {
 	//
 	// It exists because the counts alone send an operator to a log to
 	// find out what is wrong, and the sentence that says it is already
-	// in hand: "the environment variable is not set", "medium-to-medium",
-	// "the destination could not be verified at content class". Only the
+	// in hand: "the environment variable is not set", "no ACTIVE
+	// placement", "the destination could not be verified at content
+	// class". Only the
 	// first, because a deployment in this state produces one per artifact
 	// per cycle and they are the same sentence.
 	//

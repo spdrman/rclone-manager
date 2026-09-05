@@ -129,12 +129,14 @@ func (s *Service) moveEngine() (*placement.Engine, error) {
 		Store:   s.MediumStore,
 		// The local end of a move addresses full paths that came from the
 		// journal or from the destination backup set's OWN store
-		// (placement.localArtifactPath), so this value's root is never
-		// read. It is rootless on purpose: an engine that spans backup
-		// sets has no single local root, and artifactstore.Local.Locator
-		// refuses a rootless store by name, so a change that starts
-		// computing a path from here fails loudly instead of writing an
-		// artifact relative to the daemon's working directory.
+		// (placement.localArtifactPath, and placement.stagingPath for the
+		// staging copy a medium-to-medium hop goes through), so this
+		// value's root is never read. It is rootless on purpose: an
+		// engine that spans backup sets has no single local root, and
+		// artifactstore.Local.Locator refuses a rootless store by name, so
+		// a change that starts computing a path from here fails loudly
+		// instead of writing an artifact relative to the daemon's working
+		// directory.
 		Local:            artifactstore.Local{},
 		Mediums:          MediumResolver(s.Config.StorageMediums),
 		Sets:             backupSetsOf{s},

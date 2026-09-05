@@ -337,6 +337,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/retry", h.retryArtifactIngestion)
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/reinstate", h.reinstateArtifact)
 
+		// Issue #443: prove one declared storage medium works before a
+		// cycle carrying a real backup finds out for an operator. CSRF,
+		// because it writes a probe object to real storage and deletes it
+		// again; not the destructive gate, because the only object it can
+		// reach is the one it just wrote (see handlers_mediums.go).
+		r.With(requireCSRF).Post("/storage-mediums/{id}/preflight", h.preflightStorageMedium)
+
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk

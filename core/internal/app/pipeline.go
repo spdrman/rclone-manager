@@ -46,19 +46,29 @@ func (s *Service) discoverOne(ctx context.Context, source transport.Source, bs c
 // so an unqualified key would risk colliding across two different
 // artifacts) plus rec.RetryCount.
 //
-// RetryCount is what makes this the right "attempt" boundary. Nothing in
-// today's codebase increments it while an artifact moves forward through
-// DISCOVERED -> ... -> COMPLETE (see internal/lifecycle/quarantine.go's
-// package doc: only QUARANTINED's release back to DISCOVERED bumps it
-// today, and FR-22's own FAILED -> DISCOVERED retry policy, which is
-// expected to share this same counter, has not been built yet). So calling
-// this again for the same rec, after a crash mid-cycle left it exactly
-// where it was, reproduces exactly the same key, and every lifecycle step
-// below can resume the same logical attempt it left off on. The moment an
-// artifact is genuinely sent back to DISCOVERED (a quarantine release, and
-// eventually a FAILED retry), RetryCount has already advanced by then, so
-// the very next attemptKey call computes a fresh base for what is,
-// correctly, a new logical attempt.
+// RetryCount is what makes this the right "attempt" boundary. Nothing
+// increments it for an artifact that is MAKING PROGRESS through
+// DISCOVERED -> ... -> COMPLETE, so calling this again for the same rec,
+// after a crash mid-cycle left it exactly where it was, reproduces exactly
+// the same key, and every lifecycle step below can resume the same logical
+// attempt it left off on. The moment an artifact is genuinely given
+// another go from an exceptional state, RetryCount has already advanced by
+// then, so the very next attemptKey call computes a fresh base for what
+// is, correctly, a new logical attempt.
+//
+// Two things move it, and both mean exactly that (see
+// internal/lifecycle/quarantine.go's package doc, which asked for the
+// counter to be shared rather than duplicated): an operator's release back
+// out of QUARANTINED, and, since issue #419, a verification that could not
+// be COMPLETED at all recording the stalled attempt against its budget.
+// The second one moves it while the artifact sits at VERIFYING, which is
+// new. processArtifact still computes the base once, on entry, and that
+// stays correct because a stall ends the call: verifyOne returns an error
+// on the bounded stall and a QUARANTINED record on the exhausted one, and
+// neither leaves anything downstream of the verify step to key. A future
+// step that both moves the counter AND carries on has to recompute the
+// base, or it will key its own writes against an attempt number the
+// journal has already left behind.
 func attemptKey(rec state.Record) string {
 	return fmt.Sprintf("app:%s:attempt-%d", rec.Artifact, rec.RetryCount)
 }
@@ -512,17 +522,41 @@ func (s *Service) transferOne(ctx context.Context, source transport.Source, bs c
 	})
 }
 
-// verifyOne runs lifecycle.Verify. VerifyParams has no caller-configurable
-// retry policy (its one network-facing call, a remote hash lookup, is
-// already internally bounded by lifecycle's own hardcoded policy; see
-// verify.go's remoteHashRetryPolicy), so there is nothing for this package
-// to configure here.
+// verifyOne runs lifecycle.Verify. Its one network-facing call, a remote
+// hash lookup, is already internally bounded by lifecycle's own policy
+// (verify.go's remoteHashRetryPolicy), so there is no per-call retry
+// policy for this package to configure.
+//
+// StallBudget is the one number it does hand down, and it is DERIVED
+// rather than picked (issue #419). It bounds how many consecutive cycles
+// an artifact's verification may fail to complete against a backend that
+// cannot be reached, before the artifact stops being retried
+// automatically and is handed to an operator. The value is
+// retryPolicy().MaxAttempts, which is the same number, from the same
+// place, that already answers "how many times is a transient failure
+// worth trying" one level down, inside a single attempt. There is exactly
+// one such number in this product and it is the operator's, through
+// Service.RetryPolicy; inventing a second one here would be a second
+// answer to the same question, and the one an operator changed would not
+// be the one that fired.
+//
+// DefaultRetryPolicy makes it 6. Its own doc derives that from FR-1 ("a
+// little over two minutes worst case ... long enough to ride out a
+// genuine blip without holding a whole cycle hostage"), and the same
+// reasoning carries up a level unchanged: six cycles of a source that
+// cannot be reached is well past a blip, and the right answer at that
+// point is a person, not a seventh attempt. A policy with MaxAttempts 0
+// (retry.Policy's "unbounded") lands here as no tolerance at all rather
+// than as infinite tolerance, which is the safe direction: an artifact
+// reaches an operator immediately instead of stalling forever with
+// nothing watching it.
 func (s *Service) verifyOne(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record, base string) (state.Outcome, error) {
 	return lifecycle.Verify(ctx, s.lifecycleDeps(), lifecycle.VerifyParams{
-		Artifact:   rec.Artifact,
-		Source:     source,
-		Validation: bs.Validation,
-		AttemptKey: base + ":verify",
+		Artifact:    rec.Artifact,
+		Source:      source,
+		Validation:  bs.Validation,
+		AttemptKey:  base + ":verify",
+		StallBudget: s.retryPolicy().MaxAttempts,
 	})
 }
 

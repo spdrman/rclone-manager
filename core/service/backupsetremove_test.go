@@ -876,6 +876,14 @@ func TestRemoveBackupSet_RecordsWhatItRemovedAndWhatItKept(t *testing.T) {
 // behaviour I want, because it is what undoing a removal needs, and
 // pretending otherwise would mean re-fetching a volume full of backups to
 // get back where you already were. What it must not be is silent.
+//
+// The create here carries an acknowledgement because it is deliberately
+// not the undo: validCreateReq builds an sftp set at a fresh temporary
+// path, which is a different address from the local-transport one the
+// fixture removed, and issue #411 refuses that without one. The
+// adoption being loud is what this test is about, and it happens either
+// way; the acknowledgement itself is covered in
+// backupsetcreaterepoint_test.go, undo included.
 func TestCreateBackupSet_OverARemovedIDReadoptsItsHistoryLoudlyAndLiftsTheHold(t *testing.T) {
 	svc, _, _, _ := openRemovalFixtureService(t)
 	ctx := context.Background()
@@ -897,6 +905,7 @@ func TestCreateBackupSet_OverARemovedIDReadoptsItsHistoryLoudlyAndLiftsTheHold(t
 
 	req := validCreateReq(t, svc, "alpha")
 	req.SourceName = "production"
+	req.AcknowledgeRepoint = true
 	if _, err := svc.CreateBackupSet(ctx, req); err != nil {
 		t.Fatalf("CreateBackupSet over the removed id: %v", err)
 	}

@@ -49,6 +49,28 @@ type Transition struct {
 // has a real chance of finding the source. QUARANTINED's one exit, back to
 // DISCOVERED, is a genuine recovery path.
 //
+// Issue #419 added a fourth way in, out of VERIFYING, and it is worth
+// saying plainly because it stretches the word: an artifact whose
+// verification could not be COMPLETED, over and over, against a backend
+// that could not be reached. Nothing is suspect about those bytes. Nobody
+// has been able to prove anything about them at all, which is a different
+// sentence and a worse one, and the thing that has to be true next is the
+// same either way: they must not be committed, they must not authorise
+// deleting the source, and a human has to decide what happens. That is
+// exactly what QUARANTINED guarantees and it is why no fifth state was
+// invented for it. What it must not do is arrive on an operator's screen
+// wearing the words for a content failure, so QuarantineReason reports
+// this shape as what it is (see quarantine.go).
+//
+// The alternative was FAILED, and FAILED is where it used to go. That is
+// worse for a reason that has nothing to do with vocabulary: FAILED's two
+// exits below are FR-22's retry policy, FR-22's retry policy has never
+// been built, and nothing in this product takes either edge. So an
+// artifact sent there for a network condition that has very likely already
+// cleared stops being worked on permanently. QUARANTINED has three
+// operator actions wired to it end to end, one of which is a route back
+// into the pipeline.
+//
 // QUARANTINED_LOST is a different outcome, not another way into the same
 // state. It's entered only from COMPLETE, which is the one state in this
 // whole graph that confirms the remote source is already deleted. An

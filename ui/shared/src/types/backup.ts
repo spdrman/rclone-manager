@@ -324,6 +324,25 @@ export interface RetentionVerdict {
   action: RetentionVerdictAction;
   reason: string;
   /**
+   * Where the copy this verdict is about lives, when that is a configured
+   * storage medium (EPIC E FR-30, issue #430). The wire's `medium`,
+   * carried through exactly as it arrives, undefined included.
+   *
+   * UNDEFINED MEANS LOCAL, with one documented exception, and the
+   * exception is why this is not resolved to "local" here. The two REFUSE
+   * shapes that establish nothing at all, a location the journal records
+   * twice and an artifact whose local path could not be resolved, also
+   * arrive undefined, and defaulting them would put a place on a verdict
+   * that deliberately names none.
+   *
+   * A DELETE always establishes its medium, so for the question FR-30
+   * asks, "where would this deletion happen", `medium ?? "local"` is the
+   * whole answer and is safe to render. "Delete 40 backups" means
+   * something very different when half of them are objects in a bucket
+   * somebody else pays for.
+   */
+  medium?: string;
+  /**
    * Populated only for a KEEP verdict: which retention tier(s) selected
    * it, and which placement selected it for each. Empty for
    * DELETE/REFUSE.
@@ -335,6 +354,34 @@ export interface RetentionVerdict {
    * nothing here reads.
    */
   tiers: RetentionTierSelection[];
+}
+
+/**
+ * One backup a retention plan would relocate, and both ends of the move
+ * (EPIC E FR-27, issue #430; service.RetentionMove, via the wire's
+ * `moves`).
+ *
+ * A move is a statement about PLACEMENT and nothing else. Planning one
+ * never adds a backup to the keep set and never removes one, which is why
+ * these travel beside the verdicts rather than inside them, and why a
+ * dialog that renders both must not present a move as a third kind of
+ * verdict.
+ *
+ * Both mediums are spelled out, "local" included, unlike
+ * RetentionVerdict.medium above. A verdict answers "where would this
+ * happen", which has an implicit default; a move answers "from where to
+ * where", which has none.
+ */
+export interface RetentionMove {
+  /** The backup's own filename, scoped to the plan's backup set, exactly
+   *  as RetentionVerdict.artifact is. */
+  artifact: string;
+  /** Where the one confirmed copy is today. */
+  fromMedium: string;
+  /** The medium the first tier that selects this backup names as its
+   *  home. Always different from fromMedium: a backup already at home is
+   *  not a move. */
+  toMedium: string;
 }
 
 /**
@@ -368,6 +415,33 @@ export interface RetentionPlan {
    *  a preview returned — a preview creates no operation. */
   operationId?: string;
   verdicts: RetentionVerdict[];
+
+  /**
+   * Every backup this plan would relocate, in verdict order (EPIC E
+   * FR-27, issue #430).
+   *
+   * ALWAYS an array. The wire omits the field entirely for a deployment
+   * that declares no storage medium, and this normalises that to [] for
+   * the reason `tiers` is normalised: an optional array has three
+   * readings and only two of them are ever true, so nothing downstream
+   * should have to tell "no moves" from "the server did not say".
+   */
+  moves: RetentionMove[];
+
+  /**
+   * Every kept backup whose current location could not be established, in
+   * verdict order: the journal holds no confirmed copy of it, or holds
+   * more than one, which is a move already in flight.
+   *
+   * No move is planned for one, and that is exactly why this list exists
+   * rather than the backup being quietly skipped. "I could not confirm
+   * where this is" and "this is already where it belongs" produce the
+   * same silence and are not the same claim, and only one of them is
+   * something an operator acts on.
+   *
+   * ALWAYS an array, for `moves`' reason.
+   */
+  unconfirmedPlacements: string[];
 
   /** The policy these verdicts were decided under, resolved (issue #333).
    *

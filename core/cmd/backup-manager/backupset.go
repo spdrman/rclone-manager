@@ -209,7 +209,11 @@ type backupSetFlags struct {
 	runNow         *bool
 	stateDatabase  *string
 
-	// patch only.
+	// Shared by create and patch, and not a field of the backup set: it
+	// answers one refusal, on either verb. Removing a set frees its id up
+	// (issue #391), so creating one over an id that already has artifacts
+	// on record is the same move an edit makes and asks the same question
+	// (issue #411).
 	acknowledgeRepoint *bool
 }
 
@@ -221,7 +225,13 @@ type backupSetFlags struct {
 // --config by construction (refuseEveryFlagBut).
 var (
 	backupSetCreateOnlyFlags = []string{"ssh-key-file", "ssh-key-id", "known-hosts-line", "trust-host-key", "disabled", "read-only", "run", "state-database"}
-	backupSetPatchOnlyFlags  = []string{"acknowledge-repoint"}
+
+	// Empty since issue #411 made --acknowledge-repoint mean something on
+	// create too, and kept rather than deleted along with its call site:
+	// the guard is what makes a future patch-only flag refuse on create
+	// automatically instead of being silently ignored there, which is the
+	// failure this pair of lists exists to prevent.
+	backupSetPatchOnlyFlags []string
 )
 
 func declareBackupSetFlags() *backupSetFlags {
@@ -250,7 +260,7 @@ func declareBackupSetFlags() *backupSetFlags {
 		"create: the SQLite journal path a FIRST configuration names. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
 
 	f.acknowledgeRepoint = fs.Bool("acknowledge-repoint", false,
-		"patch: confirm an edit that moves this set to different data. Needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; the refusal without it says what it costs")
+		"create, patch: confirm pointing this set at different data. On patch, needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; on create, only when this id already has artifacts on record and the set is being created somewhere other than where they came from. The refusal without it says what it costs")
 
 	return f
 }
@@ -335,6 +345,7 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 		ReadOnly:           *f.readOnly,
 		RunImmediately:     *f.runNow,
 		Actor:              cliActor,
+		AcknowledgeRepoint: *f.acknowledgeRepoint,
 	}
 
 	ctx := context.Background()

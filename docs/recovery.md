@@ -216,22 +216,29 @@ That's a real operational consequence, not a cosmetic one:
 
 ## Step 6: retention decided this backup should be deleted, but it's still there
 
-That's expected, not a bug, for two independent reasons documented in the README's
-[Retention](../README.md#retention) section:
+That's expected, not a bug. A verdict and a deletion are two different things here, and
+nothing crosses between them on its own. The README's [Retention](../README.md#retention)
+section is the longer version:
 
 - `core/internal/retention.GFSDecide` only classifies artifacts into keep/not-kept-by-GFS. It
   contains no deletion code at all. A `Keep: false` verdict is a candidate, not an order.
-- There is no code path anywhere in this repository that deletes a local file yet (FR-20,
-  issue #21, the mandatory dry-run local deletion safety, is open). Local disk usage only
-  grows today; nothing prunes it automatically.
-- Last-known-good protection (FR-19, issue #20) is also not implemented, so don't rely on
-  "the newest good backup is protected" as a reason retention hasn't touched something,
-  either. Nothing is currently touching anything.
+- Deletion is real, and it is deliberately somewhere else. FR-20 (issue #21) landed in
+  `core/internal/retention/prune.go`: `PruneApply` removes the positively identified local
+  file, and since #239 the object on a storage medium beside it. FR-19's last-known-good
+  protection (issue #20) landed with it and does protect the newest good backup.
+- Nothing schedules that. The only thing that runs `PruneApply` is the API's retention
+  preview/apply pair (`core/service`): `PreviewRetention` issues a `plan_id`, and
+  `ApplyRetentionPlan` deletes only against that `plan_id`, and only while the plan it
+  re-derives still matches the one an administrator reviewed. No cycle, no daemon and no
+  timer ever calls it, so local disk usage grows until somebody applies a plan.
+- `backup-manager retention` is a preview in both of its modes and deletes nothing, with or
+  without `--dry-run`. That is not a gap waiting to be filled: a CLI that deleted backups
+  without the `plan_id` confirmation the HTTP path insists on would be a second, weaker
+  authorisation path to the same act (issue #431).
 
-If local disk usage is a concern before #21 lands, that's a manual housekeeping problem
-today, and the GFS verdicts above (`GFSDecide`, callable against the journal) are the
-closest thing to a source of truth for "what would be safe to remove," not a live guarantee
-that removal is happening or will happen automatically.
+So if a file survives a `Keep: false` verdict, the question is who was supposed to apply the
+plan, not whether deletion works. The verdicts above are the source of truth for "what would
+be safe to remove"; applying them is somebody's deliberate act through the API.
 
 ## Quick reference
 
@@ -243,4 +250,4 @@ that removal is happening or will happen automatically.
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |
 | Newest good row is `QUARANTINED` | Content suspect, source may still exist | Manual re-fetch or re-run reconciliation yourself |
 | `REMOTE_DELETE_PENDING` stuck, `remote_delete_error` set | Expected refusal under a hardened SFTP account | Monitor remote disk directly; this is not corrupting anything |
-| `Keep: false` from GFS but the file is still there | Expected; nothing deletes local files yet | Manual housekeeping if disk space matters before #21 lands |
+| `Keep: false` from GFS but the file is still there | Expected; a verdict is not a deletion, and nothing applies one on a timer | Apply a retention plan through the API if the space is needed |

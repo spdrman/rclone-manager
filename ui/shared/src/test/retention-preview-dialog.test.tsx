@@ -38,7 +38,12 @@ const PLAN: RetentionPlan = {
     { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }, { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }] },
     { artifact: "refused.dump", action: "REFUSE", reason: "sibling-prefix directory at computed path", tiers: [] },
     { artifact: "b.dump", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
-  ]
+  ],
+  // Issue #430: a medium-free deployment. Every plan in this file is
+  // about something other than placement, so this is the honest shape:
+  // the wire omits both fields and client.ts normalises them to [].
+  moves: [],
+  unconfirmedPlacements: []
 };
 
 /** RetentionVerdict.tiers is an open set: FR-18's chain is operator-defined

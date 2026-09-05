@@ -320,11 +320,11 @@ func TestNothingButSubmitEverInitiatesARestore(t *testing.T) {
 
 	c := archivedCopy()
 
-	// Every derivation. The verification gate (Ceiling, CheckClass,
-	// AutomaticClass and the gated Verify) used to be swept here too; it
-	// now lives in internal/placement (gate.go), takes a placement.Store,
-	// and placement's TestTheGateCannotInitiateARestore pins that the
-	// Store has no way to start one.
+	// Every derivation. The verification gate (Ceiling, CheckClass and
+	// the gated Verify) used to be swept here too; it now lives in
+	// internal/placement (gate.go), takes a placement.Store, and
+	// placement's TestTheGateCannotInitiateARestore pins that the Store
+	// has no way to start one.
 	for _, s := range States {
 		_ = Describe(s, c.Class, &RestoreState{InProgress: true})
 	}

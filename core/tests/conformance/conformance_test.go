@@ -21,15 +21,17 @@
 // scenario's is not. That is a deliberate correction rather than a
 // convenience, and it is the honest reading of what the composed run
 // found: a retention tier on an archive class can never take delivery of
-// an artifact (#428), and since #437 the engine refuses the move at plan
-// time for free instead of paying for it every cycle. A scenario whose
-// third rung was archive could therefore never demonstrate a third rung at
-// all, which is most of what the gate line is asking for. So the chain
+// an artifact (#428). #437 made the engine refuse that move at plan time
+// for free instead of paying for it every cycle, and #442 moved the same
+// refusal one layer earlier still, to config load, where an operator meets
+// it before the daemon starts. A scenario whose third rung was archive
+// could therefore never demonstrate a third rung at all, which is most of
+// what the gate line is asking for; it could not even load. So the chain
 // keeps three tiers and three destinations, the archive pairing gets its
 // own cell that asserts the refusal (see
-// TestAnArchiveClassTierIsRefusedBeforeItCostsAnything), and the matrix
-// says plainly that "annual on a cold class, end to end" is not something
-// this suite can claim.
+// TestAnArchiveClassTierIsRefusedAtLoad), and the matrix says plainly that
+// "annual on a cold class, end to end" is not something this suite can
+// claim.
 //
 // # What is real here, and what is not
 //
@@ -120,26 +122,26 @@ const (
 	// It used to be the cold-class medium below, and that is the single
 	// biggest thing this scenario had wrong. A retention tier on an
 	// archive class can never take delivery of an artifact (#428), and
-	// since #437 the engine refuses that move at plan time rather than
-	// paying for it every cycle, so a chain whose third rung was archive
-	// could never show the third rung working at all. The chain the phase
-	// 2 exit gate names has three tiers and this suite has to be able to
-	// put an artifact on each of them. What an archive class does instead
-	// is its own cell, with its own config, rather than a hole in the
-	// middle of the main scenario: see
-	// TestAnArchiveClassTierIsRefusedBeforeItCostsAnything.
+	// since #442 a chain that spells that pairing does not load at all, so
+	// a scenario built on one could never show the third rung working.
+	// The chain the phase 2 exit gate names has three tiers and this suite
+	// has to be able to put an artifact on each of them. What an archive
+	// class does instead is its own cell, with its own config file, rather
+	// than a hole in the middle of the main scenario: see
+	// TestAnArchiveClassTierIsRefusedAtLoad.
 	mediumAnnual = "annual_s3"
 
 	// mediumDeepFreeze is a medium on a cold class that NO tier names in
-	// the default scenario.
+	// this scenario, and that no tier CAN name.
 	//
 	// It is still declared, deliberately. #442 draws its line at the
 	// tier-to-medium PAIRING and not at the declaration, because a
 	// declared archive-class medium holding objects an operator restores
-	// by hand is exactly what #241 is for. So the default config carries
-	// one and nothing delivers to it, which is the shape that has to keep
-	// validating. The archive cell builds a world whose annual tier does
-	// name it, which is the pairing that cannot work.
+	// by hand is exactly what #241 is for. So the config carries one and
+	// nothing delivers to it, which is the shape that has to keep
+	// validating, and it is checked rather than assumed: see
+	// TestAnArchiveClassTierIsRefusedAtLoad, which asserts both halves
+	// against the same file.
 	mediumDeepFreeze = "deep_freeze_s3"
 
 	// mediumUnreachable points at a bucket that does not exist on the
@@ -195,12 +197,19 @@ type world struct {
 	unreachable transport.Medium
 
 	// annualHome is the medium id the annual tier names in this world's
-	// config, and it is the one thing the three world variants differ
-	// by. Everything else, the cast, the dates, the chain shape and the
-	// two working mediums, is identical between them, so a cell about an
-	// archive destination and a cell about the ordinary chain are
+	// config, and it is the one thing the world variants differ by.
+	// Everything else, the cast, the dates, the chain shape and the two
+	// working mediums, is identical between them, so a cell about a
+	// destination that fails and a cell about the ordinary chain are
 	// comparable.
 	annualHome string
+
+	// offsiteBucket, annualBucket and deepBucket are the buckets this
+	// world's mediums were built over, kept so a cell can write the same
+	// config file again with one field changed. The archive cell needs
+	// that: what it asserts is a refusal at LOAD, so it cannot get its
+	// config through a world that stands up.
+	offsiteBucket, annualBucket, deepBucket string
 
 	// artifacts is every artifact this scenario seeded, oldest first,
 	// with the bytes each one holds.
@@ -232,12 +241,16 @@ func newWorld(t *testing.T) *world {
 // newWorldWithAnnualHome is newWorld with the annual tier pointed
 // somewhere else, which is the only axis this suite varies.
 //
-// Two cells need a third rung that does not work, for two different
-// reasons, and both reasons are worth a scenario rather than a unit
-// fixture: an archive-class destination the engine refuses before it
-// costs anything, and a destination the endpoint itself rejects. Varying
-// one field of the same config is what keeps them comparable with the
-// working chain instead of being three unrelated setups.
+// One cell needs a third rung that does not work, and the reason is worth
+// a scenario rather than a unit fixture: a destination the endpoint
+// itself rejects, so the copy really fails against a real S3 API. Varying
+// one field of the same config is what keeps it comparable with the
+// working chain instead of being two unrelated setups.
+//
+// The archive pairing used to be the second variant here. It cannot be
+// one any more: #442 refuses that chain at LOAD, so a world built on it
+// never stands up, which is the whole of what its cell now asserts. See
+// writeConfig, which is the half of this function that cell does use.
 func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
 	t.Helper()
 
@@ -253,14 +266,17 @@ func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
 	}
 
 	w := &world{
-		t:          t,
-		ctx:        context.Background(),
-		fixture:    fixture,
-		dir:        dir,
-		root:       root,
-		annualHome: annualHome,
+		t:             t,
+		ctx:           context.Background(),
+		fixture:       fixture,
+		dir:           dir,
+		root:          root,
+		annualHome:    annualHome,
+		offsiteBucket: offsiteBucket,
+		annualBucket:  annualBucket,
+		deepBucket:    deepBucket,
 	}
-	w.cfg = w.loadConfig(offsiteBucket, annualBucket, deepBucket)
+	w.cfg = w.loadConfig()
 	w.offsite = w.mediumFromConfig(mediumOffsite)
 	w.annual = w.mediumFromConfig(mediumAnnual)
 	w.deepFreeze = w.mediumFromConfig(mediumDeepFreeze)
@@ -287,7 +303,26 @@ func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
 // says must keep validating (an operator restoring pre-existing objects by
 // hand is #241's whole subject), and the fourth is a misconfigured bucket
 // one cell points the annual tier at to make a copy really fail.
-func (w *world) loadConfig(offsiteBucket, annualBucket, deepBucket string) *config.Config {
+func (w *world) loadConfig() *config.Config {
+	w.t.Helper()
+
+	path := w.writeConfig(w.annualHome)
+	cfg, err := config.LoadAndValidate(path)
+	if err != nil {
+		w.t.Fatalf("the three-tier chain this scenario is built on does not load with the annual tier on %q: %v",
+			w.annualHome, err)
+	}
+	return cfg
+}
+
+// writeConfig writes this world's config.yaml with the annual tier
+// pointed at annualHome, and returns the path.
+//
+// It is separate from loadConfig because one cell needs the file WITHOUT
+// the load succeeding: #442's refusal happens at load, so a world that
+// stood up could not carry it. See
+// TestAnArchiveClassTierIsRefusedAtLoad.
+func (w *world) writeConfig(annualHome string) string {
 	w.t.Helper()
 
 	yaml := fmt.Sprintf(`poll_interval: 15m
@@ -356,25 +391,19 @@ retention:
       medium: %[20]s
 `,
 		w.dir, scenarioSource, scenarioSet, w.root,
-		mediumOffsite, w.fixture.Region, w.fixture.Endpoint, offsiteBucket, w.fixture.CredentialsFile,
-		mediumAnnual, annualBucket,
-		mediumDeepFreeze, deepBucket, config.StorageClassGlacier,
+		mediumOffsite, w.fixture.Region, w.fixture.Endpoint, w.offsiteBucket, w.fixture.CredentialsFile,
+		mediumAnnual, w.annualBucket,
+		mediumDeepFreeze, w.deepBucket, config.StorageClassGlacier,
 		mediumUnreachable, absentBucket,
-		tierDaily, tierMonthly, tierAnnual, w.annualHome)
+		tierDaily, tierMonthly, tierAnnual, annualHome)
 
-	path := filepath.Join(w.dir, "config.yaml")
+	// A name derived from the tier's home, so a cell that writes a second
+	// variant does not overwrite the file the world is running on.
+	path := filepath.Join(w.dir, "config-"+annualHome+".yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		w.t.Fatalf("writing the scenario's config.yaml: %v", err)
 	}
-	cfg, err := config.LoadAndValidate(path)
-	if err != nil {
-		w.t.Fatalf("the three-tier chain this scenario is built on does not load with the annual tier on %q: %v\n\n"+
-			"If that tier names an archive-class medium, this is #442 arriving: the config layer now refuses the "+
-			"tier-to-medium pairing, which is a better place for the refusal than the engine. The cell to move is "+
-			"TestAnArchiveClassTierIsRefusedBeforeItCostsAnything, which should then assert THIS refusal instead of "+
-			"the engine's plan-time one.", w.annualHome, err)
-	}
-	return cfg
+	return path
 }
 
 // mediumFromConfig is internal/app's own translation from a configured

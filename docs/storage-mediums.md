@@ -23,33 +23,43 @@ than no reference at all.
 | Credentials are resolved from a file, an environment variable or a command | Not landed (#235) |
 | Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
 | Verification classes, and revalidation that knows about mediums | Not landed (#237) |
-| Artifacts actually MOVE between mediums when a tier says so | Landed, with two limits below |
+| Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
 | Retention plans, previews and prune understand mediums | Landed, except across the HTTP boundary: the API does not yet carry the preview's moves or the medium each deletion happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
+| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
+
+| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
 
-Two limits are worth knowing before you write a chain, because both of them
-are the manager refusing to do something rather than doing it badly, and
-both were found by running the whole chain end to end rather than by
-reasoning about it:
+One limit is worth knowing before you write a chain, and it is the manager
+refusing to do something rather than doing it badly:
 
 - **A tier whose medium names `GLACIER` or `DEEP_ARCHIVE` cannot take
-  delivery of an artifact** (#428). The manager will not delete a local copy
-  against a destination it could not read back, an archived object cannot be
-  read back, and there is no `upload_verification` mode that says "existence
-  is enough". So the move is refused and the artifact stays where it is.
-  Nothing is lost; nothing arrives either.
-- **A chain with two tiers naming two different mediums stalls at the second
-  hop** (#429). Moving an artifact from one medium to another needs a local
-  staging copy, and the engine does not do that yet, so an artifact that
-  ages from a monthly `s3` tier into an annual one stays on the monthly
-  medium. Again the refusal is explicit and nothing is deleted.
+  delivery of an artifact, and the config will not load** (#428, #442). The
+  manager will not delete a copy against a destination it could not read
+  back, an archived object cannot be read back, and there is no
+  `upload_verification` mode that says "existence is enough". So the pairing
+  is refused where you write it, with a message naming the tier, the medium,
+  the class and what to write instead, rather than accepted at load and
+  refused silently once per cycle for ever.
 
-A chain with ONE medium tier, which is the common case (daily local, monthly
-offsite), works end to end today.
+  The refusal is about the PAIRING, not about the medium. Declaring an
+  archive-class medium that no tier delivers to is legal and is what you
+  want if you already have objects on `DEEP_ARCHIVE`: the manager can see
+  them and restore them, and nothing is going to be written there.
 
-Both refusals, and every other reason a move does not happen, are now visible
-without reading logs. A cycle in which artifacts were due to move and none
+A chain with two medium tiers, which is the shape this document opens with
+(daily local, monthly `s3`, annual on a colder readable class), works end to
+end (#429). The second hop is a move from one medium to another, and the
+manager does it by reading the artifact down to a `.moves` directory under
+the backup set's own `local_path`, checking that what arrived hashes to what
+it recorded at ingestion, uploading that, and removing it. So a chain like
+this needs room on the NAS for the largest artifact that will ever hop
+between two mediums, transiently, even though nothing is stored there
+permanently. A hop that will not fit is refused before anything is
+downloaded, and the copy it would have moved stays exactly where it is.
+
+Every reason a move does not happen is visible without reading logs. A cycle in which artifacts were due to move and none
 arrived says so on the `Last run cycle` panel, in the operation record the
 activity feed reads, in the FR-23 event stream under `op=move`, and in
 `backup-manager run`'s exit status, which becomes 1 with the engine's own reason
@@ -138,6 +148,67 @@ not a log line at any level, not an error message, not an API response, not the
 redacted config export, not a recovery manifest, and not object metadata in your
 bucket.
 
+### Checking a medium before anything depends on it
+
+Nothing in this product touched a bucket until a cycle carrying a real backup
+did, which meant the first thing to discover a wrong region, a bucket that is
+not there, a credentials file the daemon cannot read, or a policy that denies
+`PutObject` was a move, in the middle of a cycle, after an artifact had already
+been chosen to leave local disk. There is a preflight now:
+
+```
+backup-manager medium preflight offsite_s3
+```
+
+and the same check sits behind a button on the settings form, offered at the
+moment you point a tier at a medium and before the save that starts sending
+backups there. It exits non-zero when any check fails, so it composes into a
+deployment script.
+
+It writes. That is the point, and it is worth knowing before you run it against
+production: a reachability ping is answered perfectly well by a wrong region, by
+a policy that denies writes, and by an endpoint that accepts `storage_class` and
+silently ignores it. So the preflight writes a small probe object with the
+medium's own storage class, reads it back byte for byte, checks the class the
+object actually landed in against the class the configuration claims, asks the
+endpoint whether the medium's declared `upload_verification` can actually be
+achieved there, and deletes the probe. The probe lives at a randomly named key
+under a reserved `.rclone-manager-preflight/` segment inside the medium's own
+prefix, which no configured artifact can produce.
+
+Eight checks, and each one names which of them failed and whose problem it is.
+The two worth calling out:
+
+- **`credentials` and `reach` are separate answers.** A credential this manager
+  could not obtain is a question for this host: a file it cannot read, a variable
+  that is not set, a command that did not run. A credential the endpoint rejected
+  is a question for your provider. They used to be indistinguishable.
+- **`verification` asks the endpoint rather than a table.** A medium declared
+  `upload_verification: attested` cannot be served by any s3 endpoint this build
+  talks to (see the section on that below), so the preflight reports the refusal
+  and tells you to declare `readback`. A preflight that reported attested green
+  would be lying about the one thing it exists to establish.
+
+A medium on an archive storage class is refused at the `deliverable` check and
+nothing is written at all, because a probe object on `DEEP_ARCHIVE` is billed for
+a 180-day minimum for an answer this product already holds. That refusal is about
+DELIVERY: declaring an archive-class medium to restore objects that are already
+there stays legal.
+
+Nothing in the report ever carries a credential, a path on this host, or the name
+of an environment variable. The classified cause goes to the manager's log, where
+your diagnostics already are.
+
+Two things it does not prove, which are worth knowing before you read a green
+result as a guarantee. The probe lives at its own key under the medium's prefix,
+so a bucket policy scoped to the whole prefix is covered and one scoped per
+backup set is not. And a bucket **lifecycle rule** can transition objects to an
+archive class days after they are written, whichever class you declared and
+whichever class the endpoint reported at the moment of the write; nothing
+observable at write time tells those buckets apart, so a medium that passes here
+can still end up holding objects that need a restore. The manager catches that
+when a read is attempted rather than assuming it away.
+
 ## The disclosure, and what you are agreeing to
 
 Mapping a tier of a backup-affecting chain to a non-local medium is a
@@ -164,24 +235,38 @@ re-read for free.
 
 | Class | What it proves | What it costs |
 | --- | --- | --- |
-| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | Two full downloads per move: time, plus egress, twice. See below. On an archive class, a restore first. |
+| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | One full download per move: time, plus egress, plus two metadata calls. See below. A move a restart picks up pays for a second download. On an archive class, a restore first. |
 | `attested` | The provider's stored full-object checksum equals the recorded SHA-256 | One metadata call, no egress. Trusts the endpoint to implement S3 checksum semantics honestly. |
 | `existence` | The object exists with the recorded size | One HEAD request |
 
 The rules that matter:
 
-- A move reaches VERIFIED at `content` class by default. The local copy is
-  downloaded back and re-hashed at the last moment the local truth still exists,
-  and only then is the source deleted.
-- **A move at `content` class downloads the object twice, and you are billed for
-  both.** Once to reach VERIFIED, and once again immediately before the source
-  delete, from scratch, without writing the second result anywhere. That is not
-  an accident and it is not a retry: the second read is what makes a move
-  interrupted by a crash and a move that has just this second been verified take
-  the same code path, so there is no separate resume path to get wrong. It does
-  mean that budgeting one artifact's worth of egress per move is budgeting half
-  of it. `attested` would avoid the download entirely and does not work on `s3`
-  in this build; see below.
+- A move reaches VERIFIED at `content` class by default. The copy that was just
+  uploaded is downloaded back and re-hashed against the SHA-256 recorded when
+  the artifact was ingested, while the source copy is still there, and the
+  source is deleted only after that verdict is durably recorded.
+- **A move at `content` class downloads the object once, and a move a restart
+  picks up downloads it again.** The manager will not delete your source copy
+  without a content-class verdict about the destination that is valid at that
+  instant, and it asks for one unconditionally, immediately before the delete.
+  Where that verdict comes from is the whole of the cost:
+
+  - On a move that runs start to finish in one pass, it is the read that reached
+    VERIFIED moments earlier, plus two HEAD requests: one taken immediately
+    before that read, and one immediately before the delete. If the object's
+    size, last-modified time or storage class has moved between the two, or the
+    endpoint reports no last-modified time at all, or more than two minutes have
+    passed, the manager downloads the object again rather than act on the older
+    reading. **One artifact's worth of egress per move** is the number to budget.
+  - On a move interrupted by a crash and picked up later, there is no such
+    reading to stand on, and there deliberately cannot be one: `VERIFIED` may
+    have been written weeks ago, and a bucket lifecycle rule, an expired restore
+    window or an overwrite in the meantime is exactly what the check is for. That
+    move downloads the object in full, every cycle, until it can finish. **Budget
+    a second artifact's worth of egress for any move you see resume.**
+
+  `attested` would avoid the download entirely and does not work on `s3` in this
+  build; see below.
 - `existence` is never sufficient to delete a source. Not ever, not with any
   setting.
 - Periodic revalidation checks medium placements at `existence` class only.

@@ -95,6 +95,24 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/ssh-keys":                    true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 
+	// Issue #443: the storage medium's equivalent of test-connection,
+	// and exempt for the same reason with one extra sentence, because
+	// unlike test-connection this one WRITES.
+	//
+	// What it writes is an object of its own: a fixed, tiny body at a
+	// randomly generated key under a reserved key segment
+	// (.rclone-manager-preflight) that no configured artifact can produce,
+	// because transport.MediumKey composes an artifact's key out of a
+	// source, a backup set and an artifact name and config lets none of
+	// the three carry a separator. The only object it deletes is that same
+	// one. It moves no journal row, changes no configuration, and cannot
+	// reach a remote source at all, so there is no backup datum anywhere
+	// in its blast radius, which is what the gate stands in front of.
+	// core/internal/mediumcheck pins the containment directly
+	// (TestProbeKey_LivesUnderASegmentNoArtifactCanReach, and the happy
+	// path asserts exactly one upload and one delete).
+	"POST /api/v1/storage-mediums/{id}/preflight": true,
+
 	// Issue #140 (B3.7): editing server-side configuration is §50's
 	// "state-changing but non-destructive" bucket, alongside "create/edit
 	// backup set" — nothing reachable from this route touches, moves or
