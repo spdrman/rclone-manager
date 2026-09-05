@@ -78,9 +78,10 @@ existing populated journal. So the placements backfill makes no observable
 difference to a medium-free deployment, which is the half of #236's fourth
 acceptance criterion that lives here.
 
-The spec still calls that migration `0004_placements.sql`, and `0004` has been
-`backup_set_halts` since before EPIC E started. Only the prose is stale; the code
-uses `0007`.
+The spec called that migration `0004_placements.sql` when it was written, and
+`0004` has been `backup_set_halts` since before EPIC E started. The spec now says
+`0007` and records why it moved, so the only place the old number survives is
+#236's own title.
 
 Phase 2's four issues (#238, #239, #240, #241) are composed and #242's own
 suite runs over them: `core/tests/conformance` builds the exact three-tier

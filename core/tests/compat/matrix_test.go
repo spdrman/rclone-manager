@@ -125,7 +125,9 @@ func TestTheMatrixDoesNotCiteSuitesThatDoNotExist(t *testing.T) {
 		t.Error("no row in the matrix claims PASS, which means either nothing is checked or the parser stopped working; both are worth failing over")
 	}
 	if blocked == 0 {
-		t.Error("no row in the matrix is BLOCKED. EPIC E's phase 2 has not landed, so a matrix with nothing blocked is a matrix that has stopped telling the truth about what is missing")
+		t.Error("no row in the matrix is BLOCKED, and rows are still owed one. Phase 2 has landed, but five phase 1 rows and two section 4 violations " +
+			"are waiting on an automated falsification rather than on code, so a matrix with nothing blocked has stopped telling the truth about what is missing. " +
+			"The day those falsifications are automated and every row is honestly PASS, this line is the one to delete, and deleting it is a decision to record rather than a tidy-up")
 	}
 	t.Logf("matrix rows: %d PASS, %d PARTIAL, %d BLOCKED", pass, partial, blocked)
 }
