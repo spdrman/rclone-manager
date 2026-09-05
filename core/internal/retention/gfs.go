@@ -349,7 +349,12 @@ func (v GFSVerdict) tierNames() []GFSTier {
 // complete backups" refers to: a durable local artifact the pipeline has
 // finished producing, that has not (yet, or ever) been found bad.
 //
-// Committed is the earliest of the three included here. lifecycle's own
+// Four states are included, and the count is worth stating because a
+// list that stops at three has already caused real harm here: see
+// internal/health's knownGood, whose doc records what an undercount of
+// this same set did to the README.
+//
+// Committed is the earliest of the four. lifecycle's own
 // package doc is explicit that "[f]rom here on the backup has already
 // succeeded, regardless of what happens to the remote copy next", so
 // waiting for RemoteDeletePending or Complete before considering an
