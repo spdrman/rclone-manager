@@ -20,11 +20,12 @@ import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
 import { PageHeader } from "@shared/components/PageHeader";
 import { StatusBadge } from "@shared/components/StatusBadge";
-import { RetentionBadges } from "@shared/components/RetentionBadge";
+import { RetentionBadges, RetentionPolicyBadge } from "@shared/components/RetentionBadge";
 import { LifecycleTimeline } from "@shared/components/LifecycleTimeline";
 import { PlacementList } from "@shared/components/PlacementList";
 import { ErrorState } from "@shared/components/EmptyState";
 import { bytes, stamp } from "@shared/utilities/format";
+import type { ArtifactRetentionPolicy } from "@shared/types/backup";
 
 export function BackupDetailPage() {
   const { artifactId = "" } = useParams();
@@ -84,7 +85,15 @@ export function BackupDetailPage() {
             >
               {a.validation === "verified" ? "Verified" : "Failed"}
             </StatusBadge>
-            <RetentionBadges classes={a.retentionClasses} />
+            {/* One or the other, never both (issue #523). A backup whose
+                set was removed still has the tiers the journal last
+                recorded, and showing them here would say a chain is
+                keeping it when no chain will ever look at it again. */}
+            {a.retentionPolicy === "configured" ? (
+              <RetentionBadges classes={a.retentionClasses} />
+            ) : (
+              <RetentionPolicyBadge policy={a.retentionPolicy} />
+            )}
           </span>
         }
       />
@@ -114,6 +123,11 @@ export function BackupDetailPage() {
               value={a.validation === "verified" ? "Checksum passed" : "Failed — see Quarantine"}
             />
             <Row label="Retention classes" value={a.retentionClasses.join(", ") || "unclassified"} />
+            {/* Spelled out in the field list as well as badged in the
+                header, because this row is the sentence an operator can
+                act on: it says what happens to the file, and what to do
+                if that is not what they want. */}
+            <Row label="Retention policy" value={retentionPolicySentence(a.retentionPolicy)} />
             <Row
               label="Remote source removed"
               value={a.remoteSourceRemovedAt ? stamp(a.remoteSourceRemovedAt) + " (after commit)" : "No — original retained"}
@@ -136,6 +150,35 @@ export function BackupDetailPage() {
       </div>
     </>
   );
+}
+
+/**
+ * The one-line answer to "what will eventually delete this backup".
+ *
+ * The governed case names the chain in the vocabulary the rest of the page
+ * already uses rather than repeating the tier badges above it. The other
+ * two say the consequence: a backup under no policy is one nothing will
+ * ever delete, so it holds its space until somebody acts, and a server
+ * that did not answer leaves this page unable to say which of the two is
+ * true, which is a gap rather than reassurance.
+ */
+function retentionPolicySentence(policy: ArtifactRetentionPolicy): string {
+  switch (policy) {
+    case "configured":
+      return "This backup set's retention chain decides when this is deleted.";
+    case "none":
+      return (
+        "None. This backup set's configuration was removed, so no retention chain selects or expires this" +
+        " backup: nothing here will ever delete it. Create the backup set again to put it back under a" +
+        " policy, or remove the file yourself."
+      );
+    default:
+      return (
+        "This server did not say, so this page cannot tell you whether anything will ever delete this" +
+        " backup. Updating Backup Manager restores the answer; the backup-manager unconfigured command" +
+        " has it in the meantime."
+      );
+  }
 }
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {

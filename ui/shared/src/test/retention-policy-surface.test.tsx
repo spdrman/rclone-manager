@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
 import { httpApi } from "@shared/api/client";
+import { BackupDetailPage } from "@shared/pages/BackupDetailPage";
 import { BackupsPage } from "@shared/pages/BackupsPage";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import type { BackupArtifact } from "@shared/types/backup";
@@ -164,6 +165,55 @@ describe("a response that does not say is not read as a response that said yes",
     // And a governed row beside it still reads as governed, so this is a
     // statement about the silent row rather than about the whole page.
     expect(within(await rowFor(GOVERNED)).getByText("Daily")).toBeTruthy();
+  });
+});
+
+function renderDetail(a: BackupArtifact) {
+  const api: BackupManagerApi = createMockApi();
+  vi.spyOn(api, "getArtifact").mockResolvedValue(a);
+  render(
+    <MemoryRouter initialEntries={["/backups/" + a.id]}>
+      <ApiProvider api={api}>
+        <Routes>
+          <Route path="/backups/*" element={<BackupDetailPage />} />
+        </Routes>
+      </ApiProvider>
+    </MemoryRouter>
+  );
+}
+
+// The detail page is where an operator lands after clicking the row the
+// list flagged. It reads the same field, so the two have to agree: a page
+// that answered "Retention classes: daily, monthly" under a row marked
+// "nothing will delete this" would leave the operator trusting whichever
+// screen they happened to read second.
+describe("the backup detail page agrees with the list it was reached from", () => {
+  it("says nothing will delete a backup whose set was removed, and drops the stale tiers", async () => {
+    renderDetail(UNGOVERNED);
+
+    expect(await screen.findByText("Nothing will delete this")).toBeTruthy();
+    expect(await screen.findByText(/no retention chain selects or expires this backup/i)).toBeTruthy();
+    // The header badges are the stale claim this replaces; the field list
+    // still records what the journal remembers, which is a record rather
+    // than a promise.
+    expect(screen.queryByText("Daily")).toBeNull();
+    expect(screen.queryByText("Monthly")).toBeNull();
+  });
+
+  it("leaves a governed backup reading exactly as it did", async () => {
+    renderDetail(GOVERNED);
+
+    expect(await screen.findByText("Daily")).toBeTruthy();
+    expect(screen.queryByText("Nothing will delete this")).toBeNull();
+    expect(screen.getByText(/retention chain decides when this is deleted/i)).toBeTruthy();
+  });
+
+  it("says a silent server left the question open, rather than answering it", async () => {
+    renderDetail(artifact({ retentionPolicy: "unknown" }));
+
+    expect(await screen.findByText("Retention not reported")).toBeTruthy();
+    expect(screen.getByText(/did not say, so this page cannot tell you/i)).toBeTruthy();
+    expect(screen.queryByText(/retention chain decides when this is deleted/i)).toBeNull();
   });
 });
 

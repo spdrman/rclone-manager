@@ -32,7 +32,7 @@ import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { FieldHelp } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
-import { RetentionBadges } from "@shared/components/RetentionBadge";
+import { RetentionBadges, RetentionPolicyBadge } from "@shared/components/RetentionBadge";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
@@ -260,36 +260,17 @@ const NOTE_STYLE = {
  * What retains one backup, in one cell.
  *
  * Three answers, and only one of them is the badge row this column used to
- * be (issue #523):
- *
- *   - governed: the tiers keeping it, exactly as before;
- *   - no policy at all: what that MEANS, not what it is called. "No
- *     retention policy" states a fact an operator then has to reason
- *     about; "Nothing will delete this" is the reasoning, and it is the
- *     thing that matters at a glance on a page of four hundred rows. It is
- *     the CLI's own line, one register shorter;
- *   - not reported: a server that did not answer, said as a gap in what
- *     this page knows rather than resolved into either answer.
- *
- * The tier badges are deliberately NOT shown alongside the second answer.
- * The journal still remembers which tier last selected such a backup, and
- * rendering "Daily" beside a backup no daily chain will ever look at again
- * is a stale claim dressed as a current one.
+ * be (issue #523): the tiers keeping a governed backup, exactly as before,
+ * or RetentionPolicyBadge's sentence for the two cases where naming a tier
+ * would be a stale claim. The wording, and why the badge replaces the
+ * tiers rather than sitting beside them, are argued where the badge lives
+ * (components/RetentionBadge.tsx); the detail page renders the same badge
+ * from the same field, so an operator who clicks a marked row does not
+ * land on a page quietly disagreeing with the one they came from.
  */
 function RetentionCell({ artifact }: { artifact: BackupArtifact }) {
-  if (artifact.retentionPolicy === "none") {
-    return (
-      <span title="This backup set's configuration was removed, so no retention chain selects or expires its backups.">
-        <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing will delete this</StatusBadge>
-      </span>
-    );
-  }
-  if (artifact.retentionPolicy === "unknown") {
-    return (
-      <span title="This server did not report which retention policy governs this backup, so this page cannot say whether anything will ever delete it.">
-        <StatusBadge tone="warn" glyph={"\u25b2"}>Retention not reported</StatusBadge>
-      </span>
-    );
+  if (artifact.retentionPolicy !== "configured") {
+    return <RetentionPolicyBadge policy={artifact.retentionPolicy} />;
   }
   return <RetentionBadges classes={artifact.retentionClasses} />;
 }
