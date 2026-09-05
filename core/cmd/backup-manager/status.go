@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
@@ -110,6 +111,35 @@ func cmdStatus(args []string) int {
 		if bs.FreeBytes != nil {
 			fmt.Printf("  free space: %d bytes\n", *bs.FreeBytes)
 		}
+	}
+
+	// Issue #418: the backup sets no configuration names, which FR-24's
+	// report cannot carry because health is computed per configured set
+	// and a removed set has no freshness to assess.
+	//
+	// It belongs on this screen anyway. `status` is where an operator
+	// asks "is anything wrong here", and a category of backup that is
+	// growing, ungoverned and invisible to every maintenance pass is the
+	// kind of thing that answer should mention. It does NOT change the
+	// exit code: nothing has failed, and a healthcheck that started
+	// flapping because an operator removed a backup set would teach
+	// people to ignore it. Same reasoning, and the same shape, as the
+	// reinstated and read-only lines above.
+	unconfigured, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		// Said out loud rather than swallowed, and still not fatal. This
+		// read is an addition to a report that has already been built
+		// successfully, so failing the whole command over it would turn
+		// a healthy deployment's healthcheck red for a question nobody
+		// asked before this issue existed.
+		fmt.Fprintf(os.Stderr, "could not check for backups outside every configured set: %v\n", err)
+	}
+	if len(unconfigured) > 0 {
+		fmt.Printf("\nretained outside every backup set this configuration names: %d set(s)\n", len(unconfigured))
+		for _, u := range unconfigured {
+			fmt.Printf("  %s: %d artifact(s), %d byte(s), under no retention policy\n", u.Set, u.Artifacts, u.Bytes)
+		}
+		fmt.Println("  nothing collects, retains, reconciles or deletes these; `backup-manager unconfigured` says what to do about it.")
 	}
 
 	if !healthy {

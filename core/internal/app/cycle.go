@@ -243,6 +243,13 @@ sourcesLoop:
 	// to whatever is shipping these logs either way.
 	s.reportBarrenSets(ctx, report)
 
+	// Issue #418: what this deployment is holding outside every
+	// configured backup set. It is here rather than only on a screen
+	// because `daemon` has no exit status and nobody typing commands at
+	// it, and the whole shape of this problem is that it arrives slowly
+	// and invisibly. See reportUngoverned (unconfigured.go).
+	s.reportUngoverned(ctx)
+
 	// FR-30's half of the same verdict (cycleoutcome.go). It is a separate
 	// call under a separate op rather than a branch inside the one above,
 	// because a cycle that backed nothing up and a cycle that moved

@@ -121,10 +121,17 @@
 // What a stopped pass can leave behind is worth knowing: an interrupted
 // transfer leaves a .partial file and a journal row short of a terminal
 // state, and FR-17 reconcile is what would normally tidy that up on the
-// next cycle. Reconcile only runs for configured sets, so after a removal
-// nothing ever will. It is not a retained backup and no promise covers
-// it, but it is residue on a disk, and an operator should read that here
-// rather than discover it.
+// next cycle. Reconcile only runs for configured sets, so no cycle ever
+// will. It is not a retained backup and no promise covers it, but it is
+// residue on a disk.
+//
+// That is issue #418, and it now has an answer rather than only a
+// warning. The event below counts what this removal stranded, so the
+// moment it happens says so; `backup-manager unconfigured` lists it
+// afterwards along with everything else this set still holds; and
+// internal/app's ClearStranded (unconfigured.go) is the operator-driven
+// sweep that removes the .partial and ends the row. None of that touches
+// a retained backup, and this removal still does not either.
 package service
 
 import (
@@ -134,6 +141,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -268,6 +276,11 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 		"backup set configuration removed",
 		slog.String("backup_set", id),
 		slog.Int("retained_artifacts", b.artifactCountFor(ctx, id)),
+		// Issue #418. The removal is the one moment that knows it just
+		// stranded these, and a count of zero here is the ordinary case
+		// worth stating: it is the difference between "this removal left
+		// nothing half-done" and "nobody looked".
+		slog.Int("stranded_artifacts", b.strandedCountFor(ctx, id)),
 	)
 	return nil
 }
@@ -282,22 +295,57 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 // is already written by the time this runs, and a logging call is not
 // allowed to turn a completed write into an error.
 func (b *BackupService) artifactCountFor(ctx context.Context, id string) int {
-	if b.journal == nil {
-		return -1
-	}
-	sourceName, setName, ok := splitBackupSetID(id)
+	records, ok := b.recordsFor(ctx, id)
 	if !ok {
 		return -1
 	}
+	return len(records)
+}
+
+// strandedCountFor is how many of those rows this removal just stranded
+// mid-acquisition: rows in DISCOVERED through COMMITTING, which nothing
+// will ever advance once the set stops being configured (issue #418).
+//
+// It is a second read rather than a second return value from the count
+// above, because that method has another caller in the create path and
+// this lane does not own that file. -1 for the same reason, and it is the
+// sharper case here: a removal that logged "0 stranded" when it could not
+// look would be claiming the tidiest possible outcome for a question
+// nobody can re-ask later, since the next reader has no way to know what
+// the journal held at this instant.
+func (b *BackupService) strandedCountFor(ctx context.Context, id string) int {
+	records, ok := b.recordsFor(ctx, id)
+	if !ok {
+		return -1
+	}
+	stranded := 0
+	for _, rec := range records {
+		if app.IsAcquisitionState(rec.State) {
+			stranded++
+		}
+	}
+	return stranded
+}
+
+// recordsFor is the journal read both counts above share, and the one
+// place their "I could not look" answer is decided.
+func (b *BackupService) recordsFor(ctx context.Context, id string) ([]state.Record, bool) {
+	if b.journal == nil {
+		return nil, false
+	}
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return nil, false
+	}
 	setID, err := model.NewBackupSetID(sourceName, setName)
 	if err != nil {
-		return -1
+		return nil, false
 	}
 	records, err := b.journal.ListByBackupSet(ctx, setID)
 	if err != nil {
-		return -1
+		return nil, false
 	}
-	return len(records)
+	return records, true
 }
 
 // recordRemovedAddress writes down where bs was pointing, so a later

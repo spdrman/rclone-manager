@@ -86,6 +86,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/model"
@@ -212,6 +213,20 @@ func finalPath(localDir string, artifact model.ArtifactID) (string, error) {
 		return "", err
 	}
 	return store.Locator(artifact)
+}
+
+// IsPartialPath reports whether path carries FR-12's non-restorable
+// temporary-name marker.
+//
+// It is exported because the rule "a .partial is never a restore point"
+// has to be checkable by a caller that is about to remove a file, and the
+// suffix itself must not be spelled a second time anywhere: a constant
+// copied into another package is a constant that drifts, and the failure
+// mode of that drift here is a final-name backup deleted by something
+// that thought it was clearing residue. internal/app's #418 sweep is the
+// caller (unconfigured.go's clearOne).
+func IsPartialPath(path string) bool {
+	return strings.HasSuffix(path, partialSuffix)
 }
 
 func partialPath(localDir string, artifact model.ArtifactID) (string, error) {
