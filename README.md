@@ -830,10 +830,14 @@ REMOTE_RETAINED  the second happy-path terminal, reached from COMMITTED or
 FAILED         reachable from any state before COMMITTED; exits to
                DISCOVERED (retry) or QUARANTINED (retry budget spent)
 
-QUARANTINED    reachable from VERIFYING, COMMITTED, REMOTE_DELETE_PENDING;
-               exits to DISCOVERED only (a fresh attempt might recover it)
+QUARANTINED    reachable from VERIFYING, COMMITTED, REMOTE_DELETE_PENDING,
+               REMOTE_RETAINED and FAILED; exits to DISCOVERED (a fresh
+               attempt might recover it), or back to COMMITTED or
+               REMOTE_RETAINED on re-checked evidence (issues #220, #315)
 
-QUARANTINED_LOST   reachable only from COMPLETE; TERMINAL, no exit at all
+QUARANTINED_LOST   reachable only from COMPLETE; no automatic exit, and one
+                   operator-only way back to COMPLETE for when the local copy
+                   turns out to have been intact all along (issue #220)
 ```
 
 `REMOTE_RETAINED` is the thirteenth and it is a policy outcome, not a failure.

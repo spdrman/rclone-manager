@@ -390,6 +390,22 @@ func gfsIsManagedComplete(raw string) bool {
 	return gfsManagedCompleteStates[lifecycle.State(raw)]
 }
 
+// gfsManagedCompleteNames is the map above rendered for a person:
+// "COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED".
+//
+// Every refusal in this package that turns gfsIsManagedComplete down has to
+// tell the operator which states it would have accepted, and issue #505 is
+// what happens when that list is typed out beside the map instead of read
+// off it: REMOTE_RETAINED joined the map with #282 and three sentences
+// stayed at three states, so the one operator most likely to be refused,
+// the one running a read-only backup set where REMOTE_RETAINED is the only
+// state anything ever reaches, was told by name that their artifacts' state
+// is not one of the permitted ones. Reading the map means the sentence
+// cannot be wrong about the map, whatever is added to it next.
+func gfsManagedCompleteNames() string {
+	return lifecycle.NameSet(gfsManagedCompleteStates)
+}
+
 // gfsWeekdaysByName mirrors config's own validWeekdays: any
 // week_starts_on value config.Validate accepts must resolve here too.
 var gfsWeekdaysByName = map[string]time.Weekday{

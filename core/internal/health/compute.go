@@ -27,27 +27,18 @@ import (
 // fed back into the state, so a change to what gets rendered cannot turn
 // into a change of verdict.
 
-// knownGood is FR-19's definition of a valid restore point. There are four
-// of them, and the fourth is the one that keeps getting dropped: COMMITTED,
-// REMOTE_DELETE_PENDING, COMPLETE and REMOTE_RETAINED.
-//
-// FAILED, QUARANTINED, QUARANTINED_LOST and every .partial (pre-COMMITTED)
-// state are excluded, exactly as FR-19 requires. An artifact that was once
-// COMPLETE and has since moved to QUARANTINED_LOST is excluded too, because
-// this checks the artifact's *current* state, not its history: its one copy
-// is gone, so it cannot be a restore point any more no matter what it used
-// to be.
-//
-// REMOTE_RETAINED (issue #282) counts as known-good for the same reason
-// COMPLETE does: it is a durable local restore point, just one whose remote
-// copy this manager will never delete rather than one it already has. Say
-// the whole set every time it is written down, because an undercount here
-// does not read as a small omission. REMOTE_RETAINED is the only state a
-// read-only backup set ever reaches, so a list that stops at three says a
-// read-only set has no valid restore points at all. That undercount stood
-// in retention's own doc comment for a long time, got copied into the
-// README from there, and told operators of working read-only sets they had
-// nothing to restore from until #478 corrected it.
+// knownGood is FR-19's definition of a valid restore point: currently
+// COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED. FAILED,
+// QUARANTINED, QUARANTINED_LOST and every .partial (pre-COMMITTED) state
+// are excluded, exactly as FR-19 requires. An artifact that was once COMPLETE and has
+// since moved to QUARANTINED_LOST is excluded too, because this checks the
+// artifact's *current* state, not its history: its one copy is gone, so it
+// cannot be a restore point any more no matter what it used to be.
+// RemoteRetained (issue #282) counts as known-good too: it is a durable
+// local restore point exactly like Complete, just one whose remote copy
+// this manager will never delete rather than one it already has. A
+// read-only backup set that is working exactly as declared must not read
+// as STALE simply because none of its artifacts will ever reach Complete.
 var knownGood = map[lifecycle.State]bool{
 	lifecycle.Committed:           true,
 	lifecycle.RemoteDeletePending: true,

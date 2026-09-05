@@ -164,7 +164,7 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 	}
 
 	if newest == nil {
-		result.Reason = "no eligible restore point exists in this backup set (nothing is committed, remote-delete-pending or complete)"
+		result.Reason = fmt.Sprintf("no eligible restore point exists in this backup set (nothing is %s)", gfsManagedCompleteNames())
 		return result, nil
 	}
 

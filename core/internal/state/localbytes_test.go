@@ -25,7 +25,7 @@ import (
 var holdsLocalCopy = []string{
 	"TRANSFERRING", "TRANSFERRED", "VERIFYING", "VERIFIED",
 	"COMMITTING", "COMMITTED", "REMOTE_DELETE_PENDING", "COMPLETE",
-	"QUARANTINED", "QUARANTINED_LOST",
+	"REMOTE_RETAINED", "QUARANTINED", "QUARANTINED_LOST",
 }
 
 // discoverSized records an artifact whose REMOTE size is known and whose

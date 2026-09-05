@@ -1,9 +1,9 @@
 // Package revalidate implements Phase 4's scheduled revalidation
 // (docs/EPIC.md): re-checking artifacts that have already reached a
-// durable, "already passed" state (COMMITTED, REMOTE_DELETE_PENDING or
-// COMPLETE), on a cadence and at a scope an operator configures
-// (config.Revalidation) rather than on every cycle. Bit rot does not
-// announce itself: a backup that verified six months ago is not
+// durable, "already passed" state (COMMITTED, REMOTE_DELETE_PENDING,
+// COMPLETE or REMOTE_RETAINED), on a cadence and at a scope an operator
+// configures (config.Revalidation) rather than on every cycle. Bit rot
+// does not announce itself: a backup that verified six months ago is not
 // guaranteed to still verify today, and the only way to find out before a
 // restore is actually needed is to ask again.
 //

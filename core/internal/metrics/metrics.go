@@ -49,6 +49,7 @@ import (
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/health"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
 // ContentType is the MIME type a caller should set on an HTTP response
@@ -60,6 +61,19 @@ const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 // name, backup-manager, with the hyphen replaced by an underscore, since a
 // Prometheus metric name may not contain a hyphen.
 const namePrefix = "backup_manager_"
+
+// newestGoodBackupAgeHelp names, in the HELP line a scraping operator
+// reads, exactly the states internal/health counts as known-good.
+//
+// It is built from lifecycle's own durable-restore-point set rather than
+// typed out here, which is issue #505: the hand-typed version named three
+// states and had done since REMOTE_RETAINED joined that set with #282. An
+// operator running a read-only backup set reads this line to find out what
+// the gauge beneath it is measuring, and every artifact they have is
+// REMOTE_RETAINED, so the line named none of the states it was measuring
+// for them and read as "this gauge does not cover you".
+var newestGoodBackupAgeHelp = "Age of the newest known-good (" +
+	lifecycle.DurableRestorePointNames() + ") backup, in seconds."
 
 // healthStates lists FR-24's four backup-set states in the fixed order
 // backup_set_state always renders them in, so sample order never depends
@@ -85,7 +99,7 @@ func Render(report health.Report) string {
 	writeState(&b, sets)
 
 	writeGauge(&b, sets, "newest_good_backup_age_seconds",
-		"Age of the newest known-good (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE) backup, in seconds.",
+		newestGoodBackupAgeHelp,
 		func(s health.BackupSetHealth) (float64, bool) {
 			if s.NewestGoodBackupAge == nil {
 				return 0, false
