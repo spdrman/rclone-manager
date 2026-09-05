@@ -186,8 +186,8 @@
     }
   ],
   "links": {
-    "publiclyReachable": false,
-    "reason": "the source repository is private, so every link into it is a 404 for a reviewer outside the project. The materials exist and are checked for substance on every run; what is missing is public access to them, which only the repository owner can grant. docs/compliance/source-offer.md is the written offer that stands until then."
+    "publiclyReachable": true,
+    "reason": "the source repository is public, so every declared link resolves for a reviewer outside the project"
   },
   "signing": {
     "status": "signed",

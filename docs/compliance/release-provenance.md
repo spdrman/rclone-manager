@@ -202,6 +202,24 @@ direction. Cutting the real tag before the push is what closed the gap this sect
 used to describe: a store advertising `:1.0.0` while the binary inside answered with a
 commit SHA was the failure a push before tagging would have shipped.
 
+## The links a store reviewer follows
+
+`compliance.json`'s `sourceRepository.visibility` is `public`, so every declared
+link resolves for anyone, and `links.publiclyReachable` in the bundle is derived
+from that one field rather than asserted per link. §73 WP5.2's link criterion is
+met.
+
+That value went stale once and the note above it claimed it had been measured,
+which is how issue #484 found it: the repository was made public and nothing came
+back to re-read the field, so the record said private for a repository anyone
+could open. Re-run `gh repo view spdrman/rclone-manager --json visibility` rather
+than trusting the note, and regenerate the bundle with
+`go run ./cmd/provenance -write` from `distribution/`.
+
+`docs/compliance/source-offer.md` stays either way. A link resolving is not the
+same as an offer having been made, and Apache-2.0 §4a is an obligation to whoever
+received a package, not to whoever visits the repository.
+
 ## Verifying a release by hand
 
 ```
@@ -217,11 +235,6 @@ digests, and the image additionally by its signature.
 
 Stated here rather than left to be discovered:
 
-- **The links are not publicly reachable.** Every link target exists and has
-  substance, and the repository is private, so a store reviewer following any of
-  them gets a 404. `links.publiclyReachable` is `false` and
-  `docs/compliance/source-offer.md` is the written offer that stands until the
-  repository is made public. Only the repository owner can change that.
 - **The performance evidence is pending.** The seven metric names #81 lists are
   pinned as a set so one cannot be dropped quietly, and every value is null,
   naming the issue that will produce it. #165, #167 and #170 have not merged.
