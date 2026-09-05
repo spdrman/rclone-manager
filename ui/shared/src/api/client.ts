@@ -1222,6 +1222,15 @@ const backupSetPath = (source: string, set: string) =>
 
 const retentionPath = (source: string, set: string) => backupSetPath(source, set) + "/retention";
 
+/**
+ * The contract, implemented against a running service.
+ *
+ * Every method is one request and one mapping, and the object is flat on
+ * purpose: the interesting decisions are per operation (which path, which
+ * of the two error shapes, what an omitted field becomes) and each one
+ * that has a reason carries it at the method rather than in a shared
+ * helper that would hide the differences.
+ */
 export const httpApi: BackupManagerApi = {
   getVersion: () => request<WireVersionResponse>("/system/version").then(fromWireVersion),
   // GET /system/health, NOT /health/ready. The two answer different

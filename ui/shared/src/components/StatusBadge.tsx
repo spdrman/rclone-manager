@@ -65,6 +65,10 @@ export function StatusBadge({
   );
 }
 
+/** A health state as a badge, with no choices left to the caller. It
+ *  exists so that no page picks its own tone, glyph or wording for a
+ *  state: "stale" reads the same on the dashboard, on a card and on a
+ *  detail page, because none of them decide. */
 export function HealthBadge({ state }: { state: HealthState }) {
   const p = HEALTH_PRESENTATION[state];
   return <StatusBadge tone={p.tone} glyph={p.glyph}>{p.label}</StatusBadge>;

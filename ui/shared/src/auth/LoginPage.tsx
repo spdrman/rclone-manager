@@ -114,6 +114,10 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
   );
 }
 
+/** The centred, branded card both pre-auth screens sit in. It carries the
+ *  product's own identity deliberately, because the one thing an operator
+ *  must not conclude on either of these screens is that they are looking
+ *  at their NAS operating system asking for its own password. */
 export function AuthFrame({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "48px 24px", background: "var(--bg)" }}>

@@ -65,6 +65,10 @@ export const operationsNode = createResourceNode<Operation[]>("app.operations");
  */
 export const configuredNode = registerInput<boolean | null>("app.configured", null);
 
+/** The three badge numbers the nav draws. Every field is `undefined`
+ *  until its source resolves, and that is not the same as zero: a badge
+ *  showing nothing while a fetch is in flight is honest, and one showing 0
+ *  says an operator has no backup sets. */
 export interface AppCounts {
   sets: number | undefined;
   backups: number | undefined;
