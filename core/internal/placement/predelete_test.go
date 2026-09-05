@@ -30,6 +30,13 @@ import (
 // A change that halves the cost and drops the protection passes the first
 // and fails the second, which is the whole reason the second one is here.
 
+// errTheEndpointWentAway is a medium that answered a moment ago and does
+// not answer now. It is deliberately not classified as NotFound: "the
+// object is not there" and "I could not ask" are different facts, and the
+// pre-delete proof treats both as "no identity", which is the only safe
+// reading of either.
+var errTheEndpointWentAway = errors.New("stat: the endpoint reset the connection")
+
 // --- the cost -----------------------------------------------------------
 
 // TestACompletedMoveReadsTheObjectBackOnce is the measurement from #439,
@@ -279,6 +286,14 @@ func TestEveryFactThePreDeleteProofRestsOnIsLoadBearing(t *testing.T) {
 // The first cycle here is refused by the tier guard, so the move stops at
 // SOURCE_DELETE_PENDING with a destination that is genuinely fine. The
 // second cycle picks it up the way a restart would. It has to read again.
+//
+// What makes that true is the proof's SCOPE, not any check: the second
+// cycle's advance loop declares its own, so there is nothing to find. This
+// test is the behaviour that scope buys, and
+// TestNothingHoldsAPreDeleteProofBeyondOneWalkOfOneMove is what pins the
+// scope itself. Neither is enough alone: hoisting the proof onto Engine
+// leaves this one green, because the first cycle spends the proof on its
+// way to the guard's refusal, and it takes the structural test to say so.
 func TestAProofCannotCrossACycleBoundary(t *testing.T) {
 	f := newFixture(t, fixtureOpts{})
 	f.tiers.selected = true
@@ -329,13 +344,6 @@ func TestOnlyTheClassThatCostsEgressIsEverProved(t *testing.T) {
 			"so the check immediately before the delete stays a check", got)
 	}
 }
-
-// errTheEndpointWentAway is a medium that answered a moment ago and does
-// not answer now. It is deliberately not classified as NotFound: "the
-// object is not there" and "I could not ask" are different facts, and the
-// pre-delete proof treats both as "no identity", which is the only safe
-// reading of either.
-var errTheEndpointWentAway = errors.New("stat: the endpoint reset the connection")
 
 // TestAMoveHomeReadsTheLocalCopyOnce is the same claim for the other
 // direction, and it is here because the local end is a different branch of
