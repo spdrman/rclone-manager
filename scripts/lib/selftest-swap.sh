@@ -204,12 +204,47 @@ swap_dry() {
 # mutate_py <file> runs the python mutation on its stdin against <file>,
 # for the handful of mutants that reshape json or run a regex rather than
 # swapping one literal. Their asserts stay theirs; this only stops a failing
-# one from taking the rest of the run with it, and skips them under
-# --check-anchors, which builds nothing and must not write to the real tree.
+# one from taking the rest of the run with it.
+#
+# Under --check-anchors it runs against a COPY, which is the part worth
+# reading. It used to throw the script away (`cat >/dev/null`) on the
+# grounds that a dry run builds nothing and must not write to the real
+# tree. The second half of that is right and the first half made the mode
+# lie: nine controls plant through here, their preconditions drift exactly
+# the way a swap anchor drifts, and --check-anchors reported them as
+# checked when it had not looked. #522 hit it head on. Replacing the
+# blocked floor in core/tests/compat left "every blocked row promoted to
+# PASS" with nothing to promote, so the control could no longer plant
+# anything, and the one check whose whole job is to find that in a second
+# said the tree was fine. It would have surfaced at minute 25 of a gate
+# run, which is the failure #458 already fixed once, for swap.
+#
+# The copy lives in the selftest's own $tmp, which its EXIT trap already
+# removes, so this adds no cleanup of its own and cannot touch the tree it
+# is inspecting. A caller with no $tmp gets a complaint rather than a
+# silent pass, because "I could not check" and "it is fine" are the two
+# answers this whole file exists to keep apart.
 mutate_py() {
-  local file=$1 out status=0
+  local file=$1 out status=0 probe
   if [ "$selftest_dry_run" = 1 ]; then
-    cat >/dev/null
+    selftest_anchors_checked=$((selftest_anchors_checked + 1))
+    selftest_anchors_in_control=$((selftest_anchors_in_control + 1))
+    if [ -z "${tmp:-}" ]; then
+      cat >/dev/null
+      selftest_note_stale "$(_selftest_display "$file"): its precondition could not be checked, because this run has no scratch directory to copy the file into"
+      return 0
+    fi
+    probe="$tmp/anchor-probe"
+    if ! cp "$file" "$probe" 2>/dev/null; then
+      cat >/dev/null
+      selftest_note_stale "$(_selftest_display "$file"): the mutation names a file that is not in this tree"
+      return 0
+    fi
+    out=$(python3 - "$probe" 2>&1) || status=$?
+    if [ "$status" -ne 0 ]; then
+      selftest_note_stale "$(_selftest_display "$file"): the mutation would refuse to plant:
+$(printf '%s\n' "$out" | sed 's/^/  | /')"
+    fi
     return 0
   fi
   out=$(python3 - "$file" 2>&1) || status=$?
