@@ -1,3 +1,21 @@
+/**
+ * Everything an operator can configure from the UI, plus what this build
+ * and this platform are.
+ *
+ * Most of the page's history is subtraction. Several cards here used to be
+ * controls that rendered a value and saved nowhere: a polling interval in
+ * the wrong unit, a log level with no config key behind it, storage
+ * thresholds with no handler. Each was either removed or replaced with the
+ * real thing, and the notes in the JSX say which, because a decorative
+ * control is worse than a missing one. It teaches an operator that they
+ * have configured something.
+ *
+ * What is left splits three ways: cards that own a real config block and
+ * write it, capability copy that reports what this platform can do without
+ * ever claiming more, and build information. The version reads the shared
+ * node rather than fetching again, so this page and the compatibility
+ * banner above it cannot name two different versions.
+ */
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

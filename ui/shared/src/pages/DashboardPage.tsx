@@ -1,3 +1,22 @@
+/**
+ * The first screen after signing in: is anything wrong, is anything
+ * running, and what has happened lately.
+ *
+ * It is an answer page rather than a control panel, and the layout follows
+ * that. The health verdict comes first in words, the metrics under it are
+ * the same verdict broken into countable parts, and the activity list at
+ * the bottom is the evidence. The only actions on it are the ones that act
+ * on the whole deployment, which is why they sit in the page header and
+ * not inside any card.
+ *
+ * Nothing here fetches. Health and sets arrive as props from the one place
+ * that owns them, and live operations are read straight off the shared
+ * node, so this page cannot disagree with the backup sets list about what
+ * is running. The one filter it does apply is local and explained where it
+ * happens: the operations endpoint answers with recent operations rather
+ * than only live ones, and a panel headed "active" that counted the whole
+ * list would report the whole day's finished runs as in progress.
+ */
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";

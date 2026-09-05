@@ -1,3 +1,23 @@
+/**
+ * Every backup set as a row, with the per-set controls that used to mean
+ * opening the set first.
+ *
+ * Putting enable, disable and remove on the row is the decision this page
+ * turns on, and it is the one that needs care: a destructive action inside
+ * a list is the classic way to act on the wrong item. The three answers
+ * live in BackupSetCard's own doc, and what is here is the state behind
+ * them. One removal target at a time, so two confirmations cannot be open
+ * at once; a per-row busy set, so a row with something in flight offers
+ * nothing else; and a ref beside that state, because React batches and the
+ * second click of a double-click is dispatched before any re-render has
+ * disabled anything.
+ *
+ * The deployment-wide run stays in the page header where its scope is
+ * legible, and it submits against the configuration revision the screen is
+ * currently showing rather than one fetched at the moment of the click,
+ * because refusing a run based on a revision nobody has seen is the whole
+ * point of that check.
+ */
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

@@ -1,3 +1,19 @@
+/**
+ * Every retained artifact, filterable by set, with retention preview
+ * reachable per set.
+ *
+ * The name is load-bearing. These are backups, not restore points: this
+ * product transfers and verifies artifacts and never performs an
+ * application restore, and calling a row a restore point would promise
+ * something no code here does.
+ *
+ * The set list behind the filter is the shared node rather than another
+ * fetch, so the dropdown cannot offer a set the rest of the app has
+ * forgotten. The preview dialog needs a set's two-part identity while the
+ * dropdown is keyed by the flat id, and resolving one from the other here
+ * rather than threading both through the select is the small price of
+ * keeping every picker on this page keyed the same way.
+ */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
