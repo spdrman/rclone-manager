@@ -39,6 +39,15 @@ func blackholedConnectTimeout() error {
 		fmt.Errorf(`source "prod": NewFs: couldn't connect SSH: dial tcp 192.0.2.1:22: %w`, context.DeadlineExceeded))
 }
 
+// alwaysFailingHash builds a transport whose RemoteHash never succeeds, and
+// nothing else.
+//
+// Every test in this file is about what happens when a check cannot be
+// completed, so the transport has one job: fail the same way every time,
+// with an error the caller supplies. Making the failure a parameter rather
+// than baking one in is what lets the same fixture stage a connect timeout,
+// an unsupported capability and a cancellation without three near-identical
+// doubles.
 func alwaysFailingHash(err error) *verifyTransport {
 	return &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
 		return "", err

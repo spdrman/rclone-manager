@@ -35,6 +35,14 @@ func failedFixture(t *testing.T, j *state.Journal, artifact model.ArtifactID, fr
 	}
 }
 
+// TestRetryFailed_MovesBackToDiscoveredAndCountsTheAttempt is the happy
+// path, and the counter is the half that is easy to leave out.
+//
+// Without it a retried artifact is indistinguishable from one arriving for
+// the first time, so an artifact that fails, is retried, and fails again
+// looks like two unrelated first attempts. That is precisely the "silently
+// retried into oblivion" shape Phase 4 asks this product to make visible,
+// and RetryCount on the row is where it becomes visible.
 func TestRetryFailed_MovesBackToDiscoveredAndCountsTheAttempt(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -112,6 +120,15 @@ func TestRetryFailed_HasEveryStateFailedCanBeReachedFrom(t *testing.T) {
 	}
 }
 
+// TestRetryFailed_RefusesAnArtifactThatIsNotFailed walks every state an
+// artifact could be sitting in when somebody clicks retry on a stale screen.
+//
+// The two quarantine states are the important entries. Both are exceptional
+// states with their own operator exits and their own evidence rules, and a
+// retry that quietly worked on them would let an operator bypass those rules
+// by pressing the wrong button. The states before COMMITTED matter for a
+// different reason: an artifact quietly making progress must not be thrown
+// back to the start because a page was loaded a minute ago.
 func TestRetryFailed_RefusesAnArtifactThatIsNotFailed(t *testing.T) {
 	for _, at := range []State{Discovered, Transferring, Transferred, Verifying, Verified, Committing, Committed, Quarantined, QuarantinedLost} {
 		t.Run(string(at), func(t *testing.T) {
@@ -196,6 +213,13 @@ func TestRetryFailed_ASecondClickIsRefusedRatherThanSpendingASecondAttempt(t *te
 	}
 }
 
+// TestRetryFailed_RejectsMissingRequiredParams covers the two preconditions
+// that cannot be defaulted.
+//
+// A missing AttemptKey is the one worth having. The key is what makes a
+// repeated call converge instead of counting a second attempt, so accepting
+// an empty one would mean every double click on the operator's button was
+// recorded as another failure of the artifact.
 func TestRetryFailed_RejectsMissingRequiredParams(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
