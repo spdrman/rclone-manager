@@ -99,6 +99,16 @@
 # interrupt. Everything carries a per-run id, nothing publishes a host
 # port, and the harness reclaims its own machines. Two of these can run at
 # once.
+# Everything below is one brace group, and that is not a style choice.
+#
+# bash reads a script from the file incrementally, by byte offset, so
+# editing a script while it is running makes it resume mid-token: this one
+# ran for 159 seconds, passed every package, and then died with "syntax
+# error near unexpected token `('" in a branch that was never taken, purely
+# because the file had been edited underneath it. A run this long is
+# exactly the kind somebody edits while it works. Wrapping the body forces
+# bash to parse all of it before executing any of it.
+{
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -379,3 +389,4 @@ fi
 
 step "PASSED in ${elapsed}s"
 note "every source and medium was reached by its network alias, with nothing published"
+}
