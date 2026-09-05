@@ -116,6 +116,16 @@ E2E_STUB='E2E-GATE-STUB-RAN'
 # the gate chooses to run, so the stub prints a marker and succeeds.
 TWO_MACHINE_STUB='TWO-MACHINE-STUB-RAN'
 
+# And for the repository-wide gofmt sweep (#417), which Group L watches in
+# both directions.
+GOFMT_STUB='GOFMT-SWEEP-STUB-RAN'
+
+# The same, for the check that vets and lints the Go files no module owns
+# (#417). It lives in scripts/architecture/ but runs near the top of the
+# gate with the sweep rather than with the other architecture checks, and
+# Group L is where that placement is pinned.
+UNOWNED_STUB='UNOWNED-GO-STUB-RAN'
+
 make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   # mktemp, not a counter: this runs inside $( ), so a counter would increment
   # in the subshell and every caller would get the same directory back. That
@@ -240,9 +250,16 @@ make_full_tree() {
   for arch in check-layer-manifest check-core-dependency-rule \
               check-layer-ownership check-ui-shared-provider-imports \
               selftest verify-core-without-apps verify-core-without-distribution \
-              verify-ui-shared-without-provider-sdks verify-ugos-removable; do
+              verify-ui-shared-without-provider-sdks verify-ugos-removable \
+              check-unowned-go; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/architecture/$arch.sh"
   done
+  # check-unowned-go prints a marker on top of that, because Group L
+  # watches for it in both directions the way Group G watches the browser
+  # e2e stub. The real one vets and lints every Go file outside every
+  # module, through a throwaway module per directory.
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$UNOWNED_STUB" \
+    >"$tree/scripts/architecture/check-unowned-go.sh"
 
   # The performance baseline gate and its own self-test (#165), stubbed for
   # the same reason: this fixture measures which steps the gate chooses to
@@ -284,6 +301,15 @@ make_full_tree() {
   # `set -e` and takes every case below it down with it.
   mkdir -p "$tree/scripts/race"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/race/selftest.sh"
+
+  # The formatting sweep and its own mutation self-test (#417), for the
+  # eighth and ninth time for the same reason. The sweep prints a marker
+  # because Group L watches for it in both directions; the real one reads
+  # every tracked .go file in the repository.
+  mkdir -p "$tree/scripts/format"
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$GOFMT_STUB" \
+    >"$tree/scripts/format/check-gofmt.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/format/selftest.sh"
 
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
@@ -1309,6 +1335,106 @@ else
   fail "K4 a second exclusion is counted, so the count assertion has teeth" \
     "the mutation should have produced 2 exclusions, the scan found $k4_mutant_count:
 $k4_mutant"
+fi
+
+# ------------- Group L: formatting is checked at all (#417)
+
+echo "==> L. the formatting gate, in both halves"
+
+# Formatting was not checked anywhere until #417, and the way that surfaced
+# is the reason this group exists. Two Go files in this repository were not
+# gofmt-clean, one of them since it was written, and every gate step stayed
+# green: `go build`, `go vet` and every linter .golangci.yml enabled are all
+# indifferent to layout. A check that was never there and a check that is
+# there and looking produce the same output, which is #160's defect arriving
+# through a third door.
+#
+# It is closed in two places, and neither makes the other redundant.
+# .golangci.yml enables the gofmt formatter, which covers the five Go
+# modules, and scripts/format/check-gofmt.sh sweeps every tracked .go file,
+# which is the only thing that reaches the two Go files living outside every
+# module and outside go.work. L1 and L2 are the sweep as a gate step; L3 is
+# the config, with the mutation that proves the assertion can fail.
+
+# L1: the sweep runs, and a run that has it stays green. The marker is the
+# control against L2 passing because the step was never reached at all.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "L1 the gate runs the formatting sweep" "$GOFMT_STUB" "$out"
+assert_contains "L1 the step says what it covers" \
+  'every tracked Go file is gofmt-clean' "$out"
+assert_eq "L1 a passing sweep leaves the run green" 0 "$status"
+
+# L2: a tree with unformatted Go in it fails the run, by name, and early.
+# Early matters for the same reason it did for the anchors check: this is a
+# half-second sweep, and nobody should wait out the Docker-backed suites to
+# be told about whitespace.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "not gofmt-clean" >&2\nexit 1\n' \
+  >"$tree/scripts/format/check-gofmt.sh"
+run_gate "$tree"
+assert_nonzero "L2 an unformatted tree fails the run" "$status"
+assert_not_contains "L2 an unformatted tree cannot report success" 'ci-local: ok' "$out"
+assert_contains "L2 the verdict names the formatting step" \
+  'ci-local: FAILED (every tracked Go file is gofmt-clean' "$out"
+assert_not_contains "L2 the formatting sweep fails before the Go suites" \
+  'core/ go test' "$out"
+
+# L4: the other half of the same blind spot. Being outside every module
+# does not only cost those two files their formatting: this gate vets and
+# lints per module too, so nothing had ever vetted or linted them either.
+# The check that does now lives in scripts/architecture/ but runs HERE,
+# near the top, and that placement is the thing this cell pins: the other
+# architecture checks run after the Go suites, and a Go file nobody checks
+# is worth hearing about before twenty minutes of Docker-backed tests.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "L4 the gate checks the Go files no module owns" "$UNOWNED_STUB" "$out"
+assert_contains "L4 the step says what it covers" \
+  'every Go file no module owns still passes go vet and golangci-lint' "$out"
+assert_eq "L4 a passing check leaves the run green" 0 "$status"
+
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "go vet found something" >&2\nexit 1\n' \
+  >"$tree/scripts/architecture/check-unowned-go.sh"
+run_gate "$tree"
+assert_nonzero "L4 an unvetted Go file fails the run" "$status"
+assert_contains "L4 the verdict names the step" \
+  'ci-local: FAILED (every Go file no module owns' "$out"
+assert_not_contains "L4 it fails before the Go suites" 'core/ go test' "$out"
+
+# L3: the other half. golangci-lint checks formatting only if the config
+# asks it to, and the config is a file anybody can trim.
+#
+# The reading is structural rather than a grep for the word, because
+# .golangci.yml mentions gofmt several times in the prose explaining why it
+# is enabled, and a scan that matched those would pass against a config that
+# had lost the setting and kept the paragraph.
+gofmt_formatter_enabled() { # <path to a .golangci.yml>
+  python3 "$SCRIPTS_DIR/tests/gofmt-formatter-enabled.py" "$1"
+}
+
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  fail "L3 .golangci.yml enables the gofmt formatter, and python3 has no yaml module to read it structurally"
+else
+  if gofmt_formatter_enabled "$REPO_ROOT/.golangci.yml"; then
+    pass "L3 .golangci.yml enables the gofmt formatter"
+  else
+    fail "L3 .golangci.yml enables the gofmt formatter" \
+      "formatters.enable does not list gofmt, so golangci-lint checks no formatting in any of the five Go modules"
+  fi
+
+  # L3's mutation: drop the setting, keep every word of the prose around it,
+  # and the scan has to notice. Without this, L3 would also pass against a
+  # scan that can no longer tell the difference.
+  cp "$REPO_ROOT/.golangci.yml" "$SANDBOX/golangci-no-formatters.yml"
+  perl -0pi -e 's/formatters:\n  enable:\n    - gofmt\n//' "$SANDBOX/golangci-no-formatters.yml"
+  if gofmt_formatter_enabled "$SANDBOX/golangci-no-formatters.yml"; then
+    fail "L3 the scan notices a config with the formatter removed" \
+      "the mutated config still reads as enabling gofmt, so L3 cannot fail"
+  else
+    pass "L3 the scan notices a config with the formatter removed, so L3 has teeth"
+  fi
 fi
 
 # ------------------------------------------------------------------ result

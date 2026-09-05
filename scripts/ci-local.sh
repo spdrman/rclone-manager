@@ -226,6 +226,36 @@ else
   echo "==> mutation anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run (#458)"
 fi
 
+# Formatting, over every tracked Go file in the repository (#417). Half a
+# second, so it belongs up here with the anchors check rather than behind
+# twenty minutes of Go suites.
+#
+# It is not the same check as the gofmt formatter .golangci.yml now
+# enables, and neither one makes the other redundant. golangci-lint is
+# invoked per module below (`cd core && ...`, `cd apps/common && ...`), and
+# two Go files in this repository live outside every module and outside
+# go.work: scripts/api/gen-bindings.go and scripts/architecture/ownership.go.
+# No per-module lint run has ever been able to see either, and the
+# unformatted one of the pair was gen-bindings.go, which is how a file
+# stayed unformatted for its whole life with every gate step green.
+gate_step "every tracked Go file is gofmt-clean, including the ones outside every module (#417)"
+bash scripts/format/check-gofmt.sh
+
+# The same blind spot, for the checks that actually find bugs (#417). Being
+# outside every module does not only cost those two files their formatting:
+# this gate vets and lints per module too, so nothing has ever vetted or
+# linted them either. `go vet` needs no module when it is handed file
+# paths, and golangci-lint gets a throwaway module per unowned directory,
+# which resolves offline because every unowned file here is standard-library
+# only. A few seconds, and it belongs up here with the sweep for the same
+# reason.
+#
+# Deliberately NOT with the other scripts/architecture checks further down:
+# those run after the Go suites, and a Go file nobody checks is worth
+# hearing about before twenty minutes of Docker-backed tests, not after.
+gate_step "every Go file no module owns still passes go vet and golangci-lint (#417)"
+bash scripts/architecture/check-unowned-go.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 
@@ -559,6 +589,17 @@ if [ "$FAST" != "1" ]; then
   # under it.
   gate_step "the race detector can actually catch a race (mutation self-test, #417)"
   bash scripts/race/selftest.sh
+
+  # And the formatting gate, shown to fire (#417). Same argument as the
+  # block above, applied to the check that turned out to be missing
+  # altogether: two Go files in this tree were not gofmt-clean and nothing
+  # noticed, because `go build`, `go vet` and every linter that was enabled
+  # are all indifferent to layout. Both halves get a planted violation
+  # here, the sweep and .golangci.yml's own formatter, including one
+  # planted outside every module, which is the case the per-module linter
+  # cannot make. A second on a warm cache.
+  gate_step "the formatting gate can actually fail (mutation self-test, #417)"
+  bash scripts/format/selftest.sh
 
   # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
   # is a wall of "nothing about a medium-free deployment moved" assertions,
