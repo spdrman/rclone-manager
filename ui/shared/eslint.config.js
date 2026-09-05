@@ -1,3 +1,22 @@
+// The ESLint rules for the whole ui/shared workspace, which is a wider reach
+// than it sounds and is the point of the file.
+//
+// TypeScript already runs over this project, so a second checker has to earn
+// its place by catching what the first structurally cannot. That is the line
+// this config is drawn along: React's hook rules, Fast Refresh boundaries the
+// dev server depends on, and code nothing uses. None of those are type errors,
+// so no amount of tsc finds them.
+//
+// The reach matters as much as the rules. tsc only sees the files
+// tsconfig.json includes, which is src, while `eslint .` sweeps the workspace,
+// so this is the only check that reads the build configuration beside it. The
+// no-unused-vars rule below is here because of exactly that gap, and it says
+// so at some length: the belief that tsc already covered it was tested and
+// turned out to be wrong.
+//
+// Everything else is an exception, and each one names the thing it is making
+// room for rather than just switching a rule off.
+
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
