@@ -60,7 +60,7 @@ the way its predecessor did.
 | `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
-| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because a 180-day minimum billing period is not a thing to discover empirically (issue #443) |
+| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically (issue #443) |
 | `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
@@ -1266,6 +1266,14 @@ has three rungs, ordered:
 | `attested` | one metadata call for the provider's own full-object checksum | the endpoint's word, which an endpoint that lies can make worthless |
 | `existence` | one HEAD | the object is there at the recorded size, and nothing about its content |
 
+The config key is `upload_verification` and it names two of those three, under names of its
+own: `readback` (the default) achieves `content`, and `attested` achieves `attested`.
+`readback` is the default because the alternative asks the destination to grade its own
+work, and a hostile or broken endpoint can echo back the checksum it was handed at upload
+without having stored a byte, with a deleted local copy as the reward for believing it.
+EPIC E's own security review rejected an earlier draft over exactly that. `attested` is a
+per-medium opt-in that names its trust assumption out loud.
+
 **Every surface reports the class that was actually ACHIEVED, never the one that was
 configured or hoped for.** That is the whole reason the package exists: an existence check
 reported as "verified" is worse than no check at all, because it turns "nobody has looked
@@ -1355,12 +1363,16 @@ record the activity feed reads, in the FR-23 event stream under `op=move`, and i
 
 `GLACIER` and `DEEP_ARCHIVE` are the storage classes where a copy is durable, intact, and
 completely out of reach for the next several hours. `core/internal/archive` owns the closed
-four-word vocabulary for what can be done with a copy right now, and it is the only
-definition of it in this repository, held there by a test that fails on a second
-declaration of any of the four strings anywhere under `core/internal`. There is
-deliberately no fifth word for "unknown": a surface that cannot work out which applies has
-a bug, and printing a fifth word would turn that bug into something operators learn to
-ignore.
+vocabulary for what can be done with a copy right now, four words and no more:
+`immediate`, `requires_restore`, `restoring`, `unreachable`. It is the only definition of
+them in this repository, held there by a test that fails on a second declaration of any of
+the four strings anywhere under `core/internal`, and every surface uses the same four so a
+person at a terminal and a person in a browser read the same truth about the same artifact.
+There is deliberately no fifth word for "unknown": a surface that cannot work out which
+applies has a bug or a drifted class table, and printing a fifth word would turn that bug
+into something operators learn to ignore. The code returns an error there instead, and the
+caller says something about its own failure rather than dressing it up as a fact about the
+backup.
 
 **A retention tier whose medium names an archive class is refused when the config loads,
 and the refusal names the tier, the medium, the class and what to write instead.** The
@@ -1409,8 +1421,8 @@ question for the host and reaching a bucket with it is a question for the provid
 deliverable, write, read back byte for byte, the storage class the endpoint really reports
 against the one the configuration claims, the declared verification class asked live, and
 the probe object confirmed deleted. An archive class is refused at `deliverable` with
-nothing written at all, because a 180-day minimum billing period is not a thing to discover
-empirically.
+nothing written at all, because an object there is billed for a minimum duration measured
+in months and that is not a thing to discover empirically.
 
 No report it produces ever carries key material, and that is structural rather than
 careful: every sentence in a report is one of the package's own strings, composed only out
