@@ -331,6 +331,15 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
 
 
 def say(message: str) -> None:
+    """Print one line the operator will read, flushed.
+
+    The flush is the reason this exists rather than a bare print. Almost
+    every interesting run of this installer happens over SSH with stdout
+    on a pipe, where Python buffers in blocks, so a `docker compose up`
+    that takes ninety seconds would print nothing and then everything.
+    Worse, an interleaved traceback or a subprocess's own output would
+    land ahead of the lines explaining what was being attempted.
+    """
     print(message, flush=True)
 
 
@@ -358,6 +367,12 @@ class Preflight:
         self._registry = registry
 
     def registry(self):
+        """The release registry client, built on first use.
+
+        Lazily, for the reason __init__ gives: nothing that a unit test
+        reaches ever asks for one, so the suite stays offline by
+        construction rather than by each test remembering to inject a fake.
+        """
         if self._registry is None:
             self._registry = Registry(RELEASE_REGISTRY, RELEASE_REPOSITORY)
         return self._registry
@@ -377,6 +392,16 @@ class Preflight:
         say(f"  !!   {text}")
 
     def check_all(self) -> None:
+        """Every check, in the one order that reads correctly on a bad host.
+
+        The order is the contract, not a listing. Cheapest and most
+        fundamental first, so somebody on an unsupported architecture hears
+        that instead of hearing about a port; anything that reaches the
+        registry last, so a machine that was never going to work does not
+        wait on a registry timeout to find out; and the release identity
+        before the pull, so an operator sees which reference is about to
+        arrive before a multi-gigabyte download rather than after it.
+        """
         self.check_python()
         self.check_arch()
         self.check_docker()
@@ -406,6 +431,15 @@ class Preflight:
         self.note(f"python {sys.version.split()[0]}")
 
     def check_arch(self) -> None:
+        """Does a release image exist for this machine at all?
+
+        First of the real checks, because it is the only refusal in this
+        file that no flag and no amount of fixing the host can get past. The
+        remedy says so in as many words: building for another architecture
+        is a project decision, and offering an override here would produce
+        an install that pulls, starts and immediately dies on an exec format
+        error.
+        """
         machine = os.uname().machine
         arch = SUPPORTED_ARCH.get(machine)
         if arch is None:
@@ -419,6 +453,16 @@ class Preflight:
         self.note(f"architecture {machine} maps to the released {arch}")
 
     def check_docker(self) -> None:
+        """Is there a Docker daemon, and can THIS account reach it?
+
+        Two questions, deliberately, because they have different remedies
+        and the second is by far the more common on a NAS: the CLI is
+        installed, the socket is there, and the account is not in the
+        `docker` group. A single "docker failed" sends somebody to reinstall
+        Docker over a group membership, so a permission-denied stderr gets
+        its own hint, and that hint says the installer will not reach for
+        sudo, since it has no way to know sudo is allowed here.
+        """
         if shutil.which("docker") is None:
             raise Refusal(
                 EXIT_PREREQ_DOCKER,
@@ -442,6 +486,15 @@ class Preflight:
         self.note(f"docker server {proc.stdout.strip()} is reachable as uid {os.getuid()}")
 
     def check_compose(self) -> None:
+        """Is `docker compose` there, and is it v2?
+
+        The version floor is not caution. This deployment starts the Web UI
+        behind `depends_on: condition: service_healthy`, which v1 parses and
+        ignores, so on v1 the two containers race and the failure shows up
+        as an intermittently blank page rather than as anything naming
+        Compose. Both refusals say that, because "upgrade Compose" without
+        the reason invites someone to work around it.
+        """
         proc = run(["docker", "compose", "version", "--short"], check=False, timeout=30)
         if proc.returncode != 0:
             raise Refusal(
@@ -676,6 +729,19 @@ class Preflight:
         )
 
     def _port_is_ours(self, port: int) -> bool:
+        """Is the thing already holding this port this project's own stack?
+
+        Without this, every re-run of a working install refuses on its own
+        Web UI. The three published-port shapes below are not defensive
+        padding: `docker compose ps --format json` has emitted an object per
+        line, a JSON array, and differing Publishers spellings across
+        versions, and this has to answer on whichever one the host's Compose
+        produces.
+
+        False is the safe answer for anything unrecognised, since it turns
+        into a refusal that names the port and the flag rather than into an
+        install that publishes over something else.
+        """
         proc = run(
             ["docker", "compose", "-p", self.args.project, "ps", "--format", "json"],
             check=False,
@@ -713,6 +779,15 @@ class Preflight:
         return False
 
     def check_space(self) -> None:
+        """Is there room for a first backup cycle to finish?
+
+        Measured on the filesystem holding --backup-dir, walking up to the
+        nearest existing ancestor because the directory itself usually does
+        not exist yet on a fresh install. Refusing early is the point: a
+        disk that fills partway through a transfer leaves a partial artifact
+        and a catalog entry describing it, which is a worse state than never
+        having started.
+        """
         target = self.args.host_dirs["--backup-dir"]
         probe = target
         while not probe.exists() and probe != probe.parent:
@@ -979,6 +1054,16 @@ def render_image_override(args) -> str:
 
 
 def compose_argv(args):
+    """The one `docker compose` invocation every command in this file uses.
+
+    Built in a single place because the arguments are not a convenience:
+    the project name decides which containers Compose considers ours,
+    and the two -f files are the canonical definition plus the image
+    override, in that order, which is what pins the deployment to a
+    reference instead of a build. A caller that assembled its own would
+    sooner or later leave one of them out and operate on a different
+    stack than the one it reported on.
+    """
     return [
         "docker", "compose",
         "-p", args.project,
@@ -2481,6 +2566,13 @@ def embedded_compose_bytes() -> bytes:
 
 
 def embedded_compose_digest() -> str:
+    """The digest of the definition this installer carries.
+
+    It is recomputed from the embedded bytes on every call rather than
+    stored beside them, so a hand-edited EMBEDDED_COMPOSE_YAML changes
+    the answer. A digest kept as a second constant would agree with
+    whatever was pasted over it.
+    """
     return hashlib.sha256(embedded_compose_bytes()).hexdigest()
 
 
@@ -2665,6 +2757,15 @@ def note_replaced_compose(dest: Path, incoming: bytes) -> None:
 
 
 def stage_payload(args) -> None:
+    """Put the deployment on disk: directories, the runtime definition, the
+    image override, and the .env that points at this host's paths.
+
+    Everything here is rewritten on every run, which is why the compose
+    file is copied and never edited, and why an operator's edit to the
+    staged copy gets an explicit notice rather than being silently
+    overwritten. The per-host settings live in .env precisely so that
+    nothing an operator needs to change is in a file this function owns.
+    """
     # make_secure_dir, not a bare mkdir. host_dirs carries ssh_keys, and
     # the engine walks that directory's whole ancestry before it will use
     # the key: a plain mkdir here inherits the umask, which is how the
@@ -2770,6 +2871,15 @@ def probe_web_ui(args, timeout: int):
 
 
 def cmd_preflight(args) -> int:
+    """Everything install would check, and nothing it would create.
+
+    Worth having as its own command because the checks are the part an
+    operator can act on before committing to anything, and worth being a
+    real dry run rather than an approximation: it adopts the installed
+    credentials first so it reports on the paths install would actually
+    use, not on the computed defaults, which are the same only on a host
+    where nothing is installed yet.
+    """
     # preflight is a dry run of install, so it has to be looking at the
     # same paths install would. Without this it reports on the computed
     # defaults while install runs on whatever the .env names, and the two
@@ -2967,6 +3077,20 @@ def prepare_for_mode(args, mode, *, installed):
 
 
 def cmd_install(args) -> int:
+    """Install, upgrade or factory-reset the deployment, then prove it works.
+
+    The ordering at the top is the part worth reading. Credentials are
+    adopted before anything looks at what is installed, because the step
+    that creates a keypair runs before detection and a check bolted on
+    afterwards would be refusing over a key it had just generated.
+    Credentials are created before Preflight, because Preflight
+    validates them and a fresh host has none, so validating first would
+    refuse exactly the no-argument install this is meant to make easy.
+    And the layout is checked before any decision, because every
+    decision after it is about paths this run may not be the authority
+    on: a mismatch there means the archive captures nothing and the
+    stack comes back up pointed at empty directories.
+    """
     # Read here rather than waiting for detect_existing, and the ordering
     # is the whole fix. ensure_credentials CREATES a keypair when the
     # defaults point at nothing, and it runs before anything has looked at
@@ -3267,6 +3391,15 @@ class Sudo:
         return self._passwordless
 
     def classify(self, stderr: str) -> int:
+        """Which sudo failure this was, from what sudo said.
+
+        Text matching, because sudo's exit code is 1 for all of them and the
+        three cases need three different remedies: no terminal to type into,
+        this account is not permitted, and the password was wrong. Several
+        wordings per case, since sudo picks between them by version and by
+        how it was invoked. Anything unrecognised falls through to a generic
+        runtime failure rather than being asserted as one of the three.
+        """
         low = (stderr or "").lower()
         # Three wordings for the same problem, and sudo picks between them
         # by version and by how it was invoked. The one this was first seen
@@ -3374,6 +3507,14 @@ class Ruleset:
             }
 
     def drops(self):
+        """Only the DROP rules, keyed by chain and rule number.
+
+        The diagnosis is a before-and-after counter comparison across
+        traffic that is known to fail, and a rule that does not drop cannot
+        be the one eating it. Narrowing here rather than at the comparison
+        keeps the "which counter moved" step reading as the one question it
+        is asking.
+        """
         return {k: v for k, v in self.rules.items() if v["target"] == "DROP"}
 
 
@@ -3543,6 +3684,17 @@ class BridgeDoctor:
         return Ruleset(proc.stdout)
 
     def _nat_dump(self):
+        """The NAT table, read-only, so "Docker's chains are intact" is an
+        answer about both tables Docker installs into.
+
+        The filter table was the only one being read, while the message
+        derived from it claimed the whole ruleset was intact, so a host
+        whose nat chains had been flushed was told its chains were fine.
+        It goes through sudo like every other iptables read, because a
+        non-root account cannot list the tables at all, and the purpose
+        string says read-only so the command list an operator is asked to
+        approve reads as what it is.
+        """
         script = f"{self.iptables} -w 5 -t nat -L -n -v --line-numbers\n"
         proc = self.sudo.run_script(script, purpose="Read the NAT table (read-only)")
         return Ruleset(proc.stdout)
@@ -3572,6 +3724,14 @@ class BridgeDoctor:
         return result
 
     def _gateway_of(self, network: str) -> str:
+        """The bridge gateway address Docker gave this network.
+
+        Asked of Docker rather than assumed, because a host with several
+        bridge networks does not put them all on 172.17.0.0/16 and the probe
+        below has to ping the gateway of the network it actually joined. The
+        default is the stock docker0 address, which is the right guess for
+        the only case where the query can come back empty.
+        """
         proc = run(["docker", "network", "inspect", network,
                     "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
                    check=False, timeout=60)
@@ -3579,6 +3739,14 @@ class BridgeDoctor:
         return gateway or "172.17.0.1"
 
     def ensure_probe_image(self) -> None:
+        """Make sure there is an image to run the probe in, or refuse saying so.
+
+        Inspect before pull, so a host that already has it stays offline and
+        a host without a registry route fails here with a remedy rather than
+        inside the probe with a container error. The remedy names both ways
+        out, since needing a shell, ping and nc is a real requirement and
+        some hosts genuinely have no image that satisfies it.
+        """
         proc = run(["docker", "image", "inspect", self.args.probe_image], check=False, timeout=60)
         if proc.returncode == 0:
             return
@@ -3663,6 +3831,15 @@ class BridgeDoctor:
         return "\n".join(lines) + "\n"
 
     def delete_script(self) -> str:
+        """Remove exactly the rules this installer inserted, and nothing else.
+
+        Every line checks with -C before deleting with -D and ends in
+        `|| true`, so a rule that is already gone is not an error: the undo
+        has to succeed on a half-repaired host, and on a host that rebooted
+        since the insert, or it is an undo people stop trusting. The rules
+        are named from the same rule_specs() the insert uses, which is what
+        keeps the two from drifting into deleting something else.
+        """
         lines = []
         for chain, spec in self.rule_specs():
             tail = " ".join(spec)
@@ -3734,6 +3911,14 @@ class BridgeDoctor:
     REASSERT_INTERVAL = "2min"
 
     def unit_service_text(self) -> str:
+        """The systemd unit that re-asserts the rules, as text.
+
+        Rendered here rather than shipped as a file because the rule set it
+        asserts is computed per host, and a unit that named rules the
+        installer did not insert would be re-asserting somebody else's
+        firewall. The comments inside the unit are for whoever opens it on
+        the host, who will not have this file.
+        """
         lines = [
             "[Unit]",
             "Description=rclone-manager: re-assert this deployment's own Docker bridge firewall rules",
@@ -3779,6 +3964,13 @@ class BridgeDoctor:
         return "\n".join(lines)
 
     def unit_timer_text(self) -> str:
+        """The timer behind that unit, as text.
+
+        Two triggers, and they cover different failures: OnBootSec is the
+        safety net for a boot where the unit's own ordering was not enough,
+        and OnUnitActiveSec covers the host firewall being rewritten while
+        the machine is up, which is the case that has no event to hang off.
+        """
         return "\n".join([
             "[Unit]",
             "Description=rclone-manager: periodically re-assert the Docker bridge firewall rules",
@@ -3835,10 +4027,29 @@ class BridgeDoctor:
         )
 
     def restart_docker_script(self) -> str:
+        """Restart the Docker daemon, as a script for the one sudo call.
+
+        The least invasive correction the repair has, and the first one it
+        tries, but only when Docker's own chains are missing: a restart
+        makes dockerd reinstall them, and it can do nothing at all when
+        they are already there. It stays a script of its own because it is
+        approved on its own, and because the blast radius is every
+        container on the host rather than only this project's.
+        """
         systemctl = find_tool("systemctl") or "/bin/systemctl"
         return f"{systemctl} restart docker\n"
 
 def report_findings(doctor, before, result, moved) -> None:
+    """Print what was measured, not what was concluded.
+
+    An operator reading this is about to be asked for a sudo password,
+    so what they get is the probe result, the chains that exist, the
+    chain policies, and the specific rule whose counter moved while the
+    failing traffic was generated. "No DROP rule's counter moved" is
+    printed as its own finding rather than omitted, because it is the
+    answer that says this diagnosis did not find the cause and the
+    repair below is not aimed at anything.
+    """
     say("")
     say("==> What a bridged container can do")
     say(f"     reach its gateway {result['gateway_ip']}: {'yes' if result['gateway'] else 'NO'}")
@@ -4104,11 +4315,25 @@ def install_persistence(doctor, args) -> None:
 
 
 def cmd_network_doctor(args) -> int:
+    """Run the bridge diagnosis on its own, outside an install.
+
+    It exists because the repair has to be runnable after the fact: the
+    rules install inserts are lost on a reboot and on a host firewall
+    rewriting its own set, and the containers come back either way, so
+    the symptom returns with nothing to point at it.
+    """
     diagnose_and_fix(args, args.probe_network)
     return EXIT_OK
 
 
 def cmd_network_undo(args) -> int:
+    """Remove everything the network repair added, and only that.
+
+    Reversibility is what makes the repair defensible: it escalates to
+    root and touches a firewall on a machine reachable only through the
+    SSH session running it. Every rule it inserts carries a tag, so
+    this can delete exactly those and never flush a chain.
+    """
     doctor = BridgeDoctor(args)
     if doctor.iptables is None:
         raise Refusal(EXIT_NETWORK_UNDIAGNOSED,
@@ -4126,6 +4351,15 @@ def cmd_network_undo(args) -> int:
 
 
 def cmd_status(args) -> int:
+    """What is installed here, what is running, and can it still talk.
+
+    The network part is not decoration on a status command. The rules
+    install may have inserted do not survive a reboot, the containers
+    do, and Compose reports a perfectly healthy stack either way, so
+    without asking, the one failure that makes the product useless is
+    invisible. It asks with no root and no password, which is why it can
+    be part of an ordinary status run at all.
+    """
     payload, containers, _env = detect_existing(args)
     say(f"payload at {args.prefix}: {'present' if payload else 'absent'}")
     if not containers:
@@ -4229,6 +4463,14 @@ def cmd_uninstall(args) -> int:
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Both argparse formatters at once, because both are load-bearing.
+
+    The defaults matter: almost every path this installer uses has one,
+    and an operator deciding whether to pass --prefix needs to see where
+    it would otherwise land. The raw description matters too, since the
+    subcommand epilogs are laid out by hand and argparse's rewrapping
+    turns them into a paragraph.
+    """
     pass
 
 
@@ -4370,6 +4612,15 @@ def _add_probe_flags(sp: argparse.ArgumentParser) -> None:
 
 
 def _add_fix_network_flag(sp: argparse.ArgumentParser, *, default: str, why_this_default: str) -> None:
+    """Add --fix-network to one subcommand, with that subcommand's default.
+
+    The default is a parameter rather than a constant because the right
+    answer genuinely differs: repairing during an install is what makes
+    the install work, and repairing during a status check would be a
+    read-only command quietly changing a firewall. why_this_default is
+    appended to the help so the difference is visible from --help
+    instead of only from this file.
+    """
     net = sp.add_argument_group("bridge networking (issue #271)")
     net.add_argument("--fix-network", choices=["auto", "persist", "diagnose", "never"], default=default,
                      help="auto diagnoses and repairs Docker bridge networking when a bridged container "
@@ -4423,6 +4674,13 @@ class _IfInstalledRemoved(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Every subcommand and every flag, with the help text as the spec.
+
+    The help strings here are long on purpose. This is a single file an
+    operator copies onto a NAS, so `--help` is the documentation that
+    arrives with it, and a flag whose help says only what it sets is one
+    somebody has to come back to this source to understand.
+    """
     # No repo_root here any more. --compose-file used to default to
     # <repo>/container/compose.yaml, computed as parents[2] of this file,
     # which raises IndexError outright for a copy of this script sitting
@@ -4683,6 +4941,14 @@ def resolve(args):
 
 
 def main(argv) -> int:
+    """Parse, dispatch, and turn a Refusal into a message and an exit code.
+
+    Every refusal in this file arrives here, which is what lets the exit
+    codes be a real contract: one place maps a Refusal to its code, and
+    the message and remedy are printed as two separate paragraphs
+    because they answer different questions and a wrapper script only
+    ever reads the code.
+    """
     handlers = {
         "preflight": cmd_preflight,
         "install": cmd_install,
