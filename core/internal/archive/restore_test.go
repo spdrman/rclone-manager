@@ -300,26 +300,22 @@ func TestASecondRestoreOfAnObjectAlreadyRestoringIsRefused(t *testing.T) {
 // idempotency key exists for: the same logical request arriving twice
 // finds the original row and initiates nothing.
 //
-// # What the line in the middle is hiding, which is a real gap
+// # What this test used to hide
 //
-// The double is told to forget the restore it just started, and that line
-// is doing far more work than it looks. A real provider does not forget:
-// asking it to restore an object is precisely what makes it report one in
-// progress, which is what the double models everywhere else. Take the line
-// out and this test fails, because Submit asks the provider before it
-// resolves the idempotency key, so the replay is turned away with
-// ErrAlreadyRestoring instead of being handed back the row it already has.
+// It used to set store.restore = nil between the two submissions, under a
+// comment saying it was making the provider forget. That one line was the
+// whole test. A real provider does not forget: asking it to restore an
+// object is precisely what makes it report one in progress, which is what
+// this double models everywhere else, and what it models here now. With
+// the line gone, the replay reached the ErrAlreadyRestoring check and was
+// turned away as a conflict with itself, which is #490.
 //
-// That is a disagreement between two documented promises rather than a
-// quirk of the double. Request.IdempotencyKey says a retried submission
-// finds the original row, and service.RestorePlacementRequest repeats that
-// to the operator-facing caller; ErrAlreadyRestoring says a second restore
-// of an object already restoring is refused. Both are reasonable, and once
-// a first submission has actually reached the provider they cannot both
-// hold. Settling it means resolving the key before asking the provider,
-// which needs a lookup by idempotency key that the Journal interface here
-// does not have, so it is a change to make deliberately rather than in
-// passing.
+// So the double is left honest, and the two readings below are what make
+// that non-vacuous: the provider really is reporting a restore in progress
+// when the replay arrives, and it was still asked for exactly one. Put the
+// provider check back ahead of the key resolution in Submit and this goes
+// red on the second submission, which is the regression it exists to
+// catch.
 func TestReplayingAnIdempotencyKeyStartsNothingNew(t *testing.T) {
 	store := &fakeMedium{}
 	r, _ := newTestRestorer(t, store)
@@ -328,10 +324,14 @@ func TestReplayingAnIdempotencyKeyStartsNothingNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Submit: %v", err)
 	}
-	// Make the provider forget the restore it just started. See this
-	// test's own doc comment: this line is what keeps the replay reaching
-	// the idempotency check at all.
-	store.restore = nil
+
+	// The provider now reports the restore it was just asked for, exactly
+	// as a real one does. Nothing is reset. Without this reading the test
+	// would still pass against a double that had quietly forgotten, which
+	// is the state it used to be arranged into on purpose.
+	if store.restore == nil || !store.restore.InProgress {
+		t.Fatal("the double is not reporting the restore it was just asked for, so the replay below never reaches the check this test is about")
+	}
 
 	second, err := r.Submit(context.Background(), restoreRequest())
 	if err != nil {

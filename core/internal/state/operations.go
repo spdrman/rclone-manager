@@ -238,6 +238,33 @@ func (j *Journal) GetOperation(ctx context.Context, operationID string) (Operati
 	return getOperationByID(ctx, j.db, operationID)
 }
 
+// GetOperationByIdempotencyKey returns the row an earlier call created
+// under key, or ErrOperationNotFound when the key has never been used.
+//
+// It exists for a caller that has to know whether a request already landed
+// BEFORE it does anything irreversible about it, which CreateOperation
+// cannot answer because answering it is the same call as writing the row.
+// internal/archive is the case that forced it: a restore costs money at
+// the provider, so it has to ask "have I already been given this exact
+// request" before it asks the provider anything, and yet a request it goes
+// on to refuse must leave no row behind. Those two are only compatible if
+// the key can be resolved by a read.
+//
+// It deliberately does not take the rest of the request and does not
+// enforce the actor/action/configuration match CreateOperation makes on a
+// replay. This is a lookup, not an admission decision, and a caller that
+// short-circuits on what it finds owes that check itself; archive's
+// Restorer makes it, in those words, and its own suite plants a violation
+// against it. Folding the check in here would make the read unusable for
+// anything else and would put the refusal two packages away from the
+// caller that has to explain it.
+func (j *Journal) GetOperationByIdempotencyKey(ctx context.Context, key string) (Operation, error) {
+	if key == "" {
+		return Operation{}, fmt.Errorf("state: looking an operation up needs a non-empty IdempotencyKey")
+	}
+	return getOperationByIdempotencyKey(ctx, j.db, key)
+}
+
 // FailInterruptedOperations transitions every operation still at queued or
 // running to failed, recording finishedAt and reason, EXCEPT those whose
 // action appears in exceptActions. This is the startup
