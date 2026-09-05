@@ -631,6 +631,15 @@ func (l *guardedLocal) openCount() int {
 
 // --- the fixture -------------------------------------------------------
 
+// fixture is the whole world one engine test runs in, already wired.
+//
+// The wiring is the point rather than the convenience. Every seam the
+// engine can act through is a guarded wrapper: the journal, the medium
+// store and the local store all report to the same guard, so there is no
+// way to end up driving an engine whose invariant nothing is watching. A
+// test that assembled a placement.Engine of its own would be testing a
+// different engine from the one every other test in this package is
+// about.
 type fixture struct {
 	t        *testing.T
 	ctx      context.Context
@@ -680,6 +689,19 @@ type fixtureOpts struct {
 	clockStep time.Duration
 }
 
+// newFixture builds that world: a real SQLite journal with a real artifact
+// seeded into it, real bytes in a real file under a temp backup root, a
+// medium store double, and an engine wired to all of them through the
+// guard.
+//
+// The clock is a function that advances on every reading rather than a
+// fixed instant, and that matters more than it looks. It gives every
+// verification result, phase write and placement row in a run a distinct
+// and ordered timestamp, so a test asserting one thing happened before
+// another has something to assert against. It is also the only way a test
+// can outrun the pre-delete proof's validity window, which is a bound on
+// real elapsed time that no test can afford to wait out; see
+// fixtureOpts.clockStep.
 func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 	t.Helper()
 	ctx := context.Background()
