@@ -329,9 +329,26 @@ func describePlacements(ps []state.Placement) string {
 // isCancelledErr reports whether err is the outer context giving up, which
 // is never a verdict about an artifact.
 //
-// It mirrors internal/revalidate's isCancelled for the same reason that
-// package gives for keeping its own: it is three lines, and the packages
-// that need it do not otherwise depend on one another.
+// It mirrors internal/revalidate's isCancelled, including its ORDERING,
+// which is the part that matters and the part I got wrong first.
+// transport.Error keeps its cause reachable through Unwrap, so an error
+// already classified as something other than Cancelled can still answer
+// errors.Is(err, context.DeadlineExceeded): a connect timeout rclone
+// imposed on itself is exactly that shape (issue #388). Asking the context
+// first reads one slow bucket as the operator having cancelled the whole
+// command, and abandons a check that another copy would have carried. So
+// the transport's own classification is asked first, and the context
+// question only where nothing classified the error at all.
+//
+// This package keeps its own copy for the reason internal/revalidate gives
+// for keeping that one: it is a handful of lines, and neither package
+// otherwise depends on the other.
 func isCancelledErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if category, ok := transport.CategoryOf(err); ok {
+		return category == transport.Cancelled
+	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

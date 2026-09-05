@@ -54,6 +54,18 @@ type validateMedium struct {
 	// copies where one endpoint answers and the other does not.
 	downFor map[string]bool
 
+	// timeoutFor is issue #388's shape for one medium id: a transport
+	// error classified as Transient whose CAUSE is still reachable as
+	// context.DeadlineExceeded, which is what a connect timeout rclone
+	// imposed on itself looks like. It is not the caller giving up, and a
+	// predicate that reads it as one abandons a pass over one slow bucket.
+	timeoutFor map[string]bool
+
+	// cancelFor is a genuine cancellation for one medium id: a transport
+	// error the adapter itself classified Cancelled. It is the control
+	// for timeoutFor, and it must stop the whole check.
+	cancelFor map[string]bool
+
 	// attests makes ObjectChecksum answer with a real SHA-256 of the
 	// stored bytes. It is false by default because that is what rclone
 	// v1.75.0's s3 backend does: Fs.Hashes() returns only MD5, so no s3
@@ -67,7 +79,7 @@ type validateMedium struct {
 }
 
 func newValidateMedium() *validateMedium {
-	return &validateMedium{objects: map[string][]byte{}, downFor: map[string]bool{}}
+	return &validateMedium{objects: map[string][]byte{}, downFor: map[string]bool{}, timeoutFor: map[string]bool{}, cancelFor: map[string]bool{}}
 }
 
 func (m *validateMedium) put(key, content string) {
@@ -83,12 +95,36 @@ func (m *validateMedium) unreachable() *transport.Error {
 	}
 }
 
+// selfImposedTimeout is the error rclone produces when its own connect
+// deadline expires: classified Transient, with context.DeadlineExceeded
+// still reachable underneath (issue #388).
+func (m *validateMedium) selfImposedTimeout() *transport.Error {
+	return &transport.Error{
+		Category: transport.Transient, Op: "stat",
+		Cause: fmt.Errorf("connect timeout: %w", context.DeadlineExceeded),
+	}
+}
+
+// failFor is whatever this fake is meant to answer for medium id, or nil
+// when it should answer honestly.
+func (m *validateMedium) failFor(id string) error {
+	switch {
+	case m.down || m.downFor[id]:
+		return m.unreachable()
+	case m.timeoutFor[id]:
+		return m.selfImposedTimeout()
+	case m.cancelFor[id]:
+		return &transport.Error{Category: transport.Cancelled, Op: "stat", Cause: context.Canceled}
+	}
+	return nil
+}
+
 func (m *validateMedium) StatObject(_ context.Context, med transport.Medium, key string) (transport.ObjectInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stats++
-	if m.down || m.downFor[med.ID] {
-		return transport.ObjectInfo{}, m.unreachable()
+	if err := m.failFor(med.ID); err != nil {
+		return transport.ObjectInfo{}, err
 	}
 	b, ok := m.objects[key]
 	if !ok {
@@ -101,8 +137,8 @@ func (m *validateMedium) OpenObject(_ context.Context, med transport.Medium, key
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.opens++
-	if m.down || m.downFor[med.ID] {
-		return nil, m.unreachable()
+	if err := m.failFor(med.ID); err != nil {
+		return nil, err
 	}
 	b, ok := m.objects[key]
 	if !ok {
@@ -115,8 +151,8 @@ func (m *validateMedium) ObjectChecksum(_ context.Context, med transport.Medium,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.checksums++
-	if m.down || m.downFor[med.ID] {
-		return transport.ChecksumAttestation{}, m.unreachable()
+	if err := m.failFor(med.ID); err != nil {
+		return transport.ChecksumAttestation{}, err
 	}
 	if !m.attests {
 		return transport.ChecksumAttestation{}, &transport.Error{
@@ -147,8 +183,8 @@ func (m *validateMedium) ListObjects(context.Context, transport.Medium, string) 
 func (m *validateMedium) RestoreStatus(_ context.Context, med transport.Medium, key string) (*transport.RestoreState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.down || m.downFor[med.ID] {
-		return nil, m.unreachable()
+	if err := m.failFor(med.ID); err != nil {
+		return nil, err
 	}
 	if _, ok := m.objects[key]; !ok {
 		return nil, &transport.Error{Category: transport.NotFound, Op: "restore-status", Cause: errors.New("no such key")}
@@ -799,4 +835,58 @@ func TestValidateArtifact_EveryCopyAskedAndEveryCopyFailedDoesQuarantine(t *test
 	if result.NewState != lifecycle.QuarantinedLost {
 		t.Errorf("NewState = %q, want %q", result.NewState, lifecycle.QuarantinedLost)
 	}
+}
+
+// TestValidateArtifact_AConnectTimeoutIsNotTheOperatorGivingUp is issue
+// #388's shape reaching this code.
+//
+// rclone imposes its own connect deadline and reports the result as a
+// Transient transport error whose cause is still reachable as
+// context.DeadlineExceeded. A cancellation predicate that asks
+// errors.Is(err, context.DeadlineExceeded) before it asks the transport's
+// own classification reads that as the caller having given up, and
+// abandons the whole check over one slow bucket.
+//
+// internal/revalidate's isCancelled documents that ordering and the reason
+// for it; this asserts that this package's twin agrees. One bucket answers
+// and its copy is there, so the artifact passes, and the timing-out copy
+// is named rather than allowed to end the pass.
+func TestValidateArtifact_AConnectTimeoutIsNotTheOperatorGivingUp(t *testing.T) {
+	f := newMovedFixture(t)
+	ctx := context.Background()
+	addSecondMediumPlacement(t, f, "warm_offsite", true)
+	f.store.timeoutFor["warm_offsite"] = true
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("ValidateArtifact: %v; a connect timeout against one of two buckets is not the caller cancelling the check", err)
+	}
+	if !result.Passed {
+		t.Fatalf("result = %+v, want Passed: the copy on %s answered and is there", result, validateMediumID)
+	}
+	if !strings.Contains(result.Reason, "warm_offsite") {
+		t.Errorf("Reason = %q, want it to name the copy that timed out", result.Reason)
+	}
+}
+
+// TestValidateArtifact_ARealCancellationStopsTheWholeCheck is the control
+// for the test above, and without it that one is satisfied by a build that
+// never recognises a cancellation at all.
+//
+// The first copy answers and passes. The second is cancelled, which the
+// adapter classifies as such rather than leaving to be inferred, and a
+// pass reported on the strength of whichever copy happened to be asked
+// before the operator pressed Ctrl-C is a pass about a check that did not
+// finish. So the whole call is an error.
+func TestValidateArtifact_ARealCancellationStopsTheWholeCheck(t *testing.T) {
+	f := newMovedFixture(t)
+	ctx := context.Background()
+	addSecondMediumPlacement(t, f, "warm_offsite", true)
+	f.store.cancelFor["warm_offsite"] = true
+
+	result, err := f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
+	if err == nil {
+		t.Fatalf("ValidateArtifact returned %+v for a check that was cancelled partway through; want an error", result)
+	}
+	mustStayComplete(t, f)
 }

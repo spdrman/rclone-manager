@@ -194,14 +194,31 @@ func VerifyWithAccess(
 }
 
 // AutomaticClass is the strongest class a scheduled, unattended pass may
-// run against a copy in access state s, and it is capped a rung below
-// Ceiling for one reason: money.
+// run against a copy in access state s, and it is capped below Ceiling for
+// one reason: money.
 //
 // FR-31 makes anything that costs egress operator-initiated, and
 // Class.CostsEgress is the mechanism rather than the promise. This
 // function reads it rather than hard-coding "existence", so raising the
 // automatic ceiling means changing the class whose CostsEgress is
 // consulted, not editing a constant and finding out from a bill.
+//
+// # It lands two rungs down, not one, and that is not this rule's doing
+//
+// Ceiling(Immediate) is Content, which costs egress, so this answers
+// Existence and steps straight past Attested, which costs none. The cap
+// written here is not what skips that rung: nothing on the ladder sits
+// between "costs egress" and "does not", so a rule stated in CostsEgress
+// alone lands on the weakest free class rather than the strongest. FR-31
+// makes attested operator-initiated too, so the answer happens to be the
+// one FR-31 wants, and it is worth saying that it is a coincidence of
+// where the rungs fall rather than something this function decided.
+//
+// The operator-initiated door does make the distinction, in its own code
+// where the choice is visible: internal/app's checkMediumCopies (issue
+// #435) attempts Attested first and steps down to Existence explicitly,
+// naming the step-down, because measured against rclone v1.75.0 no s3
+// medium can attest at all.
 //
 // An archive class makes that worse and not better. A restore is billed
 // on top of the egress, and it is billed for a window measured in days, so
