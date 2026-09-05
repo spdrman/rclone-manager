@@ -1,3 +1,37 @@
+// This file is the durable half of the operation model (§14): a caller
+// asks for work, the request is written down before anything runs, and
+// the answer to "what happened to it" outlives the request, the
+// connection and the process.
+//
+// Four rules do most of the arguing below, and they are easier to see
+// together than one method at a time.
+//
+// The row is persisted and returned before execution starts, so nothing a
+// caller does next (closing the tab, a request timeout, a proxy giving
+// up) can un-ask for the work or lose the receipt for it.
+//
+// Execution runs on this service's own lifetime rather than the caller's.
+// An HTTP request's context must not own a backup cycle, and
+// context.Background() would go too far the other way and detach the
+// cycle from process shutdown as well, leaving Close with nothing to ask.
+//
+// A second concurrent run is refused outright, not queued. Queueing looks
+// friendlier and is worse: it accepts work whose configuration revision
+// was checked against a picture of the world that will have moved on by
+// the time it runs, and it hides a wedged cycle behind a growing backlog
+// that all still has to happen.
+//
+// Every optional here is a pointer, and none of them is ever rendered as
+// a zero. Absent and empty are different answers about somebody's backup:
+// a cycle that has not finished has not walked nothing, and an operation
+// this process cannot see inside is not an operation where nothing is
+// happening.
+//
+// Finally, errors from below are classified before they cross, never
+// forwarded. An unclassified failure could carry a state-layer sentence
+// naming SQLite internals, and this boundary's contract has to hold on
+// the failure paths too, which is where a leak is least likely to be
+// noticed and most likely to be logged.
 package service
 
 import (

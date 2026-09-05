@@ -1,3 +1,26 @@
+// This file is FR-24's health report as anything outside core/ sees it:
+// one call that answers "are my backups healthy", for every configured
+// set, from durable evidence.
+//
+// It is a projection of internal/health rather than a second opinion, and
+// that is the property the whole file exists to hold. `backup-manager
+// status` and the Web UI run the same computation through the same call,
+// because two surfaces that each work health out for themselves will
+// eventually disagree, and the one that disagrees quietly is the one
+// nobody is looking at.
+//
+// The rule running through every field below is that no zero is ever
+// allowed to pass for a reading. internal/health says "not measured" with
+// a nil pointer; a boundary that cannot export its types has to flatten
+// those, and a flattened nil is a zero that looks exactly like a real
+// measurement of nothing. So free space carries its own known flag, an
+// empty storage level is not OK, and each age is readable only next to
+// the count it belongs to. Anywhere that pairing is missing, a full disk
+// and an unreadable mount become the same number.
+//
+// Nothing is cached, on purpose: a cached health verdict is precisely the
+// thing that keeps reporting green after a deployment has stopped backing
+// anything up.
 package service
 
 import (
@@ -261,6 +284,16 @@ func (b *BackupService) Health(ctx context.Context) (HealthReport, error) {
 	return out, nil
 }
 
+// toServiceBackupSetHealth is the one place internal/health's vocabulary
+// and this boundary's meet, and the nil checks at the bottom of it are
+// the load-bearing part.
+//
+// Every one of them turns an optional into a value plus a way to tell
+// that the value means something: a flag, or a count the age travels
+// with. A field added upstream and simply copied gets neither, and a
+// missing reading then arrives at an operator as a confident zero. That
+// is the failure this function is one edit away from at all times, so a
+// new optional needs its companion decided here before it is exported.
 func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 	out := BackupSetHealth{
 		BackupSetID:          bs.Set.String(),

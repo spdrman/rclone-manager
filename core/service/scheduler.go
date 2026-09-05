@@ -1,3 +1,35 @@
+// This file is the unattended driver: the loop that keeps running cycles
+// when nobody is asking it to, for a process that cannot reach the one
+// internal/app already has.
+//
+// cmd/backup-manager's `daemon` gets that loop from
+// internal/app.Service.Daemon directly. The generic Web host cannot, §7.2
+// sees to that, and reimplementing it above this boundary would put the
+// cadence, the single-flight decision and the panic policy in a package
+// that can see none of the state they are about. So the loop lives here,
+// on the inside of the seam, and apps/ drives it with a context and an
+// interval.
+//
+// Nothing in this file queues. A tick that lands while an API-submitted
+// operation holds the single-flight lock is dropped and logged, not
+// buffered, because the work it would have done is the same work the next
+// tick will do: backing up whatever is on disk now is not made more
+// correct by having been asked for twice. Queueing would turn a slow
+// afternoon into a backlog of identical passes that all still have to
+// run.
+//
+// There are two timers here rather than one loop doing two jobs, and the
+// alerting one deliberately does not take the single-flight lock. Its
+// whole reason for existing is the case where a cycle has wedged, so a
+// design where a wedged cycle silences the alerts about wedged cycles
+// would be the one shape guaranteed not to work.
+//
+// Every goroutine started here recovers panics, and that is not defensive
+// habit. This code shares a process with a persistent HTTP server: an
+// unrecovered panic in a scheduled tick takes the API down with it, and a
+// panic that escaped while holding the single-flight lock would leave
+// every future tick and every future operator-submitted run waiting on a
+// lock nothing will ever release.
 package service
 
 import (

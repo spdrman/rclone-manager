@@ -1,3 +1,27 @@
+// This file is the undo for a migration that went wrong: a byte-level
+// copy of a journal's on-disk files taken before §46.1's migration step,
+// and the code that puts it back.
+//
+// Read it as the loaded weapon it is. restore rename-overwrites a live
+// FR-9 journal, which makes it the one routine in this codebase capable
+// of destroying the record of every backup this deployment has ever made.
+// What keeps that safe is not anything in this file, it is startup.go
+// arming it only on a start that is genuinely about to change the schema,
+// and only while holding the journal lock exclusively. Anything that
+// widens when a snapshot is taken widens when the overwrite can fire.
+//
+// A WAL-mode database is three files rather than one, and that is why the
+// snapshot is not a copy of the .db. A process that stopped uncleanly can
+// leave committed rows sitting in the -wal, so capturing only the main
+// file would produce a "restore" that quietly discarded them. The -shm is
+// captured for bookkeeping symmetry and deliberately never written back,
+// for the reason restore's own doc gives.
+//
+// In memory rather than to a second file on disk, because the moment this
+// gets used is a moment something has already failed. A copy on disk
+// would have to be read back on exactly the path that cannot afford a
+// second failure, and a journal of lifecycle rows (not of backup bytes)
+// is small enough that holding it costs nothing worth having.
 package service
 
 import (

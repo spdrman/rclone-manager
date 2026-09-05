@@ -1,3 +1,30 @@
+// This file is the one operation in this package that nothing here
+// executes (EPIC E, FR-34). Everything odd about it follows from that.
+//
+// An operator asks for an archived copy to be made readable again; S3
+// does the work, over hours, entirely indifferent to whether this process
+// is running. So the row records what was ASKED FOR, which never changes,
+// and where it has GOT TO is re-derived from the provider every time
+// somebody looks. Nothing in here ever writes a terminal status, which is
+// also why the startup sweep that fails abandoned operations has to be
+// taught to leave these alone: a restore left running by a dead process
+// was not abandoned, it was simply not finished.
+//
+// The other shaping force is that this one costs money. A retrieval is
+// billed and cannot be taken back, so every refusal happens before
+// anything is written or asked: no row, no provider job, no charge. The
+// configuration revision is checked ahead of even the lookups, because a
+// caller on a stale screen can be naming a medium id that has since been
+// repointed, and a restore against the wrong bucket is not a harmless
+// no-op, it is a bill against somebody else's objects.
+//
+// Nothing here reports a percentage, a finish time or an amount, and
+// there is nowhere to put one. S3 says running or finished and nothing
+// in between, this deployment holds no price list, and a field that
+// existed would eventually be filled with a plausible guess that somebody
+// then budgets against. The published wait for the storage class and the
+// plain statement that a bill exists are facts about the class, and they
+// are the honest substitutes.
 package service
 
 import (
