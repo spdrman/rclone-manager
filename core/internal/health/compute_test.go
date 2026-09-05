@@ -387,3 +387,32 @@ func TestReadOnlyRetainedCountDefaultsZero(t *testing.T) {
 		t.Fatalf("ReadOnlyRetainedCount = %d, want 0", got.ReadOnlyRetainedCount)
 	}
 }
+
+// TestKnownGoodMatchesLifecycleDurableRestorePoints ties this package's own
+// copy of the restore-point set to lifecycle's.
+//
+// The copy is deliberate: this package depends on nothing upstream of it, so
+// it keeps its own map rather than importing one, and compute.go's doc says
+// so. What that costs is exactly what issue #505 was about: two spellings of
+// one set, free to drift, with nothing red when they do. internal/metrics
+// now builds the HELP line for the newest-known-good gauge out of
+// lifecycle.DurableRestorePointNames, so an operator scraping that gauge is
+// reading lifecycle's list to find out what this package counted. That
+// sentence is only honest while the two sets are the same set.
+func TestKnownGoodMatchesLifecycleDurableRestorePoints(t *testing.T) {
+	for _, s := range lifecycle.AllStates {
+		want := lifecycle.IsDurableRestorePoint(s)
+		if got := knownGood[s]; got != want {
+			t.Errorf("knownGood[%s] = %v, want %v (lifecycle.IsDurableRestorePoint says %v). "+
+				"internal/metrics quotes lifecycle's list as the answer to what this map counted, "+
+				"so a state the two disagree about is a HELP line that lies about its own gauge.",
+				s, got, want, want)
+		}
+	}
+
+	for s := range knownGood {
+		if !s.Valid() {
+			t.Errorf("knownGood holds %q, which lifecycle does not define as a state at all", s)
+		}
+	}
+}

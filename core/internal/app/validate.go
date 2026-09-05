@@ -85,8 +85,8 @@ type ValidateResult struct {
 //
 // # Which artifacts this accepts
 //
-// Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or (issue #315)
-// REMOTE_RETAINED: the same "a durable local copy has actually landed" set
+// Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED
+// (issue #315): the same "a durable local copy has actually landed" set
 // internal/health's decideState, internal/retention's gfsIsManagedComplete
 // and internal/revalidate's eligibleStates all already agree on. Anything
 // else (still in flight, or already FAILED/QUARANTINED/QUARANTINED_LOST) is

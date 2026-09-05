@@ -63,14 +63,15 @@ func invalid(reason string) localValidity {
 // the same three checks against the same journal fields here: the file
 // exists where the artifact's own placement says it is, its size matches
 // whichever of the journal's two independent size records was captured,
-// and, when a local hash was
-// recorded at VERIFIED, its content still hashes to that value.
+// and, when a local hash was recorded at VERIFIED, its content still
+// hashes to that value.
 //
 // A missing file counts as invalid, not as a separate "absent" case: by
-// the time an artifact reaches COMMITTED, REMOTE_DELETE_PENDING or
-// COMPLETE, FR-17's table only distinguishes "final" from "invalid final"
-// for these states, with no third option, and a final copy that is not
-// even there any more cannot honestly be called anything but invalid.
+// the time an artifact reaches COMMITTED, REMOTE_DELETE_PENDING, COMPLETE
+// or REMOTE_RETAINED, FR-17's table only distinguishes "final" from
+// "invalid final" for these states, with no third option, and a final copy
+// that is not even there any more cannot honestly be called anything but
+// invalid.
 func checkLocalFinal(rec state.Record) localValidity {
 	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
 	// rather than of rec.LocalPath directly. The two are the same value

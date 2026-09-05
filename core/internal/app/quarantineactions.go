@@ -52,7 +52,8 @@ func unconfiguredSet(set model.BackupSetID) error {
 // set. The two differ in what they are for, and in what they may do:
 //
 //   - ValidateArtifact checks a healthy restore point (COMMITTED,
-//     REMOTE_DELETE_PENDING, COMPLETE) and, on a failure, quarantines it.
+//     REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED) and, on a
+//     failure, quarantines it.
 //     Its whole point is that a bad artifact stops being trusted.
 //
 //   - This checks an artifact that is ALREADY quarantined, and moves it

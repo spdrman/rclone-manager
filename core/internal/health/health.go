@@ -230,10 +230,11 @@ type BackupSetHealth struct {
 	LastCompletedBackupAt *time.Time
 
 	// NewestGoodBackupAt is the newest artifact currently in any
-	// known-good state per FR-19 (COMMITTED, REMOTE_DELETE_PENDING or
-	// COMPLETE): a valid restore point, whether or not its remote source
-	// has been deleted yet. NewestGoodBackupAge is nil exactly when this
-	// is nil.
+	// known-good state per FR-19 (COMMITTED, REMOTE_DELETE_PENDING,
+	// COMPLETE or REMOTE_RETAINED): a valid restore point, whether or not
+	// its remote source has been deleted yet, and whether or not this
+	// manager was ever going to delete it. NewestGoodBackupAge is nil
+	// exactly when this is nil.
 	NewestGoodBackupAt  *time.Time
 	NewestGoodBackupAge *time.Duration
 
