@@ -1,3 +1,28 @@
+// The composed scenario itself: the loop that runs one retention-and-
+// placement cycle the way the daemon will, the stand-ins for the two seams
+// the daemon does not own yet, and the cells that read the result.
+//
+// runPass is the file's centre and the reason the package exists. It calls
+// four pieces of product code in the order the shipped cycle will call them
+// and supplies nothing in between except the call itself, so a failure here
+// is a failure of the product's arithmetic rather than of a fixture's idea
+// of it. Its own comment names the four and says which one is standing in
+// for #239's wiring.
+//
+// The two seams below the divider (scenarioResolver and chainTierGuard) are
+// the only code here that will be deleted when the daemon grows its own.
+// They are written as the derivation the product will make rather than as
+// the shortest thing that works, because both of them answer a question a
+// local copy is deleted against: what class a copy has to reach before it
+// counts, and whether any tier still wants the copy about to be removed.
+// An unrecognised mode is an error in the first and an unprovable verdict
+// is a refusal in the second, for that reason and no other.
+//
+// The cells then read one scenario from several angles rather than seeding
+// one deployment each. Each Test function says what it is for; what they
+// share is that every assertion is made against what the product decided,
+// at a fixed instant, with the invariant watcher attached to every event
+// inside the cycle.
 package conformance_test
 
 import (
