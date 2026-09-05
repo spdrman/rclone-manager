@@ -121,8 +121,9 @@ if [ -n "$only" ]; then
   # git diff still decides what actually changed, so --only narrows the
   # question and never answers it: a path that is named and unchanged is
   # reported as such rather than counted as agreement.
-  changed=$(printf '%s' "$only" | grep -c . >/dev/null; git diff --name-only "$ref" -- $(printf '%s' "$only" | tr '\n' ' '))
   named=$(printf '%s' "$only" | grep -c .)
+  # shellcheck disable=SC2046  # one path per line, and git wants them as separate arguments
+  changed=$(git diff --name-only "$ref" -- $(printf '%s' "$only" | tr '\n' ' '))
   if [ -z "$changed" ]; then
     echo "check-comments-only: none of the $named path(s) named with --only differ from $ref," >&2
     echo "                     so there is nothing here to prove anything about." >&2
