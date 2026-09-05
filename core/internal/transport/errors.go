@@ -103,6 +103,29 @@ func (c Category) Retryable() bool {
 	return c == Transient
 }
 
+// ErrCredentialsUnavailable marks a Configuration failure that happened
+// while OBTAINING a medium's credentials, before anything was sent
+// anywhere (EPIC E, FR-33; issue #443).
+//
+// It exists because the medium preflight has to tell two questions apart
+// that share the Configuration category and cannot otherwise be separated:
+// "this manager could not get hold of the credential this medium declares"
+// and "this manager got the credential and the endpoint says the bucket
+// named here is not there". Both are a person's job to fix and they are
+// different jobs, so an operator has to be told which one.
+//
+// It is a sentinel wrapped into the Cause chain rather than a new
+// Category, and rather than something read off Error.Op, because Op is
+// documented as being for logs and never meant to be parsed back out, and
+// a new Category would have to answer Retryable, halt classification and
+// every switch that already covers the set. errors.Is against this is a
+// structural question with one answer.
+//
+// It never carries the credential, or the name of where the credential
+// came from: it marks the SHAPE of a failure and nothing else, which is
+// the same discipline the adapter that produces it already follows.
+var ErrCredentialsUnavailable = errors.New("the medium's credentials could not be obtained")
+
 // Error is what an adapter returns to lifecycle code once it has classified
 // a failure. Category is the only field lifecycle may branch on. Cause is
 // kept so logs and diagnostics still see the real underlying error, and so

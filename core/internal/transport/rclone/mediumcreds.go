@@ -121,6 +121,24 @@ func (c resolvedCredentials) MarshalJSON() ([]byte, error) { return []byte(`"[RE
 // a Stringer anything.
 func (c resolvedCredentials) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }
 
+// credentialsUnavailable is the one constructor for "this adapter could
+// not obtain the credential this medium declares", so every path that
+// reaches that conclusion carries the same category, the same op AND the
+// same sentinel (transport.ErrCredentialsUnavailable).
+//
+// The sentinel is what lets a caller tell this apart from the other
+// Configuration failure a medium produces, a bucket that is not there,
+// without reading Error.Op or matching on text. See the sentinel's own doc
+// for why it is not a new category.
+//
+// It wraps rather than replaces: cause keeps saying exactly what went
+// wrong, for the log, and this package's own rule about what a cause may
+// say is unchanged (see this file's "What is never echoed").
+func credentialsUnavailable(cause error) error {
+	return transport.NewError(transport.Configuration, "medium_credentials",
+		fmt.Errorf("%w: %w", transport.ErrCredentialsUnavailable, cause))
+}
+
 // mediumAuthOptions returns the rclone s3 options that authenticate medium,
 // resolving whichever of the three credential sources it names.
 //
@@ -146,11 +164,11 @@ func mediumAuthOptions(medium transport.Medium) (configmap.Simple, error) {
 	}
 	switch {
 	case sourceCount == 0:
-		return nil, transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return nil, credentialsUnavailable(fmt.Errorf(
 			"medium %q: exactly one of credentials.file, credentials.env or credentials.command is required; "+
 				"there is no anonymous access and no ambient credential chain reachable through this adapter", medium.ID))
 	case sourceCount > 1:
-		return nil, transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return nil, credentialsUnavailable(fmt.Errorf(
 			"medium %q: exactly one of credentials.file, credentials.env or credentials.command may be set, not more than one", medium.ID))
 	}
 
@@ -203,7 +221,7 @@ func mediumAuthOptions(medium transport.Medium) (configmap.Simple, error) {
 		}
 	}
 	if err != nil {
-		return nil, transport.NewError(transport.Configuration, "medium_credentials", err)
+		return nil, credentialsUnavailable(err)
 	}
 
 	// env_auth stays false here: a static key is configured, and rclone
@@ -236,24 +254,24 @@ func mediumAuthOptions(medium transport.Medium) (configmap.Simple, error) {
 func checkCredentialsFileCustody(mediumID, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q is not accessible: %w", mediumID, path, err))
 	}
 	if info.IsDir() {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q is a directory, not a file", mediumID, path))
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q has permissions %04o, which lets an account other than its owner read it: "+
 				"an S3 credential unlocks every retained artifact on the medium at once; correct it (chmod go-rwx %s)",
 			mediumID, path, mode, path))
 	}
 	if dir, mode, err := firstWritableAncestor(path); err != nil {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: checking the directories containing credentials.file %q: %w", mediumID, path, err))
 	} else if dir != "" {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
 				"directory lets any local actor delete or replace the file regardless of its own mode; "+
 				"correct it (chmod go-w %s) or move the file",
@@ -347,7 +365,7 @@ func refuseAmbientAWSCredentialEnvironment(mediumID string) error {
 	if len(present) == 0 {
 		return nil
 	}
-	return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+	return credentialsUnavailable(fmt.Errorf(
 		"medium %q uses credentials.file, which rclone reads through the AWS credential CHAIN, and this process's environment "+
 			"carries %v, which the chain consults BEFORE the configured file. The backup would run as whichever account those name. "+
 			"Unset them for this process, or switch the medium to credentials.env or credentials.command, which set a static key "+
@@ -417,7 +435,7 @@ func refuseAmbientAWSCredentialEnvironment(mediumID string) error {
 func checkCredentialsFileHasADefaultProfile(mediumID, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q could not be read: %w", mediumID, path, err))
 	}
 	defer f.Close()
@@ -442,17 +460,17 @@ func checkCredentialsFileHasADefaultProfile(mediumID, path string) error {
 		profiles = append(profiles, name)
 	}
 	if err := scanner.Err(); err != nil {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q could not be read as text", mediumID, path))
 	}
 	// The profile NAMES are reported, because a name is not a secret and is
 	// the whole content of the fix. No value ever is.
 	if len(profiles) == 0 {
-		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		return credentialsUnavailable(fmt.Errorf(
 			"medium %q: credentials.file %q has no [profile] header at all, so it must carry a [default] one: "+
 				"there is no profile setting to select any other with", mediumID, path))
 	}
-	return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+	return credentialsUnavailable(fmt.Errorf(
 		"medium %q: credentials.file %q declares %v but no [default] profile. Rename one to [default]: there is no profile "+
 			"setting to select another with, and a file the AWS credential chain cannot resolve does not fail, it falls "+
 			"through to EC2 instance metadata and stalls until the operation times out",
