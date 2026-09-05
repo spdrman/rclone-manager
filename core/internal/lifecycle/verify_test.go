@@ -356,23 +356,39 @@ func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
 
 // --- layer 2: hash verification ---
 
-// TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash asserts on
-// the REQUEST COUNT, not on the verdict.
+// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum
+// is #492's replacement for a test that pinned the opposite.
 //
-// The verdict would be the same either way, so the only observable
-// difference between using the checksum the producer already supplied and
-// asking the backend for one is that the second costs a request per artifact
-// per cycle. That is the behaviour under test, and the count is the only
-// place it shows.
-func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T) {
+// Until #492 this switch had a shortcut: a record carrying
+// state.TransferResult.Checksummed skipped RemoteHash entirely, on the
+// reading that the copy had already compared a hash. That shortcut was
+// dead, because no production copy ever set the field, and it was the
+// unsafe branch to leave lying around, because the comparison it would
+// have trusted is not the one the operator configured. rclone picks the
+// copy-time hash with operations.CommonHash, which is the first type both
+// sides share, and MD5 registers first in rclone's hash package, so on
+// local and on sftp alike the answer is MD5. A `hash: sha256` policy
+// satisfied by an MD5 comparison is exactly the silent downgrade of
+// configured verification FR-13 forbids.
+//
+// So the field is gone from transport.TransferResult and the branch is
+// gone from decide. The journal column survives (it is in shipped,
+// immutable migrations), and this test sets it TRUE on purpose: the point
+// is that a row still claiming a copy-time checksum buys no shortcut. It
+// is watched against the old behaviour, where the disagreeing remote hash
+// below was never requested and the artifact verified clean.
+func TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
 	rec := verifyingRecord(t, path, int64(len(content)))
 	rec.Transfer.Checksummed = true
 	j := newVerifyJournal(rec)
+	// A remote that disagrees. The verdict, not just the request count, is
+	// what makes this test fail against the shortcut: under the old code
+	// this artifact reached VERIFIED with the mismatch never observed.
+	const remote = "0000000000000000000000000000000000000000000000000000000000000000"
 	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
-		t.Fatal("RemoteHash must not be called once the transfer step already recorded a trustworthy checksum")
-		return "", nil
+		return remote, nil
 	}}
 
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
@@ -382,11 +398,11 @@ func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if out.Record.State != string(Verified) {
-		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q: the remote disagreed with the local file and nothing on the record may excuse the manager from noticing", out.Record.State, Quarantined)
 	}
-	if tr.remoteHashCalls != 0 {
-		t.Fatalf("RemoteHash called %d times, want 0", tr.remoteHashCalls)
+	if tr.remoteHashCalls != 1 {
+		t.Fatalf("RemoteHash called %d times, want 1: a configured sha256 policy is answered by asking the backend, never by a flag saying some other hash was compared during the copy", tr.remoteHashCalls)
 	}
 }
 

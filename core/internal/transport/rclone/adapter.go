@@ -480,11 +480,13 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 // splitPath below does that split rather than filepath.Split, deliberately.
 //
 // BytesTransferred is read off the destination object after the copy, so
-// it is what landed rather than what was sent. Checksummed is left false,
-// which transport.TransferResult's own doc explains: operations.Copy does
-// compare a hash when the two sides share one, but it does not report
-// whether it found one, so this cannot honestly claim a comparison
-// happened.
+// it is what landed rather than what was sent, and it is the only thing
+// reported. operations.Copy does compare a hash of its own when the two
+// sides share one, and this deliberately says nothing about that:
+// transport.TransferResult's own doc has the reasoning, but the short
+// version is that operations.CommonHash picks the first type both ends
+// share and that is never the one this boundary speaks, so a claim about
+// it here could only ever be read as more than it is.
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)

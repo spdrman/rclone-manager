@@ -240,7 +240,7 @@ func writingCopy(content []byte) func(context.Context, transport.Source, string,
 		if err := os.WriteFile(localPartialPath, content, 0o600); err != nil {
 			return transport.TransferResult{}, err
 		}
-		return transport.TransferResult{BytesTransferred: int64(len(content)), Checksummed: false}, nil
+		return transport.TransferResult{BytesTransferred: int64(len(content))}, nil
 	}
 }
 

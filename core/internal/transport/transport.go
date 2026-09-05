@@ -137,27 +137,37 @@ type RemoteArtifact struct {
 }
 
 // TransferResult reports what a copy actually did.
+//
+// One field, and the one that is absent is the interesting one. This type
+// used to carry a Checksummed bool saying the copy had compared a hash of
+// its own, which internal/lifecycle/verify.go read as a verification
+// already performed and used to skip its own RemoteHash call. No
+// production copy ever set it, so the shortcut was dead, and #492 removed
+// both rather than wiring it up, because wiring it up honestly is the
+// worse of the two outcomes.
+//
+// rclone's copy does compare a hash, and it picks which one with
+// operations.CommonHash: the first type the two sides share, in the order
+// its own hash package registered them. The weaker checksum registers
+// first, so on a local destination it is the answer against local and
+// against sftp alike, and it is the only answer an s3 medium can give at
+// all. This boundary speaks one algorithm (see SHA256 above, and
+// MediumStore.ObjectChecksum in medium.go for why the other one is named
+// nowhere it could be compared against anything). A field reporting "the
+// copy compared SOMETHING" is therefore a field that can only ever mean
+// "the copy compared the weaker one", and a `hash: sha256` policy
+// discharged by that is the silent downgrade of configured verification
+// FR-13 forbids.
+//
+// state.TransferResult still has the field, because it is a column in
+// shipped, immutable migrations. Nothing writes it any more, and
+// verify.go no longer reads it.
 type TransferResult struct {
 	// BytesTransferred is what the destination reports it holds after the
 	// copy, read off the written object rather than counted on the way
 	// past, so it is a statement about what landed and not about what was
 	// sent.
 	BytesTransferred int64
-
-	// Checksummed says the copy itself compared a hash, which rclone's
-	// operations.Copy does whenever source and destination share one. It
-	// matters because internal/lifecycle/verify.go treats it as a
-	// verification already performed and skips its own RemoteHash call.
-	//
-	// The rclone adapter never sets it. operations.Copy does not report
-	// which hash type it settled on (or whether it found one at all), and
-	// CopyToLocal does not go looking, so this is false out of every
-	// production copy and verify.go's shortcut is unreachable in practice.
-	// That is the safe direction of the two, since it means verification
-	// asks the backend itself rather than trusting a claim nobody made,
-	// and it is written down here so the next reader does not conclude
-	// from the field's existence that the shortcut is live.
-	Checksummed bool
 }
 
 // Transport is the only surface lifecycle code is allowed to depend on.
