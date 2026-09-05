@@ -1,3 +1,16 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
 // This file is the three per-set switches an operator flips from a
 // screen: run this set or leave it alone, delete its remote sources or
 // never touch them, and does the thing still answer.
@@ -25,18 +38,6 @@
 // encoding after it would freeze today's values into an operator's file
 // as though they had chosen them, and a toggle of one set would silently
 // pin the defaults of every other.
-package service
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"gopkg.in/yaml.v3"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-)
 
 // connectionTestTimeout bounds one reachability check. It is the same
 // ten seconds TestConnection uses for a candidate source: a test that can

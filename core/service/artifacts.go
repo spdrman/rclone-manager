@@ -1,3 +1,17 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // This file is where an operator's judgement enters a pipeline that
 // otherwise decides for itself: reading the journal's own rows, and the
 // four things a person is allowed to do to a backup the pipeline has
@@ -30,19 +44,6 @@
 // passing one through would hand it an error it can only match on by
 // reading the text, which is how a message becomes an interface nobody
 // meant to publish.
-package service
-
-import (
-	"context"
-	"errors"
-	"fmt"
-	"strings"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // ErrArtifactNotFound is returned when no journal row exists for the
 // artifact id a caller named.

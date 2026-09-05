@@ -1,3 +1,24 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // This file is the envelope around the one routine in this product that
 // deletes an operator's backups: preview what retention would do, show
 // it, and delete only after somebody has confirmed that exact thing.
@@ -33,26 +54,6 @@
 // plan's staleness is computed over, and an apply that ran alongside one
 // would be deciding against a snapshot that is being rewritten underneath
 // it.
-package service
-
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"sort"
-	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // ActionRetentionApply names the durable operation row a confirmed
 // retention apply (ApplyRetentionPlan) is recorded under, mirroring

@@ -1,3 +1,12 @@
+package service
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
 // This file is one step of §46.1's startup sequence (startup.go drives
 // the rest): decide whether the directory that is about to hold the state
 // database can actually be used, before anything takes a lock in it,
@@ -16,14 +25,6 @@
 // A directory that exists and cannot be used is refused, because every
 // way that happens is somebody's configuration being wrong and none of
 // them is this process's to repair.
-package service
-
-import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-)
 
 // ErrStateDirInvalid is returned by validateStateDir when the state
 // database's parent directory cannot be used safely: it exists but is not

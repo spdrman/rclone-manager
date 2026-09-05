@@ -1,3 +1,12 @@
+package service
+
+import (
+	"context"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/alert"
+)
+
 // This file is the whole of proactive alerting as anything outside core/
 // can see it (docs/EPIC-B-multi-nas.md §71, issue #159): one plain Alert
 // shape, one sink interface, one way to install a sink, and the adapter
@@ -17,14 +26,6 @@
 // running the wrong way), and nothing in apps/ can import internal/alert
 // at all, so the translation has to live on this side, once, in the one
 // package that is allowed to name both vocabularies.
-package service
-
-import (
-	"context"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/alert"
-)
 
 // Alert is the plain, provider-agnostic shape of one proactive
 // notification (docs/EPIC-B-multi-nas.md §71, Work Package 3.5), as an

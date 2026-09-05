@@ -1,3 +1,14 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/health"
+)
+
 // This file is FR-24's health report as anything outside core/ sees it:
 // one call that answers "are my backups healthy", for every configured
 // set, from durable evidence.
@@ -21,16 +32,6 @@
 // Nothing is cached, on purpose: a cached health verdict is precisely the
 // thing that keeps reporting green after a deployment has stopped backing
 // anything up.
-package service
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/health"
-)
 
 // BackupSetHealth is one configured backup set's FR-24 verdict, in plain
 // provider-agnostic terms.

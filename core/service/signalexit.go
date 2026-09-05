@@ -1,3 +1,7 @@
+package service
+
+import "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+
 // This file is where a process decides who owns SIGINT and SIGTERM when
 // rclone is embedded in it, and it is two forwarding calls because the
 // decision is a pair rather than a switch: taking the signal back also
@@ -10,9 +14,6 @@
 // cost: a routine `docker stop` of the web container exited 143, which is
 // the same defect issue #190 had already fixed for the CLI, reappearing
 // in the one process that had no way to apply the fix.
-package service
-
-import "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 
 // DisableSignalExit stops the embedded rclone from ending this process on
 // SIGINT/SIGTERM, and RunExitHandlers is the obligation that comes with
