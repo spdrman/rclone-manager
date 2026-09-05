@@ -241,6 +241,25 @@ func (f *Medium) NewBucket(t *testing.T) transport.Medium {
 
 // ContainerID is the exact id this fixture created, for a test that needs
 // to address the container itself.
+// HasBucket reports whether the medium's drive holds this bucket.
+//
+// MinIO in single-drive mode keeps one directory per bucket under /data, so
+// the question is answered by looking at the drive rather than through the
+// S3 client the tests exist to exercise. It is a harness capability because
+// the alternative is a test under core/tests exec'ing docker itself, which
+// is the bypass the testtier guard is about: before #450 this lived in
+// tests/miniointegration/helpers_test.go and was one of the two entries the
+// guard's ledger had to carry.
+//
+// The container is addressed by the exact id this medium created, never by
+// a `docker ps` scan: this machine runs many worktrees against one docker
+// daemon, so a scan-shaped answer could come from somebody else's MinIO.
+func (f *Medium) HasBucket(t *testing.T, bucket string) bool {
+	t.Helper()
+	_, _, err := dockerRun(dockerExecTimeout, "exec", f.containerID, "test", "-d", "/data/"+bucket)
+	return err == nil
+}
+
 func (f *Medium) ContainerID() string { return f.containerID }
 
 func waitUntilLive(t *testing.T, f *Medium) {

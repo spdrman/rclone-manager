@@ -93,7 +93,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // --- building and running the harness ---------------------------------
@@ -1155,7 +1155,7 @@ func TestCrash_RemoteDeletionInFlight_Local(t *testing.T) {
 // crash_safety.go's own description of this window: "unknown from the
 // caller's side whether it took effect."
 func TestCrash_RemoteDeletionInFlight_SFTP(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	artifact := mustArtifactID(t)
 
 	content := make([]byte, 4096)
@@ -1190,7 +1190,7 @@ func TestCrash_RemoteDeletionInFlight_SFTP(t *testing.T) {
 		// of this test conclude a real object was deleted when it had
 		// only been looked for in the wrong (nonexistent, one-level-too-
 		// deep) place.
-		"-sftp-root=" + f.Source("", "").Root,
+		"-sftp-root=" + f.TransportSource("", "").Root,
 		"-artifact-name=" + scenarioArtifact,
 		"-source-name=" + scenarioSource,
 		"-set-name=" + scenarioSet,
@@ -1209,7 +1209,7 @@ func TestCrash_RemoteDeletionInFlight_SFTP(t *testing.T) {
 	res := runHarness(t, append(args, "-kill-plan=mid-delete", "-mid-fraction=0.4")...)
 	t.Logf("stdout:\n%s", res.stdout)
 
-	source := f.Source("crashmatrix-sftp", "")
+	source := f.TransportSource("crashmatrix-sftp", "")
 	set, err := model.NewBackupSetID(scenarioSource, scenarioSet)
 	if err != nil {
 		t.Fatalf("NewBackupSetID: %v", err)

@@ -12,17 +12,17 @@ type LedgerEntry struct {
 	Issue int
 }
 
-// Ledger is every file the scan finds today. Eight, in two shapes.
+// Ledger is every file the scan finds today. Six, all one shape:
+// container-backed tests living in unit packages, which is why
+// `go test ./internal/...` needs a Docker daemon and why those two packages
+// were the ones that went red under concurrent gate load. #448 moves them
+// into the machine tier.
 //
-// The first six are container-backed tests living in unit packages, which
-// is why `go test ./internal/...` needs a Docker daemon and why those two
-// packages were the ones that went red under concurrent gate load. #448
-// moves them into the machine tier.
-//
-// The last two are integration tests that exec docker themselves rather
-// than through a harness (one to kill its container on purpose, one to
-// look inside MinIO's drive). #450 gives the harness those two capabilities
-// and removes the direct calls.
+// The two bypasses-harness entries that used to be here are gone. #450 gave
+// the harness the two capabilities they were exec'ing docker for
+// (Source.Kill, to remove its own container on purpose, and Medium.HasBucket,
+// to look inside MinIO's drive), so nothing under core/tests runs docker
+// itself any more and the rule holds with no exceptions.
 var Ledger = []LedgerEntry{
 	{File: "internal/transport/rclone/connections_gate_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
 	{File: "internal/transport/rclone/dockerbuild_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
@@ -30,8 +30,6 @@ var Ledger = []LedgerEntry{
 	{File: "internal/transport/rclone/gate_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
 	{File: "internal/transport/rclone/ssh_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
 	{File: "service/backupsets_docker_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "tests/miniointegration/helpers_test.go", Rule: RuleBypassesHarness, Issue: 450},
-	{File: "tests/sftpintegration/sftp_integration_test.go", Rule: RuleBypassesHarness, Issue: 450},
 }
 
 // Key is what a finding and a ledger entry are matched on.

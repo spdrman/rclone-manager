@@ -14,7 +14,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/service"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // This file is E2.2's integration leg (issue #239): preview, confirm and
@@ -105,7 +105,7 @@ func putObject(t *testing.T, medium transport.Medium, key string, content []byte
 //     a medium.
 func integrationFixture(t *testing.T) (*service.BackupService, *app.Service, config.BackupSet, *state.Journal, transport.Medium, string) {
 	t.Helper()
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 	root := t.TempDir()
 	journal := openJournal(t)

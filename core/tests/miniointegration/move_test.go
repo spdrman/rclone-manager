@@ -15,7 +15,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // This file is E2.1's integration half: the move engine driven end to end
@@ -35,7 +35,7 @@ import (
 // journal recorded at ingestion, and the local copy is deleted only after
 // that write lands. Nothing about that path is exercised by a double.
 func TestMoveToS3AndBackAgain(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.Medium()
 	ctx := context.Background()
 
@@ -150,7 +150,7 @@ func TestMoveToS3AndBackAgain(t *testing.T) {
 // VERIFIED at all, and what must happen is a loud refusal with the local
 // copy still on disk, never a quiet fall back to something cheaper.
 func TestAttestedAgainstS3RefusesRatherThanDeletingALocalCopy(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.Medium()
 	ctx := context.Background()
 
