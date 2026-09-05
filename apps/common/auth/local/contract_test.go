@@ -1,18 +1,3 @@
-package local
-
-import (
-	"net/http"
-	"path/filepath"
-	"reflect"
-	"sort"
-	"strings"
-	"testing"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/apps/common/webhost/apicontract"
-)
-
 // The /auth half of issue #166's contract gate.
 //
 // The /auth operations belong to the same /api/v1 contract as everything
@@ -29,6 +14,20 @@ import (
 // adopting the generated types is a separate, behaviour-preserving move,
 // and #81 is explicit that behaviour is not rewritten in the same step as
 // a boundary being introduced.
+package local
+
+import (
+	"net/http"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/apps/common/webhost/apicontract"
+)
 
 // authBindings ties one contract operation to this package's own request
 // and response types and to the route chi registers for it, with the

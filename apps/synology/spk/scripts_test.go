@@ -1,3 +1,13 @@
+// The tests in this file run the shipped scripts through /bin/sh rather
+// than reading them. Three of the properties this package's safety rests
+// on are behaviours of shell code - a pid file that names somebody
+// else's process, an unexported SYNOPKG_ variable, an unbounded log -
+// and none of them can be established by grepping for a line.
+//
+// They run on a development host as readily as on a DSM unit, which is
+// why pid_command has a ps fallback: /proc exists on the NAS and not on
+// a Mac, and the question "what is this pid running?" has to be
+// answerable in both places for the test to mean anything.
 package spk
 
 import (
@@ -9,17 +19,6 @@ import (
 	"testing"
 	"time"
 )
-
-// The tests in this file run the shipped scripts through /bin/sh rather
-// than reading them. Three of the properties this package's safety rests
-// on are behaviours of shell code - a pid file that names somebody
-// else's process, an unexported SYNOPKG_ variable, an unbounded log -
-// and none of them can be established by grepping for a line.
-//
-// They run on a development host as readily as on a DSM unit, which is
-// why pid_command has a ps fallback: /proc exists on the NAS and not on
-// a Mac, and the question "what is this pid running?" has to be
-// answerable in both places for the test to mean anything.
 
 // stagedScripts writes the shipped scripts/ directory into a temp
 // directory and returns it, so a test can run a stage the way DSM does,

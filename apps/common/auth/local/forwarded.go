@@ -1,3 +1,18 @@
+// Reading a forwarded header without being fooled by one.
+//
+// Both helpers here are about the same trap from two angles. An
+// X-Forwarded-* header is an ordinary request header, so its value is
+// whoever-sent-it's opinion, not a fact, and every use of one in this
+// package is gated behind Config.TrustForwardedHeaders being explicitly
+// set by a deployment that knows its own topology.
+//
+// The subtler of the two is firstForwardedValue. These headers accumulate
+// rather than replace, so a chain produces a comma-separated list, and the
+// entry that identifies the original client is the FIRST one. Reading the
+// last is the classic mistake: the last entry is whatever the nearest hop
+// added, so a rate limiter keyed on it buckets every request in the world
+// together, and a security check reading it learns nothing about who
+// actually called.
 package local
 
 import (

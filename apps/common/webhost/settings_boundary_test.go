@@ -1,19 +1,3 @@
-package webhost
-
-import (
-	"context"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
-
 // This file is issue #140's INTEGRATION requirement: config file, CLI and
 // UI have to stay in agreement about one policy, so a write through the
 // HTTP settings endpoint is proven visible to a subsequent CLI read, and
@@ -36,6 +20,21 @@ import (
 // FR-19's resolved reading in words. A tier the endpoint wrote therefore
 // shows up by name, and protect_last_known_good shows up as the sentence
 // internal/retention writes for it.
+package webhost
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
 
 var (
 	cliBuildOnce sync.Once

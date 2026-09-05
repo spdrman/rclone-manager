@@ -1,3 +1,16 @@
+// What is asserted here is mostly what must NOT be true of a hash.
+//
+// The plaintext must not appear in it, and two hashes of the same password
+// must differ, which together are how a missing or fixed salt shows up:
+// both a salt-free implementation and one with a hardcoded salt would
+// verify passwords correctly and pass any round-trip test, while making
+// every stored hash comparable against a precomputed table.
+//
+// The garbage-encoding case is about the parser rather than the crypto. An
+// encoded hash carries its own parameters, so verifyPassword reads
+// attacker-adjacent structure out of a string, and it has to refuse a
+// malformed one rather than fall through to a comparison against whatever
+// it managed to decode.
 package local
 
 import (

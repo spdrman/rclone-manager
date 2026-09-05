@@ -1,3 +1,13 @@
+// Three cases, and only the first one is about success.
+//
+// The read side of a session is where a bug is silent: an authenticator
+// that answered "yes" to everything would let every test that logs in
+// first pass, and would hand /api/v1 to anyone. So the two refusals (no
+// cookie at all, and a cookie naming a session this process never issued)
+// are the assertions that carry the weight here, and both check that the
+// returned AuthContext is empty rather than only that Authenticated is
+// false: a handler that reads Username without checking the flag must not
+// find a name in there.
 package local
 
 import (

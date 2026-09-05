@@ -1,3 +1,24 @@
+// The composition root: everything this package's doc comment lays out,
+// assembled into the two things a provider host actually wires up.
+//
+// New does three things in an order that matters. It takes the store's
+// exclusive lock first, before reading or writing anything, so that a
+// second server or a racing create-admin is refused rather than
+// interleaved. It reads the store to find out whether anybody has enrolled
+// yet. And only if nobody has does it mint a bootstrap token, which is
+// what makes a restart mid-enrollment invalidate the token the previous
+// run printed.
+//
+// The lock is never released. There is no Close on Service and that is
+// deliberate rather than an omission: the process that holds it is the
+// server, it holds the store open for its whole life, and the kernel
+// releases the flock when it exits by any means including a kill. An
+// explicit release would only add a path where the lock is dropped while
+// the store is still in use.
+//
+// Config.TrustForwardedHeaders is the one setting here with a real blast
+// radius, and its own doc carries the topology argument rather than this
+// opener, because that is where somebody about to set it will be looking.
 package local
 
 import (

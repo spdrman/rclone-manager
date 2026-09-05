@@ -1,3 +1,9 @@
+// The tests here read prose rather than code, which is unusual and
+// deliberate: three of this package's claims live in a CI comment, in an
+// acceptance procedure and in a README, and a claim about what has been
+// proven is worth exactly as much as the thing it describes. A comment
+// asserting a check that nothing runs is worse than an acknowledged gap,
+// because a reader stops looking.
 package spk
 
 import (
@@ -6,13 +12,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// The tests here read prose rather than code, which is unusual and
-// deliberate: three of this package's claims live in a CI comment, in an
-// acceptance procedure and in a README, and a claim about what has been
-// proven is worth exactly as much as the thing it describes. A comment
-// asserting a check that nothing runs is worse than an acknowledged gap,
-// because a reader stops looking.
 
 func repoText(t *testing.T, rel string) string {
 	t.Helper()

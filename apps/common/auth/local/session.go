@@ -1,3 +1,23 @@
+// Sessions: in memory, for the life of one process.
+//
+// A restart signs everybody out. That is a trade-off rather than a gap,
+// and it is worth being explicit about which way it was made: persisting
+// sessions would mean a second store to keep consistent with the first, a
+// second thing to encrypt at rest, and a way for a stolen token to survive
+// the restart an operator performed precisely because they suspected
+// something. For one administrator on a single-process deployment, losing
+// a session on restart costs one login.
+//
+// rotateSession is the one method here with a non-obvious shape, and its
+// doc explains the race it exists to close. The short version is that
+// "revoke everything" followed by "create one" is two locked steps, and
+// two concurrent rotations can interleave them into a state with no live
+// session at all, which locks the administrator out of their own account
+// straight after a successful password change.
+//
+// The cookie helpers live here rather than in handler.go because Secure,
+// HttpOnly and SameSite are session properties, and a route that sets the
+// cookie without them would be a security bug that reads like a typo.
 package local
 
 import (

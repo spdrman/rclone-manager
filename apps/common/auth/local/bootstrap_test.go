@@ -1,3 +1,15 @@
+// The bootstrap token's three refusals, one per way it can stop being
+// valid: already used, expired, or not the one that was issued.
+//
+// Single-use is the property with the sharpest failure mode, because a
+// token that can be redeemed twice is a token an attacker can redeem after
+// the operator did. The test for it consumes successfully first and then
+// asserts the second attempt fails, which is the only ordering that can
+// tell "single-use" apart from "always refuses".
+//
+// Time is injected rather than waited on. A test that slept for the real
+// TTL would take half an hour, and one that shortened the TTL would be
+// testing a constant nothing ships with.
 package local
 
 import (

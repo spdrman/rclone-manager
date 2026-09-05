@@ -1,3 +1,23 @@
+// The five HTTP routes this package serves, and the two conventions that
+// hold them together.
+//
+// The first convention is that a refusal never says more than it has to.
+// Login answers a wrong username, a wrong password and an entirely
+// unenrolled deployment with the same code and the same message, and pays
+// Argon2id's cost on every one of those branches against a fixed dummy
+// hash, so that neither the body nor the clock distinguishes them. The
+// exception is enrollment, where ENROLLMENT_CLOSED and
+// BOOTSTRAP_TOKEN_INVALID are deliberately distinct: an operator who
+// pasted a stale token needs to know which of those happened, and by that
+// point the account exists, so there is nothing left to protect.
+//
+// The second is errorCodeStatus. Every code this file emits is registered
+// there with the one status it is served at, and writeAuthError panics on
+// a mismatch rather than serving it. That is a deliberately violent
+// reaction to a small inconsistency, and it exists because the small
+// inconsistency already happened: BOOTSTRAP_TOKEN_INVALID drifted to 403
+// while the published contract still said 401 (#289), and nothing noticed
+// until somebody read both files side by side.
 package local
 
 import (
@@ -81,6 +101,21 @@ var errorCodeStatus = map[string]int{
 	"INTERNAL_ERROR":          http.StatusInternalServerError,
 }
 
+// writeAuthError serves one refusal, and panics if the caller asked for a
+// status this package has not already committed to for that code.
+//
+// A panic is a harsh answer to what looks like a small inconsistency, and
+// it is chosen over a log line or a silent correction because the small
+// inconsistency is exactly what shipped last time: the status for one code
+// drifted away from the published contract and nothing noticed for a
+// release. A panic fires in whichever test exercises the call site, which
+// is before anybody deploys it; a corrected status would hide the drift,
+// and a log line would be read by nobody.
+//
+// The correlation ID goes into both the header and the body on purpose.
+// ui/shared reads the header, and an operator quoting an error reads the
+// body, and having the same value in both is what lets somebody match a
+// screenshot to a log.
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
 	if want, ok := errorCodeStatus[code]; ok && want != status {
 		panic(fmt.Sprintf("local: writeAuthError: %q is registered at status %d, called with %d", code, want, status))
@@ -154,6 +189,14 @@ func (s *Service) Handler() http.Handler {
 	return r
 }
 
+// handleLogin implements POST /login. Every failure path answers
+// identically, and every failure path pays the same Argon2id cost, so
+// neither the response nor its timing tells a caller whether they guessed
+// the username right. The two dummy-hash calls below are what buy the
+// second half of that, and they are not optional: without them, a wrong
+// username returns in microseconds while a wrong password for the right
+// username takes the full hash, which hands over the enrolled username one
+// guess at a time.
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.loginLimiter.Allow(remoteIP(r, s.trustForwardedHeaders)) {
 		writeAuthError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many login attempts; wait before trying again")
@@ -232,6 +275,15 @@ var dummyPasswordHash = sync.OnceValue(func() string {
 	return hash
 })
 
+// handleEnroll implements POST /enroll, the one route that can create the
+// administrator account.
+//
+// The order of its checks is the interesting part. Whether an
+// administrator already exists is decided before the bootstrap token is
+// even looked at, so a stale token can never produce a refusal that hints
+// it would have worked; and the store's own Enroll guard is checked again
+// afterwards, because the read above and the write below are not atomic
+// and a concurrent enrollment can land in between.
 func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if !s.enrollLimiter.Allow(remoteIP(r, s.trustForwardedHeaders)) {
 		writeAuthError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many enrollment attempts; wait before trying again")
@@ -383,6 +435,11 @@ func (s *Service) handleRotatePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleLogout implements POST /logout, and always succeeds. A caller with
+// no session, an expired one or a token this process has never heard of
+// gets the same 204 and the same cleared cookie, because there is nothing
+// to protect here and every distinguishable answer would only tell an
+// unauthenticated caller something about which tokens are live.
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := tokenFromRequest(r); token != "" {
 		s.sessions.revoke(token)
@@ -391,6 +448,12 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleSession implements GET /session, which is what the UI calls on
+// load to find out whether to render the app or the login page. It is the
+// one route here with neither a CSRF check nor a rate limit: it changes
+// nothing, and gating it would make that first render flaky in exchange
+// for protecting a read that reveals only what the caller's own cookie
+// already proves.
 func (s *Service) handleSession(w http.ResponseWriter, r *http.Request) {
 	username, ok := s.sessions.lookup(tokenFromRequest(r))
 	if !ok {

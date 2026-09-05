@@ -1,12 +1,3 @@
-package webhost
-
-import (
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-)
-
 // This file is issue #211's own reproduction, turned into a test.
 //
 // The issue was measured by booting a real engine, signing in, and
@@ -34,6 +25,14 @@ import (
 // contract and knows nothing about whether a route was actually
 // registered, while this reads the router and knows nothing about what
 // the client asks for.
+package webhost
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 // routerReply classifies one response as coming from chi's own fallbacks
 // or from a handler.

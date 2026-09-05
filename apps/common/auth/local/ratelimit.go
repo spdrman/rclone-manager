@@ -1,3 +1,24 @@
+// Fixed-window brute-force protection, and the housekeeping that keeps it
+// from being a memory leak.
+//
+// The algorithm is deliberately the simplest thing that satisfies §13A: no
+// external store, no token bucket, no sliding window. One administrator's
+// login traffic never justifies anything cleverer, and every additional
+// mechanism here would be one more thing to get wrong in a security
+// control.
+//
+// The part that is not obvious is the sweep. Once a deployment trusts
+// X-Forwarded-For, this map stops being keyed by one reverse proxy's
+// address and starts being keyed by every real client address that has
+// ever connected, and nothing revisits a key that never comes back. So
+// Allow counts its own calls and walks the map every so often. A counter
+// rather than a timer, because a background goroutine would need a
+// shutdown story this type has no other reason to have.
+//
+// remoteIP is where the trust decision is actually spent, and its two
+// branches are not symmetric: RemoteAddr cannot be forged and is always
+// safe, while the header is only safe under the topology
+// Config.TrustForwardedHeaders describes.
 package local
 
 import (

@@ -1,3 +1,19 @@
+// This file is the Go half of issue #166's drift gate: it holds the
+// handlers in this package to api/v1/openapi.json, which is the
+// authoritative definition of /api/v1.
+//
+// The other half is scripts/api/check-contract-drift.sh, which
+// regenerates the bindings and compares them byte for byte, catching a
+// hand edit to generated output. Neither check subsumes the other: the
+// drift script proves the bindings still match the contract, and this file
+// proves the HANDLERS still match the bindings. A handler that grows a
+// field nobody wrote into the contract passes the drift script and fails
+// here.
+//
+// Several tests here read repository files (the contract itself, and the
+// package sources the error-code registry is checked against), so run them
+// with -count=1 when you have just edited one; a cached PASS is a
+// statement about the tree as it was.
 package webhost
 
 import (
@@ -23,23 +39,6 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/webhost/apicontract"
 	"github.com/spdrman/rclone-manager/core/service"
 )
-
-// This file is the Go half of issue #166's drift gate: it holds the
-// handlers in this package to api/v1/openapi.json, which is the
-// authoritative definition of /api/v1.
-//
-// The other half is scripts/api/check-contract-drift.sh, which
-// regenerates the bindings and compares them byte for byte, catching a
-// hand edit to generated output. Neither check subsumes the other: the
-// drift script proves the bindings still match the contract, and this file
-// proves the HANDLERS still match the bindings. A handler that grows a
-// field nobody wrote into the contract passes the drift script and fails
-// here.
-//
-// Several tests here read repository files (the contract itself, and the
-// package sources the error-code registry is checked against), so run them
-// with -count=1 when you have just edited one; a cached PASS is a
-// statement about the tree as it was.
 
 // contractBinding ties one contract operation to the concrete handler
 // types and router pattern that implement it in this package.

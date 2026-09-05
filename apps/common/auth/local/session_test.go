@@ -1,3 +1,13 @@
+// Session lifetime, exercised through the manager rather than over HTTP,
+// so that expiry can be tested by moving an injected clock instead of
+// waiting a day.
+//
+// The two token-distinctness and unknown-token cases look trivial and are
+// not: a manager that returned the same token twice would silently share
+// one session between two logins, and one that accepted an unknown token
+// would authenticate anybody who sent a plausible-looking string. Both are
+// the kind of thing an optimisation can introduce without touching any
+// route.
 package local
 
 import (

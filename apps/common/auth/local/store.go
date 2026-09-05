@@ -1,3 +1,21 @@
+// The one thing this package persists: a username and a password hash.
+//
+// Everything else it holds (sessions, bootstrap tokens, rate-limit
+// counters) is deliberately in memory, so this file is the whole of the
+// on-disk surface, and it is a single small JSON file rather than a
+// database because one record does not justify one.
+//
+// Two properties are load-bearing. Writes go through a temp file and a
+// rename, so a crash mid-write leaves the previous file intact rather than
+// a truncated one that fails to parse on the next start and locks the
+// operator out. And Enroll refuses when a record already exists, which is
+// §49.1's single-shot rule enforced at the lowest level rather than only
+// in the handler: the handler checks too, but the handler's check and its
+// write are not atomic, so this is what actually decides a race.
+//
+// Store takes no OS-level lock of its own. It is the path-only primitive,
+// and both callers that own a store for longer than one call (Service.New,
+// CreateAdmin) take the lock in lock_unix.go around it.
 package local
 
 import (
@@ -59,6 +77,12 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
+// load reads the file, treating "not there yet" as an empty store rather
+// than an error: a deployment that has never enrolled has no file, and
+// that is the normal first-start state, not a fault. A parse failure is
+// different and is reported, because a file that exists and cannot be read
+// means something wrote garbage over an administrator record and carrying
+// on would quietly reopen enrollment.
 func (s *Store) load() (storeFile, error) {
 	b, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -74,6 +98,9 @@ func (s *Store) load() (storeFile, error) {
 	return f, nil
 }
 
+// save replaces the file's whole contents. Callers hold s.mu and have
+// already merged whatever they wanted to change into f, so there is no
+// partial-update path here to get wrong.
 func (s *Store) save(f storeFile) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("local: create store directory: %w", err)

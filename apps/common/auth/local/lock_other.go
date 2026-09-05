@@ -1,5 +1,18 @@
 //go:build !unix
 
+// The non-unix half of the store lock, which is a refusal rather than an
+// implementation.
+//
+// A stub that returned a working-looking lock without locking anything
+// would compile everywhere and be wrong exactly where it matters: two
+// processes would both proceed, both read the store, and one would
+// overwrite the other's administrator record. So this returns an error
+// naming the GOOS instead, and everything above it fails to start.
+//
+// The build tag is the whole platform story. This project ships and tests
+// linux/amd64, linux/arm64 and darwin, all of which are unix, so this file
+// is compiled by nobody in practice and exists to keep the tree building
+// for anyone who tries a fourth platform, loudly.
 package local
 
 import (
@@ -30,4 +43,6 @@ func acquireStoreLock(path string) (*storeLock, error) {
 	return nil, fmt.Errorf("local: store locking is not implemented on %s", runtime.GOOS)
 }
 
+// release is a no-op because nothing was ever acquired: acquireStoreLock
+// on this build always fails, so no caller can hold one of these.
 func (l *storeLock) release() error { return nil }

@@ -1,3 +1,15 @@
+// EPIC E, FR-34 and FR-27 at the contract (#240).
+//
+// contract_test.go beside this file proves the handlers still match the
+// contract. What it cannot say is whether the contract itself is honest,
+// and honesty is the whole subject of this issue: a schema is free to
+// declare a restore ETA or a retrieval cost, and the drift gate would
+// cheerfully keep the bindings in step with the lie. So these read the
+// contract document as data and hold it to three rules it is not otherwise
+// held to.
+//
+// Run with -count=1 after editing api/v1/openapi.json: a cached PASS here
+// is a statement about the tree as it was.
 package webhost
 
 import (
@@ -15,19 +27,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
-
-// EPIC E, FR-34 and FR-27 at the contract (#240).
-//
-// contract_test.go beside this file proves the handlers still match the
-// contract. What it cannot say is whether the contract itself is honest,
-// and honesty is the whole subject of this issue: a schema is free to
-// declare a restore ETA or a retrieval cost, and the drift gate would
-// cheerfully keep the bindings in step with the lie. So these read the
-// contract document as data and hold it to three rules it is not otherwise
-// held to.
-//
-// Run with -count=1 after editing api/v1/openapi.json: a cached PASS here
-// is a statement about the tree as it was.
 
 // contractDocument is api/v1/openapi.json, parsed.
 func contractDocument(t *testing.T) map[string]any {
