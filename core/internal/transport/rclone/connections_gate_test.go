@@ -10,7 +10,7 @@
 // place". Neither can be answered from inside the process, so both are
 // answered here, by asking the server.
 //
-// Two measurements, deliberately different in kind:
+// Three measurements, deliberately different in kind:
 //
 //   - establishedConns is the CURRENT state of the server's TCP table. It
 //     answers "is anything still open", which is the leak question.
@@ -19,9 +19,17 @@
 //     operation open", which a current-state sample cannot: a walk that
 //     opens eight connections and closes them can be finished before any
 //     sampler looks. A cumulative counter has no such window.
+//   - sshClientGoroutines is the same leak question asked of THIS PROCESS
+//     rather than of the server, and it is the one that can attribute a
+//     survivor (#455). The fixture publishes -p 127.0.0.1::22, so the
+//     socket sshd sees belongs to Docker's userland forwarder, not to us;
+//     a row that outlives a drain is either our pool or the forwarding
+//     chain swallowing the close, and only a reading taken from inside
+//     tells those apart.
 //
-// Every assertion below has a positive control, because both measurements
-// could report zero for the boring reason that they see nothing at all.
+// Every assertion below has a positive control, because all three
+// measurements could report zero for the boring reason that they see
+// nothing at all.
 package rclone
 
 import (
@@ -171,19 +179,88 @@ func sshClientGoroutines() (int, string) {
 	return count, strings.Join(found, "\n\n")
 }
 
-// requireNoConnections fails unless the server's connection table empties
-// within connectionDrainBudget.
+// softProbe runs a diagnostic command and returns whatever it managed to
+// say. Nothing in here may fail the test: it only ever runs on a path that
+// has already failed, and a diagnostic that replaces the failure it was
+// printed to explain is worse than no diagnostic at all.
+func softProbe(name string, args ...string) string {
+	if _, err := exec.LookPath(name); err != nil {
+		return fmt.Sprintf("(%s is not on PATH, so this one cannot be answered here: %v)\n", name, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dockerProbeBudget)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	text := strings.TrimRight(string(out), "\n")
+	if text == "" {
+		text = "(no output)"
+	}
+	if err != nil {
+		return fmt.Sprintf("%s\n(`%s %s` exited: %v)\n", text, name, strings.Join(args, " "), err)
+	}
+	return text + "\n"
+}
+
+// drainDiagnostics is what the next failed drain gets to be read with.
+//
+// A count cannot be argued with, only stared at. These three readings can:
+// the server's own table with peers and states rather than a number, the
+// host's view of what this test process actually still has open on the
+// published port, and the stacks of any SSH client this process is still
+// running. Between them they say which side the survivor is on, which is
+// the whole question and is not answerable from a count.
+func drainDiagnostics(f *sftpfixture.Fixture, stacks string) string {
+	var b strings.Builder
+	b.WriteString("--- netstat -tn inside the container: peer and state, not a count ---\n")
+	b.WriteString(softProbe("docker", "exec", f.ContainerID(), "sh", "-c", "netstat -tn"))
+	fmt.Fprintf(&b, "--- lsof -nP -iTCP:%d on the host, for this test process (pid %d) ---\n", f.Port, os.Getpid())
+	if f.Port == 0 {
+		b.WriteString("(the fixture published no host port, so there is nothing on the host to look at)\n")
+	} else {
+		b.WriteString(softProbe("lsof", "-nP", fmt.Sprintf("-iTCP:%d", f.Port), "-a", "-p", strconv.Itoa(os.Getpid())))
+	}
+	b.WriteString("--- SSH client goroutines in this test process ---\n")
+	if stacks == "" {
+		b.WriteString("(none: this process is not running a single " + sshClientLoopFrame + ")\n")
+	} else {
+		b.WriteString(stacks + "\n")
+	}
+	return b.String()
+}
+
+// drainVerdict names the side the survivor is on, so the reader does not
+// have to work it out from two numbers at four in the morning.
+func drainVerdict(conns, clients int) string {
+	switch {
+	case conns > 0 && clients == 0:
+		return "This process holds no SSH client at all, so nothing here is still talking to the server. The fixture publishes -p 127.0.0.1::22, so the socket sshd can see is the container-side leg of Docker's userland forwarder and not a socket this process opened: an ESTABLISHED row with a clean client is the forwarding chain not passing the close on, not a pool this adapter leaked. Read the lsof below before touching the adapter."
+	case conns == 0 && clients > 0:
+		return "The server's table is empty but this process is still running SSH client goroutines, so the leak is on this side: the far end is gone and the client has not noticed."
+	default:
+		return "This process is still holding live SSH clients AND the server still sees connections, which is a genuine leak: an Fs that is never released holds its pool until the process exits, which is exactly the failure #355 is about."
+	}
+}
+
+// requireNoConnections fails unless BOTH sides have let go within
+// connectionDrainBudget: the server's connection table has emptied, and
+// this process is no longer running an SSH client of its own.
+//
+// Both, because either one alone is ambiguous. The server's table is read
+// through Docker's forwarder, so a row that outlives the drain may belong
+// to the forwarder rather than to us. Our own goroutines are the reading
+// that cannot be confused for anything else, and asserting the pair is what
+// turns the next occurrence from a mystery into a one-line attribution.
 func requireNoConnections(t *testing.T, f *sftpfixture.Fixture, after string) {
 	t.Helper()
 	deadline := time.Now().Add(connectionDrainBudget)
 	for {
-		n := establishedConns(t, f)
-		if n == 0 {
+		conns := establishedConns(t, f)
+		clients, stacks := sshClientGoroutines()
+		if conns == 0 && clients == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%s left %d connection(s) open on the server %s later; an Fs that is never released holds its pool until the process exits, which is exactly the failure #355 is about",
-				after, n, connectionDrainBudget)
+			t.Fatalf("%s left %d connection(s) open on the server and %d live SSH client goroutine(s) in this process %s later.\n%s\n%s",
+				after, conns, clients, connectionDrainBudget, drainVerdict(conns, clients), drainDiagnostics(f, stacks))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -335,6 +412,14 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 		}
 		wide := acceptedLogins(t, f) - before
 		shutdownFs(ctx, control)
+		// Partition the blame before going anywhere near List. This control
+		// opened seven or eight connections and, until this line existed,
+		// nothing asserted it had handed a single one of them back: the
+		// requireNoConnections at the end of the subtest counts the server's
+		// whole table, so a survivor from this walk was reported as "a
+		// recursive List left a connection open" and sent the reader after
+		// the wrong Fs.
+		requireNoConnections(t, f, "the control walk at --checkers 8")
 		if len(objs) != dirs {
 			t.Fatalf("control walk found %d objects, want %d; it did not walk the tree this test seeded", len(objs), dirs)
 		}
