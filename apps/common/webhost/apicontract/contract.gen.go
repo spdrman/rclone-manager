@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "6b0057869a2a43b1b87656b7c0cf46ca30e3da4169982c31a666b9a941bb5a97"
+const ContractSHA256 = "2a8b4694d0f6212f9ffdbdbfca52900922fddaef21e3047c39a3f35227be9f46"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -768,6 +768,7 @@ type Artifact struct {
 	Quarantined             bool        `json:"quarantined"`
 	RemotePath              string      `json:"remote_path"`
 	RemoteSourceRemovedAt   string      `json:"remote_source_removed_at,omitempty"`
+	RetentionPolicy         string      `json:"retention_policy"`
 	RetentionTier           string      `json:"retention_tier,omitempty"`
 	SetName                 string      `json:"set_name"`
 	SizeBytes               int64       `json:"size_bytes"`

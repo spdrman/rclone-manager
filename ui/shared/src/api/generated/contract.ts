@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "6b0057869a2a43b1b87656b7c0cf46ca30e3da4169982c31a666b9a941bb5a97";
+export const CONTRACT_SHA256 = "2a8b4694d0f6212f9ffdbdbfca52900922fddaef21e3047c39a3f35227be9f46";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1076,6 +1076,7 @@ export interface WireArtifact {
   quarantined: boolean;
   remote_path: string;
   remote_source_removed_at?: string;
+  retention_policy: "configured" | "none";
   retention_tier?: string;
   set_name: string;
   size_bytes: number;
