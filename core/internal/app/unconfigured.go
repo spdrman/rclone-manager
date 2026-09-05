@@ -186,6 +186,16 @@ type StrandedArtifact struct {
 	Err error
 }
 
+// IsAcquisitionState reports whether an FR-10 state string is one an
+// artifact is still trying to get OUT of on its way to being a durable
+// backup: DISCOVERED through COMMITTING.
+//
+// It is exported for one caller, core/service's removal event, which has
+// to say how many rows it just stranded and must not keep its own list of
+// state names to do it. A second copy of that list is a copy that drifts
+// the first time a state is added, and the drift is silent.
+func IsAcquisitionState(st string) bool { return acquiring(lifecycle.State(st)) }
+
 // UnconfiguredSets is every backup set the journal holds history for and
 // the configuration does not name, in id order.
 //
