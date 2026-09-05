@@ -69,14 +69,14 @@
 //     instead (one that does not depend on a remote hash call), not this
 //     switch.
 //
-//     "Every time" is #492's correction. This used to say it would take
-//     the transfer step's own word for it when the record carried
-//     state.TransferResult.Checksummed, which nothing ever set, so the
-//     shortcut was unreachable. It came out rather than getting wired up,
-//     because the hash rclone compares during a copy is the first type
-//     both ends share and that is the weaker one everywhere this manager
-//     copies from, and discharging a configured sha256 policy with it is
-//     the same silent downgrade this paragraph already refuses.
+// "Every time" in the second of those is #492's correction. It used to say
+// the manager would take the transfer step's own word for it when the
+// record carried state.TransferResult.Checksummed, and nothing ever set
+// that field, so the shortcut was unreachable. It came out rather than
+// getting wired up: the hash rclone compares during a copy is the first
+// type both ends share, which is the weaker one everywhere this manager
+// copies from, and discharging a configured sha256 policy with it is the
+// same silent downgrade the paragraph above already refuses.
 //
 // # A check that could not be completed (issue #419)
 //
