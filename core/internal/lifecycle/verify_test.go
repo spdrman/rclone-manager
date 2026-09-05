@@ -4,9 +4,15 @@
 // Transfer verification always runs: the local file exists and its size
 // matches what was recorded. The hash tier runs when the backup set
 // configures one, and it has more branches than it looks like because a
-// producer-supplied checksum, a backend that can hash, and a backend that
-// cannot are three different situations. The application validator runs when
-// one is configured, as an untrusted subprocess.
+// backend that can hash and a backend that cannot are two different
+// situations. The application validator runs when one is configured, as an
+// untrusted subprocess.
+//
+// There used to be a third situation in that tier, a copy that had already
+// compared a checksum of its own, and #492 removed it: nothing ever
+// recorded one, and the hash a copy compares is not the one a policy asks
+// for. What survives is the negative,
+// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum.
 //
 // Two distinctions organise almost every test here. The first is the one
 // verification exists to make: a check that RAN and disagreed is a verdict
@@ -14,8 +20,8 @@
 // all is a fact about the endpoint and must not. Issue #419's stall tests
 // live next door in stall_test.go for that reason. The second is which
 // requests are made: several tests assert on remoteHashCalls rather than on
-// the verdict, because "never asks the backend when a producer already
-// supplied a checksum" is not observable from the outcome.
+// the verdict, because "asks the backend exactly when a policy is
+// configured, and never otherwise" is not observable from the outcome.
 //
 // Fakes in this file are named verifyJournal/verifyTransport, deliberately
 // distinct from engine_test.go's fakeJournal (whose Get is unused there,
