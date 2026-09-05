@@ -225,8 +225,13 @@ type Source struct {
 
 	network   string
 	inNetwork bool
-	image     string
-	capped    int
+	// ownsNetwork is true when the harness created the network this
+	// machine is on, so hardStop knows whether it is allowed to take it
+	// away. False when a driver put the process inside somebody else's
+	// network (#451).
+	ownsNetwork bool
+	image       string
+	capped      int
 
 	containerID   string
 	containerName string
@@ -742,6 +747,32 @@ func (f *Source) finish() {
 // #161: orphans found still running after 4 and 11 hours compete with the
 // next run for a Docker VM that has roughly 4 GB to give, and each leak
 // makes the next collapse likelier.
+// reclaimNetwork removes the network this machine is on, and whatever else
+// is still attached to it, on the one path where t.Cleanup cannot.
+//
+// Everything on that network belongs to this dying process by construction:
+// the name carries this process's pid, and the harness is the only thing
+// that joins anything to it. Best effort throughout, because this runs
+// immediately before a panic and a failure to tidy up must not replace the
+// report that panic carries.
+func (f *Source) reclaimNetwork() {
+	if !f.ownsNetwork || f.network == "" {
+		return
+	}
+	if _, _, err := dockerRun(dockerNetworkTimeout, "network", "rm", f.network); err == nil {
+		return
+	}
+	// Still in use: something else this process started is on it. A medium,
+	// or a second source.
+	out, _, err := dockerRun(dockerProbeTimeout, "ps", "-aq", "--filter", "network="+f.network)
+	if err == nil {
+		if ids := strings.Fields(out); len(ids) > 0 {
+			_, _, _ = dockerRun(dockerRemoveTimeout, append([]string{"rm", "-f"}, ids...)...)
+		}
+	}
+	_, _, _ = dockerRun(dockerNetworkTimeout, "network", "rm", f.network)
+}
+
 func (f *Source) teardown() {
 	f.teardownOnce.Do(func() {
 		f.mu.Lock()
@@ -890,6 +921,13 @@ func (f *Source) hardStop(report string) {
 		return
 	}
 	f.teardown()
+	// t.Cleanup will not run: the panic below takes the whole process
+	// down, which is the point of a hard stop. So the network has to be
+	// given back here or it survives the run holding one of the daemon's
+	// ~30 address-pool slots until the lease sweep reclaims it fifteen
+	// minutes later. Measured: one leaked network per full run of this
+	// package, from the one test that deliberately drives this path.
+	f.reclaimNetwork()
 	debug.SetTraceback("all")
 	panic(report)
 }

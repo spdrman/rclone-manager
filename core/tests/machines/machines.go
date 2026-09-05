@@ -289,6 +289,7 @@ func (m *Machines) addSource(t *testing.T) *Source {
 func (m *Machines) startOn(t *testing.T, f *Source) *Source {
 	t.Helper()
 	alias := "source-" + shortID(t)
+	f.ownsNetwork = !m.inNetwork
 	return startSourceOn(t, f, sourceOptions{
 		Network:   m.Network,
 		Alias:     alias,
