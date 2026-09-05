@@ -83,6 +83,12 @@ func startSlowLink(t *testing.T, f *sftpfixture.Fixture, bytesPerSecond int) *sl
 	l := &slowLink{fixture: f, ln: ln, rate: bytesPerSecond, chunk: slowLinkChunk}
 	l.knownHosts = repinKnownHosts(t, f.KnownHostsFile, l.Port())
 
+	// serve() is counted in the same WaitGroup as the connections it
+	// spawns, so the counter is never zero while it is still accepting.
+	// Without that, an Accept that returns just as the Cleanup runs would
+	// call wg.Add on a WaitGroup whose Wait had already been entered at
+	// zero, which is a documented misuse and panics rather than flaking.
+	l.wg.Add(1)
 	go l.serve()
 	t.Cleanup(func() {
 		l.mu.Lock()
@@ -125,6 +131,7 @@ func (l *slowLink) Source(id, root string) transport.Source {
 }
 
 func (l *slowLink) serve() {
+	defer l.wg.Done()
 	for {
 		client, err := l.ln.Accept()
 		if err != nil {
