@@ -148,6 +148,75 @@ func TestARestoreSubmittedThroughTheServiceIsDurableAndIsNotAProgressBar(t *test
 	}
 }
 
+// TestReplayingARestoreSubmissionFindsTheOriginalRow is
+// RestorePlacementRequest.IdempotencyKey's promise, driven the whole way
+// an operator's retry actually travels.
+//
+// The retry this matters for is not the one that never landed. It is the
+// one where the operator's client timed out, or the deployment was
+// restarted mid-request, and nobody knows whether a restore was booked. A
+// retry then is the correct thing to do, and until #490 it came back as
+// ErrRestoreRefused saying a restore of this copy was already running,
+// about the restore the retry was asking after. An operator reading that
+// either pays for a second one under a fresh key or gives up on a copy
+// that was already on its way.
+//
+// The double is the honest one: InitiateRestore leaves it reporting a
+// restore in progress, exactly as S3 does, which is what makes the second
+// submission below reach the check at all. The window list is the negative
+// half, and it fails whether the replay starts a second restore or is
+// turned away.
+func TestReplayingARestoreSubmissionFindsTheOriginalRow(t *testing.T) {
+	store := &recordingRestoreStore{}
+	b, artifactID := serviceWithArchivedCopy(t, store)
+	ctx := context.Background()
+
+	req := RestorePlacementRequest{
+		IdempotencyKey: "idem-restore-retried",
+		Actor:          "alice",
+		ConfigRevision: b.ConfigRevision(),
+		ArtifactID:     artifactID,
+		Medium:         "cold-store",
+		WindowDays:     3,
+		Acknowledged:   true,
+	}
+
+	first, err := b.SubmitRestorePlacement(ctx, req)
+	if err != nil {
+		t.Fatalf("first SubmitRestorePlacement: %v", err)
+	}
+	if !first.Created {
+		t.Fatal("the first submission reported that nothing new was started")
+	}
+
+	// The provider is now saying what a provider says after it has been
+	// asked for a restore. Nothing is reset, and that is the point.
+	if got, _ := store.RestoreStatus(ctx, transport.Medium{}, ""); got == nil || !got.InProgress {
+		t.Fatal("the double is not reporting the restore it was just asked for, so the retry below proves nothing")
+	}
+
+	second, err := b.SubmitRestorePlacement(ctx, req)
+	if err != nil {
+		t.Fatalf("the retry of a submission that had already landed was refused: %v", err)
+	}
+	if second.Created {
+		t.Error("the retry reported that it started something new")
+	}
+	if second.Operation.ID != first.Operation.ID {
+		t.Errorf("the retry came back as operation %q, want the original %q", second.Operation.ID, first.Operation.ID)
+	}
+	if second.WindowDays != 3 || second.Wait == "" || second.Billing == "" {
+		t.Errorf("the retry lost the original's own terms: %+v", second)
+	}
+
+	if got := store.windows(); len(got) != 1 || got[0] != 3 {
+		t.Fatalf("the provider was asked for restores %v; a retry must not book a second one", got)
+	}
+	if ops := listAllOperations(t, b); len(ops) != 1 {
+		t.Fatalf("a retried submission left %d operation rows behind, want the original 1", len(ops))
+	}
+}
+
 // TestARestoreStatusIsReDerivedFromTheProviderNotFromTheRow is the
 // restart-safety requirement, driven through the boundary an operator's
 // client actually polls.
@@ -226,6 +295,44 @@ func TestARestoreStatusIsReDerivedFromTheProviderNotFromTheRow(t *testing.T) {
 	}
 	if done.Progress != nil {
 		t.Error("a finished restore carried a progress reading")
+	}
+}
+
+// TestARestoreOfACopySomebodyElseIsAlreadyRestoringIsRefusedAndRecordsNothing
+// is the other direction of #490, at the boundary a client actually calls.
+//
+// A restore already in progress under a key this deployment has never seen
+// is not a retry. It belongs to another operator, another deployment, or a
+// lifecycle rule, and asking again buys nothing and is billed twice on
+// some providers. So it is refused, and the row count afterwards is what
+// says the refusal cost nothing: the fix for the replay direction is
+// resolving the key before the provider is asked, and the tempting way to
+// do that is to write the row and read it back, which would leave a row
+// behind every refusal from here on.
+func TestARestoreOfACopySomebodyElseIsAlreadyRestoringIsRefusedAndRecordsNothing(t *testing.T) {
+	store := &recordingRestoreStore{state: &transport.RestoreState{InProgress: true}}
+	b, artifactID := serviceWithArchivedCopy(t, store)
+
+	_, err := b.SubmitRestorePlacement(context.Background(), RestorePlacementRequest{
+		IdempotencyKey: "idem-never-seen-before",
+		Actor:          "alice",
+		ConfigRevision: b.ConfigRevision(),
+		ArtifactID:     artifactID,
+		Medium:         "cold-store",
+		WindowDays:     3,
+		Acknowledged:   true,
+	})
+	if !errors.Is(err, ErrRestoreRefused) {
+		t.Fatalf("SubmitRestorePlacement = %v, want ErrRestoreRefused", err)
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Errorf("the refusal reads %q, and does not say what is in the way", err)
+	}
+	if got := store.windows(); len(got) != 0 {
+		t.Fatalf("a refused request still asked the provider for %v", got)
+	}
+	if ops := listAllOperations(t, b); len(ops) != 0 {
+		t.Fatalf("a refused request left %d operation rows behind", len(ops))
 	}
 }
 

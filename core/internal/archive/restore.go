@@ -119,9 +119,18 @@ type Store interface {
 
 // Journal is the slice of internal/state this operation needs.
 // *state.Journal satisfies it.
+//
+// GetOperationByIdempotencyKey is the one method here that is not obvious
+// from the operation's shape, and it is what lets Submit keep both of its
+// promises at once. Resolving a retry key is otherwise the same call as
+// writing a row (CreateOperation), and a restore has to answer "have I
+// already been given this exact request" BEFORE it asks a provider for
+// anything, while still leaving no row behind when it goes on to refuse.
+// A read is the only thing that is both.
 type Journal interface {
 	CreateOperation(ctx context.Context, req state.OperationRequest) (state.OperationOutcome, error)
 	GetOperation(ctx context.Context, operationID string) (state.Operation, error)
+	GetOperationByIdempotencyKey(ctx context.Context, key string) (state.Operation, error)
 	MarkOperationRunning(ctx context.Context, operationID string, startedAt time.Time) error
 	CompleteOperation(ctx context.Context, operationID string, finishedAt time.Time, result string) error
 	FailOperation(ctx context.Context, operationID string, finishedAt time.Time, errMsg string) error
@@ -150,15 +159,20 @@ type Request struct {
 	// it: a retried submission finds the original row rather than
 	// starting a second restore.
 	//
-	// That holds for the retry this key is mostly for, which is a
-	// submission that never reached the provider. It does NOT hold once
-	// the first submission was accepted: Submit asks the provider whether
-	// a restore is already running before it resolves this key, and a
-	// restore this product started is precisely one the provider now
-	// reports in progress, so the replay comes back as ErrAlreadyRestoring
-	// rather than as the original row. See the comment at that check, and
-	// restore_test.go's replay test, which says what settling it would
-	// take.
+	// It holds for both retries, and the second one is the one worth
+	// naming. A submission that never reached the provider is the easy
+	// case. A submission that WAS accepted is the case an operator
+	// actually hits, because a restore this product started is precisely
+	// one the provider now reports in progress, and for a while that came
+	// back as ErrAlreadyRestoring: a conflict, reported to the person
+	// whose request it was. Submit resolves this key before it asks the
+	// provider anything, so a replay is answered from the row.
+	//
+	// What the key is not is a namespace. A key first used by a different
+	// actor, for a different action, or against a different configuration
+	// revision is refused with state.ErrOperationIdempotencyKeyReused
+	// rather than answered, because handing back somebody else's
+	// operation is an information leak dressed up as a convenience.
 	IdempotencyKey string
 
 	// Actor is who asked, recorded on the row.
@@ -251,6 +265,25 @@ type Submitted struct {
 // Everything that can refuse, refuses before the row is written, so a
 // refused request leaves nothing behind at all.
 //
+// # Why the idempotency key is resolved first
+//
+// Two promises meet here and the order is the only thing that keeps both.
+// A replayed key has to find the original row (Request.IdempotencyKey),
+// and a refused request has to leave no row behind (above). Asking the
+// provider first satisfies the second and breaks the first, because a
+// restore this product started is one the provider now reports in
+// progress, so an operator retrying their own request was told it
+// conflicted with itself. Writing the row first to resolve the key
+// satisfies the first and breaks the second.
+//
+// Neither is necessary: resolving the key is a READ
+// (Journal.GetOperationByIdempotencyKey), so it can happen before the
+// provider is asked and still write nothing. A replay returns the row it
+// finds and stops; anything else falls through to the provider check with
+// nothing recorded yet, and a refusal there still leaves an empty table.
+// CreateOperation's own idempotency branch stays below as the race
+// backstop, for the row that appears between that read and the insert.
+//
 // # The crash point, named
 //
 // There is exactly one, between marking the row running and the provider
@@ -271,20 +304,29 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 		return Submitted{}, fmt.Errorf("%w: this deployment has no way to reach a storage medium", ErrInvalidRequest)
 	}
 
+	// Resolve the retry key before anything else is asked or written. A
+	// key that already has a row is this same request arriving twice, and
+	// the answer to it is that row: nothing is asked of the provider,
+	// nothing is billed, and in particular the check below is never
+	// reached, which is what stops a restore this product started being
+	// reported back to its own submitter as a conflict.
+	existing, replayed, err := r.resolveReplay(ctx, req)
+	if err != nil {
+		return Submitted{}, err
+	}
+	if replayed {
+		return replayOf(existing)
+	}
+
 	// Ask the provider whether it is already restoring this object before
 	// writing anything. A second restore of an object already being
 	// restored is billed again on some providers and buys nothing on any
 	// of them.
 	//
-	// Asking here, ahead of the idempotency key, is also what makes a
-	// replay of a key whose first submission SUCCEEDED come back as
-	// ErrAlreadyRestoring instead of as the row it already has, which is
-	// not what IdempotencyKey's own doc promises. Resolving the key first
-	// would fix that and break the other promise this ordering keeps,
-	// which is that a refused request leaves no row behind at all; keeping
-	// both needs a lookup by idempotency key that Journal has no method
-	// for, so it is a change to make deliberately rather than in
-	// passing.
+	// By here the request is known NOT to be a replay, so a restore in
+	// progress is somebody else's: another operator, another deployment,
+	// or a lifecycle rule. Refusing it is the right answer and it happens
+	// with the operations table still untouched.
 	current, err := r.store.RestoreStatus(ctx, req.Medium, req.Copy.Placement.Location)
 	if err != nil {
 		return Submitted{}, fmt.Errorf("archive: asking %q about %q before restoring it: %w",
@@ -320,17 +362,13 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 		return Submitted{}, fmt.Errorf("archive: recording the restore operation: %w", err)
 	}
 	if !outcome.Created {
-		// A replay of a key that already has a row. Nothing new is
-		// started, and in particular no second restore is initiated,
-		// which is the entire reason this branch returns here rather
-		// than falling through.
-		return Submitted{
-			OperationID: outcome.Operation.OperationID,
-			Created:     false,
-			WindowDays:  req.WindowDays,
-			Wait:        behaviour.RestoreWait,
-			Billing:     BillingStatement(behaviour),
-		}, nil
+		// A row appeared under this key between resolveReplay's read
+		// above and this insert, which needs two writers on one journal
+		// file. It is the same answer as a replay, reached later:
+		// nothing new is started, and in particular no second restore is
+		// initiated, which is the entire reason this branch returns here
+		// rather than falling through.
+		return replayOf(outcome.Operation)
 	}
 
 	if err := r.journal.MarkOperationRunning(ctx, operationID, r.now()); err != nil {
@@ -348,6 +386,65 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 		OperationID: operationID,
 		Created:     true,
 		WindowDays:  req.WindowDays,
+		Wait:        behaviour.RestoreWait,
+		Billing:     BillingStatement(behaviour),
+	}, nil
+}
+
+// resolveReplay asks the journal whether this exact request has already
+// been accepted, and answers without writing anything.
+//
+// The match it insists on is the same one CreateOperation makes on a
+// replay, and it is repeated here rather than delegated because this is
+// the layer that short-circuits on the answer. A key first used by a
+// different actor, for a different action, or against a different
+// configuration revision is not this caller's request, and handing back
+// the row would tell them a restore of theirs is running when it is
+// somebody else's, result text included. Refusing costs a caller a fresh
+// key; not refusing costs somebody their privacy.
+//
+// The refusal is state's own sentinel rather than a new one, because
+// core/service already maps it (to ErrIdempotencyKeyConflict) and a caller
+// cannot tell, and should not care, which of the two reads noticed.
+func (r *Restorer) resolveReplay(ctx context.Context, req Request) (state.Operation, bool, error) {
+	existing, err := r.journal.GetOperationByIdempotencyKey(ctx, req.IdempotencyKey)
+	if errors.Is(err, state.ErrOperationNotFound) {
+		return state.Operation{}, false, nil
+	}
+	if err != nil {
+		return state.Operation{}, false, fmt.Errorf("archive: resolving the restore's idempotency key: %w", err)
+	}
+	if existing.Actor != req.Actor || existing.Action != ActionRestore || existing.ConfigRevision != req.ConfigRevision {
+		return state.Operation{}, false, fmt.Errorf("%w: key %q", state.ErrOperationIdempotencyKeyReused, req.IdempotencyKey)
+	}
+	return existing, true, nil
+}
+
+// replayOf describes a row that already exists, for a submission that
+// started nothing.
+//
+// Every figure in it is read back out of the ROW rather than copied from
+// the request that replayed the key, and that is the difference between
+// handing back the original request and handing back the new one wearing
+// the original's id. The two only differ when a caller replays a key with
+// different parameters, which is allowed (a key's identity is its actor,
+// its action and the configuration revision, not the window), and in that
+// case the row is the only thing that knows what the provider was actually
+// asked for. Reporting the replayed window instead would describe a
+// restore nobody ever requested.
+func replayOf(op state.Operation) (Submitted, error) {
+	params, err := ParametersOf(op.Parameters)
+	if err != nil {
+		return Submitted{}, fmt.Errorf("archive: replaying restore operation %q: %w", op.OperationID, err)
+	}
+	behaviour, err := Of(params.StorageClass)
+	if err != nil {
+		return Submitted{}, fmt.Errorf("archive: replaying restore operation %q: %w", op.OperationID, err)
+	}
+	return Submitted{
+		OperationID: op.OperationID,
+		Created:     false,
+		WindowDays:  params.WindowDays,
 		Wait:        behaviour.RestoreWait,
 		Billing:     BillingStatement(behaviour),
 	}, nil
