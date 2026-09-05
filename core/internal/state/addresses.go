@@ -1,3 +1,15 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+)
+
 // Where a backup set id was last pointing, written when its configuration
 // is removed and read when the same id is configured again.
 //
@@ -17,17 +29,6 @@
 // into "recorded as empty". Both are argued at the functions themselves,
 // and migration 0008 carries the rest: why this is stored at all, why
 // removal is the only writer, and why a row here is not a tombstone.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-)
 
 // BackupSetAddress is where one backup set id was last configured to pull
 // from and land in: the three fields that together decide which data a

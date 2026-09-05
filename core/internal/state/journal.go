@@ -1,3 +1,16 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
+)
+
 // The write side of the journal: RecordTransition, which every lifecycle
 // step in this product goes through, and the helpers that turn a
 // Transition into the SQL behind it.
@@ -22,18 +35,6 @@
 // transition says nothing about the hash" different from "this transition
 // sets the hash to empty". See types.go for why every optional fact is a
 // pointer.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-)
 
 // timeLayout is used for every timestamp column. RFC3339Nano round-trips
 // exactly through time.Parse, sorts lexically in the same order it sorts

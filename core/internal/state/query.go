@@ -1,3 +1,16 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+)
+
 // The read side: decoding artifact rows back into Records, and the
 // questions the rest of the product asks this journal.
 //
@@ -23,18 +36,6 @@
 // out of quarantine and one that was never distrusted both read COMMITTED,
 // and the append-only log is the only place left that tells them apart.
 // Anything about to do something destructive asks the log.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"strings"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-)
 
 // querier is satisfied by both *sql.DB and *sql.Tx, so the read helpers
 // below work identically whether they run standalone or inside the

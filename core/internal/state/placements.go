@@ -1,3 +1,12 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+)
+
 // Where an artifact's bytes actually are: one row per durable copy (EPIC
 // E, FR-29), plus the accessors that let the rest of the product ask about
 // a copy without assuming there is exactly one and that it is local.
@@ -23,14 +32,6 @@
 // spelled out here only because 0007_placements.sql constrains those
 // columns, and a vocabulary the schema enforces should be written beside
 // the constraint that enforces it.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"fmt"
-	"time"
-)
 
 // MediumLocal is the implicit storage medium every deployment already has:
 // the backup set's own local_path, with exactly today's semantics.

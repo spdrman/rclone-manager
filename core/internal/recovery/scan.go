@@ -1,3 +1,14 @@
+package recovery
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
 // This file is the read side of the sidecar manifests manifest.go writes:
 // given the local directory of one backup set, hand back every recovery
 // manifest sitting in it.
@@ -10,16 +21,6 @@
 // none of the others count, so this walks the directory and splits the
 // outcome in two: what it could read, and what it could not, with the
 // second half carrying enough detail for an operator to go and look.
-package recovery
-
-import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-)
 
 // ScanError reports one sidecar manifest ScanManifests could not use.
 //

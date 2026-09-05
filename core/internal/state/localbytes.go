@@ -1,3 +1,12 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
 // One aggregate query: how many bytes of local disk this manager is
 // occupying, as the journal knows it.
 //
@@ -12,14 +21,6 @@
 // deliberately over-counts, why over-counting is the only safe direction
 // for a number a cap is enforced from, and why the list of states holding
 // a local copy arrives as an argument instead of being restated here.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"fmt"
-	"strings"
-)
 
 // LocalBytesInUse sums the recorded size of every artifact currently in one
 // of states: how much space this manager is occupying on the local

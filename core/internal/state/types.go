@@ -1,3 +1,11 @@
+package state
+
+import (
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+)
+
 // The values a caller hands to RecordTransition and gets back from the
 // read side: one Record per artifact, and one small struct per optional
 // fact a transition can carry.
@@ -21,13 +29,6 @@
 // FR-10 vocabulary belongs to internal/lifecycle, RetentionUpdate.Tier is
 // a plain string because FR-18's policy belongs to internal/retention, and
 // this package's job stops at storing what they decided.
-package state
-
-import (
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-)
 
 // RemoteIdentity is the remote object identity captured at discovery (FR-16),
 // so it can be compared against the remote object's identity again
