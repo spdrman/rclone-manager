@@ -609,12 +609,20 @@ function mockBackupSetRetention(
  * world, so applyRetention below only ever honors the MOST RECENT tick's
  * plan_id, exactly like ApplyRetentionPlan's own single-use, revision-
  * checked contract (core/service/retention.go).
+ *
+ * declaresAMedium is the "no-medium" scenario's own switch, and it gates
+ * exactly what core/service gates (summarizeRetentionPlan, issue #430): a
+ * deployment with one place to put anything says nothing about placement,
+ * so no move, no unconfirmed placement, and no medium on any verdict.
+ * Without that, dev mode would show a Moves section to the one scenario
+ * that exists to prove the product still works without the feature.
  */
 function retentionPlan(
   overrides: Map<string, RetentionOverride>,
   source: string,
   set: string,
-  tick: number
+  tick: number,
+  declaresAMedium: boolean
 ): RetentionPlan {
   const attribution = mockBackupSetRetention(overrides, source, set);
   return {
@@ -647,8 +655,26 @@ function retentionPlan(
       { artifact: "backup-20260813.dump.zst", action: "REFUSE", reason: "sibling-prefix directory found at the computed path; refusing to delete", tiers: [] },
       { artifact: "backup-20260806.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
       { artifact: "backup-20260723.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
-      { artifact: "backup-20260716.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
-    ]
+      // Issue #430: the one deletion that would NOT happen on this
+      // machine. A dev fixture where every deletion is local renders the
+      // FR-30 distinction as an empty column, which is the same thing as
+      // not having built it.
+      {
+        artifact: "backup-20260716.dump.zst",
+        action: "DELETE",
+        reason: "Not selected by current retention policy",
+        tiers: [],
+        medium: declaresAMedium ? "offsite_s3" : undefined
+      }
+    ],
+    // Issue #430. The monthly tier's home is offsite_s3 and both monthly
+    // keeps are still local, so one is a move and the other is a move
+    // already in flight, which is the pair a placement section exists to
+    // tell apart.
+    moves: declaresAMedium
+      ? [{ artifact: "backup-20260801.dump.zst", fromMedium: "local", toMedium: "offsite_s3" }]
+      : [],
+    unconfirmedPlacements: declaresAMedium ? ["backup-20260701.dump.zst"] : []
   };
 }
 
@@ -1194,7 +1220,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     previewRetention: (source, set) => {
       retentionTick += 1;
-      return delay(retentionPlan(retentionOverrides, source, set, retentionTick));
+      return delay(retentionPlan(retentionOverrides, source, set, retentionTick, !noMedium));
     },
 
     // Issue #333's three per-set retention operations. The write half
@@ -1248,7 +1274,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // Promise, so a bare throw escapes before a promise exists and a
       // caller's .catch() never runs — the one path that must not fail open
       // for a stale retention plan.
-      const current = retentionPlan(retentionOverrides, source, set, retentionTick);
+      const current = retentionPlan(retentionOverrides, source, set, retentionTick, !noMedium);
       if (planId !== current.planId)
         return Promise.reject(new BackupManagerError({
           // The literal code apps/common/webhost/handlers_retention.go

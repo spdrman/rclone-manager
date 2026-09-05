@@ -413,10 +413,26 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
     // chain beside the wrong source.
     retention: fromWireRetentionSettings(wire.retention),
     retentionIsOverride: wire.retention_is_override,
+    // Issue #430: EPIC E's placement facts. Both arrays are normalised to
+    // [], because the wire OMITS them for a deployment that declares no
+    // storage medium and an optional array has a third reading ("the
+    // server did not say") that is never true here.
+    moves: (wire.moves ?? []).map((m) => ({
+      artifact: m.artifact,
+      fromMedium: m.from_medium,
+      toMedium: m.to_medium
+    })),
+    unconfirmedPlacements: wire.unconfirmed_placements ?? [],
     verdicts: wire.verdicts.map((v) => ({
       artifact: v.artifact,
       action: v.action as RetentionVerdictAction,
       reason: v.reason,
+      // Carried through exactly as it arrives, undefined included: see
+      // RetentionVerdict.medium (types/backup.ts). Undefined means the
+      // implicit local medium on a DELETE, and means "nothing was
+      // established" on the two REFUSE shapes that name no place at all,
+      // so defaulting it here would turn the second into a claim.
+      medium: v.medium,
       // tier_selections, not tiers: the two carry the same tiers in the
       // same order and this UI needs the placement on every one of them
       // (issue #218), so reading the bare list as well would be a second
