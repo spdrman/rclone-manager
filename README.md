@@ -2033,7 +2033,7 @@ core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
-  artifactstore/ where a committed artifact's bytes live, and the seam that lets that be somewhere else later
+  artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)
   discovery/     turns a raw remote listing into artifacts proven complete
@@ -2043,11 +2043,11 @@ core/internal/
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging
-  placement/     the verification ladder: what each class of check proves about a durable copy, and what it costs
+  placement/     where a durable copy is, the ladder that says what proves it good, and the journaled move engine
   quarantine/    the operator-facing view of what is quarantined and why
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
-  retention/     GFS classification, last-known-good protection, and the local prune
+  retention/     GFS classification, last-known-good protection, home-medium planning, and the local prune
   revalidate/    scheduled re-verification of artifacts that already passed
   state/         the SQLite journal: durable, idempotent transition recording
   testenv/       the environment a test has to be in before it may conclude anything from file permissions
