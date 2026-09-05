@@ -835,6 +835,13 @@ class Preflight:
             return
         if image_name(self.args.image) != f"{RELEASE_REGISTRY}/{RELEASE_REPOSITORY}":
             return
+        carried = _semver(CARRIED_RELEASE)
+        if carried is None:
+            # Unreachable while the pin test stands, and cheaper than the
+            # alternative: this is the one method in the class that must
+            # never raise, and "newer than an unorderable version" has no
+            # answer to give.
+            return
         try:
             published = self.registry().released_versions()
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -842,7 +849,7 @@ class Preflight:
                       f"Nothing about this install changes.")
             return
 
-        newer = [v for v in published if _semver(v) > _semver(CARRIED_RELEASE)]
+        newer = [v for v in published if _semver(v) > carried]
         if not newer:
             self.note(f"{CARRIED_RELEASE} is the newest published release, prereleases excluded")
             return
@@ -1064,7 +1071,8 @@ def reference_version(reference: str) -> str:
     tag = image_tag(reference)
     if tag:
         return tag
-    if image_digest(reference) and image_digest(reference) == CARRIED_RELEASE_DIGEST:
+    digest = image_digest(reference)
+    if digest and digest == CARRIED_RELEASE_DIGEST:
         return CARRIED_RELEASE
     return ""
 
