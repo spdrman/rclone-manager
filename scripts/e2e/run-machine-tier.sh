@@ -127,19 +127,25 @@ cannot_run() {
 packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/... ./tests/miniointegration/..."
 keep=0
 run_filter=""
+verbose=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --packages) packages="${2:-}"; shift 2 ;;
     --packages=*) packages="${1#--packages=}"; shift ;;
     --run) run_filter="${2:-}"; shift 2 ;;
     --run=*) run_filter="${1#--run=}"; shift ;;
+    # `go test -v` inside the manager. Worth having because the numbers
+    # these tests measure are printed with t.Logf, and t.Logf on a PASSING
+    # test is invisible without it: reading a measurement out of this
+    # placement is otherwise only possible by making it fail.
+    -v|--verbose) verbose="-v"; shift ;;
     # Leaves the manager container and the network up after a FAILING run,
     # for reading. Never the default.
     --keep-on-failure) keep=1; shift ;;
     -h|--help)
       sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--keep-on-failure]" ;;
   esac
 done
 
@@ -321,7 +327,7 @@ note "no port is published by any source or medium: RCLONE_MANAGER_MACHINES_NETW
 started="$(date +%s)"
 set +e
 # shellcheck disable=SC2086
-docker exec "$manager" go test -count=1 ${run_filter:+-run "$run_filter"} $packages
+docker exec "$manager" go test -count=1 $verbose ${run_filter:+-run "$run_filter"} $packages
 status=$?
 set -e
 elapsed=$(( $(date +%s) - started ))
