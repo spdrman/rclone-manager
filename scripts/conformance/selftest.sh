@@ -36,6 +36,12 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# swap, the STALE ANCHOR verdict and --check-anchors all live in the shared
+# library, because scripts/compat/selftest.sh needs exactly the same three
+# things and the two drifted apart once already (#458).
+. scripts/lib/selftest-swap.sh
+selftest_parse_args "$@"
+
 root=$(pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-conformance-selftest.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -55,6 +61,13 @@ fail=0
 mutant() {
   local name=$1
   local dir="$tmp/$name"
+  # Under --check-anchors nothing is planted, so there is nothing to copy
+  # into and no reason to spend a tar per control. Every swap reads the real
+  # tree instead, which is the tree whose drift is being looked for.
+  if [ "$selftest_dry_run" = 1 ]; then
+    printf '%s' "$root"
+    return 0
+  fi
   mkdir -p "$dir"
   (cd "$root" && git ls-files -z --cached --others --exclude-standard | tar -cf - --null -T -) | (cd "$dir" && tar -xf -)
   printf '%s' "$dir"
@@ -81,6 +94,12 @@ unit_gate() {
 # expect_unit_check_fails <label> <dir> <expected substring> <package> <run pattern>
 expect_unit_check_fails() {
   local label=$1 dir=$2 needle=$3 pkg=$4 pattern=$5
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
   if (cd "$dir" && unit_gate "$pkg" "$pattern") >"$tmp/out" 2>&1; then
     echo "SELFTEST FAIL: $label. $pkg PASSED against a planted violation." >&2
     sed 's/^/    /' "$tmp/out" >&2
@@ -100,6 +119,12 @@ expect_unit_check_fails() {
 # expect_check_fails <label> <dir> <expected substring> [run pattern]
 expect_check_fails() {
   local label=$1 dir=$2 needle=$3 pattern=${4:-.}
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
   if (cd "$dir" && conformance_gate "$pattern") >"$tmp/out" 2>&1; then
     echo "SELFTEST FAIL: $label. The composed suite PASSED against a planted violation." >&2
     sed 's/^/    /' "$tmp/out" >&2
@@ -118,6 +143,12 @@ expect_check_fails() {
 
 expect_gate_passes() {
   local label=$1 dir=$2
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
   if (cd "$dir" && conformance_gate) >"$tmp/out" 2>&1; then
     echo "  ok (clean):  $label"
     pass=$((pass + 1))
@@ -128,26 +159,13 @@ expect_gate_passes() {
   fi
 }
 
-# swap <file> <old> <new> replaces one exact string, and REFUSES if the old
-# text is not there.
-#
-# The refusal is the whole point. A planted violation that silently planted
-# nothing is the "green mutation" failure this file exists to rule out, and
-# it has happened here before: a mutation whose anchor had been refactored
-# away read as a clean pass for weeks.
-swap() {
-  local file=$1 old=$2 new=$3
-  python3 - "$file" "$old" "$new" <<'PY'
-import sys
-path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
-src = open(path).read()
-if old not in src:
-    sys.exit("PLANTED NOTHING: %s does not contain the anchor:\n%s" % (path, old))
-if src.count(old) != 1:
-    sys.exit("AMBIGUOUS ANCHOR: %s contains the anchor %d times" % (path, src.count(old)))
-open(path, "w").write(src.replace(old, new))
-PY
-}
+# swap <file> <old> <new> replaces one exact string and REFUSES if the old
+# text is not there, which is the whole point: a planted violation that
+# silently planted nothing is the "green mutation" failure this file exists
+# to rule out, and it has happened here before. It lives in
+# scripts/lib/selftest-swap.sh now, along with what a refusal costs: the
+# control is reported STALE ANCHOR and skipped, and the run carries on to
+# the rest instead of dying here (#458).
 
 echo "==> negative control: the composed suite is clean on the real tree"
 expect_gate_passes "core/tests/conformance on an unmutated tree" "$root"
@@ -514,7 +532,12 @@ expect_check_fails "a planted breach that plants nothing" "$d" \
   'TestTheWatcherCatchesABreachASamplerWouldMiss'
 
 echo
-echo "==> $pass passed, $fail failed"
-if [ "$fail" -ne 0 ]; then
+if [ "$selftest_dry_run" = 1 ]; then
+  echo "==> $selftest_anchors_checked anchors checked, $selftest_anchors_stale stale"
+else
+  echo "==> $pass passed, $fail failed, $selftest_stale_count stale"
+fi
+selftest_stale_summary
+if [ "$fail" -ne 0 ] || [ "$selftest_stale_count" -ne 0 ]; then
   exit 1
 fi

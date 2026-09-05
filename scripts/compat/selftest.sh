@@ -37,6 +37,12 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# swap, the STALE ANCHOR verdict and --check-anchors all live in the shared
+# library, because scripts/conformance/selftest.sh needs exactly the same
+# three things and the two drifted apart once already (#458).
+. scripts/lib/selftest-swap.sh
+selftest_parse_args "$@"
+
 root=$(pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-compat-selftest.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -56,6 +62,13 @@ fail=0
 mutant() {
   local name=$1
   local dir="$tmp/$name"
+  # Under --check-anchors nothing is planted, so there is nothing to copy
+  # into and no reason to spend a tar per control. Every swap reads the real
+  # tree instead, which is the tree whose drift is being looked for.
+  if [ "$selftest_dry_run" = 1 ]; then
+    printf '%s' "$root"
+    return 0
+  fi
   mkdir -p "$dir"
   (cd "$root" && git ls-files -z --cached --others --exclude-standard | tar -cf - --null -T -) | (cd "$dir" && tar -xf -)
   printf '%s' "$dir"
@@ -73,6 +86,12 @@ compat_gate() {
 # passing.
 expect_cell_fails() {
   local label=$1 dir=$2 cell=$3
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
   if (cd "$dir" && compat_gate) >"$tmp/out" 2>&1; then
     echo "SELFTEST FAIL: $label. The FR-35 gate PASSED against a planted violation." >&2
     sed 's/^/    /' "$tmp/out" >&2
@@ -90,6 +109,12 @@ expect_cell_fails() {
 
 expect_gate_passes() {
   local label=$1 dir=$2
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
   if (cd "$dir" && compat_gate) >"$tmp/out" 2>&1; then
     echo "  ok (clean):  $label"
     pass=$((pass + 1))
@@ -114,6 +139,9 @@ expect_gate_passes() {
 # was caught instead of read as five passes.
 plant_migration() {
   local dir=$1 body=$2 next
+  if [ "$selftest_dry_run" = 1 ]; then
+    return 0
+  fi
   next=$(( $(ls "$dir"/core/migrations/[0-9]*.sql \
              | sed 's|.*/||; s|_.*||; s|^0*||' \
              | sort -n | tail -1) + 1 ))
@@ -174,58 +202,40 @@ echo
 echo "==> the decisions a medium-free deployment already makes"
 
 d=$(mutant absent-medium-stops-meaning-local)
-python3 - "$d/core/internal/config/config.go" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = '''func (t RetentionTier) EffectiveMedium() string {
+swap "$d/core/internal/config/config.go" \
+  'func (t RetentionTier) EffectiveMedium() string {
 	if t.Medium == "" {
 		return MediumLocal
 	}
 	return t.Medium
-}'''
-new = '''func (t RetentionTier) EffectiveMedium() string {
+}' \
+  'func (t RetentionTier) EffectiveMedium() string {
 	return t.Medium
-}'''
-assert old in s, "EffectiveMedium no longer has the shape this control mutates"
-open(p, "w").write(s.replace(old, new))
-PY
+}'
 expect_cell_fails "a tier with no medium key resolving to no medium at all" "$d" "01-config-validation"
 
 d=$(mutant last-known-good-protection-dropped)
-python3 - "$d/core/internal/retention/lastknowngood.go" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = '''	if !lkg.Protected {
+swap "$d/core/internal/retention/lastknowngood.go" \
+  '	if !lkg.Protected {
 		return verdicts
-	}'''
-new = '''	if true {
+	}' \
+  '	if true {
 		return verdicts
-	}'''
-assert old in s, "ApplyLastKnownGood no longer has the shape this control mutates"
-open(p, "w").write(s.replace(old, new, 1))
-PY
+	}'
 expect_cell_fails "FR-19 protection silently not composed onto the verdicts" "$d" "04-retention-verdicts"
 
 d=$(mutant prune-deletes-what-it-cannot-stat)
-python3 - "$d/core/internal/retention/prune.go" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = '''	info, err := os.Lstat(expected)
+swap "$d/core/internal/retention/prune.go" \
+  '	info, err := os.Lstat(expected)
 	if err != nil {
 		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {'''
-new = '''	info, err := os.Lstat(expected)
+	if info.Mode()&os.ModeSymlink != 0 {' \
+  '	info, err := os.Lstat(expected)
 	if err != nil {
 		return expected, nil
 	}
-	if info.Mode()&os.ModeSymlink != 0 {'''
-assert old in s, "the prune stat refusal no longer has the shape this control mutates"
-open(p, "w").write(s.replace(old, new, 1))
-PY
+	if info.Mode()&os.ModeSymlink != 0 {'
 expect_cell_fails "prune promoting a file it could not stat from REFUSE to DELETE" "$d" "05-prune-verdicts"
 
 echo
@@ -235,57 +245,40 @@ d=$(mutant cli-renders-a-placement-line-unconditionally)
 # FR-35 allows an additive CLI column only when a non-local placement
 # exists. This is that column rendered on a deployment that has none,
 # which is the single most likely way EPIC E breaks this clause.
-python3 - "$d/core/cmd/backup-manager/artifacts.go" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = '''	if rec.RetentionTier != "" {
-		fmt.Printf("retention_tier:      %s\\n", rec.RetentionTier)
-	}'''
-new = '''	fmt.Printf("placements:          local\\n")
+swap "$d/core/cmd/backup-manager/artifacts.go" \
+  '	if rec.RetentionTier != "" {
+		fmt.Printf("retention_tier:      %s\n", rec.RetentionTier)
+	}' \
+  '	fmt.Printf("placements:          local\n")
 	if rec.RetentionTier != "" {
-		fmt.Printf("retention_tier:      %s\\n", rec.RetentionTier)
-	}'''
-assert old in s, "printArtifactDetail no longer has the shape this control mutates"
-open(p, "w").write(s.replace(old, new, 1))
-PY
+		fmt.Printf("retention_tier:      %s\n", rec.RetentionTier)
+	}'
 expect_cell_fails "an additive CLI line rendered with no non-local placement anywhere" "$d" "06-cli-surfaces"
 
 d=$(mutant cli-retention-line-reshaped)
-python3 - "$d/core/cmd/backup-manager/retention.go" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
 # #239 gave this line a mediumSuffix() call, so the old edit no longer
-# matches and the control could not plant its violation. It now mutates the
+# matched and the control could not plant its violation. It now mutates the
 # function instead, which is closer to the thing being guarded: the line is
 # allowed to say medium= when there IS one, and FR-35's promise is that a
 # deployment naming no medium sees exactly what it saw before.
-old = '''	default:
+swap "$d/core/cmd/backup-manager/retention.go" \
+  '	default:
 		return ""
 	}
-}'''
-new = '''	default:
+}' \
+  '	default:
 		return " medium=local"
 	}
-}'''
-assert old in s, "mediumSuffix no longer has the default branch this control mutates"
-open(p, "w").write(s.replace(old, new, 1))
-PY
+}'
 expect_cell_fails "the retention preview line growing a medium column for a local-only deployment" "$d" "07-cli-retention-preview"
 
 d=$(mutant cli-usage-line-reworded)
 # The usage block is compared additively so a new subcommand does not
 # force a regeneration. This is the other direction: a line an operator
 # already reads, quietly reworded.
-python3 - "$d/core/cmd/backup-manager/main.go" <<'PYEOF'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = "  reconcile                                      run FR-17 reconciliation for every backup set"
-assert old in s, "the usage block no longer has the line this control rewords"
-open(p, "w").write(s.replace(old, "  reconcile                                      reconcile every backup set", 1))
-PYEOF
+swap "$d/core/cmd/backup-manager/main.go" \
+  '  reconcile                                      run FR-17 reconciliation for every backup set' \
+  '  reconcile                                      reconcile every backup set'
 expect_cell_fails "a usage line reworded under an operator who already read it" "$d" \
   "06b-cli-usage-block"
 
@@ -293,7 +286,7 @@ echo
 echo "==> what the /api/v1 contract already promises"
 
 d=$(mutant contract-drops-a-response-property)
-python3 - "$d/api/v1/openapi.json" <<'PY'
+mutate_py "$d/api/v1/openapi.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -307,7 +300,7 @@ PY
 expect_cell_fails "a response property taken off the contract" "$d" "08-api-contract-promises"
 
 d=$(mutant contract-changes-a-property-type)
-python3 - "$d/api/v1/openapi.json" <<'PY'
+mutate_py "$d/api/v1/openapi.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -323,7 +316,7 @@ d=$(mutant contract-adds-a-required-request-field)
 # The one break additive-only cannot see on its own: adding something is
 # an addition, and this addition breaks every client already sending the
 # old shape.
-python3 - "$d/api/v1/openapi.json" <<'PY'
+mutate_py "$d/api/v1/openapi.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -340,7 +333,7 @@ d=$(mutant contract-adds-a-required-query-parameter)
 # The parameter-shaped version of the same blind spot: additive-only sees
 # a new line and waves it through, and every caller that was not already
 # sending it starts getting a 400.
-python3 - "$d/api/v1/openapi.json" <<'PYEOF'
+mutate_py "$d/api/v1/openapi.json" <<'PYEOF'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -359,7 +352,7 @@ echo
 echo "==> the numbers FR-34 refuses to invent"
 
 d=$(mutant contract-serves-a-cost-figure)
-python3 - "$d/api/v1/openapi.json" <<'PYEOF'
+mutate_py "$d/api/v1/openapi.json" <<'PYEOF'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -372,7 +365,7 @@ expect_cell_fails "a cost figure on a public schema" "$d" \
   "no surface renders a cost figure or an invented ETA"
 
 d=$(mutant contract-serves-a-restore-eta)
-python3 - "$d/api/v1/openapi.json" <<'PYEOF'
+mutate_py "$d/api/v1/openapi.json" <<'PYEOF'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -394,7 +387,9 @@ plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). The sam
 -- above, with the corpus obligingly re-captured around it, which is what
 -- somebody in a hurry does to a red golden file.
 UPDATE artifacts SET retention_tier = '\'''\'';'
-(cd "$d/core" && COMPAT_UPDATE=1 GOWORK=off go test -count=1 -run TestMediumFreeSurfacesAreUnchanged ./tests/compat/ >/dev/null 2>&1) || true
+if [ "$selftest_dry_run" != 1 ]; then
+  (cd "$d/core" && COMPAT_UPDATE=1 GOWORK=off go test -count=1 -run TestMediumFreeSurfacesAreUnchanged ./tests/compat/ >/dev/null 2>&1) || true
+fi
 expect_cell_fails "the same backfill, with the corpus regenerated to accept it" "$d" \
   "differs between a fresh install and an in-place upgrade"
 
@@ -402,19 +397,14 @@ echo
 echo "==> the matrix cannot claim a suite that is not there"
 
 d=$(mutant matrix-cites-a-suite-that-does-not-exist)
-python3 - "$d/docs/conformance/epic-e-matrix.md" <<'PYEOF'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-old = "`core/tests/compat`, twelve cells"
-assert old in s, "the P2.7 row no longer has the shape this control mutates"
-open(p, "w").write(s.replace(old, "`core/tests/there-is-no-such-suite`", 1))
-PYEOF
+swap "$d/docs/conformance/epic-e-matrix.md" \
+  '`core/tests/compat`, twelve cells' \
+  '`core/tests/there-is-no-such-suite`'
 expect_cell_fails "a PASS row citing a suite this repository does not have" "$d" \
   "name something this repository does not have"
 
 d=$(mutant matrix-has-nothing-blocked)
-python3 - "$d/docs/conformance/epic-e-matrix.md" <<'PYEOF'
+mutate_py "$d/docs/conformance/epic-e-matrix.md" <<'PYEOF'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
@@ -432,7 +422,7 @@ echo "==> the gate's own corpus"
 d=$(mutant corpus-cell-deleted)
 # A cell quietly dropped from the corpus is how a gate shrinks to nothing
 # one commit at a time.
-python3 - "$d/core/tests/compat/testdata/medium-free-surfaces.json" <<'PY'
+mutate_py "$d/core/tests/compat/testdata/medium-free-surfaces.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -444,7 +434,7 @@ PY
 expect_cell_fails "a corpus cell deleted rather than satisfied" "$d" "05-prune-verdicts"
 
 d=$(mutant corpus-cell-emptied)
-python3 - "$d/core/tests/compat/testdata/medium-free-surfaces.json" <<'PY'
+mutate_py "$d/core/tests/compat/testdata/medium-free-surfaces.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p))
@@ -455,10 +445,15 @@ with open(p, "w") as f:
 PY
 expect_cell_fails "a corpus cell emptied so it passes whatever the product does" "$d" "06-cli-surfaces"
 
-if [ "$fail" -ne 0 ]; then
+selftest_stale_summary
+if [ "$fail" -ne 0 ] || [ "$selftest_stale_count" -ne 0 ]; then
   echo >&2
-  echo "FAIL: $fail of $((pass + fail)) FR-35 compatibility controls did not behave as required." >&2
+  echo "FAIL: $((fail + selftest_stale_count)) of $((pass + fail + selftest_stale_count)) FR-35 compatibility controls did not behave as required ($fail reached the wrong verdict, $selftest_stale_count could not plant their violation at all)." >&2
   exit 1
 fi
 echo
-echo "OK: all $pass FR-35 compatibility controls behaved as required (every cell was shown to go red against a real planted violation, and shown not to on the real tree)."
+if [ "$selftest_dry_run" = 1 ]; then
+  echo "OK: all $selftest_anchors_checked FR-35 mutation anchors still name code that is in this tree."
+else
+  echo "OK: all $pass FR-35 compatibility controls behaved as required (every cell was shown to go red against a real planted violation, and shown not to on the real tree)."
+fi
