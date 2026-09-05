@@ -22,6 +22,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 
 	"github.com/spdrman/rclone-manager/core/internal/testenv"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 )
 
 // ---------------------------------------------------------------------------
@@ -510,18 +511,13 @@ func callerDeadlineFiresMidCopy(t *testing.T) (context.Context, []error) {
 	)
 	estimatedFullDuration := payload / (64 * 1024) * time.Second
 
-	// --bwlimit is process-global in rclone, so it gets put back afterwards.
-	// Note the unit suffix: rclone reads a bare "65536" as 64Mi, not 64Ki,
-	// which throttles nothing at this payload size.
-	bwCtx, ci := rclonefs.AddConfig(context.Background())
-	if err := (&ci.BwLimit).Set(bwLimit); err != nil {
-		t.Fatalf("setting --bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	t.Cleanup(func() {
-		unthrottled, _ := rclonefs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	})
+	// --bwlimit is process-global in rclone, so it gets put back afterwards,
+	// which is what tests/bwlimit is for: the obvious way of putting it back
+	// does not work, and every test that tried it was leaking its limit into
+	// the next one. The unit suffix is that package's other reason to exist,
+	// and it is load-bearing here: a bare 65536 is 64Mi, which at this
+	// payload throttles nothing at all (#414).
+	bwlimit.Throttle(t, context.Background(), bwLimit)
 
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "slow.bin"), make([]byte, payload), 0o644); err != nil {

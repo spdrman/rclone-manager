@@ -8,10 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
-
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 )
 
 // TestCopyToLocal_ReportsIntermediateProgressForARealTransfer is the
@@ -30,11 +28,19 @@ import (
 // this gate runs on, and "make the file big enough" is a race against
 // whatever disk is underneath: on a fast NVMe a file large enough to
 // guarantee several sampling windows is also large enough to be unfriendly
-// in a test suite. gate_test.go's MidTransferCancellation already
-// established the alternative in this package, for the same reason: turn
-// rclone's own bandwidth limiter down and use a small payload. A slow,
-// small, real transfer exercises exactly the same accounting path a fast
-// huge one would, and it makes the timing a fact rather than a hope.
+// in a test suite. So this turns rclone's own bandwidth limiter down and
+// uses a small payload instead. A slow, small, real transfer exercises
+// exactly the same accounting path a fast huge one would, and it makes the
+// timing a fact rather than a hope.
+//
+// --bwlimit is the right lever HERE and the wrong one for a cancellation
+// test, which is worth knowing before copying this file's shape into one.
+// It throttles by parking inside rclone (Account.accountRead and fshttp's
+// dialer both wait with WaitN(context.Background(), n)), so a copy under it
+// is slow AND partly uninterruptible. That is fine for sampling progress
+// and fatal for proving an interruption; gate_test.go's
+// MidTransferCancellation used to use it and did not prove what it said
+// (#414). That row runs over a slow link now instead.
 func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	// "1M" is rclone's own spelling for 1 MiB/s. It is written as a
 	// suffixed string on purpose: a bare number in an rclone bandwidth
@@ -52,15 +58,10 @@ func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	progressSampleInterval = sampleInterval
 	t.Cleanup(func() { progressSampleInterval = restore })
 
-	bwCtx, ci := fs.AddConfig(context.Background())
-	if err := (&ci.BwLimit).Set(bwLimit); err != nil {
-		t.Fatalf("set bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	t.Cleanup(func() {
-		unthrottled, _ := fs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	})
+	// bwlimit.Throttle rather than StartTokenBucket-and-put-it-back, because
+	// putting it back that way does not work and this test's own 1MiB/s
+	// limit was outliving it. See that package's doc.
+	bwCtx := bwlimit.Throttle(t, context.Background(), bwLimit)
 
 	srcRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcRoot, "big.bin"), make([]byte, size), 0o644); err != nil {

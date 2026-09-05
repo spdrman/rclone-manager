@@ -29,16 +29,13 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
@@ -48,6 +45,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
@@ -512,7 +510,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	journal := openJournal(t)
 	localDir := t.TempDir()
 
-	const size = 2 * 1024 * 1024
+	const size = 4 * 1024 * 1024
 	content := make([]byte, size)
 	if _, err := rand.Read(content); err != nil {
 		t.Fatalf("rand.Read: %v", err)
@@ -532,32 +530,65 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	}
 	artifact := res.Discovered[0].Artifact
 
-	// Throttle bandwidth so a real, mid-copy cancellation has a wide,
-	// reliable window to land in, the same technique
-	// gate_test.go's MidTransferCancellation already established for this
-	// exact fixture.
-	const bwLimit = 128 * 1024
-	bwCtx, ci := fs.AddConfig(f.Context())
-	if err := (&ci.BwLimit).Set(fmt.Sprintf("%d", bwLimit)); err != nil {
-		t.Fatalf("set bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	t.Cleanup(func() {
-		unthrottled, _ := fs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	})
+	// Throttle so the copy lasts long enough to be interrupted part way
+	// through, then fire the cancel from the copy's OWN progress rather
+	// than from a timer.
+	//
+	// Both halves are issue #414's. The limit used to be built with
+	// fmt.Sprintf("%d", 128*1024) and rclone reads a bare 131072 as 128Mi
+	// rather than 128Ki, so there was no throttle at all; and a 150ms timer
+	// against this fixture reliably fires during the SSH connect, well
+	// before the copy has read a byte, so what it was really cancelling was
+	// the setup. What made it pass was that Transfer fails either way.
+	//
+	// The unit says what it means now, and the cancel cannot fire until the
+	// progress reporter has watched a real part of the payload move. Note
+	// that this row's subject is what the JOURNAL is left at, not how
+	// quickly the copy stops: the interruption itself is proved against the
+	// adapter, over a slow link rather than a bandwidth limit, by
+	// transport/rclone's TestPhase1Gate/ContextCancellation.
+	const bwLimit = "1Mi"
+	bwCtx := bwlimit.Throttle(t, f.Context(), bwLimit)
 
+	// A quarter of the payload: far enough in that the copy is
+	// unambiguously under way, far enough from the end that finishing
+	// anyway would be a visible failure rather than a rounding error.
+	const cancelAfterBytes = size / 4
 	cancelCtx, cancel := context.WithCancel(bwCtx)
-	time.AfterFunc(150*time.Millisecond, cancel)
+	defer cancel()
+	var (
+		progressMu sync.Mutex
+		movedAt    int64
+	)
+	progressCtx := transport.WithProgressReporter(cancelCtx, transport.ProgressReporterFunc(func(p transport.ByteProgress) {
+		progressMu.Lock()
+		fire := p.BytesTransferred >= cancelAfterBytes && movedAt == 0
+		if fire {
+			movedAt = p.BytesTransferred
+		}
+		progressMu.Unlock()
+		if fire {
+			cancel()
+		}
+	}))
 
 	deps := lifecycle.Deps{Journal: journal, Transport: adapter}
-	_, transferErr := lifecycle.Transfer(cancelCtx, deps, lifecycle.TransferParams{
+	_, transferErr := lifecycle.Transfer(progressCtx, deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	})
-	if transferErr == nil {
-		t.Fatal("Transfer succeeded despite being cancelled mid-copy; the throttle should have made this reliably interruptible")
+	progressMu.Lock()
+	cancelledWith := movedAt
+	progressMu.Unlock()
+
+	if cancelledWith == 0 {
+		t.Fatalf("the copy never reported %d of its %d bytes moved, so nothing here cancelled a transfer that was "+
+			"under way; the throttle (%s/s) or the progress reporting is not doing what this test assumes (Transfer returned %v)",
+			int64(cancelAfterBytes), int64(size), bwLimit, transferErr)
 	}
-	t.Logf("Transfer correctly failed on cancellation: %v", transferErr)
+	if transferErr == nil {
+		t.Fatalf("Transfer succeeded despite being cancelled after %d of %d bytes had moved", cancelledWith, int64(size))
+	}
+	t.Logf("Transfer correctly failed on a cancellation fired after %d of %d bytes had moved: %v", cancelledWith, int64(size), transferErr)
 
 	rec, err := journal.Get(context.Background(), artifact)
 	if err != nil {
@@ -568,7 +599,11 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	}
 
 	// Resume with the same AttemptKey, unthrottled: must converge to a
-	// correct, complete TRANSFERRED.
+	// correct, complete TRANSFERRED. The throttle is lifted here rather
+	// than only in the Cleanup, because "unthrottled" was not true of the
+	// resume while the Cleanup was the only thing lifting it, and because
+	// the way it used to be lifted did not lift it at all: the resume ran
+	// at 1MiB/s and so did every test after this one in the package.
 	if _, err := lifecycle.Transfer(f.Context(), deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	}); err != nil {
