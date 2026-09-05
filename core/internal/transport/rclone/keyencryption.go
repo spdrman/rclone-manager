@@ -393,6 +393,12 @@ var (
 	keyEncryptionSecretCache   = map[string]keyEncryptionSecretCacheEntry{}
 )
 
+// keyEncryptionSecretCacheEntry is one memoized resolution, and it stores
+// all three of resolveKeyEncryptionSecret's return values rather than just
+// the secret. That is what makes "no source configured" and "the resolver
+// failed" cacheable answers alongside a successful one: replaying the
+// whole verdict is the only way a cache hit and a first call can be
+// indistinguishable to the caller.
 type keyEncryptionSecretCacheEntry struct {
 	secret obs.Secret
 	ok     bool

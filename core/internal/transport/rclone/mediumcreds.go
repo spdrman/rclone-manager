@@ -104,6 +104,10 @@ type resolvedCredentials struct {
 // redaction is reasserted here rather than left to the wrapper that cannot
 // reach it. obs.Secret's own doc now records the limitation, and
 // obs.TestSecretInAnUnexportedFieldStillLeaks pins it.
+// String covers %s and %v on a value whose fields fmt would otherwise
+// walk; GoString covers %#v, which consults GoStringer ahead of anything
+// else and is the verb a debugger-minded print reaches for precisely
+// because it shows structure.
 func (c resolvedCredentials) String() string   { return "[REDACTED]" }
 func (c resolvedCredentials) GoString() string { return "[REDACTED]" }
 
@@ -610,6 +614,12 @@ var (
 	errCredentialsMalformedValue   = credentialsError("a resolved credential value contains whitespace, so the text was quoted, wrapped or truncated on its way here")
 )
 
+// credentialsError is a named string type rather than errors.New, so the
+// five values above cannot be confused with any other error in this
+// package by an equality check that meant to compare something else. It is
+// transport/medium.go's mediumKeyError applied to the same problem, kept
+// local for the same reason: a shared error type across two packages would
+// make two unrelated refusals compare equal.
 type credentialsError string
 
 func (e credentialsError) Error() string { return string(e) }
