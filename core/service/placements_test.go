@@ -31,6 +31,14 @@ func mediumsConfig(t *testing.T, mediums ...config.StorageMedium) mediumIndex {
 	return indexMediums(&config.Config{StorageMediums: mediums})
 }
 
+// noConfiguredSets is the configured-set index these placement tests pass,
+// named for what it actually holds rather than for what they mean by it.
+// Every one of them is about where a backup's copies are, none is about
+// which retention policy governs it, and the records they build by hand
+// carry no backup set id to look up either way.
+// artifacts_retentionpolicy_test.go is where that question is asked.
+func noConfiguredSets() configuredSetIndex { return configuredSetIndex{} }
+
 // TestToServiceArtifact_AnArtifactStillTransferringHasNoCopyAtAll is the
 // ".partial has no row" rule, at the layer a client reads.
 //
@@ -46,7 +54,7 @@ func TestToServiceArtifact_AnArtifactStillTransferringHasNoCopyAtAll(t *testing.
 		Placements: nil,
 	}
 
-	a := toServiceArtifact(rec, mediumsConfig(t))
+	a := toServiceArtifact(rec, mediumsConfig(t), noConfiguredSets())
 
 	if len(a.Placements) != 0 {
 		t.Fatalf("an artifact still transferring reports %d copies: %+v", len(a.Placements), a.Placements)
@@ -71,7 +79,7 @@ func TestToServicePlacements_AReleasedCopyIsNotServedAsACopy(t *testing.T) {
 
 	a := toServiceArtifact(rec, mediumsConfig(t, config.StorageMedium{
 		ID: "offsite_s3", Type: config.StorageMediumTypeS3, Bucket: "nas-backups", StorageClass: config.StorageClassStandardIA,
-	}))
+	}), noConfiguredSets())
 
 	if len(a.Placements) != 1 {
 		t.Fatalf("got %d copies, want 1: a copy the journal knows is gone is not a copy\n%+v", len(a.Placements), a.Placements)
@@ -86,7 +94,7 @@ func TestToServicePlacements_AReleasedCopyIsNotServedAsACopy(t *testing.T) {
 	pending := state.Record{Placements: []state.Placement{
 		{Medium: state.MediumLocal, Location: "/volume1/backups/a.dump", Status: state.PlacementDeletePending},
 	}}
-	if got := toServiceArtifact(pending, mediumsConfig(t)); len(got.Placements) != 1 {
+	if got := toServiceArtifact(pending, mediumsConfig(t), noConfiguredSets()); len(got.Placements) != 1 {
 		t.Errorf("a copy with a recorded but unfinished delete was dropped; that is a copy, and it is one an operator should see going")
 	}
 }
@@ -110,7 +118,7 @@ func TestToServicePlacements_ACopyOnAMediumNobodyCanReachSaysSo(t *testing.T) {
 	}}}
 
 	// No mediums declared: the entry was removed from config.yaml.
-	a := toServiceArtifact(rec, mediumsConfig(t))
+	a := toServiceArtifact(rec, mediumsConfig(t), noConfiguredSets())
 
 	if len(a.Placements) != 1 {
 		t.Fatalf("got %d copies, want 1: an unreachable copy is still a recorded copy", len(a.Placements))
@@ -150,7 +158,7 @@ func TestToServicePlacements_ACopyNobodyHasCheckedCarriesNoClass(t *testing.T) {
 
 	a := toServiceArtifact(rec, mediumsConfig(t, config.StorageMedium{
 		ID: "offsite_cold", Type: config.StorageMediumTypeS3, Bucket: "nas-archive", StorageClass: config.StorageClassDeepArchive,
-	}))
+	}), noConfiguredSets())
 
 	p := a.Placements[0]
 	if p.VerificationClass != "" {
@@ -184,7 +192,7 @@ func TestToServicePlacements_AnOrdinaryLocalCopyIsUnchanged(t *testing.T) {
 		VerifiedAt:        &verified,
 	}}}
 
-	got := toServiceArtifact(rec, mediumsConfig(t)).Placements
+	got := toServiceArtifact(rec, mediumsConfig(t), noConfiguredSets()).Placements
 	want := []Placement{{
 		Medium:            state.MediumLocal,
 		MediumType:        MediumTypeLocal,
