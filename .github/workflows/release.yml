@@ -48,6 +48,17 @@ name: Release
 # what a verifier pins. id-token: write is the whole credential story.
 # docs/compliance/release-provenance.md has the design and the fallback for
 # a release signed by hand.
+#
+# THE TRIGGER BELOW IS PART OF THAT IDENTITY. GitHub builds the certificate
+# SAN out of the ref the run was triggered on, so the "on:" block decides
+# what a verifier has to pin: publishing on a push to `release` signs as
+# @refs/heads/release. Changing the trigger changes the identity of every
+# release signed afterwards, and the documented `cosign verify` command has
+# to change with it. That command lives in distribution/packaging/signing.go
+# and TestSigningIdentityMatchesTheWorkflowTriggerThatPublishes reads this
+# file to hold the two together, because for a while they disagreed and the
+# published command reported a genuinely signed image as unverifiable
+# (issue #510).
 
 on:
   push:

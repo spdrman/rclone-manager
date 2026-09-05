@@ -39,10 +39,14 @@
 # to the workflow's own identity, the signature is recorded in Rekor, and
 # the certificate expires in minutes. There is no long-lived private key,
 # so there is nothing to rotate, nothing to leak and nothing to commit by
-# accident. The identity a verifier pins is the workflow path plus the tag
-# ref, which is recorded in provenance/release-provenance.json
-# under signing.identity so it is settled before the first signature rather
-# than discovered after it.
+# accident. The identity a verifier pins is the workflow path plus the ref
+# the run was triggered on, which for this workflow is refs/heads/release
+# because a push to `release` is what publishes. It is recorded in
+# provenance/release-provenance.json under signing.identity so it is settled
+# before the first signature rather than discovered after it, and
+# distribution/packaging/signing.go is the one place that string is built
+# (issue #510: this comment said "the tag ref", and the documented verify
+# command was pinned to refs/tags/ and could not match anything).
 #
 # For a release signed by hand off CI, cosign reads a key from the
 # environment (`--key env://COSIGN_PRIVATE_KEY`) and this script requires

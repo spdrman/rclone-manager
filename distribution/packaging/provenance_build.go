@@ -438,12 +438,17 @@ func linkReadiness(c Compliance) LinkReadiness {
 // no digest to sign. The method is recorded anyway, because the identity
 // a verifier checks is part of the release contract and has to be settled
 // before the first signature rather than discovered after it.
+//
+// The identity and the command both come from signing.go, which is also
+// where the reason they are pinned to the release branch rather than to a
+// tag is written down (issue #510). Neither is spelled out again here:
+// two copies of a verification command is how one of them goes stale.
 func signingRecord(canonical Canonical) SigningRecord {
 	if !canonical.Image.Published {
 		return SigningRecord{
 			Status:       "unsigned",
 			Method:       "sigstore-keyless",
-			Identity:     "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/tags/*",
+			Identity:     SigningIdentity,
 			Transparency: "https://rekor.sigstore.dev",
 			Note: []string{
 				"Nothing has been pushed to " + canonical.Image.Reference + ", so there is no digest to sign and no signature to verify.",
@@ -455,10 +460,10 @@ func signingRecord(canonical Canonical) SigningRecord {
 	return SigningRecord{
 		Status:       "signed",
 		Method:       "sigstore-keyless",
-		Identity:     "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/tags/*",
+		Identity:     SigningIdentity,
 		Transparency: "https://rekor.sigstore.dev",
 		Note: []string{
-			"Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/spdrman/rclone-manager/\\.github/workflows/release\\.yml@refs/tags/' " + canonical.Image.Reference,
+			"Verify with: " + SigningVerifyCommand(canonical.Image.Reference),
 		},
 	}
 }

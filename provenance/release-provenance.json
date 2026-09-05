@@ -192,7 +192,7 @@
   "signing": {
     "status": "unsigned",
     "method": "sigstore-keyless",
-    "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/tags/*",
+    "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
       "Nothing has been pushed to ghcr.io/spdrman/backup-manager:0.3.0, so there is no digest to sign and no signature to verify.",

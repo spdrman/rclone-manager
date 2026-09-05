@@ -73,9 +73,42 @@ records no identity:
 ```
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/spdrman/rclone-manager/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-identity 'https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release' \
   ghcr.io/spdrman/backup-manager:0.2.0
 ```
+
+That command passes against the published image, and it is the whole point of this
+section that it does. It is checked by running it, not by reading it.
+
+The ref half of that identity is `refs/heads/release` because a push to `release` is
+what publishes (see the header of `.github/workflows/release.yml`). GitHub builds the
+certificate SAN out of the ref the run was triggered on, so the trigger decides the
+identity, and the two have to move together. Issue #510 is what happens when they do
+not: this printed a regexp anchored on `@refs/tags/` for long enough that the command
+above would answer
+
+```
+Error: no matching signatures: none of the expected identities matched what was in
+the certificate, got subjects
+[https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release]
+with issuer https://token.actions.githubusercontent.com
+```
+
+against a release that was signed correctly the whole time. A record that makes a real
+artifact look forged is worse than one that says nothing, so
+`TestSigningIdentityMatchesTheWorkflowTriggerThatPublishes` now reads the workflow's
+trigger and refuses an identity a run of that workflow could not produce, and
+`TestComplianceDocsPrintTheCommandThatPasses` refuses this file if it drifts from it.
+
+The identity is exact rather than a regexp. The ref is a single fixed branch, so there
+is nothing to match loosely, and an exact identity cannot be quietly widened by a
+missing anchor the way the old `@refs/tags/` pattern was: it had no `$`, so it would
+have accepted any tag ref at all.
+
+A hand-dispatched run publishing from some other branch would sign under that branch's
+ref and would not match this command. That is intended. `release` is the only branch a
+cut lands on (`docs/release-branch.md`), and an image signed from anywhere else is not
+one this record vouches for.
 
 The tag in that example is `0.2.0` rather than the `0.3.0` this tree declares, because
 `0.3.0` is not pushed yet and there is nothing at that tag to verify. Move it once the
