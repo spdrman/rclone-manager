@@ -99,6 +99,10 @@ commands:
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
+  quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
+                                                  act on one quarantined artifact: revalidate re-checks it and moves
+                                                  nothing; retry re-enters the pipeline from DISCOVERED; reinstate
+                                                  trusts it again in place and forfeits any future remote delete
   unconfigured                                   list the backup sets the journal remembers and the configuration no
                                                   longer names, what they still hold on storage, and the retention
                                                   policy governing them, which is none (#418)
@@ -106,10 +110,6 @@ commands:
                                                   clear the .partial residue a removal stranded mid-transfer, and end
                                                   the journal rows nothing will ever advance. It never touches a
                                                   retained backup; without --acknowledge it only prints what it would do
-  quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
-                                                  act on one quarantined artifact: revalidate re-checks it and moves
-                                                  nothing; retry re-enters the pipeline from DISCOVERED; reinstate
-                                                  trusts it again in place and forfeits any future remote delete
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force
