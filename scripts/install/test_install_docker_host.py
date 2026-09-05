@@ -83,6 +83,39 @@ def carrying_a_recorded_digest(digest: str | None = RECORDED_DIGEST):
         installer.CARRIED_RELEASE_DIGEST = was
 
 
+# Two ports that are obviously nobody's. Every test below that needs "a
+# non-default SSH port" uses one of these, and neither is a port any
+# machine this project pulls from listens on: issue #264's third
+# criterion is that no real one reaches this repository, and a test file
+# is part of this repository.
+A_NON_DEFAULT_PORT = 2222
+ANOTHER_NON_DEFAULT_PORT = 4222
+
+
+@contextlib.contextmanager
+def source_port_in_the_environment(value: str | None):
+    """Run a block with RCLONE_MANAGER_SOURCE_PORT set, or removed.
+
+    Removed matters as much as set. resolve() consults this variable on
+    every call, so a test about "nothing was supplied" that inherited a
+    value from the shell that started the run would pass or fail
+    depending on the machine.
+    """
+    name = installer.SOURCE_PORT_ENV
+    was = os.environ.get(name)
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+    try:
+        yield
+    finally:
+        if was is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = was
+
+
 class Fixture:
     """A prefix with a key, a known_hosts and the three data directories,
     all owned by whoever is running the tests, which is what the paths
@@ -285,6 +318,243 @@ class TestCredentialRefusals(unittest.TestCase):
         rendered = installer.render_env(fx.args())
         self.assertIn(str(fx.key), rendered, "the .env carries the key's PATH, which is not a secret")
         self.assertNotIn("not a key", rendered, "the .env must never carry the key's CONTENTS")
+
+
+
+class TestTheSourcePortIsAnInputAndNothingInfersOne(unittest.TestCase):
+    """Issue #264's second criterion, at the point the value is read.
+
+    The two sources this product exists to pull from listen on a port
+    that is deliberately unpublished, so the port is an input exactly the
+    way the key path is an input. What that has to mean concretely is
+    that there is no answer this installer produces on its own: not 22,
+    not the listen port, not a value left over from somewhere else. Every
+    test here is about the absence of an answer.
+    """
+
+    def test_nothing_supplied_leaves_no_port_at_all(self):
+        with source_port_in_the_environment(None):
+            args = Fixture(self).args()
+        self.assertIsNone(args.source_port, "a run told nothing about a source port must hold nothing, not 22")
+        self.assertIsNone(args.source_port_origin)
+
+    def test_the_flag_is_read(self):
+        with source_port_in_the_environment(None):
+            args = Fixture(self).args("--source-port", str(A_NON_DEFAULT_PORT))
+        self.assertEqual(args.source_port, A_NON_DEFAULT_PORT)
+        self.assertEqual(args.source_port_origin, "--source-port")
+
+    def test_the_environment_is_read(self):
+        """The convention the Ansible configuration for these hosts
+        already uses, and the reason it exists: a port on the command
+        line is in shell history and in this host's process listing for
+        as long as the install runs, and one in the environment is not."""
+        with source_port_in_the_environment(str(A_NON_DEFAULT_PORT)):
+            args = Fixture(self).args()
+        self.assertEqual(args.source_port, A_NON_DEFAULT_PORT)
+        self.assertEqual(args.source_port_origin, installer.SOURCE_PORT_ENV)
+
+    def test_the_flag_wins_over_the_environment(self):
+        with source_port_in_the_environment(str(A_NON_DEFAULT_PORT)):
+            args = Fixture(self).args("--source-port", str(ANOTHER_NON_DEFAULT_PORT))
+        self.assertEqual(args.source_port, ANOTHER_NON_DEFAULT_PORT)
+        self.assertEqual(args.source_port_origin, "--source-port")
+
+    def test_the_flag_with_an_empty_value_is_refused_rather_than_read_as_silence(self):
+        """`--source-port "$SSH_PORT"` with SSH_PORT unexported is the
+        way this actually goes wrong, and the shell hands the flag an
+        empty string. Reading that as "nothing was supplied" and carrying
+        on is how a deployment ends up pointed at 22 by an accident
+        nobody typed."""
+        fx = Fixture(self)
+        with source_port_in_the_environment(None):
+            exc = refusal_from(fx.args, "--source-port", "")
+        self.assertIsNotNone(exc, "an empty value is not silence, it is a mistake")
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn("no value", exc.message)
+        self.assertIn("22", exc.remedy, "the refusal has to say what it is NOT doing")
+
+    def test_an_empty_environment_variable_is_refused_the_same_way(self):
+        fx = Fixture(self)
+        with source_port_in_the_environment(""):
+            exc = refusal_from(fx.args)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn(installer.SOURCE_PORT_ENV, exc.message)
+
+    def test_something_that_is_not_a_port_is_refused_without_being_repeated(self):
+        """The value never reaches the message. On these deployments the
+        port IS the part of the endpoint that is not published, so a
+        refusal that echoed it back would put it in the operator's
+        scrollback and in whatever captured that run's output."""
+        fx = Fixture(self)
+        for bad in ("2222x", "-1", "0", "65536", "22 ", "0x22"):
+            with self.subTest(value=bad), source_port_in_the_environment(None):
+                exc = refusal_from(fx.args, "--source-port", bad)
+                if bad == "22 ":
+                    self.assertIsNone(exc, "surrounding whitespace is the shell's, not the operator's")
+                    continue
+                self.assertIsNotNone(exc, f"{bad!r} is not a port")
+                self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+                self.assertNotIn(bad.strip(), exc.message + exc.remedy,
+                                 "a refusal must not repeat the value it was given")
+
+    def test_the_refusal_is_an_exit_code_an_operator_can_branch_on(self):
+        """Through main(), not through the Refusal object, and with no
+        Docker and no socket: resolve() decides this from the command
+        line alone, so the run stops before any check that would reach
+        for either. The exit code is the credentials one, because that is
+        what the port is on these deployments."""
+        fx = Fixture(self)
+        prefix = ["preflight", "--prefix", str(fx.prefix), "--ssh-key", str(fx.key),
+                  "--known-hosts", str(fx.known), "--compose-file", str(CANONICAL_COMPOSE)]
+        stderr = io.StringIO()
+        with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
+            code = installer.main(prefix + ["--source-port", ""])
+        self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn("no value", stderr.getvalue())
+
+        stderr = io.StringIO()
+        with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
+            code = installer.main(prefix + ["--source-port", "not-a-port"])
+        self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertNotIn("not-a-port", stderr.getvalue(),
+                         "even a wrong value is a value the operator typed, and it is not echoed")
+
+    def test_the_port_never_reaches_the_env_file(self):
+        """.env is the one file this installer authors, it is world
+        readable on most hosts, and container/compose.yaml states in its
+        own first paragraph that nothing in it is a secret. The port is
+        one, on these deployments, so it does not go there."""
+        with source_port_in_the_environment(None):
+            args = Fixture(self).args("--source-port", str(A_NON_DEFAULT_PORT), command="install")
+        rendered = installer.render_env(args)
+        self.assertNotIn(str(A_NON_DEFAULT_PORT), rendered)
+        self.assertNotIn("SOURCE_PORT", rendered)
+
+
+class TestTheSourcePortIsCheckedAgainstThePinnedHostKeys(unittest.TestCase):
+    """What the installer DOES with the port, and why it is worth a
+    preflight refusal.
+
+    A source on a non-default port has its host key pinned under
+    `[host]:port`, and a pin written without the port does not match.
+    rclone reports that as `knownhosts: key mismatch`, which is the one
+    SSH error an operator must never wave through, and here it fires for
+    a pin that is merely missing a port. That was met on a real host and
+    took a positive control to explain. It arrives after the stack is up
+    and the first backup has run, so it is caught at the door instead.
+    """
+
+    KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "N" * 12
+
+    def pinning(self, *lines: str):
+        fx = Fixture(self)
+        fx.known.write_text("".join(f"{line} {self.KEY}\n" for line in lines))
+        return fx
+
+    def preflight(self, fx, *extra):
+        with source_port_in_the_environment(None):
+            return installer.Preflight(fx.args(*extra))
+
+    def test_a_pin_for_the_supplied_port_passes(self):
+        fx = self.pinning(f"[source.example.internal]:{A_NON_DEFAULT_PORT}")
+        pf = self.preflight(fx, "--source-port", str(A_NON_DEFAULT_PORT))
+        pf.check_source_port()
+        self.assertTrue(pf.notes)
+
+    def test_a_pin_written_without_the_port_is_refused(self):
+        """The exact field failure: connect with ssh, see the
+        fingerprint, pin the line it showed you, and it does not match
+        because the entry is not keyed to the port."""
+        fx = self.pinning("source.example.internal")
+        pf = self.preflight(fx, "--source-port", str(A_NON_DEFAULT_PORT))
+        exc = refusal_from(pf.check_source_port)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn("none of them is pinned for the source port", exc.message)
+        self.assertIn("knownhosts: key mismatch", exc.remedy)
+
+    def test_a_pin_for_a_different_port_is_refused(self):
+        fx = self.pinning(f"[source.example.internal]:{ANOTHER_NON_DEFAULT_PORT}")
+        pf = self.preflight(fx, "--source-port", str(A_NON_DEFAULT_PORT))
+        exc = refusal_from(pf.check_source_port)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+
+    def test_pins_that_are_all_on_a_non_default_port_with_no_port_supplied_are_refused(self):
+        """The sharp half of "never defaults or infers one". A pinned
+        [host]:port entry IS this deployment stating it has a source that
+        is not on 22, so a run that was told no port has a question it
+        cannot answer, and answering it with 22 anyway is the guess this
+        refuses to make."""
+        fx = self.pinning(f"[source.example.internal]:{A_NON_DEFAULT_PORT}",
+                          f"[other.example.internal]:{ANOTHER_NON_DEFAULT_PORT}")
+        pf = self.preflight(fx)
+        exc = refusal_from(pf.check_source_port)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn("no source port was supplied", exc.message)
+        self.assertIn(installer.SOURCE_PORT_ENV, exc.remedy)
+
+    def test_a_deployment_with_a_port_22_pin_is_not_made_to_type_a_flag(self):
+        """An unbracketed entry is a source on 22, so this deployment has
+        one and there is nothing to demand. Refusing here would fail a
+        working install over a flag nobody needed."""
+        fx = self.pinning("source.example.internal",
+                          f"[other.example.internal]:{A_NON_DEFAULT_PORT}")
+        self.preflight(fx).check_source_port()
+
+    def test_an_explicit_22_matches_an_unbracketed_pin(self):
+        fx = self.pinning("source.example.internal")
+        self.preflight(fx, "--source-port", "22").check_source_port()
+
+    def test_a_fresh_install_with_nothing_pinned_yet_is_not_a_refusal(self):
+        """install creates an empty known_hosts and the operator pins
+        into it afterwards, so "nothing pinned" is the normal state of a
+        first run, not a broken one."""
+        fx = Fixture(self)
+        fx.known.write_text("")
+        self.preflight(fx, "--source-port", str(A_NON_DEFAULT_PORT)).check_source_port()
+        self.preflight(fx).check_source_port()
+
+    def test_a_hashed_known_hosts_is_reported_rather_than_refused(self):
+        """HashKnownHosts hashes the whole [host]:port, so which port an
+        entry was pinned for cannot be read out of it. A check that
+        cannot see is not allowed to refuse."""
+        fx = self.pinning("|1|" + "A" * 27 + "=|" + "B" * 27 + "=")
+        pf = self.preflight(fx, "--source-port", str(A_NON_DEFAULT_PORT))
+        pf.check_source_port()
+        self.assertTrue(any("hashed" in n for n in pf.notes))
+
+    def test_markers_and_multi_pattern_lines_are_read(self):
+        """@cert-authority puts a marker in front of the pattern list,
+        and one line may name several patterns on different ports. Both
+        shapes are real known_hosts and both used to read as one
+        unbracketed pattern, which is a silent pass."""
+        fx = self.pinning(f"@cert-authority [a.example.internal]:{A_NON_DEFAULT_PORT},"
+                          f"[b.example.internal]:{ANOTHER_NON_DEFAULT_PORT}")
+        self.preflight(fx, "--source-port", str(ANOTHER_NON_DEFAULT_PORT)).check_source_port()
+        exc = refusal_from(self.preflight(fx).check_source_port)
+        self.assertIsNotNone(exc, "every pattern on that line is on a non-default port")
+
+    def test_nothing_this_check_says_ever_carries_the_port_or_the_host(self):
+        """Issue #264's third criterion, held at the one place in this
+        installer that reads an endpoint. known_hosts is the only
+        credential-adjacent file opened here, and the exception is only
+        safe while nothing read out of it comes back out."""
+        secret_host = "source.example.internal"
+        for extra, fx in (
+            (("--source-port", str(A_NON_DEFAULT_PORT)), self.pinning(f"[{secret_host}]:{A_NON_DEFAULT_PORT}")),
+            (("--source-port", str(A_NON_DEFAULT_PORT)), self.pinning(secret_host)),
+            ((), self.pinning(f"[{secret_host}]:{A_NON_DEFAULT_PORT}")),
+        ):
+            with self.subTest(extra=extra):
+                pf = self.preflight(fx, *extra)
+                exc = refusal_from(pf.check_source_port)
+                said = " ".join(pf.notes) + (exc.message + exc.remedy if exc else "")
+                self.assertNotIn(str(A_NON_DEFAULT_PORT), said)
+                self.assertNotIn(secret_host, said)
 
 
 class TestPathRefusals(unittest.TestCase):
@@ -2602,9 +2872,10 @@ class TestSubcommandFlagScoping(unittest.TestCase):
         port or a puid/pgid/timezone override. status, uninstall,
         network-doctor and network-undo never construct a Preflight and
         never stage a deployment, so they no longer declare any of this."""
-        install_prereqs = {"--ssh-key", "--known-hosts", "--compose-file", "--image", "--release",
-                           "--image-archive", "--no-pull", "--listen-port", "--public-base-url",
-                           "--profile", "--timezone", "--puid", "--pgid", "--timeout"}
+        install_prereqs = {"--ssh-key", "--known-hosts", "--source-port", "--compose-file", "--image",
+                           "--release", "--image-archive", "--no-pull", "--listen-port",
+                           "--public-base-url", "--profile", "--timezone", "--puid", "--pgid",
+                           "--timeout"}
         for command in ("status", "uninstall", "network-doctor", "network-undo"):
             self.assertFalse(install_prereqs & self.flags_of(command),
                              f"{command} never reads a credential, an image reference or a port")
