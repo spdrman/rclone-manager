@@ -87,7 +87,7 @@ func TestNoProductionEndpointOrKeyMaterialIsInTheTree(t *testing.T) {
 //
 // A guard whose only evidence is its own green light is a guard nobody
 // has checked. Each case here plants one shape in a directory of its own
-// and asserts that the specific rule for it fires - specific, because a
+// and asserts that the specific rule for it fires. Specific, because a
 // control that passes because some OTHER rule tripped proves nothing
 // about the rule it claims to exercise.
 func TestEveryLeakShapeIsCaught(t *testing.T) {
@@ -188,7 +188,7 @@ func TestEveryLeakShapeIsCaught(t *testing.T) {
 // a plausible false positive: the placeholder endpoints the tests
 // already use, the documentation addresses the error-message tests are
 // pinned to, and the `file.go:1514` citations that fill the transport
-// package - which is also the package that says "ssh" most often, so the
+// package, which is also the package that says "ssh" most often, so the
 // context window is no help there.
 func TestWhatThisGuardMustNotReport(t *testing.T) {
 	cases := []struct {

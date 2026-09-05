@@ -64,8 +64,8 @@ var (
 	pemBodyRe   = regexp.MustCompile(`(?m)^[A-Za-z0-9+/=]{40,}$`)
 
 	// A known_hosts entry: a host pattern, an algorithm, and a key. Not
-	// anchored to the start of a line on purpose - the same line pasted
-	// into a Go string literal or a YAML value is the same leak, and
+	// anchored to the start of a line on purpose, because the same line
+	// pasted into a Go string literal or a YAML value is the same leak and
 	// anchoring would let it through.
 	knownHostsLineRe = regexp.MustCompile(`(\S+)\s+(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)\s+AAAA[A-Za-z0-9+/]{20,}`)
 
@@ -109,7 +109,7 @@ var reservedTLDs = map[string]bool{
 // rather than a hostname. This matters more than it sounds: a Go comment
 // citing `s3.go:1514` is a dotted name followed by a colon and a number,
 // which is indistinguishable from host:port without this list, and those
-// citations are everywhere in this repository's transport package - which
+// citations are everywhere in this repository's transport package, which
 // is also the package that says "ssh" most often.
 var sourceFileSuffixes = map[string]bool{
 	"go": true, "py": true, "ts": true, "tsx": true, "js": true, "mjs": true,
@@ -133,9 +133,9 @@ var publicResolvers = map[string]bool{
 }
 
 // infrastructureDomains are the services this repository is built with
-// and against. They are public names by definition - they are in a
-// go.mod, a Dockerfile, a licence URL - so a scan that reported them
-// would report a hundred true statements and nothing anybody needs.
+// and against. They are public names by definition, sitting in a go.mod,
+// a Dockerfile or a licence URL, so a scan that reported them would report
+// a hundred true statements and nothing anybody needs.
 //
 // Every entry here was added because it actually fired, not in advance:
 // an allowlist written by imagining what might match is an allowlist
@@ -206,7 +206,7 @@ func ScanForLeakedEndpoints(root string, rel []string) ([]Violation, error) {
 // Test sources are exempt from the PEM-block rule and from nothing else.
 // The reason is specific rather than general: this tree deliberately
 // carries generated throwaway keypairs as test constants, because a test
-// that parses a private key needs one, and those are not a leak - they
+// that parses a private key needs one, and those are not a leak: they
 // were made for the test and authorise nothing. What is never exempt is a
 // key that arrived as a FILE, which is what wholeFileIsAPrivateKey below
 // catches wherever it sits, testdata included.
@@ -340,9 +340,9 @@ func routableHost(host string) bool {
 	if len(labels) < 2 {
 		// A single label is a container alias, a compose service name or
 		// a placeholder. It resolves nowhere off the machine that defines
-		// it, so it cannot be the address of a production host - and both
-		// of this issue's hosts are already named in this repository by
-		// their single-label role names, deliberately.
+		// it, so it cannot be the address of a production host. Both of
+		// this issue's hosts are already named in this repository by their
+		// single-label role names, deliberately.
 		return false
 	}
 	last := labels[len(labels)-1]

@@ -222,7 +222,7 @@ DEFAULT_LISTEN_PORT = 8080
 # The name is namespaced rather than the bare SSH_PORT that convention uses,
 # because a bare SSH_PORT is a name other tooling sets for its own reasons,
 # and reading a stray one would be inferring a port rather than being given
-# one - which is the single thing this must never do.
+# one, which is the single thing this must never do.
 SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 
 # The release this installer carries, and the identity ghcr.io assigned
@@ -715,7 +715,7 @@ class Preflight:
         the exception is narrow on purpose: known_hosts holds PUBLIC host
         keys and the endpoints they are pinned for. The private key is
         still never read, and nothing read out of this file is ever
-        printed - not a host, not a port, not a key. Every message below
+        printed, not a host, not a port, not a key. Every message below
         is a count and a verdict.
         """
         port = getattr(self.args, "source_port", None)

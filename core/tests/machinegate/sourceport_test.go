@@ -101,7 +101,7 @@ func TestTheSFTPSourcePathRunsOnANonDefaultPortAgainstTheFixture(t *testing.T) {
 	// One more operation over the same port, because List and a copy both
 	// go through the same walk and a Stat does not. No RemoteHash here:
 	// this fixture is the atmoz/sftp shape, forced internal-sftp with no
-	// shell, so `sha256sum` has nothing to run in - which is issue #281's
+	// shell, so `sha256sum` has nothing to run in. That is issue #281's
 	// finding and not this test's business.
 	stat, err := adapter.Stat(ctx, source, "production.dump")
 	if err != nil {
