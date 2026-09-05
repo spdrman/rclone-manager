@@ -127,10 +127,21 @@ const shutdownGrace = serve.DefaultShutdownGrace
 // sign of trouble, not something worth waiting out.
 const healthcheckTimeout = 3 * time.Second
 
+// main is one line on purpose: everything worth testing lives in run,
+// which returns an exit code instead of calling os.Exit, so the whole
+// command surface can be driven from a test in-process. The only thing
+// that genuinely cannot be observed that way is what the process exits
+// with after a signal, and serve_signal_test.go re-executes the test
+// binary to get at it.
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// run dispatches to one of the four commands and returns the process exit
+// code. Two is reserved for a usage error (no command, or one this binary
+// does not have) and one for a command that ran and failed, which is the
+// same split core/cmd/backup-manager uses, so a caller scripting either
+// binary reads them the same way.
 func run(args []string) int {
 	if len(args) == 0 {
 		usage()
@@ -152,6 +163,12 @@ func run(args []string) int {
 	}
 }
 
+// usage writes the command surface an operator reads. The text below is
+// pinned byte for byte by the compatibility corpus (FR-35 clause 4): a
+// reworded line here is a change to something somebody already has in a
+// runbook, so it is a deliberate act with a recorded reason rather than an
+// edit. Adding a command means adding a line, and a test asserts every
+// mode this binary carries appears here.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: backup-manager-web <command> [flags]
 
@@ -308,6 +325,24 @@ auth create-admin flags:
 `)
 }
 
+// cmdServe runs the engine: the API, the local-auth service, the backend
+// and the scheduler, sharing one process and one shutdown context.
+//
+// Almost all of its length is flag and environment parsing followed by
+// refusals, and that is where the value is. Every check below happens
+// before anything binds a port or opens a journal, so a deployment that
+// is misconfigured stops with a sentence about what is wrong instead of
+// starting and being subtly wrong. The two peer-related flags are the ones
+// worth reading carefully: --trusted-upstream names who may talk to THIS
+// hop, and --trusted-gateway, which belongs to serve-ui and names the
+// platform gateway, is accepted here only so it can be refused by name.
+// An operator who carried the old spelling over gets told which of the two
+// hops they are looking at rather than a bare unknown-flag error.
+//
+// The composition itself is not here. It moved to
+// apps/common/webhost/serve so every other provider gets the same
+// orchestration; what is left is the part that is genuinely specific to
+// this provider.
 func cmdServe(args []string) int {
 	fset := flag.NewFlagSet("serve", flag.ContinueOnError)
 	configPath := fset.String("config", defaultConfigPath, "path to the manager's YAML config file")
@@ -828,6 +863,10 @@ func localHealthcheckURL(listenAddr string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/"
 }
 
+// fail prints one line to stderr and returns the exit code for a command
+// that ran and did not work. The prefix matters more than it looks: this
+// process shares a container log with the engine and the UI host, so a
+// line without it is a line an operator cannot attribute.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 	return 1

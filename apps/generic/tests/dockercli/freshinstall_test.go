@@ -29,7 +29,6 @@
 // start gate, on the same fixture, and requires the web UI NOT to come
 // up - so a run that passes is a run that would have failed against
 // what shipped, rather than one that only ever tested a healthy stack.
-
 package dockercli_test
 
 import (

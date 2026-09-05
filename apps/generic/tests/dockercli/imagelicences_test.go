@@ -28,7 +28,6 @@
 // architecture-independent bytes copied from the build context, which is
 // the one part of the image where "it is the same on both" is a claim
 // about a COPY rather than about a compiler.
-
 package dockercli_test
 
 import (

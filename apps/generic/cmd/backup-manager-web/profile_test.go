@@ -1,3 +1,20 @@
+// Profile selection at startup, where every case is a refusal.
+//
+// The reason they are all refusals is that the safe-looking alternative is
+// the bug. A profile token nothing implements must stop the process
+// instead of falling back to generic, because a UGOS deployment that
+// silently gets the generic auth story is a security regression that
+// nothing downstream reports. A gateway profile with no trusted peer range
+// must stop too: without a peer range there is no gateway, only an
+// identity header anybody on the LAN can set.
+//
+// The mirror-image case matters just as much. A trusted gateway declared
+// on a profile that has none is also refused, so an operator cannot
+// believe they have configured a trust boundary that nothing reads.
+//
+// Both serve and serve-ui are driven through every case, because they are
+// two entry points onto the same table and a check present on one and
+// missing on the other is exactly the gap this would otherwise leave.
 package main
 
 import (

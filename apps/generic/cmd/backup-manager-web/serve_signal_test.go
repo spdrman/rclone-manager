@@ -1,3 +1,20 @@
+// What the process actually exits with when it is signalled, which no
+// in-process test can observe.
+//
+// A signal handler's whole contract is about the process rather than about
+// a function's return value, so this re-executes the test binary as the
+// engine, sends it a real SIGTERM and reads the exit status and the log
+// line the operator would see. The environment variables are what turn
+// this binary into that child; the same trick the core daemon's own signal
+// test uses, and for the same reason: the child runs the same run() the
+// shipped binary dispatches to, so what it exits with is what the shipped
+// binary exits with.
+//
+// The shutdown notice is pinned as a literal here rather than imported
+// from the command. That looks like duplication and is deliberate: what is
+// under test is the text an operator finds in the container log, so an
+// assertion that imported the constant would keep passing through a
+// rewording that breaks whoever is grepping for it.
 package main
 
 import (
