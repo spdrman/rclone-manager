@@ -238,6 +238,13 @@ func TestClassify_ConnectTimeoutRcloneImposedIsTransient(t *testing.T) {
 			want: transport.Transient,
 		},
 		{
+			// Row 1's discriminating shape, with the network's coin
+			// toss taken out of it. See the function's own doc.
+			name: "an error that carries a deadline nobody in this process set",
+			run:  connectTimeoutShapeThatUsedToBeCancelled,
+			want: transport.Transient,
+		},
+		{
 			name: "caller context cancelled before the call started",
 			run:  callerCancelledBeforeTheCall,
 			want: transport.Cancelled,
@@ -396,16 +403,67 @@ func rcloneImposedConnectTimeout(t *testing.T) (context.Context, []error) {
 			attempt, elapsed, errors.Is(err, context.DeadlineExceeded), err)
 	}
 
-	// The last precondition, and the one the race makes necessary: at least
-	// one of these dials has to have drawn the *net.timeoutError shape, or
-	// every sample here was already Transient before the fix and the row
-	// proves nothing. Failing loudly beats a green that means nothing.
-	if carriedDeadlineErr == 0 {
-		t.Fatalf("none of %d connect timeouts carried context.DeadlineExceeded, so this run drew only the shape that was already classified correctly; "+
-			"re-run, and if it keeps happening this machine's dial race has moved and this row needs more samples", connectTimeoutSamples)
-	}
+	// Which shape this run drew, reported and not asserted on.
+	//
+	// It used to be asserted on: at least one of these dials had to carry
+	// context.DeadlineExceeded, because the other shape was already
+	// Transient before #388 and a run that drew only that one proved
+	// nothing about the fix. The trouble is that which shape a dial draws
+	// is decided by which of two deadlines the kernel notices first, and
+	// that is a property of how busy the machine is. This row's own
+	// comment records it falling from 29-in-30 on a quiet machine to
+	// roughly 2-in-5 with dials in flight, and putting the gate's Go
+	// suites under -race (#417) pushed it further the same way: the
+	// assertion failed on both of the first two full runs under the
+	// detector, having drawn 0 of 6, on a tree with nothing wrong with
+	// it.
+	//
+	// So the claim it was carrying moved somewhere it can be made
+	// without a coin toss. connectTimeoutShapeThatUsedToBeCancelled is
+	// that row: the exact shape, classified against a live context,
+	// every time. This one keeps the part only a real dial can prove,
+	// that rclone's own connect timeout is reached at all and is
+	// Transient whichever shape it arrives in, and reports the draw for
+	// whoever is reading a failure.
 	t.Logf("%d of %d connect timeouts carried context.DeadlineExceeded (the shape that read as Cancelled before #388)", carriedDeadlineErr, connectTimeoutSamples)
 	return ctx, errs
+}
+
+// connectTimeoutShapeThatUsedToBeCancelled is the deterministic half of
+// row 1: an error that carries an expired deadline, handed to ClassifyCtx
+// with a context that never asked for one.
+//
+// That pair is the whole of #388. rclone sets its own --contimeout on
+// both dials, and when one fires the error underneath answers
+// errors.Is(err, context.DeadlineExceeded) true, so a classifier reading
+// the error alone calls it Cancelled: "the operator decided", which
+// retry.DefaultIsTransient will not retry. The fix was to consult the
+// caller's context, and the only input that exercises it is an error
+// carrying a deadline while the context is live.
+//
+// Fabricated on purpose. The classifier sees an error, not a network, and
+// what it keys on is exactly what is built here; going through a real
+// dial to obtain it buys nothing and costs the coin toss the live row
+// above documents. The live row is what proves this shape is reachable in
+// the first place.
+func connectTimeoutShapeThatUsedToBeCancelled(t *testing.T) (context.Context, []error) {
+	t.Helper()
+
+	err := fmt.Errorf("NewFs: couldn't connect SSH: dial tcp %s:%d: %w",
+		blackholedHost, blackholedPort, context.DeadlineExceeded)
+	// The precondition, and it is the same one the live row samples for:
+	// an error that does not carry the deadline is not this shape and
+	// would prove nothing.
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("this row's own error does not carry context.DeadlineExceeded, so it is not the shape #388 is about: %v", err)
+	}
+	// And the context has to be genuinely live, or Cancelled would be the
+	// right answer and the row would be asserting the opposite of the fix.
+	ctx := context.Background()
+	if ctx.Err() != nil {
+		t.Fatalf("the caller context is done (%v) before anything happened", ctx.Err())
+	}
+	return ctx, []error{err}
 }
 
 // callerCancelledBeforeTheCall is the positive control from the other side:
