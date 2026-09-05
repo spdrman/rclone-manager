@@ -204,6 +204,12 @@ make_full_tree() {
   # the gate dies on `cd distribution` in every full-tree case, which is the
   # same shape of miss the two comments further down record.
   add_go_module "$tree" distribution stubdistribution
+  # And distribution/packaging as a package of that module, because #417
+  # gave it a step of its own: it is the one Go suite the gate runs without
+  # -race, so `go test ./packaging/` is now a real path the gate walks and
+  # a tree without it dies on it, which is the same miss again.
+  add_go_module "$tree" distribution/packaging stubpackaging
+  rm -f "$tree/distribution/packaging/go.mod"
 
   add_workspace "$tree" ui/shared installed
   add_workspace "$tree" apps/common/tests installed
@@ -270,6 +276,14 @@ make_full_tree() {
   # each copy and stands up MinIO containers.
   mkdir -p "$tree/scripts/conformance"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/conformance/selftest.sh"
+
+  # The race detector's own mutation self-test (#417), stubbed for the
+  # seventh time for the seventh identical reason: the real one copies the
+  # tree twice, plants a data race in core/service and runs the detector
+  # over it, and `bash` on a path that does not exist exits 127 under
+  # `set -e` and takes every case below it down with it.
+  mkdir -p "$tree/scripts/race"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/race/selftest.sh"
 
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
@@ -973,7 +987,7 @@ assert_not_contains "J1 a daemon that dies mid-run cannot report success" \
 assert_not_contains "J1 a daemon that dies mid-run is not a ledgered skip" \
   'ci-local: INCOMPLETE' "$out"
 assert_contains "J1 the failure names the step that needed the daemon" \
-  'ci-local: FAILED (core/ go test ./...' "$out"
+  'ci-local: FAILED (core/ go test -race ./...' "$out"
 assert_contains "J1 the failure says the daemon died during the run" \
   'it was at the start of this run' "$out"
 assert_contains "J1 the failure points at Resource Saver" 'Resource Saver' "$out"
@@ -1112,7 +1126,7 @@ printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-RAN"\nexit 0\n' \
 run_gate "$tree"
 assert_contains "J8 a tree with an anchors script runs it" 'ANCHORS-STUB-RAN' "$out"
 assert_contains "J8 the anchors step is announced, and says mutation anchors" \
-  'mutation anchors in the compat and conformance selftests' "$out"
+  'mutation anchors in the compat, conformance and race selftests' "$out"
 assert_eq "J8 a passing anchors script leaves the run green" 0 "$status"
 
 tree="$(make_full_tree)"
@@ -1122,7 +1136,7 @@ printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-FAILED"\nexit 1\n' \
 run_gate "$tree"
 assert_nonzero "J8 a failing anchors script fails the run" "$status"
 assert_contains "J8 the failure names the anchors step" \
-  'ci-local: FAILED (mutation anchors in the compat and conformance selftests' "$out"
+  'ci-local: FAILED (mutation anchors in the compat, conformance and race selftests' "$out"
 # And it fails EARLY: the point of putting a one-second check near the top is
 # that nobody waits twenty-five minutes to hear about a broken link.
 assert_not_contains "J8 a failing anchors script fails before the Go suites" \
@@ -1157,6 +1171,145 @@ for rs_case in on off nokey missing; do
     assert_eq "J9 $rs_case prints no warning" "" "$warn_out"
   fi
 done
+
+# ------------- Group K: every Go suite in the gate runs under -race (#417)
+
+echo "==> K. the race detector is on, and on everything"
+
+# The gate ran no -race anywhere until #417. That is the same shape as every
+# other hole this suite exists for: `go test` exits 0 whether the detector
+# looked or not, so "this tree has no data race" and "nobody asked" were the
+# same output. Turning it on found two real things in one package on the
+# first run, one of them a genuine data race in a dependency.
+#
+# It is a flag on the steps that already exist rather than a step of its
+# own, which is the decision these cases pin down. A separate step can be
+# commented out and the suites still run and still report ok; a flag cannot
+# be removed without the step going with it. So the assertion is not "there
+# is a race step" but "no `go test` in this gate runs without the detector",
+# which is a rule a new module cannot be added around by accident.
+
+# race_flag_problems <path to a ci-local.sh> -> one line per invocation
+# that runs a Go suite without the detector and without saying why.
+#
+# It reads command lines only: `GOWORK=off go test` is how every suite in
+# this gate is actually invoked, and `cmd/gotestwatch` is the one that runs
+# through the progress-bounded wrapper instead. Step headings and comments
+# are prose about those commands and are skipped, which matters because at
+# least one heading says "go test -timeout" while describing the flag it
+# does NOT pass.
+#
+# A trailing `# no -race: <reason>` on the command line itself is the one
+# way out, and it is not a loophole because it is counted: K4 below asserts
+# how many lines carry it and which. An exclusion nobody can enumerate is
+# how a gate ends up not running the thing it says it runs.
+race_flag_problems() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /GOWORK=off go test/ && !/GOWORK=off go test -race/ {
+      if ($0 ~ /# no -race: [^ ]/) { next }
+      printf "  a Go suite runs without -race and without a reason, line %d: %s\n", NR, $0
+    }
+    /cmd\/gotestwatch/ && !/gotestwatch -race/ {
+      printf "  the gotestwatch suites run without -race, line %d: %s\n", NR, $0
+    }
+  ' "$1"
+}
+
+# race_flag_exceptions <path> -> one line per deliberate exclusion.
+race_flag_exceptions() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /GOWORK=off go test/ && !/GOWORK=off go test -race/ && /# no -race: [^ ]/ {
+      printf "%d: %s\n", NR, $0
+    }
+  ' "$1"
+}
+
+# race_flag_invocations <path> -> how many Go suites the script runs at all.
+# The count is the control for the scan: a script this scan finds nothing
+# wrong with because it found nothing at all would otherwise read as a pass.
+race_flag_invocations() {
+  grep -cE '^[^#]*(GOWORK=off go test|cmd/gotestwatch)' "$1" | tr -d '[:space:]'
+}
+
+real_gate="$SCRIPTS_DIR/ci-local.sh"
+
+# K1: the real script, as it stands. Every Go suite, detector on.
+k1_problems="$(race_flag_problems "$real_gate")"
+if [ -z "$k1_problems" ]; then
+  pass "K1 every Go suite in scripts/ci-local.sh runs under -race"
+else
+  fail "K1 every Go suite in scripts/ci-local.sh runs under -race" "$k1_problems"
+fi
+
+# K1's control: the scan has something to find. Nine Go suites today (the
+# FAST core step, the full core step, gotestwatch, apps/common,
+# distribution, distribution/packaging, apps/generic, apps/synology and
+# apps/ugos/backend), and the floor is deliberately low so adding or
+# removing a module does not fail this, while an empty scan does.
+k1_count="$(race_flag_invocations "$real_gate")"
+if [ "$k1_count" -ge 5 ]; then
+  pass "K1 the scan actually found the gate's Go suites ($k1_count of them)"
+else
+  fail "K1 the scan actually found the gate's Go suites" \
+    "found $k1_count invocations of \`go test\` or gotestwatch in $real_gate, want at least 5; the scan is looking for the wrong shape"
+fi
+
+# K2: the mutation. Strip the flag out of a copy and the scan has to say so,
+# by name, or K1 is a check that cannot fail.
+tree="$(make_full_tree)"
+script="$tree/scripts/ci-local.sh"
+sed -i.bak 's/go test -race/go test/g; s/gotestwatch -race/gotestwatch/g' "$script"
+rm -f "$script.bak"
+k2_problems="$(race_flag_problems "$script")"
+assert_contains "K2 a gate with the flag stripped out is caught" \
+  'a Go suite runs without -race' "$k2_problems"
+assert_contains "K2 the gotestwatch suites are caught too" \
+  'the gotestwatch suites run without -race' "$k2_problems"
+
+# K3: the other direction, end to end. A static scan of the file says the
+# flag is written down; this says a run actually announces it, which is what
+# stops the whole thing from passing against a step nobody reaches.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_eq "K3 a full run with -race everywhere still reaches ok" 0 "$status"
+assert_contains "K3 the core step announces the detector" \
+  'core/ go test -race ./...' "$out"
+assert_contains "K3 the gotestwatch step announces the detector" \
+  'under gotestwatch, -race' "$out"
+assert_contains "K3 the other Go modules announce it too" \
+  'apps/common go build, vet, test -race' "$out"
+
+# K4: the exclusions, enumerated. One suite is deliberately out
+# (distribution/packaging: no goroutine anywhere in it, so nothing to
+# detect, and it is the most CPU-bound package here). That is a decision
+# somebody made with a number in hand, and this is what keeps the next one
+# from being made by accident: the count is pinned, so a second exclusion
+# fails here until it is added on purpose.
+k4_exceptions="$(race_flag_exceptions "$real_gate")"
+k4_count="$(printf '%s' "$k4_exceptions" | grep -c . | tr -d '[:space:]')"
+assert_eq "K4 exactly one Go suite in the gate is excluded from -race" 1 "$k4_count"
+assert_contains "K4 the exclusion is distribution/packaging" './packaging/' "$k4_exceptions"
+assert_contains "K4 the exclusion says why on the line itself" \
+  'no goroutine of its own' "$k4_exceptions"
+
+# K4's control: the enumeration notices a new one. Without this, K4's count
+# assertion would also pass against a scan that can no longer see any
+# exclusion at all.
+tree="$(make_full_tree)"
+script="$tree/scripts/ci-local.sh"
+sed -i.bak 's|^(cd apps/common && \(.*\)go test -race \./\.\.\.)$|(cd apps/common \&\& \1go test ./...) # no -race: a second exclusion nobody decided on|' "$script"
+rm -f "$script.bak"
+k4_mutant="$(race_flag_exceptions "$script")"
+k4_mutant_count="$(printf '%s' "$k4_mutant" | grep -c . | tr -d '[:space:]')"
+if [ "$k4_mutant_count" -eq 2 ]; then
+  pass "K4 a second exclusion is counted, so the count assertion has teeth"
+else
+  fail "K4 a second exclusion is counted, so the count assertion has teeth" \
+    "the mutation should have produced 2 exclusions, the scan found $k4_mutant_count:
+$k4_mutant"
+fi
 
 # ------------------------------------------------------------------ result
 

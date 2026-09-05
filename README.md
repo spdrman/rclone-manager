@@ -1109,8 +1109,13 @@ This repository is four Go modules stitched together by `go.work`: `core/`, `app
 cd core
 go build ./...
 go vet ./...
-go test ./...
+go test -race ./...
 ```
+
+`-race` rather than a bare `go test`, because that is what the gate runs (see below) and
+because this engine's core loop is a scheduler handing a config snapshot to a cycle while
+service methods swap that snapshot underneath it. Drop the flag for a quick single-package
+loop if you like; do not form an opinion about a change from a run without it.
 
 ### The local gate
 
@@ -1156,6 +1161,78 @@ Everything the gate starts gets `CI_LOCAL=1` in its environment, which is how th
 fixtures in `core/tests` tell "this laptop has no Docker", an honest skip when you are
 running one suite by hand, from "the daemon this gate already used has gone away", which is
 a failure.
+
+Every `go test` the gate runs carries `-race` (#417). Until that landed it ran none at all,
+anywhere, which is the same shape as every other hole this gate has had to close: `go test`
+exits 0 whether the detector looked or not, so "this tree has no data race" and "nobody
+asked" were the same output. On this product that gap sat over the code most likely to have
+one. The `{inner, revision}` pair, the edit-holds registry and the journal are all shared
+across goroutines, and one test in `core/service` says in its own doc that it proves nothing
+except under the detector, which until now it had never once been run under.
+
+It is a flag on the steps that already exist rather than a step of its own. A separate step
+would run the same suites a second time and buy nothing, since `-race` replaces no
+assertion: everything a plain run checks, the instrumented run checks too, plus the
+detector. And a separate step is one more thing that can be commented out while the suites
+still run and still report `ok`. So Group K of the gate's own self-test pins the rule that
+follows: not "there is a race step" but "no `go test` in this gate runs without the
+detector", which is a rule a new module cannot be added around by accident.
+
+A detected race fails the run rather than joining the skip ledger, and there is no opt-out
+variable for it. That falls out of it being a flag: the step it is on is the step the gate
+already had to run, so a race is a red suite and a red suite is `==> ci-local: FAILED`
+naming it. A ledgered race would be a check reporting on a defect it decided not to act on,
+which is the one thing this gate is not allowed to do.
+
+Measured on the machine this was written on, warm cache, with five other worktrees running
+their own suites at the time, so read the pairs rather than the absolutes:
+
+| suite | plain | `-race` |
+|---|---|---|
+| `core/`, minus the four Docker-backed suites | 135s, 128s | 174s, 177s |
+| those four, under `gotestwatch` | 143s | 147s |
+| `distribution`, minus `packaging` | 69s | 64s |
+| `apps/generic` | 43s | 51s |
+| `apps/synology` | 9s | 17s |
+| `apps/common` | 6s | 31s |
+| `distribution/packaging`, the one exclusion | 44s | 521s |
+
+About ninety seconds added on a gate that runs for twenty-five minutes. The four
+Docker-backed suites under `core/tests/` were the ones worth measuring before committing
+them, and they turned out to be the cheapest of the lot: they spend their time waiting on
+containers and on a real rclone, so the instrumentation is nearly free.
+
+`distribution/packaging` is the one Go suite the gate runs without the detector, and it says
+so on its own command line. It is a static-analysis suite: it reads this repository's own
+manifests, matrices, READMEs and release records and asserts they agree with each other. It
+starts no goroutine of its own: no `go` statement in product code or in tests, no
+`t.Parallel` anywhere, and one `sync.Once` memoising a fixture. The only concurrency in the
+whole package is `os/exec`'s internal pipe plumbing, which is the standard library's and is
+not what a race in this repository would look like. What it does have is the most CPU-bound
+work in the repository, which is exactly the shape instrumentation multiplies, and that one
+package was the whole of `distribution`'s `-race` cost. Group K asserts that this is the
+only line in the whole script carrying a `# no -race:` marker, and a mutation that adds a
+second one proves that count can fail. An exclusion nobody can enumerate is how a gate ends
+up not running what it says it runs.
+
+Turning it on found two things in `core/internal/transport/rclone` on the first run, and
+neither was a flake. One is a real data race, in rclone v1.75.0's `lib/atexit` rather than
+here: it publishes its signal channel in a plain package-level variable and writes `nil`
+over it in `IgnoreSignals` while the goroutine `Register` started is reading it, which
+`DisableSignalExit` reaches. Nothing on this side can add a synchronisation edge between two
+accesses in another module, and the shipped daemon disables signals before its first
+transfer so it never installs that handler at all, so the one row that provokes it runs
+under a suppression that `TestDisableSignalExit` holds to account: the child says what it
+suppressed, and the test asserts that exactly the provoking row used it and no other row
+did. When rclone fixes it, that assertion goes red and the file gets deleted. The other was
+a sampling assertion whose odds move with machine load, which the detector's slowdown pushed
+over; the claim it carried now lives in a row where no coin is tossed.
+
+`scripts/race/selftest.sh` is the control for all of it, in the shape #242 established for
+the compatibility and conformance cells: it plants a real data race in real product source
+in a copy of the tree, requires the detector to catch it and to name the write that planted
+it, and then runs the same mutant with the flag off and requires it to go green. That last
+cell is the one that makes the other two mean anything.
 
 Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
 says which tier a test belongs to (unit, integration, or a machine reached through
