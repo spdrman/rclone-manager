@@ -30,7 +30,7 @@ const (
 	// adapter's own unexported default, so this row does not name it: it
 	// counts the samples it actually saw instead, which is the property the
 	// number was standing in for anyway.
-	cancelLinkRate = 1024 * 1024
+	cancelLinkRate = 2 * 1024 * 1024
 
 	// cancelPayload has to be comfortably larger than everything that can
 	// still move after a cancel lands, or "it stopped short" stops being
@@ -121,14 +121,20 @@ func TestMidTransferCancellationCanStillFail(t *testing.T) {
 // # Why the observable is bytes and not elapsed time
 //
 // Because on sftp the call does not return when the transfer stops. The
-// adapter's sftpConfig pins concurrency at 64 and chunk_size at 32Ki, so
-// about 2MiB of read requests are outstanding at any moment, and the server
+// adapter's sftpConfig pins concurrency at 64 and chunk_size at 32Ki, so at
+// least 2MiB of read requests are outstanding at any moment, and the server
 // answers all of them whatever the client has decided. The copy loop stops
-// at the cancel; the socket then drains that window at whatever the link is
-// worth. Measured here: the byte count froze at the cancel, and the call
-// returned a couple of seconds later. A test that timed the call would be
-// timing the drain, so the elapsed times below are logged and never
-// asserted.
+// at the cancel; the connection then drains at whatever the link is worth.
+//
+// Measured here, the drain is bigger than that 2MiB window, so the SFTP
+// requests are not the whole of it: rclone's own read-ahead buffer and the
+// SSH channel and socket buffers all hold bytes the server has already sent.
+// The row does not try to attribute the drain to any one of them. What it
+// does claim is the part it can see, which is that ACCOUNTING froze at the
+// cancel and never moved again, and those drained bytes are never accounted
+// because Account is the thing the cancellation stops. A test that timed the
+// call would be timing the drain instead, so the elapsed times below are
+// logged and never asserted.
 //
 // That is also why this uses a slow LINK rather than rclone's --bwlimit.
 // The old version of this row set --bwlimit to fmt.Sprintf("%d", 64*1024),
@@ -294,14 +300,17 @@ func TestSFTPAdapterCancelsAMidFlightTransfer(t *testing.T) {
 	// transfer stopping and the call returning is the in-flight SFTP window
 	// draining off a deliberately slow link, and it is a property of the
 	// protocol's own read-ahead rather than of anything cancellation could
-	// reach. The window is stated as what the drain actually cost at the
-	// link's known rate, which is a measurement of this run, rather than as
-	// a restatement of the adapter's configuration.
+	// reach. The bytes are stated as what the drain cost at the link's known
+	// rate, which is a measurement of this run, and deliberately NOT
+	// attributed to any single buffer: it comes out larger than the 2MiB
+	// SFTP request window, so rclone's read-ahead and the socket buffers are
+	// in there too. None of it is accounted, which is the assertion above.
 	drain := elapsed - cancelledAt
-	t.Logf("the transfer stopped at %v and CopyToLocal returned at %v: %v of that is about %d bytes of outstanding "+
-		"SFTP reads (concurrency x chunk_size) draining off a %d B/s link. An uncancelled copy needed %v.",
+	t.Logf("the transfer stopped at %v and CopyToLocal returned at %v: %v of that is the connection draining, "+
+		"about %d bytes the server had already been asked for, off a %d B/s link. None of them were accounted "+
+		"(peak stayed at %d). An uncancelled copy needed %v.",
 		cancelledAt.Round(time.Millisecond), elapsed.Round(time.Millisecond), drain.Round(time.Millisecond),
-		int64(drain.Seconds()*float64(cancelLinkRate)), int64(cancelLinkRate), uncancelled.Round(time.Millisecond))
+		int64(drain.Seconds()*float64(cancelLinkRate)), int64(cancelLinkRate), peak, uncancelled.Round(time.Millisecond))
 
 	if info, statErr := os.Stat(localPath); statErr == nil {
 		t.Logf("partial local file left behind: %d of %d bytes", info.Size(), int64(cancelPayload))
