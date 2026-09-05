@@ -136,3 +136,20 @@ opt-out, and it ledgers too.
 Run one case on its own with `--case`, and add `--keep-on-failure` to
 leave a failing case's containers up for reading. Everything else is torn
 down on success, on failure and on interrupt.
+
+## Both drivers' `--help` is a pinned block, not a line range
+
+`two-machine-backup.sh` and `run-machine-tier.sh` print their `--help` from the
+header block between `# HELP-START` and `# HELP-END` near the top of each file.
+That used to be a range of line numbers, `sed -n '2,110p' "$0"`, so the help an
+operator reads was a set of coordinates rather than a piece of text: a comment
+inserted above the boundary rewrote it and deleting one truncated it, with
+nothing anywhere rendering either script's help. Both had already drifted by the
+time #514 was written, one of them to a sentence cut off inside a word.
+
+Edit the header freely; move a marker if you want the block to cover more or
+less. `scripts/tests/e2e-help.test.sh` renders both drivers and diffs them
+against `scripts/tests/testdata/*.help.txt` on every gate run, the way
+`core/tests/compat` pins the CLI under FR-35 clause 4, so a reword fails until
+somebody updates the golden on purpose. It also proves the property that used to
+be missing: a comment added above the block leaves the rendered help unchanged.
