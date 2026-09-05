@@ -232,6 +232,21 @@ func (b *BackupService) requireRepointAcknowledgement(ctx context.Context, sourc
 // ceremony either way, for the same reason an edit to one is: there is
 // nothing to orphan. That is every ordinary create, including every one
 // the wizard has ever made.
+//
+// # The one create this does not cover, said rather than left to be found
+//
+// FirstRun.CreateInitialConfig (firstrun.go). It writes the first
+// configuration there has ever been, which is the moment the state
+// database path stops being a default and becomes this deployment's
+// answer, so there is no journal open and nothing to ask. It could only
+// get one by opening (and migrating) a database at a path the operator
+// has not committed to yet, during setup, to answer a question that on a
+// genuinely first install has no history behind it. The case it leaves
+// open is narrow and real: a reinstall pointed at a volume that still
+// holds the previous deployment's journal. The set adopts that history,
+// nothing asks first, and unlike CreateBackupSet there is not even a
+// backup_set_adopted_history event, because there is no logger and no
+// journal to count it from at that point either.
 
 // createRepointedFields reports which of the identity-of-the-data fields
 // this create request puts somewhere other than where the id's recorded
