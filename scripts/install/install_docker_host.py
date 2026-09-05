@@ -346,9 +346,21 @@ class Preflight:
     unsupported machine is told that before being told about a port.
     """
 
-    def __init__(self, args) -> None:
+    def __init__(self, args, *, registry=None) -> None:
         self.args = args
         self.notes = []
+        # The seam the suite pins the registry through (issue #484).
+        # None is not "no registry", it is "build one if a check gets as
+        # far as needing an answer", which no unit test ever does: the
+        # only two callers are check_release and the update check, and
+        # both are reached from check_all and nowhere else. So the suite
+        # stays offline by construction rather than by remembering.
+        self._registry = registry
+
+    def registry(self):
+        if self._registry is None:
+            self._registry = Registry(RELEASE_REGISTRY, RELEASE_REPOSITORY)
+        return self._registry
 
     def note(self, text: str) -> None:
         self.notes.append(text)
@@ -374,6 +386,12 @@ class Preflight:
         self.check_credentials()
         self.check_port()
         self.check_space()
+        # Before check_image, which is the step that PULLS. An operator
+        # should be told which reference is about to be installed, and
+        # that its identity is the recorded one, before a 2 GB download
+        # starts rather than after it.
+        self.check_release()
+        self.check_for_a_newer_release()
         self.check_image()
 
     # -- the machine ---------------------------------------------------
@@ -710,6 +728,130 @@ class Preflight:
             )
         self.note(f"{usage.free // (1024 ** 3)} GiB free on the filesystem holding {target}")
 
+    def check_release(self) -> None:
+        """Which reference is about to be installed, and whether the tag
+        on it really is the release it names (issue #484).
+
+        The reference is printed first and unconditionally, because "what
+        version did this actually install" is the first question anyone
+        debugging a deployment asks and the answer was previously only
+        deducible from the flags.
+
+        Then the proof, which is what makes naming a release safe to
+        offer at all. A tag is a mutable pointer, and this project says so
+        in its own release tooling, so "install 0.2.0" is a claim about a
+        name until something compares the name against a recorded
+        identity. container/release-manifest.json recorded that identity
+        at push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
+        anonymous HEAD settles it.
+
+        It settles exactly one version: the one this installer carries. A
+        release cut afterwards has no digest here and cannot get one,
+        which is the whole reason the --image default is pinned rather
+        than floating. Everything this cannot prove is SAID rather than
+        passed over, because a check that stays quiet when it did nothing
+        is indistinguishable from one that succeeded.
+        """
+        ref = self.args.image
+        self.note(f"installing {ref}")
+
+        if self.args.image_archive is not None:
+            self.note(f"loaded from {self.args.image_archive}, so there is no registry to ask")
+            return
+        if self.args.no_pull:
+            self.note("--no-pull, so nothing is resolved against a registry")
+            return
+
+        home = f"{RELEASE_REGISTRY}/{RELEASE_REPOSITORY}"
+        if image_name(ref) != home:
+            self.warn(f"{image_name(ref)} is not {home}, so nothing recorded here says what {ref} "
+                      f"should be. Whatever is behind that reference is yours to vouch for.")
+            return
+
+        pinned = image_digest(ref)
+        if pinned:
+            if pinned == CARRIED_RELEASE_DIGEST:
+                self.note(f"pinned by digest to {CARRIED_RELEASE}'s recorded identity, so there is "
+                          f"nothing a moved tag could change")
+            else:
+                self.warn(f"pinned by digest to {pinned}, which is not the {CARRIED_RELEASE} this "
+                          f"installer recorded. A digest is exact, so this installs what you named; "
+                          f"it is just not a release this can vouch for.")
+            return
+
+        tag = image_tag(ref)
+        if tag != CARRIED_RELEASE:
+            self.warn(f"this installer records a digest for {CARRIED_RELEASE} only, so {tag} goes in "
+                      f"on the registry's word. Use the {tag} installer if you want it checked: it "
+                      f"is the one that carries {tag}'s digest.")
+            return
+
+        try:
+            digest = self.registry().digest_for(tag)
+        except (OSError, ValueError, KeyError) as exc:
+            # NOT a refusal. Being unable to reach a registry over HTTPS
+            # from this process is a different fact from a tag that has
+            # moved, and plenty of hosts pull through a daemon-level proxy
+            # this cannot see. check_image still has to resolve the image
+            # itself, so an unreachable registry does not get past that.
+            self.warn(f"could not ask {RELEASE_REGISTRY} what {ref} points at ({exc}), so the "
+                      f"recorded digest went unchecked. The pull below still has to succeed.")
+            return
+
+        if digest != CARRIED_RELEASE_DIGEST:
+            raise Refusal(
+                EXIT_RELEASE_DIGEST_MISMATCH,
+                f"{ref} is {digest or 'nothing this could read'} on {RELEASE_REGISTRY}, and the "
+                f"release manifest records {CARRIED_RELEASE_DIGEST} for {CARRIED_RELEASE}.",
+                "A tag is a mutable pointer, so exactly one of three things is true: the tag has "
+                "been moved since this release was recorded, this installer's copy of the digest "
+                "is stale, or something other than the registry is answering. None of the three "
+                "is something to install through.\n\n"
+                f"If you know the recorded digest is the right one, install it by identity rather "
+                f"than by name:\n  --image {image_name(ref)}@{CARRIED_RELEASE_DIGEST}\n\n"
+                "Otherwise take the release from a machine that already has it, with `docker save` "
+                "and --image-archive.",
+            )
+        self.note(f"{ref} is {digest}, the identity the release manifest records for {CARRIED_RELEASE}")
+
+    def check_for_a_newer_release(self) -> None:
+        """Whether a newer release exists. Read-only, and it can only ever
+        add a line of output (issue #484).
+
+        Not a check in this class's usual sense: it has no refusal and no
+        exit code, and it deliberately cannot acquire one. It must not
+        change what is installed, so every failure degrades to silence
+        rather than to a decision, and a registry that is down or slow
+        costs an operator nothing but a missing sentence.
+
+        It also does not offer to install what it finds, and that is the
+        design rather than a gap. The proof above works off a digest this
+        installer carries, and it can never carry the digest of a release
+        cut after it was written; an installer that floated onto a newer
+        tag would be installing on the registry's word alone. So this says
+        where the newer installer is and stops.
+        """
+        if self.args.image_archive is not None or self.args.no_pull:
+            return
+        if image_name(self.args.image) != f"{RELEASE_REGISTRY}/{RELEASE_REPOSITORY}":
+            return
+        try:
+            published = self.registry().released_versions()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.warn(f"could not ask {RELEASE_REGISTRY} whether a newer release exists ({exc}). "
+                      f"Nothing about this install changes.")
+            return
+
+        newer = [v for v in published if _semver(v) > _semver(CARRIED_RELEASE)]
+        if not newer:
+            self.note(f"{CARRIED_RELEASE} is the newest published release, prereleases excluded")
+            return
+        self.warn(f"{newer[-1]} has been published since this installer was written, which carries "
+                  f"{CARRIED_RELEASE} (prereleases are excluded from that comparison). Nothing here "
+                  f"changes what is about to be installed, on purpose: an installer can only prove "
+                  f"a release it already holds a digest for. Get the {newer[-1]} installer from "
+                  f"{RELEASE_DOWNLOAD_PAGE}.")
+
     def check_image(self) -> None:
         """The image has to be resolvable BEFORE anything is created.
 
@@ -978,6 +1120,132 @@ def _semver(tag: str):
     if not all(identifiers):
         return None
     return (numbers, 0, _prerelease_key(identifiers))
+
+
+def _next_page(link_header: str) -> str:
+    """The `rel="next"` target out of a Link header, or "" when there is none.
+
+    RFC 8288 in the one shape a registry sends it: `</v2/...>; rel="next"`,
+    sometimes with other links beside it. Written out rather than
+    approximated with `"next" in header`, because `rel="previous"` also
+    contains the word and following it is an infinite loop.
+    """
+    for part in link_header.split(","):
+        target, _, params = part.partition(";")
+        if "rel=next" not in params.replace(" ", "").replace('"', ""):
+            continue
+        return target.strip().strip("<>")
+    return ""
+
+
+class Registry:
+    """The two read-only questions this installer asks a registry, and
+    nothing else (issue #484).
+
+    Standard library only, like the rest of this file, and both questions
+    are GETs and HEADs against an anonymous pull token. Nothing here
+    writes, nothing here needs a credential, and nothing here can change
+    what is installed: the reference is settled in resolve_release()
+    before this class is constructed, and the answers are used to CONFIRM
+    it or to print a line, never to produce it.
+
+    Built lazily and injectable on purpose. `test_install_docker_host.py`
+    runs its whole suite offline in about a second, and Fixture.args()
+    resolves arguments dozens of times; a registry read reachable from
+    resolve(), or from an argparse default, would put HTTPS into every
+    one of them. So Preflight takes one of these as a keyword argument
+    and only ever builds a real one when a check gets as far as needing
+    an answer.
+
+    Deliberately NOT cosign. Verification through a digest the release
+    already recorded is one request and no dependency; a signature check
+    would need a binary a NAS may not let anyone install, and would put
+    the most security-sensitive code in this project in the least
+    reviewed place. Issue #484 records all four reviewers saying so.
+    """
+
+    # An image index and an image manifest, in both the OCI and the
+    # Docker spellings. Without an Accept a registry may answer with a
+    # converted manifest, whose digest is a different (and correct)
+    # digest for a different set of bytes, and the comparison below
+    # would fail for a reason that has nothing to do with the release.
+    ACCEPT = ", ".join((
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ))
+
+    def __init__(self, registry: str = RELEASE_REGISTRY, repository: str = RELEASE_REPOSITORY,
+                 *, timeout: int = REGISTRY_TIMEOUT) -> None:
+        self.registry = registry
+        self.repository = repository
+        self.timeout = timeout
+        self._bearer = None
+
+    def _token(self) -> str:
+        """An anonymous pull token, fetched once and kept for the run.
+
+        Anonymous because the image is public and because an installer
+        that asked for a credential to check a public digest would be
+        asking for a credential nobody should have to give it.
+        """
+        if self._bearer is None:
+            url = (f"https://{self.registry}/token"
+                   f"?scope=repository:{self.repository}:pull&service={self.registry}")
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                self._bearer = json.loads(response.read().decode("utf-8"))["token"]
+        return self._bearer
+
+    def _open(self, path: str, *, method: str = "GET", accept: str = ""):
+        # A path beginning with "/" is one the registry handed back in a
+        # Link header and is already rooted; anything else is relative to
+        # this repository's own v2 endpoint.
+        url = (f"https://{self.registry}{path}" if path.startswith("/")
+               else f"https://{self.registry}/v2/{self.repository}/{path}")
+        request = urllib.request.Request(url, method=method)
+        request.add_header("Authorization", f"Bearer {self._token()}")
+        if accept:
+            request.add_header("Accept", accept)
+        return urllib.request.urlopen(request, timeout=self.timeout)
+
+    def digest_for(self, tag: str) -> str:
+        """What the registry says this tag currently points at.
+
+        A HEAD, so no manifest body crosses the wire: the answer is the
+        `docker-content-digest` header, which is the identity the release
+        manifest recorded at push time.
+        """
+        with self._open(f"manifests/{tag}", method="HEAD", accept=self.ACCEPT) as response:
+            return response.headers.get("docker-content-digest", "")
+
+    def released_versions(self) -> list:
+        """Every tag that is a released version, oldest first.
+
+        Paginated, because ghcr.io caps a page at 100 tags and this
+        repository publishes three per release (the version, its
+        signature and its attestation), so the first page fills at 33
+        releases and a later one is the page the newest release is on.
+
+        Ordered by _semver, never by the order the registry answers in.
+        That order is push order, and push order is not version order:
+        the six tags here today come back with the newest release fourth.
+        Sorting by _semver also drops the signature and attestation tags
+        for free, since neither parses as a version.
+
+        Prereleases are excluded. A release candidate is published the
+        same way a release is, and telling an operator that 0.3.0-rc.1 is
+        "newer" than the release they are installing is telling them to
+        move a backup host onto a candidate.
+        """
+        page, tags = "tags/list?n=100", []
+        while page:
+            with self._open(page) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                tags += body.get("tags") or []
+                page = _next_page(response.headers.get("Link", ""))
+        released = [t for t in tags if _semver(t) is not None and _semver(t)[1] == 1]
+        return sorted(released, key=_semver)
 
 
 def compare_versions(installed: str, target: str) -> str:
