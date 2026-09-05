@@ -833,3 +833,102 @@ func TestAPassSaysWhichCopiesTheConfigurationCannotReach(t *testing.T) {
 		t.Errorf("the pass statted %d placements, want 1: a medium that is not configured cannot be asked", store.stats)
 	}
 }
+
+// TestACopyProvedMissingIsNotReportedAsNothingHavingBeenChecked is an
+// honesty hole this package had, found while writing the operator-triggered
+// twin of these checks (issue #435).
+//
+// One copy was asked and the medium answered that it is not there. The
+// other sits on a medium the configuration does not name, so it could not
+// be asked. The pass used to report that as an unchecked finding reading
+// "none of them is in the configuration, so nothing was checked", which is
+// two untrue statements: one of them IS in the configuration, and it was
+// checked, and it is gone.
+//
+// Nothing may quarantine on the strength of it, because the copy nobody
+// could ask may be perfectly fine, and that part was always right. What
+// was wrong is where it lands and what it says: a copy proved missing is
+// exactly the thing an operator has to hear about, so this goes to
+// Report.Errors, which is where this package puts "somebody should find
+// out why", rather than to a finding an operator reads past.
+func TestACopyProvedMissingIsNotReportedAsNothingHavingBeenChecked(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy gone, one medium forgotten")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size: int64(len(content)),
+		statErrs: map[string]error{
+			"offsite_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found")),
+		},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, findings = %+v, want exactly one error: one copy is provably gone and the other could not be asked",
+			report.Errors, report.Findings)
+	}
+	msg := report.Errors[0].Error()
+	if !strings.Contains(msg, "offsite_s3") || !strings.Contains(msg, "not present") {
+		t.Errorf("the error does not say that the copy on offsite_s3 is gone: %q", msg)
+	}
+	if !strings.Contains(msg, "archive_s3") {
+		t.Errorf("the error does not name the copy that could not be asked: %q", msg)
+	}
+	if strings.Contains(msg, "nothing was checked") {
+		t.Errorf("the report still claims nothing was checked, while a copy was checked and found missing: %q", msg)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if after.State != before.State {
+		t.Errorf("state moved from %q to %q while one copy was never asked about", before.State, after.State)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing could decide about", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// TestNoCopyAskedAtAllIsStillAnUncheckedFinding is the control that keeps
+// the change above from swallowing the case it must not touch. When NO
+// copy could be asked, there is no evidence in either direction and no
+// failure to report: that really is a configuration fact, and it stays an
+// unchecked finding rather than becoming an alarm every cycle.
+func TestNoCopyAskedAtAllIsStillAnUncheckedFinding(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("two copies, neither medium configured")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	deps := Deps{Journal: j, Store: &perMediumStore{size: int64(len(content))}, Mediums: namedMediums{}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none: nothing failed, nothing could be asked", report.Errors)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	if f := report.Findings[0]; f.Checked {
+		t.Errorf("finding = %+v, want Checked false: no copy of this artifact was asked about", f)
+	}
+}

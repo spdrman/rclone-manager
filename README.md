@@ -54,7 +54,7 @@ the way its predecessor did.
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
 | `reconcile` | run FR-17 reconciliation for every backup set |
-| `validate` | re-check one artifact's durable local copy |
+| `validate` | re-check one artifact's durable copy, wherever it is. A copy on a storage medium is checked at the strongest verification class that costs nothing; `--content` downloads it and re-hashes it, which costs egress, so FR-31 makes that something an operator asks for (issue #435) |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
@@ -760,8 +760,10 @@ its final committed path if quarantined afterward by reconciliation. See
 turns those rows into a countable, actionable picture, and `backup-manager quarantine` is
 how an operator acts on one by hand, in one of three ways (issue #277):
 
-- `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-local-copy
-  checks and reports the verdict, moving nothing either way. **This is not `validate` under
+- `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-copy checks and
+  reports the verdict, moving nothing either way. Where the durable copy is an object on a
+  storage medium rather than a local file, that is where it looks (issue #435), at the
+  strongest verification class that costs nothing. **This is not `validate` under
   a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
   (`COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE`) and refuses a `QUARANTINED` or
   `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
@@ -1065,7 +1067,7 @@ If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this ca
 `backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
 what try automatically. To act on it yourself right now, without waiting for a cycle, see
 [Quarantine](#quarantine) above: `quarantine revalidate <source/backup-set/artifact>`
-re-checks the durable local copy and reports the verdict without moving anything,
+re-checks the durable copy, wherever it is, and reports the verdict without moving anything,
 `quarantine retry` re-enters the pipeline from a fresh fetch, and `quarantine reinstate`
 trusts the local copy again in place. (`backup-manager validate` is a different command: it
 only ever re-checks a *healthy* restore point and refuses a `QUARANTINED` artifact outright.)

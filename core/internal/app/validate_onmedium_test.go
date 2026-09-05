@@ -56,7 +56,7 @@ func TestValidateArtifact_RefusesWhenTheDurableCopyIsOnAMedium(t *testing.T) {
 		}
 	}
 
-	_, err = f.svc.ValidateArtifact(ctx, f.artifact)
+	_, err = f.svc.ValidateArtifact(ctx, f.artifact, ValidateOptions{})
 	if err == nil {
 		t.Fatal("ValidateArtifact returned a verdict for an artifact it has no local copy to check; want a refusal")
 	}
