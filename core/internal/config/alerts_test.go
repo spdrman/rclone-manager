@@ -1,3 +1,19 @@
+// The alerting block, tested from the position that matters most: what
+// happens to a deployment that has never heard of it.
+//
+// Alerting is opt-in, and the failure it has to be kept away from is not a
+// missed notification, it is an unwanted one. A config written before this
+// block existed must stay silent, and a threshold left unset must default
+// to something an operator can live with rather than be read literally as
+// "notify on the first failed artifact", which is how somebody who turned
+// alerting on gets a message per transfer and turns the whole thing back
+// off.
+//
+// So the shape here is: absent stays off, absent-but-enabled defaults, an
+// explicit value is left exactly as written, and a negative one is refused
+// rather than clamped, because there is no honest reading of a negative
+// count of failures.
+
 package config
 
 import (

@@ -1,3 +1,18 @@
+// Issue #264's ceiling, and above all its absence.
+//
+// The interesting value is the one nobody wrote. Zero is rclone's own
+// unlimited default and is what every config written before this key
+// existed means, so it has to validate, and it has to stay out of a
+// round-tripped file: a key that appeared in an operator's config after the
+// API layer saved something unrelated is this product editing a file it was
+// not asked to edit.
+//
+// Both ends are refused, and the upper one is not a taste limit. rclone
+// builds a token dispenser of exactly this many tokens at every NewFs,
+// filling the channel one send at a time, so a fat-fingered eight-digit
+// number is a fill loop on every backend operation rather than a harmless
+// over-provision.
+
 package config
 
 import (
@@ -77,6 +92,9 @@ func TestValidateAcceptsNoCeilingAndRefusesANegativeOne(t *testing.T) {
 	}
 }
 
+// validConfigWithMaxConnections takes the shared valid config and changes
+// only this one field, so a refusal in the table above can only be about
+// the number under test.
 func validConfigWithMaxConnections(t *testing.T, n int) Config {
 	t.Helper()
 	cfg := validConfig()

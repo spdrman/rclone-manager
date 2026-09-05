@@ -1,3 +1,27 @@
+// Validate, checked rule by rule against a config that is otherwise
+// correct.
+//
+// Everything here starts from validConfig, a config with nothing wrong with
+// it, and breaks exactly one thing. That is what makes a failure readable:
+// a test that assembled its own minimal config per case would go red for
+// whichever unrelated field it happened to leave out, and the messages
+// Validate produces are long enough that nobody would notice.
+//
+// Three properties get tested that are easy to lose without any single
+// check failing. Validate has to be idempotent, because ValidateRetention
+// runs the same code for the CLI's override path and a second call must not
+// re-default anything. It has to collect every problem rather than stop at
+// the first, because otherwise fixing a config costs one restart per
+// mistake. And ValidateRetention has to agree with Validate field for
+// field, which is asserted by reflection over the struct rather than by a
+// list, so a field added later cannot quietly go unchecked on one of the
+// two paths.
+//
+// Assertions on message text are deliberate rather than brittle. These
+// strings are what an operator reads when the daemon refuses to start, and
+// FR-35 pins them, so a test that only asserted "an error happened" would
+// let the useful half of the product surface be rewritten silently.
+
 package config
 
 import (
@@ -67,6 +91,10 @@ func validConfig() Config {
 	}
 }
 
+// boolPtr spells "the operator wrote this". ProtectLastKnownGood is a
+// *bool exactly so an absent key and an explicit false are different facts,
+// and a test that could not express the difference could not check that
+// Validate keeps them apart.
 func boolPtr(b bool) *bool { return &b }
 
 // retentionEqual compares two Retention values field by field, dereferencing
@@ -88,6 +116,14 @@ func retentionEqual(a, b Retention) bool {
 	return true
 }
 
+// retentionString renders a Retention for a failure message, dereferencing
+// the pointer rather than printing it.
+//
+// %+v on the struct prints an address for ProtectLastKnownGood, so the two
+// values in a failing comparison would differ in a place a reader cannot
+// interpret and agree everywhere they can. This is only ever called on the
+// way to a failure, so the cost of building it does not matter and the
+// legibility does.
 func retentionString(r Retention) string {
 	protect := "nil"
 	if r.ProtectLastKnownGood != nil {
@@ -104,6 +140,12 @@ func TestValidConfigPasses(t *testing.T) {
 	}
 }
 
+// Idempotence is a promise Validate's own doc makes and two real callers
+// depend on: the CLI runs the same code over an override, and the API layer
+// loads, edits and re-saves a config that has already been through it. A
+// second call that re-applied a default, or that read a resolved field as
+// something the operator had now set explicitly, would change a
+// deployment's policy on a save that touched something else entirely.
 func TestValidateIsIdempotent(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
@@ -123,6 +165,11 @@ func TestValidateIsIdempotent(t *testing.T) {
 
 // --- retention: the "zero or missing tier" cases the task calls out ---
 
+// "Safely" is the load-bearing word, and it means one direction. A
+// retention field left out has to default to keeping MORE, because the
+// alternative reading of a zero is "keep none", and a policy that deletes
+// everything is the one outcome an operator who omitted a key cannot have
+// meant.
 func TestMissingRetentionTierDefaultsSafely(t *testing.T) {
 	cfg := validConfig()
 	cfg.Retention = Retention{} // everything zero/absent, as if the whole block was left out of the file
@@ -324,6 +371,12 @@ func TestStaleAfterNegativeIsRejected(t *testing.T) {
 
 // --- backup set identity: must go through model.NewBackupSetID ---
 
+// The identity has to come from model.NewBackupSetID rather than from
+// concatenation here, and these two tests are what hold that. The next one
+// down feeds this package the values model refuses, so a hand-rolled
+// identity built somewhere in this file would have to reimplement every one
+// of those rules to keep passing, which is exactly the divergence the
+// single constructor exists to prevent.
 func TestBackupSetIDBuiltThroughModel(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
@@ -352,6 +405,11 @@ func TestBackupSetIDRejectsWhatModelRejects(t *testing.T) {
 	}
 }
 
+// Two sets sharing an identity is the failure FR-7's whole isolation
+// argument rests on: retention keyed on a colliding id lets one set's pass
+// delete another set's restore points. It can only be caught at the whole
+// file, since neither set is wrong on its own, which is why the seen-map is
+// threaded through every source rather than kept per source.
 func TestDuplicateBackupSetIDRejected(t *testing.T) {
 	cfg := validConfig()
 	// Two different Source entries that both claim the same source name and
@@ -392,6 +450,17 @@ func TestSftpRequiredFieldsMissing(t *testing.T) {
 
 // --- #74: key_file, key.file, key.env, key.command ---
 
+// Exactly one, never zero and never two.
+//
+// Two configured sources is refused rather than resolved by precedence,
+// because a precedence order would mean this package and
+// transport/rclone/ssh.go both having to pick the same one silently, and an
+// operator finding out which by watching what connects.
+//
+// The deprecated Remote.KeyFile is the case that makes the table long. It
+// and Key.File are two spellings of the same source rather than two
+// sources, so they count once and only conflict when they name different
+// files.
 func TestKeyExactlyOneSourceRequired(t *testing.T) {
 	t.Run("zero sources rejected", func(t *testing.T) {
 		cfg := validConfig()
@@ -676,6 +745,11 @@ func TestKeyEncryptionCommandEmptyExecutableRejected(t *testing.T) {
 	}
 }
 
+// The key rules have their own idempotence test because they are the one
+// place Validate normalises rather than only defaults: it writes the
+// deprecated KeyFile alias and Key.File into agreement. That is a mutation
+// a naive second call could read as "both are set now", turning a valid
+// config into a refusal on the second pass.
 func TestKeyValidateIsIdempotent(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -719,6 +793,10 @@ func TestKnownHostsNoneRejected(t *testing.T) {
 	}
 }
 
+// Zero is inside the range on purpose: it selects the backend's default
+// port, which is what every config that never mentions a port means. The
+// test carries it so a later tightening to "must be positive" fails here
+// rather than on every existing deployment.
 func TestSftpPortRange(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -757,6 +835,11 @@ func TestUnsupportedRemoteTypeRejected(t *testing.T) {
 	}
 }
 
+// A local remote carrying leftover sftp fields is refused rather than
+// ignored, because the operator who left them there believes something
+// about how the set connects. Ignoring them means this product and the
+// person who wrote the file disagree about what the deployment does, and
+// nothing ever says so.
 func TestLocalTypeRejectsSftpFields(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -813,6 +896,11 @@ func TestPathsMustBeAbsolute(t *testing.T) {
 	}
 }
 
+// A ".." in a configured path is refused at load rather than cleaned,
+// because these paths are the roots everything else is resolved against: a
+// local_path that walks upward silently widens what a prune or a delete can
+// reach, and cleaning it would hide the fact that the operator wrote
+// something other than what runs.
 func TestPathsRejectTraversal(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1036,6 +1124,11 @@ func TestManifestMarkerValidation(t *testing.T) {
 // before include filtering and unconditionally skips a match, with no
 // error, no rejection entry, no warning. ---
 
+// Neither value is wrong here, only the pair. A manifest marker that
+// matches the set's own include patterns means a real artifact with that
+// name is read as a completion signal and never backed up, silently and for
+// ever, and nothing downstream can notice a file it was told to treat as
+// metadata.
 func TestManifestMarkerIncludeCollision(t *testing.T) {
 	t.Run("explicit marker matching an explicit include pattern is rejected", func(t *testing.T) {
 		cfg := validConfig()
@@ -1364,6 +1457,11 @@ func TestDuplicateSourceNameRejected(t *testing.T) {
 
 // --- error aggregation ---
 
+// Collecting rather than returning at the first problem is what makes
+// fixing a config one edit instead of one restart per mistake, and it is
+// only visible in a test that breaks several things at once. The Unwrap
+// test below is the other half: an aggregate that no caller can take apart
+// is a wall of text, so errors.Is and errors.As have to reach each problem.
 func TestValidationErrorAggregatesAllProblems(t *testing.T) {
 	cfg := validConfig()
 	cfg.PollInterval = 0

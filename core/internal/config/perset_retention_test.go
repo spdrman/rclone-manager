@@ -325,6 +325,11 @@ func TestPerSetRetention_ResolvedChainIsNotAliasedToTheGlobalOne(t *testing.T) {
 	}
 }
 
+// A per-set override goes through the same resolution the global policy
+// does, so it inherits the same idempotence requirement, and it has a
+// sharper failure: the API layer saves a config after every settings
+// change, so an override that drifted on each pass would quietly retain
+// less every time somebody edited something unrelated.
 func TestPerSetRetention_OverrideSurvivesRepeatedValidate(t *testing.T) {
 	c := validConfig()
 	c.Sources[0].BackupSets[0].RetentionConfig = &Retention{
