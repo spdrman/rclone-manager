@@ -1292,7 +1292,7 @@ k4_count="$(printf '%s' "$k4_exceptions" | grep -c . | tr -d '[:space:]')"
 assert_eq "K4 exactly one Go suite in the gate is excluded from -race" 1 "$k4_count"
 assert_contains "K4 the exclusion is distribution/packaging" './packaging/' "$k4_exceptions"
 assert_contains "K4 the exclusion says why on the line itself" \
-  'no goroutine anywhere in the package' "$k4_exceptions"
+  'no goroutine of its own' "$k4_exceptions"
 
 # K4's control: the enumeration notices a new one. Without this, K4's count
 # assertion would also pass against a scan that can no longer see any

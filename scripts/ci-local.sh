@@ -72,8 +72,10 @@
 # exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
 # is the out-loud opt-out.
 #
-# Every `go test` in this script carries -race (#417). It is a flag on the
-# steps that already exist rather than a step of its own, for two reasons.
+# Every `go test` in this script carries -race (#417), with one named
+# exception that says why on its own line (distribution/packaging, below).
+# It is a flag on the steps that already exist rather than a step of its
+# own, for two reasons.
 # A separate step would run the same suites twice, and -race replaces
 # nothing: everything the plain run asserted, the instrumented run asserts
 # too, plus the detector. And a separate step is one more thing that can be
@@ -86,12 +88,22 @@
 # ledgered race would be this gate reporting on a defect it decided not to
 # act on.
 #
-# Measured on this machine rather than estimated, warm cache, twice each:
-# core/ minus the four Docker-backed suites went 131s -> 176s, those four
-# suites under gotestwatch went 143s -> 147s (they wait on containers, so
-# the instrumentation is nearly free), apps/common 6s -> 12s,
-# apps/synology 9s -> 12s, distribution and apps/generic are in the PR for
-# #417. Nothing is excluded, so nothing needs a reason.
+# Measured on this machine rather than estimated, warm cache, with five
+# other worktrees running their own suites at the time, so the pairs are
+# the reading and not the absolutes:
+#
+#   core/ minus the four Docker-backed suites   135s, 128s -> 174s, 177s
+#   those four, under gotestwatch                     143s -> 147s
+#   distribution minus packaging                       69s ->  64s
+#   apps/generic                                       43s ->  51s
+#   apps/synology                                       9s ->  17s
+#   apps/common                                         6s ->  31s
+#   distribution/packaging (left out)                  44s -> 521s
+#
+# About ninety seconds added on a gate that runs for twenty-five. The four
+# Docker-backed suites were the ones worth measuring before committing
+# them, and they turned out to be the cheapest: they wait on containers and
+# on a real rclone, so the instrumentation is nearly free.
 #
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
@@ -271,7 +283,8 @@ gate_docker_step "distribution go build, vet, test -race (every package but pack
 # What it can do is cost. This is also the most CPU-bound package in the
 # repository (four of its epic-matrix cases alone are 14.5s, 7.4s, 7.1s and
 # 6.9s of pure graph and text analysis), which is exactly the shape race
-# instrumentation multiplies: PACKAGING_NUMBERS
+# instrumentation multiplies: 44s becomes 521s, and that one package was
+# the whole of this module's -race cost.
 #
 # So it is left out on purpose, marked on the command line so the gate's
 # own self-test can see it, and Group K of that self-test asserts this is
@@ -279,7 +292,7 @@ gate_docker_step "distribution go build, vet, test -race (every package but pack
 # somebody deciding to add it is the thing that would make this exclusion
 # rot.
 gate_step "distribution/packaging (the static-analysis suite, no -race: see above)"
-(cd distribution && GOWORK=off go test ./packaging/) # no -race: no goroutine anywhere in the package, so nothing to detect, at PACKAGING_COST
+(cd distribution && GOWORK=off go test ./packaging/) # no -race: no goroutine of its own, so nothing here to detect, and 44s becomes 521s
 
 gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)

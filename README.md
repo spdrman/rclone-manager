@@ -1170,9 +1170,36 @@ already had to run, so a race is a red suite and a red suite is `==> ci-local: F
 naming it. A ledgered race would be a check reporting on a defect it decided not to act on,
 which is the one thing this gate is not allowed to do.
 
-RACE_COST_TABLE_PLACEHOLDER
+Measured on the machine this was written on, warm cache, with five other worktrees running
+their own suites at the time, so read the pairs rather than the absolutes:
 
-DISTRIBUTION_EXCLUSION_PLACEHOLDER
+| suite | plain | `-race` |
+|---|---|---|
+| `core/`, minus the four Docker-backed suites | 135s, 128s | 174s, 177s |
+| those four, under `gotestwatch` | 143s | 147s |
+| `distribution`, minus `packaging` | 69s | 64s |
+| `apps/generic` | 43s | 51s |
+| `apps/synology` | 9s | 17s |
+| `apps/common` | 6s | 31s |
+| `distribution/packaging`, the one exclusion | 44s | 521s |
+
+About ninety seconds added on a gate that runs for twenty-five minutes. The four
+Docker-backed suites under `core/tests/` were the ones worth measuring before committing
+them, and they turned out to be the cheapest of the lot: they spend their time waiting on
+containers and on a real rclone, so the instrumentation is nearly free.
+
+`distribution/packaging` is the one Go suite the gate runs without the detector, and it says
+so on its own command line. It is a static-analysis suite: it reads this repository's own
+manifests, matrices, READMEs and release records and asserts they agree with each other. It
+starts no goroutine of its own: no `go` statement in product code or in tests, no
+`t.Parallel` anywhere, and one `sync.Once` memoising a fixture. The only concurrency in the
+whole package is `os/exec`'s internal pipe plumbing, which is the standard library's and is
+not what a race in this repository would look like. What it does have is the most CPU-bound
+work in the repository, which is exactly the shape instrumentation multiplies, and that one
+package was the whole of `distribution`'s `-race` cost. Group K asserts that this is the
+only line in the whole script carrying a `# no -race:` marker, and a mutation that adds a
+second one proves that count can fail. An exclusion nobody can enumerate is how a gate ends
+up not running what it says it runs.
 
 Turning it on found two things in `core/internal/transport/rclone` on the first run, and
 neither was a flake. One is a real data race, in rclone v1.75.0's `lib/atexit` rather than
