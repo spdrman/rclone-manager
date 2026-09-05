@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9"
+const ContractSHA256 = "520d615adcae52dc6ab59d99605299a360b7ee937085fdc3b30a0e5e0ad8999f"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -822,18 +822,30 @@ type BackupSetEditHoldState struct {
 	Running     *RunningWork `json:"running"`
 }
 
-// BackupSetHealth is one backup set's freshness verdict. This is the backup half of
+// BackupSetHealth is one backup set's health verdict: whether its backups are fresh and
+// trustworthy, and whether they are on the storage medium its
+// retention policy says they belong on. This is the backup half of
 // health, and it deliberately carries no process or build fact: a
-// running service is not evidence that backups are landing.
+// running service is not evidence that backups are landing. The
+// placement figures come from durable state rather than from the
+// last pass, so a deployment nobody has run a cycle in front of
+// still reports relocations that have been failing for weeks.
 type BackupSetHealth struct {
+	AwayFromHome                  int    `json:"away_from_home"`
+	AwayFromHomeOldestAgeSeconds  int64  `json:"away_from_home_oldest_age_seconds,omitempty"`
 	BackupSetID                   string `json:"backup_set_id"`
 	CurrentTransfers              int    `json:"current_transfers"`
+	FailedMoveOldestAgeSeconds    int64  `json:"failed_move_oldest_age_seconds,omitempty"`
+	FailedMoveReason              string `json:"failed_move_reason,omitempty"`
+	FailedMoves                   int    `json:"failed_moves"`
 	Failures                      int    `json:"failures"`
 	FreeBytes                     uint64 `json:"free_bytes,omitempty"`
 	FreeBytesKnown                bool   `json:"free_bytes_known"`
 	HaltReason                    string `json:"halt_reason,omitempty"`
 	LastCompletedBackupAt         string `json:"last_completed_backup_at,omitempty"`
 	NewestGoodBackupAt            string `json:"newest_good_backup_at,omitempty"`
+	OpenMoveOldestAgeSeconds      int64  `json:"open_move_oldest_age_seconds,omitempty"`
+	OpenMoves                     int    `json:"open_moves"`
 	PendingDeletes                int    `json:"pending_deletes"`
 	QuarantinedCount              int    `json:"quarantined_count"`
 	QuarantinedLostCount          int    `json:"quarantined_lost_count"`
@@ -846,6 +858,7 @@ type BackupSetHealth struct {
 	State                         string `json:"state"`
 	StorageLevel                  string `json:"storage_level,omitempty"`
 	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
+	UnconfirmedLocation           int    `json:"unconfirmed_location"`
 }
 
 // BackupSetRetention is which retention policy one backup set is retained under, and where

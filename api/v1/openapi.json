@@ -1915,7 +1915,7 @@
       },
       "BackupSetHealth": {
         "type": "object",
-        "description": "One backup set's freshness verdict. This is the backup half of health, and it deliberately carries no process or build fact: a running service is not evidence that backups are landing.",
+        "description": "One backup set's health verdict: whether its backups are fresh and trustworthy, and whether they are on the storage medium its retention policy says they belong on. This is the backup half of health, and it deliberately carries no process or build fact: a running service is not evidence that backups are landing. The placement figures come from durable state rather than from the last pass, so a deployment nobody has run a cycle in front of still reports relocations that have been failing for weeks.",
         "additionalProperties": false,
         "properties": {
           "backup_set_id": {
@@ -2023,6 +2023,49 @@
               "CRITICAL"
             ],
             "x-go-omitempty": true
+          },
+          "away_from_home": {
+            "type": "integer",
+            "description": "How many backups in this set have their durable copy somewhere other than the storage medium this set's retention policy says they belong on. On its own this is not a complaint: a policy pass that has just decided a backup belongs offsite puts it here, and the relocation that carries it there runs in the same pass. Zero is a real reading, not a missing one, so it is always present.",
+            "format": "int32"
+          },
+          "away_from_home_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest of those copies has existed where it currently sits. Read it for exactly that: it is an upper bound on how long the backup has been in the wrong place, because nothing durable records when a policy last changed where a backup belongs, so a policy edited this morning makes a year-old copy away-from-home this morning and this still reports a year. failed_move_oldest_age_seconds is the figure measured from a moment this manager actually wrote down. Absent when away_from_home is zero: there is nothing for it to be the age of.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "unconfirmed_location": {
+            "type": "integer",
+            "description": "How many backups in this set could not be placed at all: no durable copy recorded yet, or a relocation in flight leaving two answers to 'where is this'. They are NOT thereby in the right place, and reporting them as if they were is the collapse away_from_home exists to prevent. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "open_moves": {
+            "type": "integer",
+            "description": "How many relocations this set has that have not finished, in any phase. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "open_move_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest unfinished relocation has been open, whether or not anything has been recorded against it. It is reported separately from failed_move_oldest_age_seconds because not every way a relocation gets stuck leaves a reason behind: the refusal that fires immediately before the original copy is deleted deliberately changes nothing at all, so such a relocation is open and not failed, and this is the figure that still grows. It changes no state, because 'open for a while' has no honest threshold: a single large copy can legitimately outlast one cycle. Absent when open_moves is zero.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "failed_moves": {
+            "type": "integer",
+            "description": "How many unfinished relocations had their last attempt fail. This is the one figure here that turns an otherwise-healthy backup set DEGRADED, and it is what makes a week of failing relocations reach this endpoint at all: everything else about a relocation's outcome describes a single pass and is gone by the time anybody reads a status page. Zero is a real reading, so it is always present.",
+            "format": "int32"
+          },
+          "failed_move_oldest_age_seconds": {
+            "type": "integer",
+            "description": "How long the oldest failing relocation has been open, measured from when this manager wrote it down. It is the difference between a blip and a wedge: a transient failure clears on the next cycle, and one that does not turns this into days and then weeks. Absent when failed_moves is zero.",
+            "format": "int64",
+            "x-go-omitempty": true
+          },
+          "failed_move_reason": {
+            "type": "string",
+            "description": "What was recorded against that oldest failing relocation. Served beside the count rather than instead of it, because a count alone cannot tell an operator whether to look at a storage policy, a credential or a network, and this sentence is the only account of the failure that outlives the pass that hit it. Absent when failed_moves is zero.",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -2039,7 +2082,11 @@
           "quarantined_lost_count",
           "reinstated_remote_retained_count",
           "read_only_retained_count",
-          "free_bytes_known"
+          "free_bytes_known",
+          "away_from_home",
+          "unconfirmed_location",
+          "open_moves",
+          "failed_moves"
         ]
       },
       "HealthResponse": {

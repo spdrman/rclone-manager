@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9";
+export const CONTRACT_SHA256 = "520d615adcae52dc6ab59d99605299a360b7ee937085fdc3b30a0e5e0ad8999f";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1117,18 +1117,30 @@ export interface WireBackupSetEditHoldState {
   running?: WireRunningWork;
 }
 
-/** One backup set's freshness verdict. This is the backup half of
+/** One backup set's health verdict: whether its backups are fresh and
+ *  trustworthy, and whether they are on the storage medium its
+ *  retention policy says they belong on. This is the backup half of
  *  health, and it deliberately carries no process or build fact: a
- *  running service is not evidence that backups are landing. */
+ *  running service is not evidence that backups are landing. The
+ *  placement figures come from durable state rather than from the
+ *  last pass, so a deployment nobody has run a cycle in front of
+ *  still reports relocations that have been failing for weeks. */
 export interface WireBackupSetHealth {
+  away_from_home: number;
+  away_from_home_oldest_age_seconds?: number;
   backup_set_id: string;
   current_transfers: number;
+  failed_move_oldest_age_seconds?: number;
+  failed_move_reason?: string;
+  failed_moves: number;
   failures: number;
   free_bytes?: number;
   free_bytes_known: boolean;
   halt_reason?: "HOST_KEY_CHANGED" | "AUTHENTICATION_FAILED" | "KEY_PERMISSIONS";
   last_completed_backup_at?: string;
   newest_good_backup_at?: string;
+  open_move_oldest_age_seconds?: number;
+  open_moves: number;
   pending_deletes: number;
   quarantined_count: number;
   quarantined_lost_count: number;
@@ -1141,6 +1153,7 @@ export interface WireBackupSetHealth {
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
   storage_level?: "OK" | "WARNING" | "CRITICAL";
   total_bytes?: number;
+  unconfirmed_location: number;
 }
 
 /** Which retention policy one backup set is retained under, and where
