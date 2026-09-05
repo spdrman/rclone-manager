@@ -32,11 +32,37 @@ func retentionTestBackupSet(t *testing.T, localDir string) config.BackupSet {
 // retentionTestConfig builds a *config.Config directly (rather than
 // through this file's own testConfig, which hardcodes a full daily/weekly/
 // monthly policy) so each test controls exactly which GFS tiers are live.
+//
+// It declares a storage medium for every medium the chain NAMES, because a
+// config that does not is one Validate refuses outright (validate.go: a
+// tier may only name a medium the deployment declares). These fixtures
+// skip Validate, so without this they were quietly the one config shape a
+// real deployment can never be in, and "does this deployment declare a
+// medium" is now a question the preview answers with.
 func retentionTestConfig(bs config.BackupSet, ret config.Retention) *config.Config {
 	return resolveTestRetention(&config.Config{
-		Sources:   []config.Source{{Name: bs.ID.Source, BackupSets: []config.BackupSet{bs}}},
-		Retention: ret,
+		Sources:        []config.Source{{Name: bs.ID.Source, BackupSets: []config.BackupSet{bs}}},
+		Retention:      ret,
+		StorageMediums: mediumsNamedBy(ret),
 	})
+}
+
+// mediumsNamedBy declares one storage medium per non-local medium the
+// chain names, in chain order, with just enough of a body to be a medium
+// (an id, a type and a bucket). Nothing in these tests reaches a provider,
+// so nothing more is needed and nothing more would be honest.
+func mediumsNamedBy(ret config.Retention) []config.StorageMedium {
+	var out []config.StorageMedium
+	seen := map[string]bool{}
+	for _, t := range ret.Tiers {
+		medium := t.EffectiveMedium()
+		if medium == config.MediumLocal || seen[medium] {
+			continue
+		}
+		seen[medium] = true
+		out = append(out, config.StorageMedium{ID: medium, Type: config.StorageMediumTypeS3, Bucket: "test-" + medium})
+	}
+	return out
 }
 
 // retentionTodayOnlyChain mirrors internal/retention's own
