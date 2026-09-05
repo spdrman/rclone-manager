@@ -389,6 +389,38 @@ jobs:
         working-directory: apps/common/tests
         run: npm test
 
+  gofmt:
+    name: every tracked Go file is gofmt-clean (#417)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+
+      # Its own job rather than a step inside a module's, because it is not
+      # a module's question. It reads every tracked .go file in the
+      # repository, which is the only thing that reaches the two that live
+      # outside every module and outside go.work
+      # (scripts/api/gen-bindings.go, scripts/architecture/ownership.go).
+      # One of those two was the unformatted one that started #417's
+      # formatting half. Half a second on the whole repository.
+      - name: gofmt sweep
+        run: bash scripts/format/check-gofmt.sh
+
+      # The mutation self-test that proves both halves of the formatting
+      # gate can go red is NOT run here, and that is a statement about this
+      # workflow rather than about the check. Half of what it measures is
+      # .golangci.yml's gofmt formatter, and this workflow runs no
+      # golangci-lint at all, in any job: linting lives entirely in
+      # scripts/ci-local.sh, which is the gate that actually runs and which
+      # runs `bash scripts/format/selftest.sh` on every non-FAST run.
+      # Installing a linter here purely to test a config nothing here uses
+      # would be the wrong shape.
+
   api-contract:
     name: /api/v1 contract drift (#166)
     runs-on: ubuntu-latest

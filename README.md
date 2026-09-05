@@ -1214,6 +1214,30 @@ did. When rclone fixes it, that assertion goes red and the file gets deleted. Th
 a sampling assertion whose odds move with machine load, which the detector's slowdown pushed
 over; the claim it carried now lives in a row where no coin is tossed.
 
+Turning the detector on is also how formatting got checked at all. Chasing one of the
+`-race` failures turned up a Go file that was not `gofmt`-clean, and then a second, and then
+the thing actually worth writing down: **nothing in this repository looked**. `go build`,
+`go vet` and every linter `.golangci.yml` enabled are all indifferent to layout, so an
+unformatted file produced exactly the same output as a formatted one, forever. That is the
+same defect as a skipped suite reporting `ok`, arriving through a third door.
+
+It is closed in two places, because one of them cannot reach everything. `.golangci.yml` now
+enables the `gofmt` formatter, which covers the five Go modules. `scripts/format/check-gofmt.sh`
+sweeps every tracked `.go` file in about half a second, and it is not redundant with the
+first: `golangci-lint` is invoked per module, and two Go files here live outside every module
+and outside `go.work` (`scripts/api/gen-bindings.go` and `scripts/architecture/ownership.go`),
+so no per-module run has ever been able to see either of them. One of those two was the
+unformatted one. They are compiled by the `go run` that invokes them, so a syntax error would
+surface; nothing else about them is checked by anything, which is worth knowing before adding
+a third.
+
+`scripts/format/selftest.sh` is the control, with seven cells: the real tree clean, the two
+out-of-module files still out of module (a standing precondition, checked by
+`check-anchors.sh` in half a second), a planted unformatted file inside a module, one outside
+every module, one staged but not committed because that is the state the pre-commit hook
+runs in, and `.golangci.yml`'s own formatter turning red on unformatted code and green on the
+same file formatted.
+
 `scripts/race/selftest.sh` is the control for all of it, in the shape #242 established for
 the compatibility and conformance cells: it plants a real data race in real product source
 in a copy of the tree, requires the detector to catch it and to name the write that planted
