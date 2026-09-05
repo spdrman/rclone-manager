@@ -10,15 +10,19 @@
 # cannot silently change what those suites certify. Each is one line, in one
 # file, reviewable on its own.
 #
-# At e57d26b, read off rclone-manager-tests' merged main rather than a branch
+# At a794c38, read off rclone-manager-tests' merged main rather than a branch
 # head, because a squash rewrites the head and the pin then names a commit in
-# no history. It is exactly one commit past the sha this line held before, so
-# nothing unrelated arrives with it.
+# no history. It is exactly two commits past the sha this line held before, and
+# both are #431's, so nothing unrelated arrives with the bump.
 #
-# That commit is rclone-manager-tests#32, which retires the two retention cases
-# that recorded this binary's old note about FR-20 being unimplemented. It is
-# the specs half of #431 and the product half is in the same commit as this
-# bump, because either one alone leaves the gate red.
+# Those are rclone-manager-tests#32 and rclone-manager-tests#33, which between
+# them retire the two retention cases that recorded this binary's old note
+# about FR-20 being unimplemented and replace them with one that asserts the
+# note that replaces it. They are the specs half of #431; the product half is
+# in the same branch as this bump, because either one alone leaves the gate
+# red. The second of the two exists because I committed the first without
+# staging two of its files, and that repository's own lockstep test caught it
+# on main.
 #
 # This header used to narrate a deliberate hold at 9dfd6e3, waiting for #240's
 # Suite B specs to have a product to run against. #240 landed, b2092a5 moved
@@ -37,7 +41,7 @@
 # It runs the other way too, and that half has no automation. rclone-manager-
 # tests carries its own build-under-test.json naming a commit of THIS
 # repository, and a spec landed ahead of its feature cannot go green over there
-# until somebody moves it. #32 is in that position right now: it needs that
-# file moved to #465's own merge commit.
+# until somebody moves it. Both of those commits are in that position right
+# now: they need that file moved to #465's own merge commit.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=e57d26b9920bc5375e0cae3e0090f2fabf9088b4
+TESTS_REPO_SHA=a794c38581d3c2f7df73e3bee9753c063fc9d72a
