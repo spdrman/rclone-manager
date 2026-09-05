@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+// This file is the scan's own test, in three parts that have to stay in
+// this order.
+//
+// The synthetic part plants one violation at a time in a throwaway tree.
+// The real-tree part runs the same scan over this repository and subtracts
+// the ledger. The gate part reads scripts/ci-local.sh. Only the first can
+// fail on demand, which is why it comes first: the other two are expected
+// to be quiet, and a quiet check is worth exactly as much as the evidence
+// that it can make noise.
+//
+// The gate part is the one that is easy to leave out, and it is checking a
+// different thing from the other two. A machine package the scan classifies
+// perfectly is still an untested package if ci-local.sh never names it, so
+// the wiring is read out of the script text rather than assumed from the
+// fact that the classification came out right.
+
 // --- positive controls on synthetic trees --------------------------------
 //
 // Every rule here is a negative assertion, and a negative assertion that

@@ -8,6 +8,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
+// This suite has to prove a policy about an environment it is not running
+// in.
+//
+// The whole point of the package is what happens at euid 0, and no
+// developer machine and no correctly configured CI job runs the suite
+// there, so the branch that matters is the branch that never executes.
+// That is why Decide is a pure function of its two inputs rather than
+// something that reads os.Geteuid itself: the table below drives every
+// branch, root included, on any machine, with no privileges and no
+// container.
+//
+// A table over a pure function can also drift away from the process it is
+// meant to describe, so the last test goes the other way and seals a real
+// directory in a real temp dir. It is the only assertion here about the
+// machine actually running the suite, and without it the two above would
+// keep passing on a host where the real helper refuses everything.
+
 // TestRootIsARefusalRatherThanASkip is the positive control for a policy
 // that is otherwise only observable by re-running the whole suite as root.
 //
