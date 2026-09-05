@@ -1,3 +1,25 @@
+// The source machine: a disposable SFTP server in a container, so a test
+// drives the real rclone sftp backend against a real server rather than
+// reasoning about the API from the outside.
+//
+// It uses atmoz/sftp (OpenSSH's sshd, chrooted, forced into internal-sftp)
+// because that gives us a genuine SSH/SFTP endpoint with real host-key
+// verification and real chroot/permission semantics, for the cost of a
+// disposable container. All key material is generated fresh per test run
+// under tests/.run and removed on cleanup; nothing here is a real credential.
+//
+// What this suite costs, written down here rather than left as folklore for
+// the next person to rediscover through a 25-minute hang (issue #161). Every
+// fixture is a real sshd in its own container, and one scripts/ci-local.sh
+// run starts the suite three times over: once directly, and again inside the
+// throwaway worktrees of verify-core-without-apps.sh and
+// verify-ugos-removable.sh. The Docker VM on the machine this was written on
+// has 4 CPUs and roughly 4 GB, which is comfortable for one gate at a time
+// and demonstrably not comfortable for several at once: under concurrent
+// gate runs, containers get evicted mid-test. If a machine has to run gates
+// in parallel, either that VM needs more than 4 GB, or the two architecture
+// checks need to stop re-running a container-backed suite to prove a
+// dependency boundary that no container is involved in.
 package machines
 
 import (
@@ -26,38 +48,6 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
-
-// The source machine: a disposable SFTP server in a container, so a test
-// drives the real rclone sftp backend against a real server rather than
-// reasoning about the API from the outside.
-//
-// It is the machine the rest of the tier is arranged around, playing the VPS
-// being backed up, and everything a test reads off it (host-key
-// verification, the chroot, key-only login, a connection cap) is the
-// server's own behaviour rather than a double's answer. What this file adds
-// on top of the container is the part that is easy to get wrong once and
-// then copy: bounded docker calls, a watchdog armed before the first of
-// them, a per-machine client identity, and known_hosts files written the way
-// OpenSSH actually matches them.
-//
-// It uses atmoz/sftp (OpenSSH's sshd, chrooted, forced into internal-sftp)
-// because that gives us a genuine SSH/SFTP endpoint with real host-key
-// verification and real chroot/permission semantics, for the cost of a
-// disposable container. All key material is generated fresh per test run
-// under tests/.run and removed on cleanup; nothing here is a real credential.
-//
-// What this suite costs, written down here rather than left as folklore for
-// the next person to rediscover through a 25-minute hang (issue #161). Every
-// fixture is a real sshd in its own container, and one scripts/ci-local.sh
-// run starts the suite three times over: once directly, and again inside the
-// throwaway worktrees of verify-core-without-apps.sh and
-// verify-ugos-removable.sh. The Docker VM on the machine this was written on
-// has 4 CPUs and roughly 4 GB, which is comfortable for one gate at a time
-// and demonstrably not comfortable for several at once: under concurrent
-// gate runs, containers get evicted mid-test. If a machine has to run gates
-// in parallel, either that VM needs more than 4 GB, or the two architecture
-// checks need to stop re-running a container-backed suite to prove a
-// dependency boundary that no container is involved in.
 
 // User is the fixed username created inside the container.
 const User = "backupuser"

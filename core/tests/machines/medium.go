@@ -1,20 +1,3 @@
-package machines
-
-import (
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
-)
-
 // The storage medium: a disposable MinIO server in a container, so the
 // MediumStore contract suite runs against something that speaks the real S3
 // API rather than against a hand-written double.
@@ -33,6 +16,22 @@ import (
 // this fixture created, never by a `docker ps` scan: this machine runs many
 // worktrees against one docker daemon, so a scan-shaped assertion could be
 // answered by another agent's container and would prove nothing.
+package machines
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+)
 
 // minioImage is pinned by name rather than by digest, matching
 // the source machine's own choice: this is a test fixture, not a shipped artifact,
