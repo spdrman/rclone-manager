@@ -324,3 +324,39 @@ func TestOnlyTheClassThatCostsEgressIsEverProved(t *testing.T) {
 // pre-delete proof treats both as "no identity", which is the only safe
 // reading of either.
 var errTheEndpointWentAway = errors.New("stat: the endpoint reset the connection")
+
+// TestAMoveHomeReadsTheLocalCopyOnce is the same claim for the other
+// direction, and it is here because the local end is a different branch of
+// the same mechanism rather than an afterthought.
+//
+// A move back to local has its content check on a file rather than on an
+// object: verifyLocalCopy opens it and hashes it, and deleteSource used to
+// open it and hash it again. No egress, so no bill, but on a large
+// artifact it is the whole thing off the disk twice for a question that
+// was answered a moment ago. The proof's subject on this end is the file's
+// size and its modification time at nanosecond resolution, which is a
+// better signal than anything S3 will give.
+func TestAMoveHomeReadsTheLocalCopyOnce(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+
+	// Out first, the ordinary way, so there is something to bring back.
+	f.runCycle()
+	f.guard.fail()
+	if f.localExists() {
+		t.Fatal("the outward move did not remove the local copy, so the reverse move has nothing to prove")
+	}
+	before := f.local.openCount()
+
+	report, err := f.engine.RunCycle(f.ctx, []placement.Plan{{Artifact: f.artifact, DestinationMedium: state.MediumLocal}})
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	f.guard.fail()
+	if report.Completed != 1 {
+		t.Fatalf("the reverse move did not complete: %+v", report.Outcomes)
+	}
+	if got := f.local.openCount() - before; got != 1 {
+		t.Errorf("the reverse move read the local copy back %d times, want 1: verifyLocalCopy hashes it, and the delete stands on "+
+			"that read plus the file's size and mod time, which is what artifactstore.Stat reports without opening anything", got)
+	}
+}

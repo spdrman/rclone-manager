@@ -588,16 +588,45 @@ func (m *guardedMedium) DeleteObject(ctx context.Context, medium transport.Mediu
 
 // guardedLocal refuses a local delete the invariant does not authorise.
 // This is the one that catches a source delete issued too early.
+//
+// It also counts, for the reason fakeMedium counts. A move HOME has its
+// content check on the local end, and #439's double read is a double read
+// there too: no egress, but the whole artifact off the disk twice. Nothing
+// could see that before, because the local store was the one seam in this
+// fixture with no accounting on it.
 type guardedLocal struct {
 	artifactstore.Local
 	guard *guard
+
+	mu           sync.Mutex
+	opens, stats int
 }
 
-func (l guardedLocal) Remove(ctx context.Context, locator string) error {
+func (l *guardedLocal) Remove(ctx context.Context, locator string) error {
 	if err := l.guard.beforeDelete("removing the local copy", state.MediumLocal, locator); err != nil {
 		return err
 	}
 	return l.Local.Remove(ctx, locator)
+}
+
+func (l *guardedLocal) Open(ctx context.Context, locator string) (io.ReadCloser, error) {
+	l.mu.Lock()
+	l.opens++
+	l.mu.Unlock()
+	return l.Local.Open(ctx, locator)
+}
+
+func (l *guardedLocal) Stat(ctx context.Context, locator string) (artifactstore.Stat, error) {
+	l.mu.Lock()
+	l.stats++
+	l.mu.Unlock()
+	return l.Local.Stat(ctx, locator)
+}
+
+func (l *guardedLocal) openCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.opens
 }
 
 // --- the fixture -------------------------------------------------------
@@ -609,6 +638,7 @@ type fixture struct {
 	guarded  *guardedJournal
 	guard    *guard
 	medium   *fakeMedium
+	local    *guardedLocal
 	engine   *placement.Engine
 	tiers    *tierGuard
 	sets     fixedSets
@@ -708,6 +738,7 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 	if err != nil {
 		t.Fatalf("building the local store: %v", err)
 	}
+	counted := &guardedLocal{Local: local, guard: g}
 
 	guarded := &guardedJournal{Journal: journal, guard: g}
 	clock := testNow2
@@ -718,7 +749,7 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 
 	f := &fixture{
 		t: t, ctx: ctx, journal: journal, guarded: guarded, guard: g,
-		medium: medium, tiers: tiers, sets: sets,
+		medium: medium, local: counted, tiers: tiers, sets: sets,
 		artifact: artifact, content: content, hash: sha256Hex(content),
 		localDir: localDir, root: root, clock: clock,
 	}
@@ -730,7 +761,7 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 	f.engine = &placement.Engine{
 		Journal: guarded,
 		Store:   &guardedMedium{fakeMedium: medium, guard: g},
-		Local:   guardedLocal{Local: local, guard: g},
+		Local:   counted,
 		Mediums: fixedMediums{
 			medium: transport.Medium{ID: testMedium, Type: transport.MediumTypeS3, Bucket: "nas-backups", Prefix: "rclone-manager", StorageClass: opts.storageClass},
 			class:  class,
