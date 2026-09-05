@@ -47,7 +47,7 @@ import (
 // map (health depends on nothing upstream of it, and importing it here
 // would invert that), so the equivalence is enforced by review and by
 // TestLastKnownGoodEligibilityMatchesGFSManagedComplete rather than by a
-// shared symbol, but the three states involved are the same three states,
+// shared symbol, but the four states involved are the same four states,
 // on purpose, in both places.
 //
 // Reusing gfs.go's own eligibility check is not just convenient: it is
@@ -163,7 +163,7 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 	}
 
 	if newest == nil {
-		result.Reason = "no eligible restore point exists in this backup set (nothing is committed, remote-delete-pending or complete)"
+		result.Reason = fmt.Sprintf("no eligible restore point exists in this backup set (nothing is %s)", gfsManagedCompleteNames())
 		return result, nil
 	}
 

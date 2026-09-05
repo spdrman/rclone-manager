@@ -386,8 +386,8 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// already happened. See TestPruneRefusesPartialArtifactEvenWhenToldToDeleteIt.
 	if !gfsIsManagedComplete(rec.State) {
 		return "", fmt.Errorf(
-			"retention: prune: refusing %s: journal state %q is not a final managed artifact (must be COMMITTED, REMOTE_DELETE_PENDING or COMPLETE)",
-			rec.Artifact, rec.State)
+			"retention: prune: refusing %s: journal state %q is not a final managed artifact (must be %s)",
+			rec.Artifact, rec.State, gfsManagedCompleteNames())
 	}
 
 	expected, err := pruneFinalPath(bs, rec.Artifact)
@@ -685,8 +685,8 @@ func pruneEvaluateOnMedium(rec state.Record, keepVerdict GFSVerdict, lkg LastKno
 			Action:   PruneRefuse,
 			Medium:   medium,
 			Reason: fmt.Sprintf(
-				"retention: prune: refusing %s on %q: journal state %q is not a final managed artifact (must be COMMITTED, REMOTE_DELETE_PENDING or COMPLETE)",
-				rec.Artifact, medium, rec.State),
+				"retention: prune: refusing %s on %q: journal state %q is not a final managed artifact (must be %s)",
+				rec.Artifact, medium, rec.State, gfsManagedCompleteNames()),
 		}
 	}
 	if strings.HasSuffix(rec.Artifact.Name, prunePartialSuffix) {

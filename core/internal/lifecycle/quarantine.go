@@ -220,13 +220,13 @@ func ReleaseFromQuarantine(ctx context.Context, d Deps, p QuarantineReleaseParam
 //   - anything else capable of routing an artifact into QUARANTINED or
 //     QUARANTINED_LOST today: a hash mismatch caught at VERIFYING
 //     (verify.go), or the durable local copy found invalid by FR-17
-//     reconciliation after COMMITTED, REMOTE_DELETE_PENDING or COMPLETE
-//     (internal/reconcile), or Phase 4's own scheduled revalidation
-//     (internal/revalidate). None of those three attach a Validation
-//     update, and none of them persists their specific free-text reason
-//     onto the record either, so the best this function can honestly say
-//     is that a content check failed, plus whatever hash was on file at
-//     the time, not which check or why.
+//     reconciliation after COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or
+//     REMOTE_RETAINED (internal/reconcile), or Phase 4's own scheduled
+//     revalidation (internal/revalidate). None of those three attach a
+//     Validation update, and none of them persists their specific
+//     free-text reason onto the record either, so the best this function
+//     can honestly say is that a content check failed, plus whatever hash
+//     was on file at the time, not which check or why.
 //
 // A caller that needs the exact wording a specific quarantine was recorded
 // with has to read the journal's transition log directly (sqlite3 against

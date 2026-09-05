@@ -52,10 +52,10 @@ sqlite3 /path/to/state.db "
 What `core/internal/health` would tell you if it were wired to anything (see the README's
 [Status and health](../README.md#status-and-health)):
 
-- If the newest row across the whole set is `COMMITTED`, `REMOTE_DELETE_PENDING` or
-  `COMPLETE`, and it's recent enough for your `stale_after` window, that's a healthy set.
-  Nothing to do.
-- If there's no row in one of those three states inside the freshness window, treat it as
+- If the newest row across the whole set is `COMMITTED`, `REMOTE_DELETE_PENDING`,
+  `COMPLETE` or `REMOTE_RETAINED`, and it's recent enough for your `stale_after` window,
+  that's a healthy set. Nothing to do.
+- If there's no row in one of those four states inside the freshness window, treat it as
   stale: something has stopped landing new backups for this set, whether or not any single
   attempt has technically "failed" yet.
 - If any row is `QUARANTINED_LOST`, that's an unconditional alarm regardless of anything
@@ -66,12 +66,19 @@ What `core/internal/health` would tell you if it were wired to anything (see the
 
 ## Step 2: finding a restore point
 
-Only three states are ever a valid restore point. This isn't a convention this document is
+Only four states are ever a valid restore point. This isn't a convention this document is
 inventing, it's the exact set `core/internal/health/compute.go` calls `knownGood`:
 
 - `COMMITTED`
 - `REMOTE_DELETE_PENDING`
 - `COMPLETE`
+- `REMOTE_RETAINED`
+
+`REMOTE_RETAINED` is the one to check for first if the backup set is declared `read_only`,
+because it is the only one of the four those artifacts ever reach: FR-15's delete step is
+never offered them, so they stop at a terminal state of their own instead of moving on to
+`COMPLETE`. A query that leaves it out answers "this set has no restore points at all" for
+a set that is working exactly as declared.
 
 Everything else is not a restore point, with no exceptions:
 
@@ -93,7 +100,7 @@ sqlite3 /path/to/state.db "
   FROM artifacts
   WHERE source = 'production'
     AND backup_set = 'postgres-primary'
-    AND state IN ('COMMITTED', 'REMOTE_DELETE_PENDING', 'COMPLETE')
+    AND state IN ('COMMITTED', 'REMOTE_DELETE_PENDING', 'COMPLETE', 'REMOTE_RETAINED')
   ORDER BY updated_at DESC
   LIMIT 1;
 "
@@ -135,8 +142,8 @@ again. See `docs/adr/0004-reinstating-a-quarantined-backup.md`.
 
 If the local copy really is bad, the backup is gone. What to actually do then:
 
-1. Query for the next-newest row in `COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE` for
-   the same backup set (same query as Step 2, drop the `LIMIT 1` and look further down, or
+1. Query for the next-newest row in `COMMITTED`, `REMOTE_DELETE_PENDING`, `COMPLETE` or
+   `REMOTE_RETAINED` for the same backup set (same query as Step 2, drop the `LIMIT 1` and look further down, or
    add `AND state != 'QUARANTINED_LOST'` if it's mixed in with rows you do want). Restore
    from that instead.
 2. Treat the gap as a real, permanent loss of that specific restore point when you report
@@ -300,7 +307,7 @@ recovery path reaches. Create a backup set with the same source and name first.
 
 | Symptom in the journal | Meaning | What to do |
 |---|---|---|
-| Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`, recent | Healthy | Nothing |
+| Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`/`REMOTE_RETAINED`, recent | Healthy | Nothing |
 | No good row inside `stale_after` | Stale | Investigate why new backups aren't landing |
 | `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backup-manager retry <id>` (Step 7) |
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |

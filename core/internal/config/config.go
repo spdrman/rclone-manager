@@ -845,10 +845,10 @@ type Command struct {
 
 // Revalidation configures Phase 4's scheduled re-verification of artifacts
 // that already reached a durable, once-good state (COMMITTED,
-// REMOTE_DELETE_PENDING or COMPLETE). Bit rot does not announce itself, and
-// a backup that verified six months ago is not guaranteed to still verify
-// today; this is what re-checks it without waiting for a restore attempt
-// to find out the hard way.
+// REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED). Bit rot does not
+// announce itself, and a backup that verified six months ago is not
+// guaranteed to still verify today; this is what re-checks it without
+// waiting for a restore attempt to find out the hard way.
 //
 // It is entirely optional. The zero value (Hash false, Command nil) means
 // disabled: nothing is re-checked, ever, for this backup set, which is

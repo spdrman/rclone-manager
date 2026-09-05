@@ -9,9 +9,9 @@ import (
 )
 
 // knownGood is FR-19's definition of a valid restore point: currently
-// COMMITTED, REMOTE_DELETE_PENDING or COMPLETE. FAILED, QUARANTINED,
-// QUARANTINED_LOST and every .partial (pre-COMMITTED) state are excluded,
-// exactly as FR-19 requires. An artifact that was once COMPLETE and has
+// COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED. FAILED,
+// QUARANTINED, QUARANTINED_LOST and every .partial (pre-COMMITTED) state
+// are excluded, exactly as FR-19 requires. An artifact that was once COMPLETE and has
 // since moved to QUARANTINED_LOST is excluded too, because this checks the
 // artifact's *current* state, not its history: its one copy is gone, so it
 // cannot be a restore point any more no matter what it used to be.

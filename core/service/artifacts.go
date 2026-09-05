@@ -253,10 +253,11 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 // cause uniformly: a hash mismatch caught at VERIFYING
 // (internal/lifecycle/verify.go), an application validator's rejection
 // (same file), a durable local copy internal/reconcile found invalid
-// after COMMITTED/REMOTE_DELETE_PENDING/COMPLETE, and Phase 4's scheduled
-// internal/revalidate checks. None of those attach a second copy of the
-// text anywhere else, so this is the one place quarantine_reason comes
-// from now, not a fallback alongside an older guess.
+// after COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED,
+// and Phase 4's scheduled internal/revalidate checks. None of those attach
+// a second copy of the text anywhere else, so this is the one place
+// quarantine_reason comes from now, not a fallback alongside an older
+// guess.
 //
 // a.QuarantineReason can still come back empty: that means the
 // transition itself carried no Detail, not that this call failed.

@@ -61,7 +61,7 @@ var eligibleStates = map[lifecycle.State]bool{
 // An artifact is due when its current state is one of eligibleStates and
 // now.Sub(rec.UpdatedAt) >= cfg.Interval.Duration(). UpdatedAt stands in
 // for "when this artifact was last checked" because, once a record is
-// sitting in one of these three states, nothing touches its journal row
+// sitting in one of these four states, nothing touches its journal row
 // afterward except this package's own same-state pass/fail writes (Run)
 // and FR-17 reconciliation at startup, both of which are legitimate
 // "this was looked at" events: a pass leaves UpdatedAt where a fresh check

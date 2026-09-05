@@ -52,9 +52,10 @@
 //     checked first, before freshness is even considered.
 //
 //   - STALE means the freshness guarantee is broken: no known-good backup
-//     (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE, per FR-19) exists
-//     within the configured stale_after window, and nothing has happened
-//     recently enough to suggest a first backup is merely still in flight.
+//     (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED, per
+//     FR-19) exists within the configured stale_after window, and nothing
+//     has happened recently enough to suggest a first backup is merely
+//     still in flight.
 //
 //   - DEGRADED covers everything that deserves attention but has not
 //     broken the freshness guarantee outright: a backup set that has never
