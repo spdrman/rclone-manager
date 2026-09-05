@@ -161,12 +161,14 @@ func TestDeclaredLinksResolveInTheTree(t *testing.T) {
 // TestLinkReachabilityIsNotOverstated is the half the check above
 // deliberately does not decide.
 //
-// Every link target exists and has substance, and none of them resolves
-// for anybody outside this repository's ACL, because the repository is
-// private. Those are different facts and a compliance package that
-// reports the first as if it were the second is exactly the kind of
-// paperwork §73 WP5.2 exists to stop. So the recorded verdict has to
-// track the recorded visibility, in both directions.
+// A link target existing and having substance is one fact, and a reviewer
+// outside the project being able to open it is another. A compliance
+// package that reports the first as if it were the second is exactly the
+// kind of paperwork §73 WP5.2 exists to stop, so the recorded verdict has
+// to track the recorded visibility, in both directions. Both directions
+// earn their place now rather than one: this was written against a private
+// repository, and the recorded value has since been wrong in the
+// conservative direction too (issue #484).
 func TestLinkReachabilityIsNotOverstated(t *testing.T) {
 	c := MustLoadCompliance()
 	p := readProvenance(t)

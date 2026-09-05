@@ -119,10 +119,75 @@ parsing prose.
 | 43 | bridge networking is broken and was not repaired (`--fix-network=never`, or `diagnose`) |
 | 44 | the correction was applied and a bridged container still cannot originate traffic |
 | 45 | bridge networking is broken and the responsible rule could not be identified |
+| 50 | `--release` and `--image` name different versions, or `--image` already pins a digest |
+| 51 | `--release` was given together with `--no-pull` or `--image-archive` |
+| 52 | the tag being installed no longer points at the digest this release recorded |
 
 Compose v1 is refused rather than tolerated because the deployment gates the Web UI on
 `depends_on: condition: service_healthy`, and v1 ignores that. It would appear to work
 and would start the UI before the engine was listening.
+
+## Naming a previous release, and proving the one it carries
+
+`--release X.Y.Z` installs a published release other than the one this installer
+carries:
+
+```
+python3 install_docker_host.py install --release 0.1.0
+```
+
+It fills the tag in `--image` and nothing else. It is not `--version`: that name
+belongs to "print your own version", and this program's identity is the release
+it carries.
+
+When `--image` already names a version, the two have to agree. If they do not,
+this refuses with exit 50 rather than pick a winner, because installing a version
+other than the one you typed, quietly, is the failure the flag exists to prevent.
+An `--image` that already pins an `@sha256:` digest is refused the same way: a
+digest names exactly one image and is the stronger claim of the two, so `--release`
+will not weaken it and will not decorate it with a tag that may describe something
+else. An `--image` with no tag at all is the one case it fills in.
+
+`--no-pull` and `--image-archive` are the offline paths and resolve nothing against
+a registry, so `--release` alongside either of them is exit 51. Pick the release on
+a machine that can reach the registry, `docker save` it, and bring the tarball over.
+
+`latest` is refused, and so is anything else that is not an orderable version.
+A host installed from a moving tag records `VERSION=latest` in its `.env`, which
+orders against nothing, so no later installer can tell whether it is moving that
+host forwards or backwards. There is no `latest` tag to install anyway.
+
+### The digest, and why the default does not float
+
+Preflight prints the reference it is about to install before anything is created,
+and then proves it:
+
+```
+  ok   installing ghcr.io/spdrman/backup-manager:0.2.0
+  ok   ghcr.io/spdrman/backup-manager:0.2.0 is sha256:0ba1fba4f9f35c93..., the identity
+       the release manifest records for 0.2.0
+```
+
+A registry tag is a mutable pointer, which `scripts/release/publish-image.sh` says
+in its own words, so "install this version" is a claim about a name until something
+compares the name to a recorded identity. `container/release-manifest.json` recorded
+that identity at push time, the installer carries a copy of it, and one anonymous
+HEAD against the registry settles it. If the tag has moved, this refuses with exit
+52 and tells you how to install the recorded digest by identity instead. No cosign,
+no dependency: the installer is standard library only because a NAS may not let you
+install anything.
+
+That proof only covers the release the installer carries, and a release cut after
+this installer was written can never have a digest in it. That is why the `--image`
+default is pinned rather than floating onto whatever is newest: a floating default
+would install on the registry's word alone, which is the posture the digest exists
+to replace.
+
+What the installer does instead is tell you. Preflight lists the published releases,
+ordered by version rather than by push order and with prereleases excluded, and says
+so when a newer one exists and where to get its installer. That check is read-only,
+it never changes what is installed, and if it cannot reach the registry the only
+consequence is a missing line.
 
 ## Install modes, and what each one keeps
 

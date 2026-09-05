@@ -186,18 +186,22 @@ has to notice.
 
 The source repository is <https://github.com/spdrman/rclone-manager>.
 
-It is private today. That is a fact about access rather than about the licence:
-Apache-2.0 obliges the project to pass the licence and the notices along with any
-distributed copy, which the packages do, and it does not oblige a public
-repository. But a store reviewer who follows a link into a private repository
-gets a 404, and a compliance package that pretends otherwise is worth nothing.
-So the state is recorded honestly, in
+It is public, and that is recorded rather than assumed, in
 `distribution/packaging/compliance.json` (`sourceRepository.visibility`) and in
-`provenance/release-provenance.json` (`links.publiclyReachable`), and
-the release provenance bundle says in as many words that the link criterion is
-not satisfied until the repository is made public.
+`provenance/release-provenance.json` (`links.publiclyReachable`). Both are read
+from `gh repo view spdrman/rclone-manager --json visibility`, and both said
+private for a while after the repository stopped being private, which is issue
+#484's finding: a recorded measurement with a note asserting its freshness is
+worse than an unmeasured value, because the note is what stops anyone checking.
 
-**Written offer.** Until the repository is public, anyone who has received a
+Access is a fact about convenience rather than about the licence. Apache-2.0
+obliges the project to pass the licence and the notices along with any
+distributed copy, which the packages do, and it never obliged a public
+repository. So the offer below stands regardless: somebody holding a package
+and no browser is owed the source by the licence, not by the repository being
+open.
+
+**Written offer.** Anyone who has received a
 distributed copy of Backup Manager may obtain the complete corresponding source
 for that copy by opening an issue at
 <https://github.com/spdrman/rclone-manager/issues>, or by contacting the

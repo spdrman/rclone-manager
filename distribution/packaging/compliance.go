@@ -14,10 +14,13 @@
 // A link's public reachability is DERIVED from one recorded fact, the
 // source repository's visibility, instead of being asserted per link. Five
 // links each carrying their own "yes this resolves" boolean is five places
-// to forget, and the answer for all five is the same answer: this
-// repository is private, so every link into it is a 404 for a store
-// reviewer. One field, one truth, and flipping it is the operator action
-// that closes the criterion.
+// to forget, and the answer for all five is the same answer: whether the
+// repository they point into can be opened. One field, one truth. It reads
+// public today, and it read private for a while after the repository had
+// stopped being private, which is issue #484: the value is measured with
+// `gh repo view spdrman/rclone-manager --json visibility`, nothing in this
+// package can re-measure it, and a note claiming it was measured is not
+// evidence that it still is.
 //
 // A licence the project has not read is a hard refusal rather than a
 // warning. The premise behind the Apache-2.0 choice is that every

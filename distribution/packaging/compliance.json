@@ -193,22 +193,27 @@
 
   "sourceRepository": {
     "url": "https://github.com/spdrman/rclone-manager",
-    "visibility": "private",
+    "visibility": "public",
     "visibilityNote": [
       "Measured, not assumed: `gh repo view spdrman/rclone-manager --json visibility`",
-      "answers PRIVATE today. §73 WP5.2 wants the source, privacy, licence and",
-      "support links to resolve to real, current content for a store reviewer, and a",
-      "private repository resolves to a 404 for everyone outside the ACL. So every",
-      "link whose target is this repository is NOT publicly reachable while this says",
-      "private, which is why storeReadyForPublicLinks is derived from this one field",
-      "instead of being asserted per link. Flipping it to public is the operator",
-      "action that closes the criterion; nothing here can do it, and nothing here",
-      "pretends otherwise.",
+      "answers PUBLIC. §73 WP5.2 wants the source, privacy, licence and support links",
+      "to resolve to real, current content for a store reviewer, and they now do:",
+      "every link whose target is this repository resolves for anyone, which is why",
+      "storeReadyForPublicLinks is derived from this one field instead of being",
+      "asserted per link.",
       "",
-      "docs/compliance/source-offer.md is the written offer that stands in the",
-      "meantime: it is what a reviewer is given when the repository itself cannot be",
-      "opened, and it is the artifact Apache-2.0 §4a's redistribution obligation is",
-      "discharged through."
+      "This said private until issue #484, under the sentence above claiming it was",
+      "measured. It had been measured, and then the repository was made public and",
+      "nothing came back to re-measure it, so the file carried a stale reading with a",
+      "note asserting its freshness - which is worse than an unmeasured value,",
+      "because the note is what stops anyone checking. Re-run the command above when",
+      "this is in doubt rather than reading the note.",
+      "",
+      "docs/compliance/source-offer.md stays. It stood in while the repository was",
+      "private and it is still the artifact Apache-2.0 §4a's redistribution obligation",
+      "is discharged through for a recipient who has a package and no browser: a link",
+      "resolving is not the same as an offer having been made, and the two are",
+      "different obligations to different people."
     ]
   },
 
