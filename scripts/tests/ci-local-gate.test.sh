@@ -328,6 +328,14 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
   done
 
+  # The e2e drivers' --help pin (#514), stubbed for the same reason and for
+  # the seventh time. It is one of the few steps up in the static section
+  # rather than behind FAST, so without this stub every tree here would die
+  # at it, before anything below had a chance to measure anything. The real
+  # one renders the two drivers' help and diffs it against a golden; this
+  # fixture carries stub drivers with no help block at all.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/e2e-help.test.sh"
+
   # The installer's unit tests (#262), which the gate runs by `cd`-ing into
   # scripts/install. Same reason as every stub above, and the same failure
   # mode without it: a `cd` into a directory this fixture does not have

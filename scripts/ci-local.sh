@@ -256,6 +256,24 @@ bash scripts/format/check-gofmt.sh
 gate_step "every Go file no module owns still passes go vet and golangci-lint (#417)"
 bash scripts/architecture/check-unowned-go.sh
 
+# The two end-to-end drivers' --help, pinned against a golden (#514). Both
+# used to render it by reading their own header BY LINE NUMBER, so the help
+# an operator reads was a set of coordinates: a comment inserted above the
+# boundary rewrote it and deleting one truncated it, with nothing anywhere
+# rendering either script's help. Both had already drifted by the time
+# anybody looked, one of them to a sentence that stops mid-word.
+#
+# FR-35 clause 4 says nothing may reword a line an operator already reads,
+# and core/tests/compat enforces that for the CLI byte for byte. These two
+# surfaces are the same kind of text with none of that protection, so they
+# get a golden of their own and a reword has to update it on purpose.
+#
+# Up here with the other static text checks rather than behind FAST: it
+# renders two help texts and diffs them, so it builds nothing, installs
+# nothing and needs no Docker, and it costs about a second.
+gate_step "the e2e drivers' --help is still the text it was (#514)"
+bash scripts/tests/e2e-help.test.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 
