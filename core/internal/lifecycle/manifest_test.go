@@ -1,3 +1,15 @@
+// These cover the recovery sidecar Commit writes beside a durable artifact,
+// which is the read side of internal/recovery's whole reason to exist.
+//
+// The fixtures are heavier than the other commit tests' and that is the
+// substance of the file. A manifest's job is to carry enough evidence to
+// rebuild a journal row after the journal is gone, so a test that committed
+// an artifact with no remote identity, no transfer result and no recorded
+// hash would produce a manifest with every interesting field empty and would
+// pass every round-trip assertion there is. walkToVerifiedWithEvidence
+// exists so the artifact reaching Commit looks like one a real FR-11 and
+// FR-13 run produced, and the assertions can then be about whether that
+// evidence survived rather than about the file's shape.
 package lifecycle
 
 import (

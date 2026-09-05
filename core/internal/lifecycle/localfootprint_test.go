@@ -1,3 +1,14 @@
+// These cover localfootprint.go, and there are only three of them because
+// the file under test is two lists and a lookup.
+//
+// The interesting one is the classification guard. The whole reason
+// StatesWithNoLocalCopy is written out by hand instead of being computed as
+// the complement is that a computed complement can never be wrong, and being
+// unable to be wrong is exactly the problem: a state added to AllStates and to
+// neither list would silently join the "occupies nothing" side, the capacity
+// cap would quietly under-count, and nothing would fail. Writing both lists
+// and proving they partition AllStates turns that silence into a build
+// failure.
 package lifecycle
 
 import "testing"

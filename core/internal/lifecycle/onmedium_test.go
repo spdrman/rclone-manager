@@ -1,3 +1,18 @@
+// These cover what the FR-15 delete gate does when an artifact's durable
+// copy is not on local disk at all, which is the shape EPIC E's move engine
+// leaves behind.
+//
+// They are in their own file because the assertion is about the WORDING of a
+// refusal rather than about the refusal happening. The gate was already
+// refusing this case correctly, and the fault issue #434 found was that it
+// said "no local final path is recorded", which describes a lost file and
+// sends an operator hunting for one. A copy sitting safely in a bucket is
+// not a lost file, and a message that cannot tell the two apart turns a
+// correct refusal into a wasted afternoon.
+//
+// So these tests read the refusal text. That is unusual here and it is the
+// point: the message is the product surface in this case, since the gate's
+// behaviour is unchanged either way.
 package lifecycle
 
 import (
