@@ -78,6 +78,8 @@
 #   warm, --race, under gotestwatch:  169s wall, 164s inside, compile 3s
 #   the compile alone, both caches empty, --race:  45s
 #
+#   cold, --race, under gotestwatch: 217s wall, 169s inside, compile 45s
+#
 # and, measured before this took --race and gotestwatch, on four packages
 # under a plain `go test`: 210s wall cold and 120s warm, so about 76s of
 # compile.
@@ -397,4 +399,14 @@ fi
 
 step "PASSED in ${elapsed}s"
 note "every source and medium was reached by its network alias, with nothing published"
+
+# The brace group above is half the protection against this file being
+# edited while it runs; this exit is the other half. bash parses the whole
+# group before executing any of it, but once the group is done it goes back
+# to the file for whatever comes next, at the byte offset it saved. If the
+# file grew in the meantime that offset now points into the middle of a
+# line, and bash tries to run the fragment: this script passed every
+# package, printed PASSED, and then exited 127 on a word out of its own
+# header comment. Exiting here means there is never a next read.
+exit 0
 }

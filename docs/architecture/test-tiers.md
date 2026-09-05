@@ -179,7 +179,7 @@ After #448 and #450, on the same machine:
 | `core/tests/sftpintegration` | 121s |
 | `core/tests/miniointegration` | 16s |
 | every machine package inside a manager container, `-race`, under gotestwatch, warm | 164s |
-| the compile alone inside that container, `-race`, both caches empty | 45s |
+| the same with both caches empty (45s of which is the compile) | 169s |
 
 A two-machine case per test function, for the 1555 test functions under
 `core/internal`, `core/service` and `core/cmd`, would be thirty hours. One
