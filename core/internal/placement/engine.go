@@ -38,10 +38,18 @@ import (
 //     SOURCE_DELETE_PENDING except from VERIFIED.
 //  2. state.AdvanceMove compares the phase in the UPDATE's own WHERE
 //     clause, so a write against a row that has moved on affects no rows.
-//  3. deleteSource re-verifies the destination from scratch, immediately
-//     before the delete, whether it arrived there fresh or after a crash.
-//     FR-30 asks for that on the restart path; doing it on both paths
-//     means there is only one path.
+//  3. deleteSource requires a content-class verdict about the
+//     destination, valid now, immediately before the delete, whether it
+//     arrived there fresh or after a crash. It asks for it
+//     unconditionally, through one function, and feeds the answer into
+//     one switch: FR-30 asks for that on the restart path, and doing it
+//     on both paths means there is only one path. What it does NOT
+//     require is that the bytes be downloaded twice per move. A verdict
+//     this same walk of this same move produced a moment ago, about an
+//     object the medium still describes identically, is the same fact
+//     with a stated age; anything else, and every move a restart picks
+//     up, is a full read. predelete.go is that argument at length, and
+//     issue #439 is why it had to be made.
 //  4. guardSourceDelete re-derives every precondition from the DURABLE
 //     journal and the real filesystem at the moment of the delete, and
 //     refuses on anything it cannot prove. It is this file's
@@ -1030,9 +1038,20 @@ func (e *Engine) intendSourceDelete(ctx context.Context, mv state.Move) (state.M
 
 // deleteSource is the dangerous one.
 //
-// It re-verifies the destination from scratch, does NOT write that fresh
-// result anywhere, re-derives every precondition from the durable journal
-// and the real filesystem, and only then removes the source copy.
+// It requires a content-class verdict about the destination that is valid
+// at this instant, does NOT write that verdict anywhere, re-derives every
+// precondition from the durable journal and the real filesystem, and only
+// then removes the source copy.
+//
+// The verdict comes from reverifyForDelete, which is the one producer and
+// is called unconditionally. It is a full read of the destination unless
+// this same walk of this same move read it moments ago and the medium
+// still describes the object identically, in which case it is that read,
+// with its own timestamp and a bounded age. Everything below is the same
+// either way, which is the point: there is one call, one answer and one
+// switch, and the resume path takes the full read every time because a
+// proof cannot outlive the advance loop that made it. predelete.go is the
+// whole argument (#439).
 //
 // That "does NOT" was the wrong way round here until now: this comment used
 // to say the fresh result is written into the destination's placement "so
@@ -1111,8 +1130,8 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move, proof *readBac
 			mv.DestinationMedium, result.Class, result.Detail))
 	}
 
-	// The fresh result is deliberately NOT written back over the
-	// destination's placement here.
+	// The result is deliberately NOT written back over the destination's
+	// placement here.
 	//
 	// That would be the natural thing to do and it would quietly destroy
 	// the guard below. The guard's job is to require DURABLE evidence, the
@@ -1122,6 +1141,12 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move, proof *readBac
 	// them could ever fire. Two independent conditions are the point: what
 	// the journal durably recorded when it authorised this delete, and what
 	// is true about the destination right now. Both have to hold.
+	//
+	// That stays exactly as true when the verdict came from a pre-delete
+	// proof rather than from a read taken here. The proof is one process's
+	// own account of a read plus the medium's account of the object; it is
+	// never durable, it is never written, and it is spent when it is used.
+	// Nothing about it can satisfy a clause below.
 	target, guardErr := e.guardSourceDelete(ctx, mv, rec, want)
 	switch {
 	case errors.Is(guardErr, errSourceAlreadyGone):
