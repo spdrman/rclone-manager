@@ -1,3 +1,20 @@
+// These cover FR-14's durable commit, at two levels that are worth keeping
+// apart.
+//
+// The journal-level tests drive Commit itself and are mostly about
+// convergence: the crash matrix kills the process after every state, so a
+// retried Commit has to reach the same place whether the previous attempt
+// did nothing, half the filesystem work, all of it, or all of it plus the
+// journal write. Several of them use testHookAfterRename to stop the
+// process in a window a test could not otherwise reach.
+//
+// The filesystem-level tests call commitFile, linkWithoutClobbering and the
+// fsync helpers directly, with no journal at all. They are separate because
+// the durability argument is about system calls rather than about states:
+// link rather than rename so an occupied final name refuses instead of
+// overwriting, and a directory fsync because a rename is not durable without
+// one. Reaching those branches through Commit is possible but the failure
+// message would name the wrong layer.
 package lifecycle
 
 import (
@@ -355,6 +372,16 @@ func TestCommitRefusesInvalidInputBeforeTouchingTheJournal(t *testing.T) {
 	}
 }
 
+// TestCommitInputValidate mutates one field at a time out of a known-good
+// input, which is what isolates each precondition: a table of five broken
+// inputs written from scratch would not prove the base was ever valid, and a
+// validate that rejected everything would pass.
+//
+// "same keys" is the case that is not a missing value. The two keys identify
+// two separate durable writes, and the journal replays a repeated key as the
+// same attempt, so giving both the same value would make the second write a
+// silent no-op: the artifact would sit at COMMITTING for ever while every
+// call reported success.
 func TestCommitInputValidate(t *testing.T) {
 	artifact := mustID(t)
 	base := CommitInput{
@@ -390,6 +417,14 @@ func TestCommitInputValidate(t *testing.T) {
 
 // --- commitFile: pure filesystem-level tests, no journal involved ---
 
+// TestCommitFileRenamesAndFsyncsWithoutError is the happy path at the
+// filesystem level, and it asserts the .partial is GONE afterwards as well
+// as the final file being right.
+//
+// The disappearance matters beyond tidiness. A .partial left behind is a
+// file the next transfer attempt would find and discard, and FR-12's whole
+// point is that a .partial is never a restore point, so one sitting beside a
+// finished artifact is a name that says the opposite of what is true.
 func TestCommitFileRenamesAndFsyncsWithoutError(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, "a.partial")
@@ -499,6 +534,18 @@ func TestCommitFileReturnsAClearErrorWhenBothFilesAreMissing(t *testing.T) {
 // EEXIST-then-recheck branch, which commitFile's own Stat-based routing
 // normally short-circuits around. ---
 
+// TestLinkWithoutClobberingToleratesARaceOntoTheSameInode reaches a branch
+// Commit itself normally routes around.
+//
+// commitFile stats the final path first, so the EEXIST-then-recheck path
+// inside linkWithoutClobbering is only entered when the link is created
+// between that stat and the link call, which is a race a test cannot stage
+// through the public entry point. Calling the helper directly with the link
+// already in place produces the same situation deterministically.
+//
+// Tolerating it is correct because the file already at the final name IS
+// this artifact, same inode: a previous attempt got there first, and
+// refusing would turn a converged retry into a permanent failure.
 func TestLinkWithoutClobberingToleratesARaceOntoTheSameInode(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, "a.partial")
@@ -515,6 +562,14 @@ func TestLinkWithoutClobberingToleratesARaceOntoTheSameInode(t *testing.T) {
 	}
 }
 
+// TestLinkWithoutClobberingRefusesAForeignFile is the other half of the
+// same branch and the reason it exists: a DIFFERENT file at the final name
+// is FR-12's collision, and it must refuse rather than replace.
+//
+// The two tests together are the whole argument for link over rename.
+// os.Rename cannot tell these two situations apart, because it succeeds in
+// both, and one of them is a known-good backup being overwritten
+// irrecoverably.
 func TestLinkWithoutClobberingRefusesAForeignFile(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, "a.partial")
@@ -535,6 +590,14 @@ func TestLinkWithoutClobberingRefusesAForeignFile(t *testing.T) {
 
 // --- small helpers ---
 
+// TestFsyncFileAndFsyncDir is coverage of the durability primitives rather
+// than proof of durability, which no unit test can give: a passing fsync
+// cannot be distinguished from a no-op without pulling the power.
+//
+// What it does pin is that fsyncDir opens a DIRECTORY successfully, which is
+// the part people get wrong, and that a missing file is an error rather than
+// a silent success. The real durability argument lives in commit.go's
+// comments and in the crash matrix harness.
 func TestFsyncFileAndFsyncDir(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "f")
@@ -552,6 +615,11 @@ func TestFsyncFileAndFsyncDir(t *testing.T) {
 	}
 }
 
+// TestRemoveIfExistsToleratesAnAlreadyGoneFile pins the convergence
+// property in the smallest place it appears. Commit is retried after
+// crashes, so it routinely tries to remove a .partial a previous attempt
+// already removed, and treating that as a failure would make every
+// successful resume report an error.
 func TestRemoveIfExistsToleratesAnAlreadyGoneFile(t *testing.T) {
 	if err := removeIfExists(filepath.Join(t.TempDir(), "gone")); err != nil {
 		t.Fatalf("removeIfExists: %v", err)

@@ -1,3 +1,19 @@
+// These cover FR-11 and FR-12's transfer step, and unlike the delete and
+// commit suites they run against in-memory fakes rather than a real journal.
+//
+// That is a deliberate trade. Transfer's interesting behaviour is the state
+// sequence and the local filenames, not journal history, so a fake journal
+// that enforces the two rules Transfer genuinely depends on, idempotency-key
+// replay and refusing a mismatched From, is enough. What it buys is that a
+// test can make a write fail on demand, which is how the "refuse loudly even
+// when recording the refusal also fails" case gets covered at all.
+//
+// The .partial name is the thread running through the file. It is not a
+// naming convention, it is the mechanism: nothing downstream may treat a
+// .partial as a restore point, an orphaned one from a crashed attempt is
+// discarded rather than resumed, and the final name is checked for an
+// occupant BEFORE any bytes move. Several tests below assert on which of the
+// two files exists after a failure, and that is why.
 package lifecycle
 
 import (
@@ -39,6 +55,13 @@ type fakeTransferJournal struct {
 	failRecordFor string // if non-empty, RecordTransition to this To-state fails
 }
 
+// newFakeTransferJournal starts an artifact at DISCOVERED with a recorded
+// remote path, which is where the pipeline hands one to Transfer.
+//
+// The remote path is set here rather than left empty because one test
+// asserts Transfer uses the path from the JOURNAL rather than one it
+// recomposed from the artifact name, and that assertion needs the two to be
+// distinguishable.
 func newFakeTransferJournal(artifact model.ArtifactID, remotePath string) *fakeTransferJournal {
 	return &fakeTransferJournal{
 		exists: true,
@@ -51,6 +74,10 @@ func newFakeTransferJournal(artifact model.ArtifactID, remotePath string) *fakeT
 	}
 }
 
+// Get returns the current row, or the configured failure. The getErr hook is
+// what lets a test make the journal unreachable at the moment Transfer looks
+// the artifact up, which is a different failure from a write failing and
+// leads somewhere different.
 func (f *fakeTransferJournal) Get(_ context.Context, _ model.ArtifactID) (state.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -79,6 +106,14 @@ func (f *fakeTransferJournal) LastTransition(context.Context, model.ArtifactID, 
 	return time.Time{}, false, nil
 }
 
+// RecordTransition implements the two journal rules Transfer depends on,
+// and nothing else.
+//
+// Key replay comes first: a repeated key returns the earlier outcome without
+// applying anything, which is what makes a retried attempt converge. The
+// From check comes second and is what catches a caller acting on a stale
+// idea of where the artifact is. failRecordFor is the hook for the tests
+// about a refusal that cannot be recorded.
 func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -109,12 +144,21 @@ func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transi
 	return out, nil
 }
 
+// currentState reads the row under the lock, for tests asserting where the
+// artifact ended up. The lock matters because the cancellation tests have a
+// goroutine in flight when this is called.
 func (f *fakeTransferJournal) currentState() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.rec.State
 }
 
+// transitionsTo returns every recorded write into one state.
+//
+// It returns all of them rather than the last, because several tests assert
+// there was exactly ONE: a second TRANSFERRED write for the same attempt
+// would mean the idempotency key was not doing its job, and only counting
+// shows that.
 func (f *fakeTransferJournal) transitionsTo(to State) []state.Transition {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -136,14 +180,26 @@ type fakeTransport struct {
 	callStart chan struct{} // if non-nil, sent to (non-blocking best-effort) on every call
 }
 
+// List fails. Transfer copies one named object; it never enumerates.
 func (f *fakeTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	return nil, errors.New("fakeTransport: List not used")
 }
 
+// Stat fails. The identity was captured at discovery and re-checked at
+// delete time, not here, so a Stat during transfer would be a request nobody
+// accounted for.
 func (f *fakeTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 	return transport.RemoteArtifact{}, errors.New("fakeTransport: Stat not used")
 }
 
+// CopyToLocal counts its calls, optionally signals that it has started, and
+// then does whatever the test asked.
+//
+// The count is how the retry tests distinguish "retried three times" from
+// "failed once"; callStart is how the cancellation tests wait until the copy
+// is genuinely in flight before cancelling, rather than racing the goroutine
+// with a sleep. The send is non-blocking so a test that does not read the
+// channel cannot deadlock the transport.
 func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	f.mu.Lock()
 	f.calls++
@@ -157,14 +213,20 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 	return f.copyFunc(ctx, source, remotePath, localPartialPath)
 }
 
+// RemoteHash fails. Hashing belongs to verification, one state later.
 func (f *fakeTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
 	return "", errors.New("fakeTransport: RemoteHash not used")
 }
 
+// DeleteRemote fails, and this is the one that would matter most: transfer
+// is a copy, never a move, and a transport whose delete quietly succeeded
+// would let that distinction erode without a test noticing.
 func (f *fakeTransport) DeleteRemote(context.Context, transport.Source, string) error {
 	return errors.New("fakeTransport: DeleteRemote not used")
 }
 
+// callCount reads the counter under the lock, since the retry and
+// cancellation tests read it while a copy may still be running.
 func (f *fakeTransport) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -182,6 +244,11 @@ func writingCopy(content []byte) func(context.Context, transport.Source, string,
 	}
 }
 
+// testArtifact builds the one artifact this file uses, through the real
+// constructors so its name is one the pipeline could genuinely produce. The
+// name has two extensions on purpose: the .partial suffix is appended to the
+// whole basename, not substituted for an extension, and a single-extension
+// name would not show the difference.
 func testArtifact(t *testing.T) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")
@@ -195,6 +262,12 @@ func testArtifact(t *testing.T) model.ArtifactID {
 	return id
 }
 
+// fastPolicy shrinks the retry schedule to milliseconds.
+//
+// MaxAttempts is left at 0, meaning the package default, because the retry
+// tests are about WHICH failures are retried rather than how many times, and
+// pinning a count here would quietly duplicate a policy decision that lives
+// in the transport package.
 func fastPolicy() retry.Policy {
 	return retry.Policy{
 		BaseDelay:   5 * time.Millisecond,
@@ -206,6 +279,14 @@ func fastPolicy() retry.Policy {
 
 // --- the nominal path ---
 
+// TestTransferNominalSequenceCopiesToPartialThenRecordsTransferred is the
+// happy path, and it asserts the SEQUENCE rather than only the end state.
+//
+// The order is the safety property: TRANSFERRING is recorded before any
+// bytes move, so a crash mid-copy leaves a journal that says a transfer was
+// underway and a .partial that a later attempt knows to discard. An
+// implementation that copied first and recorded afterwards would reach the
+// same final state and leave nothing to explain an orphaned file.
 func TestTransferNominalSequenceCopiesToPartialThenRecordsTransferred(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -263,6 +344,14 @@ func TestTransferNominalSequenceCopiesToPartialThenRecordsTransferred(t *testing
 	}
 }
 
+// TestTransferPassesTheExactRemotePathRecordedAtDiscovery pins that the
+// path comes out of the journal rather than being recomposed.
+//
+// Recursion made this real: an artifact is named by its basename but lives
+// at a full path, so a transfer that rebuilt the path from the identity
+// would fetch from the wrong directory whenever a producer nests its output,
+// and would do so silently because the bytes it copied would be a perfectly
+// valid file.
 func TestTransferPassesTheExactRemotePathRecordedAtDiscovery(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -287,6 +376,14 @@ func TestTransferPassesTheExactRemotePathRecordedAtDiscovery(t *testing.T) {
 
 // --- FR-12's hardest case: a final-name collision must never be clobbered ---
 
+// TestFinalNameCollisionRefusesAndLeavesTheExistingFileUntouched is FR-12's
+// collision rule checked at the earliest point it can be.
+//
+// The check happens before TRANSFERRING is recorded and before any bytes
+// move, which is what the assertions are really about: the existing file is
+// byte-for-byte unchanged, and no bandwidth was spent on a transfer that
+// could only have ended in a refusal. The existing file might be a
+// known-good backup, and this package has no way to tell.
 func TestFinalNameCollisionRefusesAndLeavesTheExistingFileUntouched(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -347,6 +444,14 @@ func TestFinalNameCollisionRefusesAndLeavesTheExistingFileUntouched(t *testing.T
 	}
 }
 
+// TestFinalNameCollisionStillReturnsLoudlyEvenIfRecordingFailedAlsoFails
+// covers the compound failure: a collision, and then the journal refusing
+// the write that would record it.
+//
+// The rule is that the caller still hears about the collision. A function
+// that returned only the journal error would report a database problem for
+// what is actually a file sitting where a backup is about to go, and the
+// operator would go and look at the wrong thing.
 func TestFinalNameCollisionStillReturnsLoudlyEvenIfRecordingFailedAlsoFails(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -376,6 +481,13 @@ func TestFinalNameCollisionStillReturnsLoudlyEvenIfRecordingFailedAlsoFails(t *t
 
 // --- the state machine guardrail: Transfer must go through Advance ---
 
+// TestTransferRefusesAnArtifactPastItsOwnStage covers the stale-caller
+// case: something asks for a transfer of an artifact that has already moved
+// on.
+//
+// Re-transferring is not harmless. It would overwrite the .partial of an
+// artifact that may already be verified, so the refusal is about protecting
+// work that has been done rather than about tidiness.
 func TestTransferRefusesAnArtifactPastItsOwnStage(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -400,6 +512,15 @@ func TestTransferRefusesAnArtifactPastItsOwnStage(t *testing.T) {
 
 // --- orphaned .partial on restart ---
 
+// TestOrphanedPartialFromACrashedAttemptIsDiscardedNotResumed pins the
+// decision not to resume.
+//
+// A .partial left by a killed process has unknown contents: it may be
+// truncated, or it may be a complete copy of an object that has since
+// changed. Appending to it would produce a file that passes a size check and
+// contains two halves of different objects, so the only safe reading is that
+// it is residue. Discarding costs bandwidth and buys the ability to say what
+// the bytes are.
 func TestOrphanedPartialFromACrashedAttemptIsDiscardedNotResumed(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -444,6 +565,13 @@ func TestOrphanedPartialFromACrashedAttemptIsDiscardedNotResumed(t *testing.T) {
 	}
 }
 
+// TestOrphanedPartialDoesNotBlockOrSkipAFreshCopy is the other half: having
+// discarded the residue, the transfer must actually happen.
+//
+// Without this, an implementation that treated an existing .partial as a
+// reason to refuse, or as evidence the artifact was already transferred,
+// would satisfy the test above while leaving the artifact permanently
+// stuck.
 func TestOrphanedPartialDoesNotBlockOrSkipAFreshCopy(t *testing.T) {
 	// The specific "quiet outage" the task calls out: an orphaned .partial
 	// existing on disk must never be mistaken for "this artifact is already
@@ -471,6 +599,14 @@ func TestOrphanedPartialDoesNotBlockOrSkipAFreshCopy(t *testing.T) {
 
 // --- retry policy wiring for Transient failures ---
 
+// TestTransferRetriesTransientFailuresThenSucceeds pins that a classified
+// transient failure is retried inside one call rather than surfacing as a
+// failed attempt.
+//
+// It matters because the alternative is not merely slower. A dropped
+// connection that ended the attempt would count against the artifact's retry
+// budget and eventually record FAILED, which is a verdict about the backup
+// for something that was only ever a fact about the network.
 func TestTransferRetriesTransientFailuresThenSucceeds(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -500,6 +636,12 @@ func TestTransferRetriesTransientFailuresThenSucceeds(t *testing.T) {
 	}
 }
 
+// TestTransferDoesNotRetryAPermanentFailure is the necessary companion. A
+// retry loop with no classification would sit re-attempting a
+// permission-denied for the whole schedule, on every artifact, turning one
+// misconfiguration into a pass that never finishes.
+//
+// The call count is the assertion: exactly one attempt.
 func TestTransferDoesNotRetryAPermanentFailure(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -529,6 +671,15 @@ func TestTransferDoesNotRetryAPermanentFailure(t *testing.T) {
 
 // --- cancellation must never claim TRANSFERRED ---
 
+// TestCancellationDuringRetryBackoffLeavesJournalAtTransferringNotTransferred
+// covers a shutdown landing in the sleep between attempts, which is where a
+// retrying transfer spends most of its time.
+//
+// The artifact has to stay at TRANSFERRING. It is an honest description: a
+// transfer was underway and was interrupted, and the next run resumes from
+// there. Recording TRANSFERRED would claim bytes arrived that did not, and
+// recording FAILED would blame the artifact for the operator stopping the
+// process.
 func TestCancellationDuringRetryBackoffLeavesJournalAtTransferringNotTransferred(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -584,6 +735,13 @@ func TestCancellationDuringRetryBackoffLeavesJournalAtTransferringNotTransferred
 	}
 }
 
+// TestCancellationBeforeTransferStartsIsRefusedWithoutTouchingTheJournal is
+// the same principle one step earlier: a context already cancelled when
+// Transfer is called must leave no trace at all.
+//
+// During a shutdown this is the common case, once per remaining artifact in
+// the pass. A journal write per artifact would fill the log with transitions
+// describing nothing that happened.
 func TestCancellationBeforeTransferStartsIsRefusedWithoutTouchingTheJournal(t *testing.T) {
 	artifact := testArtifact(t)
 	dir := t.TempDir()
@@ -610,6 +768,11 @@ func TestCancellationBeforeTransferStartsIsRefusedWithoutTouchingTheJournal(t *t
 
 // --- input validation ---
 
+// TestTransferRejectsMissingRequiredParams pins the preconditions that
+// cannot be defaulted, and LocalDir is the one with teeth: an empty one used
+// to join to a path relative to the daemon's working directory, so a backup
+// set with no configured local_path would have written artifacts somewhere
+// nobody was backing up.
 func TestTransferRejectsMissingRequiredParams(t *testing.T) {
 	artifact := testArtifact(t)
 	j := newFakeTransferJournal(artifact, "backups/x")
@@ -649,6 +812,11 @@ func mustFinalPath(t *testing.T, dir string, artifact model.ArtifactID) string {
 	return p
 }
 
+// mustPartialPath computes the .partial path a test expects, failing the
+// test rather than returning an error. It goes through the production helper
+// so a test and the code agree on the name; the tests that pin the name
+// itself use literals instead, for the reason artifactstore's locator tests
+// spell out.
 func mustPartialPath(t *testing.T, dir string, artifact model.ArtifactID) string {
 	t.Helper()
 	p, err := partialPath(dir, artifact)
