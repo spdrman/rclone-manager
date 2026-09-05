@@ -59,9 +59,10 @@ an `ssh-keygen rsa 2048` and a container start to every one of them.
 
 Failure shapes and probes are methods: `LimitConnections` and
 `RemoveConnectionLimit` (#264), `Kill` (#161), `EstablishedConnections`,
-`AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor`, and
-later a blackhole. The rule for adding one is in the last section: if the
-harness cannot do what a test needs, the capability goes into the harness.
+`AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor` and
+its negative control `DecoyKnownHostsFor`, and later a blackhole. The rule
+for adding one is in the last section: if the harness cannot do what a test
+needs, the capability goes into the harness.
 
 The source machine is built from `scripts/e2e/source-machine.Dockerfile`,
 which `two-machine-backup.sh` builds too. One definition of "the simulated
@@ -177,8 +178,8 @@ After #448 and #450, on the same machine:
 | `core/tests/machinegate` (the six moved tests, plus #463's) | 107s |
 | `core/tests/sftpintegration` | 121s |
 | `core/tests/miniointegration` | 16s |
-| all four machine-tier packages inside a manager container, warm | 119s |
-| the same, with an empty module cache and an empty build cache | 195s |
+| every machine package inside a manager container, `-race`, under gotestwatch, warm | 164s |
+| the same with both caches empty (45s of which is the compile) | 169s |
 
 A two-machine case per test function, for the 1555 test functions under
 `core/internal`, `core/service` and `core/cmd`, would be thirty hours. One
@@ -189,7 +190,8 @@ per package would be thirty-five minutes of setup before a test ran, with
 
 #451 asked for that number to be measured here rather than inherited, and
 it does not reproduce: the compile inside the manager container, from an
-empty module cache and an empty build cache, is about 76 seconds. Two
+empty module cache and an empty build cache, is 45 seconds with `-race` and
+about 76 without. Two
 reasons, both worth knowing before either figure is quoted again. Only the
 packages the tier imports get compiled, not the whole product. And this
 builds arm64 natively, where `DOCKER_DEFAULT_PLATFORM=linux/amd64` is set on

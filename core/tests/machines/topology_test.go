@@ -78,6 +78,9 @@ func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
 	if strings.Contains(text, "RCLONE_MANAGER_ALLOW_ROOT") {
 		t.Errorf("the driver sets the root opt-out. That flag exists for a person who typed it on purpose, not for a driver to set on everybody's behalf: setting it here deletes eight permission-bit assertions from every run inside the manager")
 	}
+	if !strings.Contains(text, "cmd/gotestwatch") {
+		t.Errorf("the driver runs the tier under a bare `go test`. A machine-tier package's wall clock tracks real machine load, so a fixed -timeout chosen on a quiet machine kills a run that is still making progress (#256), which is why scripts/ci-local.sh puts these packages under gotestwatch. A driver meant to stand in for that step has to keep the bound")
+	}
 	if !strings.Contains(text, "EXIT_CANNOT_RUN=3") {
 		t.Errorf("the driver has no CANNOT RUN status. A machine that cannot run the tier is neither a pass nor a failure, and two-machine-backup.sh already ledgers that as exit 3; without it the gate cannot tell the two apart without parsing prose")
 	}

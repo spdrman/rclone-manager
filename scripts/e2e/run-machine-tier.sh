@@ -21,9 +21,16 @@
 #   * the SOURCE machines, created by the harness inside the manager, one
 #     per test, from scripts/e2e/source-machine.Dockerfile.
 #
-# Then it runs `go test` for the machine-tier packages inside the manager
-# with RCLONE_MANAGER_MACHINES_NETWORK set, so nothing publishes a port and
-# every address a test uses is the address a real manager would use.
+# Then it runs the machine-tier packages inside the manager with
+# RCLONE_MANAGER_MACHINES_NETWORK set, so nothing publishes a port and every
+# address a test uses is the address a real manager would use.
+#
+# It runs them under core/cmd/gotestwatch rather than under a bare
+# `go test`, which is the same wrapper scripts/ci-local.sh puts them under
+# and for the same reason (#256): a machine-tier package's wall clock tracks
+# real machine load, and a fixed -timeout chosen on a quiet machine kills a
+# run that is still making progress. Being a drop-in for that step is the
+# point, so it takes --race too.
 #
 # # The docker socket question, answered
 #
@@ -65,23 +72,33 @@
 #
 # # Cost, measured on this machine rather than guessed
 #
-# Measured on the 4 CPU / 4 GB Docker Desktop VM this gate runs against,
-# arm64 native, running all four machine-tier packages:
+# On the 4 CPU / 4 GB Docker Desktop VM this gate runs against, arm64
+# native, running every machine package:
 #
-#   cold (both caches empty):     210s wall, 195s inside the manager
-#   warm (both caches populated): 120s wall, 119s inside the manager
+#   warm, --race, under gotestwatch:  169s wall, 164s inside, compile 3s
+#   the compile alone, both caches empty, --race:  45s
 #
-# So the compile of everything the tier needs, from an empty module cache
-# and an empty build cache, is about 76 seconds. #451 asked for this number
-# because a cold compile of rclone's module graph took over six minutes in
-# CI with no cache, and that is the figure the "run every test on two
-# machines" option was rejected on. It does not reproduce here, for two
-# reasons worth knowing before anybody quotes either number: only the
-# packages the tier actually imports get compiled, not the whole product,
-# and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is linux/amd64 on
-# this machine, and with it in force the manager was built emulated and the
-# compile was measuring qemu, which is why the platform is named explicitly
-# below.
+#   cold, --race, under gotestwatch: 217s wall, 169s inside, compile 45s
+#
+# and, measured before this took --race and gotestwatch, on four packages
+# under a plain `go test`: 210s wall cold and 120s warm, so about 76s of
+# compile.
+#
+# #451 asked for the cold figure because a cold compile of rclone's module
+# graph took over six minutes in CI with no cache, and that is what the
+# "run every test on two machines" option was rejected on. It does not
+# reproduce here, for two reasons worth knowing before either number is
+# quoted again: only the packages the tier imports get compiled, not the
+# whole product, and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is
+# linux/amd64 on this machine, and with it in force the manager was built
+# emulated and the compile was measuring qemu, which is why the platform is
+# named from the daemon's own architecture below.
+#
+# The 45 seconds is worth its own line, because it is exactly gotestwatch's
+# unmeasured floor. A cold compile inside the watched window does not merely
+# risk tripping the watchdog, it lands on the boundary, and under any load
+# at all it goes over. That is why the compile is its own step above the
+# watched run rather than inside it.
 #
 # The caches are volumes rather than being thrown away with the container
 # precisely so the warm number is the one a gate pays.
@@ -92,6 +109,16 @@
 # interrupt. Everything carries a per-run id, nothing publishes a host
 # port, and the harness reclaims its own machines. Two of these can run at
 # once.
+# Everything below is one brace group, and that is not a style choice.
+#
+# bash reads a script from the file incrementally, by byte offset, so
+# editing a script while it is running makes it resume mid-token: this one
+# ran for 159 seconds, passed every package, and then died with "syntax
+# error near unexpected token `('" in a branch that was never taken, purely
+# because the file had been edited underneath it. A run this long is
+# exactly the kind somebody edits while it works. Wrapping the body forces
+# bash to parse all of it before executing any of it.
+{
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -124,10 +151,16 @@ cannot_run() {
 
 # --------------------------------------------------------------- options
 
-packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/... ./tests/miniointegration/..."
+# Every package that reaches a machine, which is the gate's own
+# gotestwatch list plus tests/machines. The harness package is not on the
+# gate's list because it is a harness rather than a machine-tier package
+# and runs in the plain `go test` step, but it is exactly the package whose
+# own #161, #243 and #456 proofs are worth running in this placement too.
+packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/... ./tests/crashmatrix/..."
 keep=0
 run_filter=""
 verbose=""
+race=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --packages) packages="${2:-}"; shift 2 ;;
@@ -139,13 +172,18 @@ while [ $# -gt 0 ]; do
     # test is invisible without it: reading a measurement out of this
     # placement is otherwise only possible by making it fail.
     -v|--verbose) verbose="-v"; shift ;;
+    # `go test -race`, which is what the gate runs the machine tier with.
+    # Off by default here because a race build costs compile time and the
+    # cost figures in this header were measured without it; on when this
+    # driver is standing in for the gate's own step.
+    --race) race="-race"; shift ;;
     # Leaves the manager container and the network up after a FAILING run,
     # for reading. Never the default.
     --keep-on-failure) keep=1; shift ;;
     -h|--help)
       sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--race] [--keep-on-failure]" ;;
   esac
 done
 
@@ -319,7 +357,28 @@ note "manager: $manager (uid $uid, on $net, socket reachable)"
 
 # ---------------------------------------------------------------- the run
 
-step "running the machine tier inside the manager machine"
+step "compiling the tier inside the manager machine"
+# Before the watched run, not inside it.
+#
+# gotestwatch bounds a run by the pace of its own test events, and its
+# unmeasured floor is 45 seconds: nothing has been observed yet, so that is
+# all it has to go on. A cold compile inside this container takes longer
+# than that and emits no test event while it works, so the first thing the
+# watchdog sees is 45 seconds of silence and it kills a run that was
+# building normally. That is not a gotestwatch bug. In scripts/ci-local.sh
+# the gotestwatch step is preceded by a whole `go test ./...` step, so the
+# build cache is warm by the time anything is watched; this driver had no
+# such step, and this is it.
+#
+# `-run ^$` compiles and links every test binary and runs no test in it, so
+# nothing here starts a container.
+compile_started="$(date +%s)"
+docker exec "$manager" go test $race -count=1 -run '^$' $packages >/dev/null \
+  || die "the machine-tier packages do not compile inside the manager machine." \
+         "Nothing below can run, and this is a build failure rather than a test one."
+note "compiled in $(( $(date +%s) - compile_started ))s"
+
+step "running the machine tier inside the manager machine, under gotestwatch"
 note "packages: $packages"
 [ -n "$run_filter" ] && note "filter:   -run $run_filter"
 note "no port is published by any source or medium: RCLONE_MANAGER_MACHINES_NETWORK=$net"
@@ -327,7 +386,7 @@ note "no port is published by any source or medium: RCLONE_MANAGER_MACHINES_NETW
 started="$(date +%s)"
 set +e
 # shellcheck disable=SC2086
-docker exec "$manager" go test -count=1 $verbose ${run_filter:+-run "$run_filter"} $packages
+docker exec "$manager" go run ./cmd/gotestwatch $race -count=1 $verbose ${run_filter:+-run "$run_filter"} $packages
 status=$?
 set -e
 elapsed=$(( $(date +%s) - started ))
@@ -340,3 +399,14 @@ fi
 
 step "PASSED in ${elapsed}s"
 note "every source and medium was reached by its network alias, with nothing published"
+
+# The brace group above is half the protection against this file being
+# edited while it runs; this exit is the other half. bash parses the whole
+# group before executing any of it, but once the group is done it goes back
+# to the file for whatever comes next, at the byte offset it saved. If the
+# file grew in the meantime that offset now points into the middle of a
+# line, and bash tries to run the fragment: this script passed every
+# package, printed PASSED, and then exited 127 on a word out of its own
+# header comment. Exiting here means there is never a next read.
+exit 0
+}

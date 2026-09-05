@@ -5,6 +5,14 @@
 // ./internal/...` ran them and where they needed a Docker daemon to say
 // anything about a package that is otherwise pure. Everything here reaches
 // its machine through core/tests/machines and nothing here execs docker.
+//
+// #414 and #415's three cancellation files came here for the same reason,
+// one step later: they had already left the unit tier for
+// tests/sftpintegration, which stopped being the right home when the
+// fixture they reached their machine through was folded into the harness.
+// They arrive as a set because adaptercancellation_test.go drives the slow
+// link that slowlink_test.go defines, and because tests/sftpintegration has
+// a measured budget these three would have doubled.
 package machinegate_test
 
 import (
