@@ -1,3 +1,28 @@
+// Where an artifact's bytes actually are: one row per durable copy (EPIC
+// E, FR-29), plus the accessors that let the rest of the product ask about
+// a copy without assuming there is exactly one and that it is local.
+//
+// The row exists because local_path stopped being able to express the
+// truth. An artifact has two copies while it is being moved and no local
+// one after the move finishes, and a single path column has no way to say
+// either.
+//
+// The part of this file that is easy to get wrong is not the storage, it
+// is the reading. ReadableLocalPath returning false has two meanings, "the
+// copy is on a medium" and "there is no copy anywhere", and those are a
+// healthy artifact and a data loss. Stopping at the bool marked the first
+// successfully moved artifact QUARANTINED_LOST on the very next cycle. So
+// the pair ReadableLocalPath and ActiveMediumPlacements is the interface,
+// localpathsweep_test.go refuses a caller that asks one without the other,
+// and both functions carry the full argument.
+//
+// The vocabularies split three ways and the split is deliberate. A
+// placement's Status is this package's own, because where a copy is in its
+// own life is a storage fact. Record.State belongs to internal/lifecycle,
+// and VerificationClass belongs to internal/placement. The last two are
+// spelled out here only because 0007_placements.sql constrains those
+// columns, and a vocabulary the schema enforces should be written beside
+// the constraint that enforces it.
 package state
 
 import (
@@ -239,6 +264,14 @@ func (r Record) ActiveMediumPlacements() []Placement {
 	return out
 }
 
+// placementColumns is the column list both placement reads share.
+//
+// The two of them scan it into the same buildPlacement call rather than
+// each decoding it themselves, and that is what keeps a single-artifact
+// read and a whole-set read from drifting into disagreeing about what a
+// placement is. loadPlacementsFor selects one extra leading column,
+// artifact_id, to key its map by, which is why it does its own Scan rather
+// than calling scanPlacement.
 const placementColumns = `
 	medium, location, size_bytes, hash, hash_alg,
 	verification_class, verified_at, status, created_at, updated_at`
@@ -352,6 +385,14 @@ func scanPlacement(row scanRow) (Placement, error) {
 	return buildPlacement(medium, location, size, hash, hashAlg, verificationClass, verifiedAt, status, createdAt, updatedAt)
 }
 
+// buildPlacement is the one place a stored placement becomes a Placement,
+// shared by both readers so the nullable columns are interpreted the same
+// way whichever query produced them.
+//
+// A stored timestamp that will not parse fails the read rather than
+// becoming a zero time. verified_at in particular is what FR-31 answers
+// "when was this copy last proven" with, and a zero there is not a missing
+// answer, it is a very old one.
 func buildPlacement(
 	medium, location string, size sql.NullInt64, hash, hashAlg string,
 	verificationClass string, verifiedAt sql.NullString, status string,

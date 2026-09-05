@@ -194,6 +194,15 @@ func (u PlacementUpdate) WithStatus(status string) PlacementUpdate {
 	return u
 }
 
+// moveColumns and moveFrom are spelled once and shared by every read in
+// this file, because scanMove decodes them by position. A SELECT that
+// listed its own columns would only have to disagree with that Scan by one
+// to hand a destination key back as a phase, silently, on one code path.
+//
+// The LEFT JOIN is what makes SourcePlacementID's nil case reachable: a
+// move whose source placement row has been deleted still has a history
+// worth reading, so it comes back with empty source fields rather than
+// disappearing from the listing.
 const moveColumns = `
 	m.id, a.source, a.backup_set, a.artifact_name,
 	m.source_placement_id, p.medium, p.location,
@@ -382,6 +391,10 @@ func (j *Journal) GetMove(ctx context.Context, id int64) (Move, error) {
 	return getMove(ctx, j.db, id)
 }
 
+// getMove is GetMove's body, taking a querier so PlanMove and AdvanceMove
+// can read back the row they just wrote from inside their own open
+// transaction. Reading it any other way would either miss the write or see
+// somebody else's.
 func getMove(ctx context.Context, q querier, id int64) (Move, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+moveColumns+moveFrom+` WHERE m.id = ?`, id)
 	mv, err := scanMove(row)
@@ -452,6 +465,13 @@ func (j *Journal) MovesForArtifact(ctx context.Context, artifact model.ArtifactI
 	return out, nil
 }
 
+// scanMove decodes one row of moveColumns.
+//
+// A timestamp that will not parse is a hard failure rather than a zero
+// time, and that is the same choice every scanner in this package makes:
+// the move engine compares these against each other to decide what to do
+// next, and a silent zero would read as the oldest move there has ever
+// been.
 func scanMove(row scanRow) (Move, error) {
 	var (
 		id                                   int64

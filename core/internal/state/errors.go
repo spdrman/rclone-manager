@@ -1,3 +1,26 @@
+// The failures this package returns that a caller is expected to branch
+// on, gathered in one place instead of being formatted where they are
+// raised.
+//
+// Every one of them separates two situations that look alike from the
+// database's side and demand opposite responses from the caller: a replay
+// of an attempt that already succeeded against a genuine sequencing bug, a
+// schema this binary is too old to understand against one somebody edited
+// underneath it, a request already in flight against a key somebody reused
+// for a different request. A caller that cannot tell those apart either
+// retries something destructive or gives up on a journal that is fine.
+//
+// They are sentinel values so telling them apart is errors.Is against a
+// name rather than a match on message text. That is worth more here than
+// the usual style argument: these sentences reach an operator, so they are
+// pinned by the compatibility corpus and cannot be reworded to suit a
+// caller, and a caller matching on the text would be coupling itself to a
+// string it is not allowed to change.
+//
+// They are values rather than types because no caller needs structured
+// data out of a refusal. Each call site wraps one with %w and adds the
+// artifact, key or version it was working on, so the sentinel says what
+// kind of refusal happened and the wrapping says which one.
 package state
 
 import "errors"

@@ -1,3 +1,20 @@
+// A backup set's standing connection refusal: the manager could not reach
+// the host at all, so nothing was backed up and somebody has to be told
+// why.
+//
+// This is a table and a vocabulary of its own because there are no
+// artifacts to hang it on. A set the manager cannot log into produces no
+// listing, so it produces no rows anywhere else in this journal, and an
+// absence of new artifacts is exactly what a broken backup and a quiet
+// week look like alike. Recording the refusal itself is the only thing
+// that tells them apart.
+//
+// The shape that keeps that true is that presence is the claim. A set with
+// no row here is a set nothing is known about, which is a different
+// statement from "this set is reachable", and there is deliberately no
+// boolean anywhere in this file to let the two be confused (issue #231). A
+// refusal is cleared by deleting the row, and only ever on evidence that a
+// cycle actually connected.
 package state
 
 import (

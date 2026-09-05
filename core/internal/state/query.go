@@ -1,3 +1,28 @@
+// The read side: decoding artifact rows back into Records, and the
+// questions the rest of the product asks this journal.
+//
+// Reads take a querier rather than the *sql.DB, so one helper serves both
+// a standalone read and the read RecordTransition runs inside its own open
+// transaction. That is what lets a write return the record it just made
+// without a second round trip and without seeing anything else's
+// half-finished work.
+//
+// Every list attaches placements in one further query for the whole result
+// set rather than one query per record. The N+1 that shape would create is
+// not theoretical: these lists are what a retention cycle walks over every
+// backup set on every pass. loadPlacementsFor (placements.go) explains why
+// that second query re-runs the caller's predicate instead of naming the
+// row ids it already holds, and that one is a measured limit rather than a
+// stylistic preference.
+//
+// The queries that read state_transitions rather than the artifacts row
+// (LastEnteredAt, LastEnteredDetail, LastTransition,
+// ArtifactsWithAnyTransition) all exist for one reason worth knowing up
+// front. The artifacts row is overwritten by every write, so it can say
+// what an artifact IS and never how it got there. An artifact reinstated
+// out of quarantine and one that was never distrusted both read COMMITTED,
+// and the append-only log is the only place left that tells them apart.
+// Anything about to do something destructive asks the log.
 package state
 
 import (
@@ -19,6 +44,15 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// selectColumns is every column of the artifacts table, spelled once
+// because scanRecord decodes it by position.
+//
+// Positional scanning is what makes that sharing load-bearing rather than
+// tidy. A read that listed its own columns and got one out of order would
+// not fail: it would put a hash into a validation detail, or a retry count
+// into a byte count, on that one code path, and the types line up often
+// enough that a test would have to be looking for it. Every read of this
+// table goes through this constant and that one scanner.
 const selectColumns = `
 	id, source, backup_set, artifact_name, remote_path, local_path, state,
 	discovered_at, updated_at,
@@ -143,6 +177,18 @@ func scanRecord(row scanRow) (Record, int64, error) {
 	return rec, rowID, nil
 }
 
+// scanOptionalInt64, scanOptionalBool and scanOptionalTime are the read
+// side of journal.go's optionalInt64 and optionalTimeText: a NULL column
+// comes back as a nil pointer, never as a zero.
+//
+// Keeping NULL and zero apart all the way out to the caller is the whole
+// reason those Record fields are pointers. A backend that reported no size
+// and an object that really is zero bytes are different facts, a
+// validation that has not run and one that failed are different facts, and
+// a caller downstream decides real things on the difference.
+//
+// Each returns a pointer to a fresh local rather than into the sql.Null
+// value, which would alias a variable the next row's Scan reuses.
 func scanOptionalInt64(v sql.NullInt64) *int64 {
 	if !v.Valid {
 		return nil
@@ -170,6 +216,16 @@ func scanOptionalTime(v sql.NullString) (*time.Time, error) {
 	return &t, nil
 }
 
+// getByRowID reads one record by the artifacts table's own primary key,
+// which is the read RecordTransition uses to return the record it just
+// wrote from inside its still-open transaction.
+//
+// By row id rather than by artifact identity because the identity is not
+// always the right key at that moment: an insert has the row id back from
+// LastInsertId and nothing else, and re-deriving the row from three
+// identity columns would be a second lookup for a row the caller is
+// holding. Get is the identity-keyed form, for callers outside a
+// transaction.
 func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE id = ?`, rowID)
 	rec, _, err := scanRecord(row)
