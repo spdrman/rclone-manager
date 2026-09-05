@@ -24,6 +24,14 @@
 # staging two of its files, and that repository's own lockstep test caught it
 # on main.
 #
+# It has moved once since, to 6520d0a, which is rclone-manager-tests#34: the
+# archive case that follows rclone-manager#442 refusing a retention tier bound
+# to an archive storage class at load. The two paragraphs above are about the
+# bump that carried #431's specs and not about where this line points today,
+# which is worth saying rather than leaving them to read as current. A pin
+# header narrating a sha the pin no longer holds is the same defect #431 is
+# about, in the file that was fixing it.
+#
 # This header used to narrate a deliberate hold at 9dfd6e3, waiting for #240's
 # Suite B specs to have a product to run against. #240 landed, b2092a5 moved
 # the sha to 57ef7b5, and nobody came back to the paragraph explaining the

@@ -12,24 +12,23 @@ day you need the file back.
 
 ## Read this first: what works today
 
-The EPIC lands in two phases and only part of it is in your build. This section
-is the honest state of it, and it is here at the top rather than in a footnote
-because a configuration reference for behavior that does not exist yet is worse
-than no reference at all.
+The EPIC landed in two phases, and both are in this build. This section is the
+honest state of it, and it is here at the top rather than in a footnote because
+a configuration reference for behavior that does not exist yet is worse than no
+reference at all. It is worth keeping for the one row that is still qualified:
+an archive class is not a place a tier can deliver to.
 
 | What | State |
 | --- | --- |
 | `storage_mediums` and a tier's `medium` key are accepted, validated and round-tripped by a settings save | Landed |
-| Credentials are resolved from a file, an environment variable or a command | Not landed (#235) |
-| Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
-| Verification classes, and revalidation that knows about mediums | Not landed (#237) |
+| Credentials are resolved from a file, an environment variable or a command | Landed (#235) |
+| Artifacts are recorded as living somewhere, and the recovery manifest says where | Landed (#236): migration 0007 and the manifest's `placements` |
+| Verification classes, and revalidation that knows about mediums | Landed (#237) |
 | Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
-| Retention plans, previews and prune understand mediums | Landed, except across the HTTP boundary: the API does not yet carry the preview's moves or the medium each deletion happens on (#430) |
+| Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
-| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
-
 | A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
-| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
+| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
 One limit is worth knowing before you write a chain, and it is the manager
 refusing to do something rather than doing it badly:
