@@ -198,9 +198,22 @@ func Start(t *testing.T) *Machines {
 	// container at all.
 	name := os.Getenv(NetworkEnv)
 	inNetwork := name != ""
+	// created is read by the cleanup below and written after the network
+	// exists. The cleanup has to be registered before the network is made,
+	// for the LIFO reason above, and the probe between the two can end the
+	// test: every #456 case does exactly that, with a dead DOCKER_HOST or
+	// an empty PATH. Without this flag those cases spend the removal budget
+	// retrying against a daemon that was never there and then fail for it,
+	// which is a refusal test failing at teardown over a network it never
+	// created.
+	created := false
 	if !inNetwork {
 		name = fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
-		t.Cleanup(func() { removeNetwork(t, name) })
+		t.Cleanup(func() {
+			if created {
+				removeNetwork(t, name)
+			}
+		})
 	}
 
 	// The watchdog is armed before the first external command, not after
@@ -222,6 +235,7 @@ func Start(t *testing.T) *Machines {
 	if !inNetwork {
 		pending.setStage("docker network create")
 		createNetwork(t, name)
+		created = true
 	}
 	pending.setStage("waiting for the test to ask for a machine")
 
@@ -340,6 +354,14 @@ func removeNetwork(t *testing.T, name string) {
 		// Already gone is success: the lease sweep or another teardown got
 		// there first, which is a normal outcome on a shared daemon.
 		if strings.Contains(errOut, "not found") || strings.Contains(errOut, "No such network") {
+			return
+		}
+		// A daemon that is not there to be asked is not a leak, and it is
+		// not this test's to report: the fixtures already say INFRA: when
+		// the daemon goes, and adding a second verdict from teardown buries
+		// the first. The network goes with the daemon anyway.
+		if strings.Contains(errOut, "Cannot connect to the Docker daemon") ||
+			strings.Contains(err.Error(), "executable file not found") {
 			return
 		}
 		lastErr, lastOut = err, errOut

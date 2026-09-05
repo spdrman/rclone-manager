@@ -35,22 +35,60 @@ nothing about the boundary it claims to cover.
 
 ### The machine tier is the two-machine topology
 
-`core/tests/machines` is the Go half of what the shell script does.
-`machines.Start(t)` creates a network for the test, starts a source machine
-on it (a real sshd, chrooted, key-only, with iptables so it can carry the
-production connection cap from #264), and hands back the same fields every
-caller used to read off `sftpfixture.Fixture`. `m.Medium(t)` joins a real
-S3 API to the same network only when a test asks. Failure shapes are
-methods: `LimitConnections`, `Kill`, and later a blackhole.
+`core/tests/machines` is the Go half of what the shell script does, and
+since #450 it is the whole of it: `core/tests/sftpfixture` and
+`core/tests/miniofixture` were folded into it, along with the three copies
+of the docker plumbing, the `INFRA:` verdict and the #456 refusal tests they
+each carried.
+
+`machines.Start(t)` creates a network for the test and nothing else.
+`m.Source(t)` starts the machine being backed up on it (a real sshd,
+chrooted, key-only, with iptables so it can carry the production connection
+cap from #264) the first time it is asked; `m.Medium(t)` joins a real S3 API
+to the same network the first time IT is asked; `m.AnotherSource(t)` gives a
+second, independent machine, which is what "this address has no known_hosts
+entry" needs to be a real second server rather than a rebuilt image. Nothing
+starts that a test did not ask for, which is not a micro-optimisation: the
+MinIO suite runs eight tests, and an eagerly started source would have added
+an `ssh-keygen rsa 2048` and a container start to every one of them.
+
+Failure shapes and probes are methods: `LimitConnections` and
+`RemoveConnectionLimit` (#264), `Kill` (#161), `EstablishedConnections`,
+`AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor`, and
+later a blackhole. The rule for adding one is in the last section: if the
+harness cannot do what a test needs, the capability goes into the harness.
+
+The source machine is built from `scripts/e2e/source-machine.Dockerfile`,
+which `two-machine-backup.sh` builds too. One definition of "the simulated
+VPS", read by both, rather than two that agree until they do not.
 
 The manager is the test process. On Docker Desktop for macOS a host process
 cannot sit on a bridge network, so by default the source publishes a port on
 127.0.0.1 and the test reaches it there, exactly as the fixtures always
 have; the network still exists, the source is on it, and that is what the
 connection-cap probe and a medium use to reach the source by name. When the
-tests run inside a manager container on that network (#451) nothing
-publishes a port and the source is reached by alias. `Source.Addr()` answers
-correctly either way, so a test never has to know.
+tests run inside a manager container on that network nothing publishes a
+port and the source is reached by alias. `Source.Addr()` answers correctly
+either way, so a test never has to know.
+
+`scripts/e2e/run-machine-tier.sh` (#451) is that second placement. It builds
+a manager machine from a Go toolchain with a docker client, mounts the
+repository at the same absolute path inside as out, joins it to the network
+as an ordinary user, and runs the machine-tier packages inside it. The
+manager gets the docker socket, and the driver's header argues that out
+against `two-machine-backup.sh`'s refusal of the same thing: that manager
+runs the real installer, so a socket would install onto the developer's
+host, while this one runs the harness, which is orchestration and not the
+product.
+
+A test that puts something in front of a machine (a relay that adds latency
+or drops a connection) has to re-record the machine's real host keys against
+the relay's address, because known_hosts matches on address.
+`Source.KnownHostsFor(t, host, port)` does that, and it is a capability
+rather than a paragraph because every way of getting it wrong by hand is
+silent: pin an address nothing consults and the obvious fix is to weaken the
+check, or hardcode `127.0.0.1` and verify against nothing the moment the
+tier runs inside a manager container.
 
 ## The guard
 
@@ -68,15 +106,18 @@ the harness is named on the gotestwatch line and in the exclusion group of
 the plain `go test` step, so a machine-tier package cannot be run under a
 fixed timeout (the #256 shape) or not at all (the #160 shape).
 
-The tree is not clean today, and the guard says so honestly through a
-ledger rather than an allowlist. Eight files are listed: six
-container-backed tests in unit packages (#448 moves them) and two
-integration tests that exec `docker` directly (#450 gives the harness what
-they need). The ledger cannot go stale: a listed file that stops violating
-fails the guard until it is removed, and an unlisted file that starts
-violating fails the guard and is told which tier to move to. Every rule
-was watched to fail against a planted violation before the guard was
-trusted; those controls are in `testtier_test.go`.
+The ledger is empty. It held eight files when the guard landed: six
+container-backed tests in unit packages, moved to `core/tests/machinegate`
+by #448, and two integration tests that exec'd `docker` directly, given
+harness capabilities by #450 (`Source.Kill` and `Medium.HasBucket`). The
+mechanism stays with an empty slice, because the next migration should find
+the shape already here.
+
+The ledger cannot go stale: a listed file that stops violating fails the
+guard until it is removed, and an unlisted file that starts violating fails
+the guard and is told which tier to move to. Every rule was watched to fail
+against a planted violation before the guard was trusted; those controls are
+in `testtier_test.go`.
 
 ## What only a fake can prove
 
@@ -97,8 +138,9 @@ toward containers has to argue with it rather than delete it by accident.
 | a real SIGKILL the instant a journal state commits | `tests/crashmatrix` | precise because the decorator is compiled into the dying process; a container changes nothing about the kill and takes away direct access to what it left on disk. Its one sftp case is machine tier, through the harness; the rest stays a subprocess harness on local disk |
 
 What survives in the machine tier and is better there: the server's own
-connection table and login counter (`connections_gate_test.go`, on its way
-to being `Source` methods), the connection cap (#264), a network that
+connection table and login counter (`Source.EstablishedConnections`,
+`Source.AcceptedLogins` and `Source.ConnectionTable`), the connection cap
+(#264), a network that
 blackholes (an iptables DROP on the source produces a real half-open TCP no
 fake can), and a container that dies mid-test (#161). The blackhole should
 exist in both tiers: the fake for determinism in seconds, the DROP rule for
