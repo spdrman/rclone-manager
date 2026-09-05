@@ -1,3 +1,19 @@
+// A plain TCP relay in front of a machine, and the one property that has to
+// survive putting anything in front of a machine at all.
+//
+// The relay itself does nothing but forward. That is the point: it is the
+// shape every test that wants to interfere with the link starts from (add
+// latency, drop a connection, throttle), so establishing it separately means
+// a later cell can put its interference in the copy loop and know the
+// detour itself is sound.
+//
+// What the cell here proves is that host-key verification is still real on
+// the other side of the detour. The server behind the relay is the machine,
+// so it presents the machine's keys, but the ADDRESS the client verifies
+// them against is the relay's. Re-pinning those keys at the new address is
+// easy to get wrong in a direction that leaves the check silently disabled,
+// so it is done through the harness and paired with a decoy key that has to
+// be refused at the same address.
 package machinegate_test
 
 import (

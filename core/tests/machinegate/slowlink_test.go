@@ -1,3 +1,19 @@
+// A relay that hands the client bytes at a fixed rate, so a transfer lasts
+// long enough to be interrupted, and the check that slowing the link did not
+// weaken anything else.
+//
+// slowLink's own comment carries the long argument for why this is a relay
+// and not rclone's --bwlimit, and it is worth reading before reaching for the
+// simpler option: the bandwidth limiter parks in a wait that ignores the
+// caller's context, so throttling with it makes part of the transfer
+// uninterruptible and turns any timing assertion into a statement about the
+// token bucket instead of about the code under test. A slow wire changes only
+// the speed of the wire.
+//
+// The cell in this file is the one that keeps the detour honest. Everything
+// reached through the relay is reached at the relay's address, so host-key
+// verification has to be re-pinned there, and a re-pin done wrongly leaves
+// the check passing everything. The decoy key is what makes that visible.
 package machinegate_test
 
 import (

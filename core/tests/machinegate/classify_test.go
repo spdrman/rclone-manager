@@ -1,3 +1,17 @@
+// The error classifier held to errors a real server produced, rather than
+// to errors this repository wrote for it.
+//
+// That distinction is the whole reason the file is in the machine tier. A
+// classifier tested against hand-built errors is tested against its author's
+// memory of what a backend says, and this adapter has already shipped
+// wrong on exactly that: what comes back from a failed handshake, a refused
+// key or a missing path is not the sentinel a reasonable person would
+// predict, and several of the cases below exist because the predicted answer
+// was wrong.
+//
+// Every refusal here is read next to a positive control on the same machine,
+// because "refused" and "this fixture is broken" produce the same verdict
+// from the outside.
 package machinegate_test
 
 import (

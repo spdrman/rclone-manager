@@ -1,3 +1,18 @@
+// Creating a backup set the way the wizard does, against a real server,
+// and then proving a backup actually happened.
+//
+// It is the one cell in this package that drives core/service rather than a
+// transport, and it is here because every step it takes is one a double
+// would have answered for free: probing a host key, importing a key,
+// persisting and hot-reloading a config, and then running a real cycle that
+// discovers, transfers, verifies, commits and deletes a real file over real
+// SFTP. The claim is the end of that chain rather than any link in it, so
+// nothing short of a real server can carry it.
+//
+// The browser half of the same wizard is proved separately, against a mocked
+// API, and that division is deliberate: this file is the evidence that the
+// sequence works, and the UI suite is the evidence that the screens drive
+// the sequence.
 package machinegate_test
 
 import (

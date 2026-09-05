@@ -1,3 +1,16 @@
+// The three ways a private key can be named, each proved by completing a
+// real SSH session with it.
+//
+// Every one of these resolvers can be unit tested against its own output,
+// and that is exactly what makes this file necessary: a resolver that
+// produced plausible-looking bytes no server would ever accept passes those
+// tests and fails in front of an operator. The claim here is authentication,
+// which is a server's answer and nobody else's.
+//
+// All three share one machine and one client key. The machine trusts that
+// one key however it is named, so the same server proves all three routes
+// without paying for three servers, and a failure is unambiguously about the
+// resolver rather than about which fixture it drew.
 package machinegate_test
 
 import (

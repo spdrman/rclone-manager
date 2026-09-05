@@ -1,3 +1,19 @@
+// Whether a transfer already under way stops when its context is cancelled,
+// against a real server behind a deliberately slow link.
+//
+// The claim is small and the machinery around it is not, because a
+// cancellation test is unusually easy to write in a form that cannot fail.
+// A transfer that finishes before the cancel lands, or one whose remaining
+// bytes are smaller than the noise, satisfies every assertion an honest
+// version would make. So the payload, the link rate and the trigger point
+// are constants with reasons attached, and TestMidTransferCancellationCanStillFail
+// is the control that holds them to those reasons rather than trusting the
+// prose beside them.
+//
+// The link is a relay rather than rclone's own --bwlimit, and slowlink_test.go
+// argues why at length: the bandwidth limiter waits on a context of its own,
+// so throttling with it would make part of the transfer uninterruptible and
+// turn this into an assertion about the token bucket.
 package machinegate_test
 
 import (
