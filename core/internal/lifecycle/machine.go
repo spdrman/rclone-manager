@@ -2,8 +2,39 @@ package lifecycle
 
 import "fmt"
 
+// This file is the graph: which state may follow which, and the two ways of
+// asking about it.
+//
+// The whole design decision is that the answer is a TABLE and not code.
+// Transitions is a slice of edges, and everything else here reads it:
+// Validate looks a pair up, the successor and predecessor helpers filter it,
+// and the tests walk it. Nothing branches on a state name, which is what
+// makes "these are all the legal moves" a statement a reader can check by
+// looking at one declaration instead of by finding every place a state is
+// mentioned.
+//
+// The cost of that choice is that the reasoning has to live somewhere, and
+// it lives in the comments on the table itself rather than being spread over
+// the code that consults it. Transitions' own doc is long for that reason:
+// the edges that are absent are as deliberate as the ones that are present,
+// and an absent edge leaves no code behind to hang an explanation on.
+//
+// Machine is the stateful wrapper for a caller walking one artifact through
+// several moves. Validate is the stateless question, and it is the one
+// Advance asks on every journal write, so it is the one that actually keeps
+// the journal honest.
+
 // Transition is one legal (From, To) edge in the lifecycle graph.
+//
+// It is a comparable struct on purpose: that is what lets the table be
+// turned into a set and the legality question be one map lookup, with no
+// nested maps and no string concatenation to build a key.
 type Transition struct {
+	// From is the state an artifact is in now, and To is where it is
+	// asking to go. Both are needed to answer legality, because several
+	// states are reachable from more than one place and the origin decides
+	// what may follow: QUARANTINED is the clearest case, where the exit an
+	// artifact is entitled to depends on the edge that brought it in.
 	From State
 	To   State
 }
@@ -371,6 +402,13 @@ func HasReinstatementExit(from State) bool {
 	return false
 }
 
+// transitionSet is Transitions as a set, built once at init.
+//
+// Validate is on the path of every journal write this package makes, so the
+// legality question has to be a map lookup rather than a scan of a table
+// that grows with every state added. It is derived from Transitions rather
+// than written out again, so the table stays the single statement of what is
+// legal.
 var transitionSet = func() map[Transition]bool {
 	m := make(map[Transition]bool, len(Transitions))
 	for _, t := range Transitions {
@@ -388,6 +426,10 @@ type IllegalTransitionError struct {
 	To   State
 }
 
+// Error names both ends of the refused move. Both halves matter to whoever
+// reads it: the target alone would not say whether the caller had the wrong
+// destination or a stale idea of where the artifact currently is, and a
+// stale current state is the more common of the two after a crash.
 func (e *IllegalTransitionError) Error() string {
 	return fmt.Sprintf("lifecycle: %s -> %s is not a legal transition", e.From, e.To)
 }
@@ -401,6 +443,11 @@ type UnknownStateError struct {
 	Raw string
 }
 
+// Error quotes the raw string rather than interpolating it bare, because
+// the value that gets here is by definition one this package does not
+// recognise: it can be empty, contain whitespace, or have come from a
+// hand-edited row, and an unquoted empty string in a log line reads as if
+// the message itself is broken.
 func (e *UnknownStateError) Error() string {
 	return fmt.Sprintf("lifecycle: %q is not a known state", e.Raw)
 }

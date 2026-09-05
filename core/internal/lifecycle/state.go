@@ -54,9 +54,29 @@
 // and TestCompleteCannotLivelockThroughQuarantine).
 package lifecycle
 
+// This file is the vocabulary: the thirteen state names, the type that
+// carries one, and the parse and validity checks that keep a raw string from
+// becoming a State without being looked at.
+//
+// It holds no rules about MOVEMENT at all. Which state may follow which is
+// machine.go's table, and the separation is deliberate: a name is a fact
+// about what an artifact is, and an edge is a claim about what may happen
+// next, and mixing them is how a constant file grows opinions nobody
+// reviews. The package doc above sits here because this is the file that
+// introduces the vocabulary the rest of the package is written in.
+
 // State is one named point in the FR-10 artifact lifecycle.
+//
+// It is a defined string type rather than an int, because the journal stores
+// exactly this string and an operator reads exactly this string in a log
+// line. An integer with a lookup table would make the stored form an
+// implementation detail that could be renumbered, and the stored form is a
+// contract with every row already on disk.
 type State string
 
+// The thirteen states. Their string forms are a contract with the FR-9
+// journal and with every log line an operator has already read, so a name
+// here is not renameable without a migration and an FR-35 conversation.
 const (
 	// Discovered is the entry point: the artifact exists on the remote and
 	// the manager has recorded it, but nothing has moved yet.
@@ -165,6 +185,13 @@ var AllStates = []State{
 	QuarantinedLost,
 }
 
+// validStates is AllStates as a set, built once at init.
+//
+// It is derived from AllStates rather than written out again, which is the
+// same discipline the tests follow: a state added to the constants and to
+// AllStates becomes valid automatically, and a state added to the constants
+// alone is caught by TestAllStatesAreValidAndDistinct rather than silently
+// being rejected at runtime by a lookup nobody remembered to update.
 var validStates = func() map[State]bool {
 	m := make(map[State]bool, len(AllStates))
 	for _, s := range AllStates {

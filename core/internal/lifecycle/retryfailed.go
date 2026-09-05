@@ -129,6 +129,11 @@ type NotFailedError struct {
 	Current  State
 }
 
+// Error names the state the artifact is actually in, not just the one it is
+// not. That is the part an operator can act on: this refusal almost always
+// means the screen they clicked from is stale, and knowing whether the
+// artifact has since moved on by itself or been quarantined by somebody else
+// decides whether there is anything left to do.
 func (e *NotFailedError) Error() string {
 	return fmt.Sprintf("lifecycle: refusing to retry %s: its journal state is %s, not %s", e.Artifact, e.Current, Failed)
 }
