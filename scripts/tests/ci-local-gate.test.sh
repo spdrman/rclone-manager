@@ -204,6 +204,12 @@ make_full_tree() {
   # the gate dies on `cd distribution` in every full-tree case, which is the
   # same shape of miss the two comments further down record.
   add_go_module "$tree" distribution stubdistribution
+  # And distribution/packaging as a package of that module, because #417
+  # gave it a step of its own: it is the one Go suite the gate runs without
+  # -race, so `go test ./packaging/` is now a real path the gate walks and
+  # a tree without it dies on it, which is the same miss again.
+  add_go_module "$tree" distribution/packaging stubpackaging
+  rm -f "$tree/distribution/packaging/go.mod"
 
   add_workspace "$tree" ui/shared installed
   add_workspace "$tree" apps/common/tests installed
@@ -1237,11 +1243,11 @@ else
   fail "K1 every Go suite in scripts/ci-local.sh runs under -race" "$k1_problems"
 fi
 
-# K1's control: the scan has something to find. Six Go suites today (the
+# K1's control: the scan has something to find. Nine Go suites today (the
 # FAST core step, the full core step, gotestwatch, apps/common,
-# distribution, apps/generic, apps/synology, apps/ugos/backend), and the
-# floor is deliberately low so adding or removing a module does not fail
-# this, while an empty scan does.
+# distribution, distribution/packaging, apps/generic, apps/synology and
+# apps/ugos/backend), and the floor is deliberately low so adding or
+# removing a module does not fail this, while an empty scan does.
 k1_count="$(race_flag_invocations "$real_gate")"
 if [ "$k1_count" -ge 5 ]; then
   pass "K1 the scan actually found the gate's Go suites ($k1_count of them)"

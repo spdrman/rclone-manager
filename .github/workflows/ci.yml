@@ -68,7 +68,13 @@ jobs:
 
       - name: Test
         working-directory: core
-        run: go test ./...
+        # -race, the same as scripts/ci-local.sh's own step for this
+        # module (#417). This workflow is workflow_dispatch-only and that
+        # script is the gate that actually runs, but the script's whole
+        # claim is that it mirrors this file job for job, and a mirror
+        # that runs a weaker check than the thing it mirrors is worse
+        # than no mirror.
+        run: go test -race ./...
 
   apps-common-build-vet-test:
     name: apps/common build, vet, test
@@ -114,7 +120,13 @@ jobs:
 
       - name: Test
         working-directory: apps/common
-        run: go test ./...
+        # -race, the same as scripts/ci-local.sh's own step for this
+        # module (#417). This workflow is workflow_dispatch-only and that
+        # script is the gate that actually runs, but the script's whole
+        # claim is that it mirrors this file job for job, and a mirror
+        # that runs a weaker check than the thing it mirrors is worse
+        # than no mirror.
+        run: go test -race ./...
 
   distribution-build-vet-test:
     name: distribution build, vet, test
@@ -157,7 +169,14 @@ jobs:
 
       - name: Test
         working-directory: distribution
-        run: go test ./...
+        # Every package but packaging under -race, and packaging without
+        # it, exactly as scripts/ci-local.sh splits the same module
+        # (#417): packaging is a static-analysis suite with no goroutine
+        # anywhere in it, so the detector has nothing to find there and
+        # multiplies the most CPU-bound package in the repository.
+        run: |
+          go test -race $(go list ./... | grep -v '/packaging$')
+          go test ./packaging/
 
   apps-generic-build-vet-test:
     name: apps/generic build, vet, test
@@ -190,7 +209,13 @@ jobs:
 
       - name: Test
         working-directory: apps/generic
-        run: go test ./...
+        # -race, the same as scripts/ci-local.sh's own step for this
+        # module (#417). This workflow is workflow_dispatch-only and that
+        # script is the gate that actually runs, but the script's whole
+        # claim is that it mirrors this file job for job, and a mirror
+        # that runs a weaker check than the thing it mirrors is worse
+        # than no mirror.
+        run: go test -race ./...
 
   apps-synology-build-vet-test:
     name: apps/synology build, vet, test
@@ -239,7 +264,13 @@ jobs:
       # docs/acceptance/synology-dsm-package-lifecycle.md step 1.6.
       - name: Test
         working-directory: apps/synology
-        run: go test ./...
+        # -race, the same as scripts/ci-local.sh's own step for this
+        # module (#417). This workflow is workflow_dispatch-only and that
+        # script is the gate that actually runs, but the script's whole
+        # claim is that it mirrors this file job for job, and a mirror
+        # that runs a weaker check than the thing it mirrors is worse
+        # than no mirror.
+        run: go test -race ./...
 
   ugreen-cross-compile:
     name: UGREEN cross-compile (${{ matrix.goarch }})
