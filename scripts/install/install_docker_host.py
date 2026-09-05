@@ -881,7 +881,12 @@ class Preflight:
 
         newer = [v for v in published if _semver(v) > carried]
         if not newer:
-            self.note(f"{CARRIED_RELEASE} is the newest published release, prereleases excluded")
+            # "nothing published is newer" rather than "this is the newest
+            # published release". Those read the same while the carried
+            # release is on the registry and they differ between a cut and
+            # a push, when the carried release is not published at all and
+            # calling it the newest published one is simply false.
+            self.note(f"nothing published is newer than {CARRIED_RELEASE}, prereleases excluded")
             return
         self.warn(f"{newer[-1]} has been published since this installer was written, which carries "
                   f"{CARRIED_RELEASE} (prereleases are excluded from that comparison). Nothing here "
