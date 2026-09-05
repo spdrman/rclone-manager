@@ -785,40 +785,6 @@ func generateClientSSHKeyPair(t *testing.T) (privateKeyPath string, authorizedKe
 	return privateKeyPath, authorizedKeyLine
 }
 
-// generateEncryptedClientSSHKeyPair is generateClientSSHKeyPair's #269
-// sibling: the same generated ed25519 keypair, but the private key file is
-// encrypted with passphrase using x/crypto/ssh's own
-// MarshalPrivateKeyWithPassphrase, rather than shelling out to ssh-keygen
-// the way keysource_test.go's mustEncryptedKeyPEM does. Every other test
-// in this file already generates its client keys this way (Go-native, no
-// external dependency beyond what this package already imports), so this
-// follows the same convention instead of introducing ssh-keygen as a new
-// dependency of the Docker-fixture suite specifically.
-func generateEncryptedClientSSHKeyPair(t *testing.T, passphrase string) (privateKeyPath string, authorizedKeyLine string) {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("ed25519.GenerateKey: %v", err)
-	}
-	sshPub, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatalf("ssh.NewPublicKey: %v", err)
-	}
-	authorizedKeyLine = string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub)))
-
-	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "rclone-manager-sftp-test-client-encrypted", []byte(passphrase))
-	if err != nil {
-		t.Fatalf("ssh.MarshalPrivateKeyWithPassphrase: %v", err)
-	}
-	pemBytes := pem.EncodeToMemory(block)
-
-	privateKeyPath = filepath.Join(t.TempDir(), "client_ed25519_encrypted")
-	if err := os.WriteFile(privateKeyPath, pemBytes, 0o600); err != nil {
-		t.Fatalf("writing encrypted client private key: %v", err)
-	}
-	return privateKeyPath, authorizedKeyLine
-}
-
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
