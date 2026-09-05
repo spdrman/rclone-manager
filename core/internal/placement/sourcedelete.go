@@ -215,6 +215,14 @@ func (e *Engine) guardSourceDelete(ctx context.Context, mv state.Move, rec state
 	return target, nil
 }
 
+// classOrUnverified spells a placement's recorded verification class for
+// the refusal above, resolving the empty string that means nothing has
+// ever verified this copy.
+//
+// The empty class is deliberately not a rung of the ladder (see
+// Class.Valid), so without this the refusal about the most dangerous case
+// there is would read `records verification class ""` and leave an
+// operator to work out whether that was a bug in the message.
 func classOrUnverified(c string) string {
 	if c == "" {
 		return "unverified"

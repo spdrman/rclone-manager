@@ -11,6 +11,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is FR-34's restore, and it is the one operation in this
+// product whose work does not happen in this process.
+//
+// Everything else in the operations table is executed by a goroutine
+// here, so a process that dies mid-operation really has abandoned it and
+// the startup sweep is right to fail the row. A restore is asked for at
+// the provider and then takes hours, and this deployment stopping,
+// restarting or being replaced changes nothing about it whatever. So the
+// two halves of an operation come apart, and the whole file is arranged
+// around that: the row records what was ASKED FOR, which never changes,
+// and where it has GOT TO is re-derived from the endpoint every time
+// anybody asks (Derive).
+//
+// What that arrangement buys is the only property that matters here,
+// which is that a restore this product started is never invisible. Submit
+// writes the row before the provider is asked, so the worst crash leaves a
+// row describing a restore that may not have started, and asking again
+// costs a request. The other ordering leaves a restore running at the
+// provider that nothing in this deployment knows about, and that one is
+// billed and cannot be found.
+//
+// What it costs is a rule every declaration below has to keep: nothing
+// here invents a fact about somebody else's system. No price, no
+// percentage, no completion time, and nothing concluded from a provider
+// that said nothing at all. Each of those is refused somewhere specific,
+// and each place says why it is refusing rather than defaulting.
+
 // ActionRestore is the durable operation's action name, and it is the
 // string internal/state stores in operations.action.
 //
