@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9";
+export const CONTRACT_SHA256 = "923af6b55c36fa1317063d1da3399dd38060bb44ab898f772cb7401a949b9422";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -47,6 +47,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -110,6 +111,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -306,6 +308,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
+      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
     }
@@ -1255,9 +1258,11 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
-/** POST /backup-sets. The backup-set spec, plus the one thing only a
- *  create can ask for: that the new set also runs at once. */
+/** POST /backup-sets. The backup-set spec, plus the two things only a
+ *  create can ask for: that the new set also runs at once, and that
+ *  it may take over history already on its id. */
 export interface WireCreateBackupSetRequest extends WireBackupSetSpec {
+  acknowledge_repoint?: boolean;
   run_immediately?: boolean;
 }
 
