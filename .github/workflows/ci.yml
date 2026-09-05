@@ -120,12 +120,7 @@ jobs:
 
       - name: Test
         working-directory: apps/common
-        # -race, the same as scripts/ci-local.sh's own step for this
-        # module (#417). This workflow is workflow_dispatch-only and that
-        # script is the gate that actually runs, but the script's whole
-        # claim is that it mirrors this file job for job, and a mirror
-        # that runs a weaker check than the thing it mirrors is worse
-        # than no mirror.
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
         run: go test -race ./...
 
   distribution-build-vet-test:
@@ -209,12 +204,7 @@ jobs:
 
       - name: Test
         working-directory: apps/generic
-        # -race, the same as scripts/ci-local.sh's own step for this
-        # module (#417). This workflow is workflow_dispatch-only and that
-        # script is the gate that actually runs, but the script's whole
-        # claim is that it mirrors this file job for job, and a mirror
-        # that runs a weaker check than the thing it mirrors is worse
-        # than no mirror.
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
         run: go test -race ./...
 
   apps-synology-build-vet-test:
@@ -264,12 +254,7 @@ jobs:
       # docs/acceptance/synology-dsm-package-lifecycle.md step 1.6.
       - name: Test
         working-directory: apps/synology
-        # -race, the same as scripts/ci-local.sh's own step for this
-        # module (#417). This workflow is workflow_dispatch-only and that
-        # script is the gate that actually runs, but the script's whole
-        # claim is that it mirrors this file job for job, and a mirror
-        # that runs a weaker check than the thing it mirrors is worse
-        # than no mirror.
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
         run: go test -race ./...
 
   ugreen-cross-compile:
