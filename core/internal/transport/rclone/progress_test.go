@@ -8,9 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
-
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
