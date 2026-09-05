@@ -1022,6 +1022,30 @@ func (e *Engine) intendSourceDelete(ctx context.Context, mv state.Move) (state.M
 // answer, and it restores the source BEFORE it touches the destination, so
 // there is no instant at which the journal says both copies are
 // disposable.
+//
+// A re-verification that could not RUN is the one outcome that does not
+// decide anything here, and it still goes on to consult the guard. It has
+// to: "the source is already gone" is the only answer that changes what
+// happens on that path, only the guard can give it, and without asking,
+// a crash between the source delete and the DONE write left an
+// archive-class move stuck at SOURCE_DELETE_PENDING for ever. Consulting
+// the guard never authorises a delete there; see the case below.
+//
+// # Every exit that stops rather than finishes records why
+//
+// Those two rules are in tension at the same branch and the order settles
+// it: the guard speaks FIRST, so a move that is genuinely finished can
+// still finish, and the reason is recorded on the paths where the guard
+// did not produce a terminal answer. The other order was tried and is
+// wrong in a way that matters more: recording the capability refusal
+// before asking the guard means errSourceAlreadyGone is never reached, and
+// a move whose source really is gone can never converge. A stuck move with
+// a good reason written on it is still a stuck move.
+//
+// The recording itself is noteOnRow, which is a From == To write: it moves
+// nothing, touches no placement, and makes nothing terminal. See its own
+// doc for why a refusal that changes nothing observable is a refusal a
+// health surface cannot see.
 func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, error) {
 	rec, err := e.Journal.Get(ctx, mv.Artifact)
 	if err != nil {
@@ -1033,34 +1057,17 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	}
 
 	result, want, err := e.verifyCopy(ctx, mv, src, false)
+
+	// unreadable is the one verification outcome that does not decide this
+	// on its own, and it is the reason the guard below is consulted even
+	// when nothing is going to be deleted. See the case that reads it.
+	unreadable := errors.Is(err, ErrClassUnavailable)
+
 	switch {
-	case errors.Is(err, ErrClassUnavailable):
-		// This branch RECORDS its reason and changes nothing else. See
-		// noteOnRow for why the recording is not optional.
-		// "I could not check it" is not "I checked and it is wrong", and
-		// at this phase the difference decides whether a good copy gets
-		// destroyed. The destination here is not the disposable one it was
-		// at VERIFYING: the VERIFIED write gave it a placements row, the
-		// journal believes in it, and FR-30's standing invariant is
-		// currently resting on it because the source is DELETE_PENDING.
-		//
-		// recopyOrAbandon would delete it and copy it again. Against a
-		// read that timed out that is merely wasteful. Against an archive
-		// class it is the loop this change exists to stop, and it throws
-		// away an object that is fine and buys another minimum billing
-		// period to arrive back in exactly this position. Against a
-		// restore window that expired mid-move it destroys the only copy
-		// the operator has already paid to have restored once.
-		//
-		// So nothing moves. The source stays DELETE_PENDING, which is the
-		// durable intent and is true, the destination stays where it is,
-		// and the reason is reported every cycle until somebody acts on
-		// it. That is the same standing refusal guardSourceDelete's own
-		// clauses produce, and it is reached the same way: by returning
-		// rather than by advancing.
-		return e.noteOnRow(ctx, mv, fmt.Errorf(
-			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
-			mv.Artifact, mv.DestinationMedium, want, err))
+	case unreadable:
+		// Fall through to the guard. Nothing is decided here and nothing
+		// is written here; the refusal, and the note that makes it
+		// visible, are at the case that produces them below.
 	case err != nil:
 		return e.recopyOrAbandon(ctx, mv, SourceDeletePending, fmt.Sprintf(
 			"the destination copy on %q could not be re-verified at %s class immediately before the source delete: %v",
@@ -1089,14 +1096,65 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	// them could ever fire. Two independent conditions are the point: what
 	// the journal durably recorded when it authorised this delete, and what
 	// is true about the destination right now. Both have to hold.
-	target, err := e.guardSourceDelete(ctx, mv, rec, want)
+	target, guardErr := e.guardSourceDelete(ctx, mv, rec, want)
 	switch {
-	case errors.Is(err, errSourceAlreadyGone):
+	case errors.Is(guardErr, errSourceAlreadyGone):
 		// The delete already happened and the process died before it could
-		// say so. Recording DONE below is the whole remaining work, and
-		// nothing is noted on the row because nothing refused.
-	case err != nil:
-		return e.noteOnRow(ctx, mv, err)
+		// say so. Recording DONE below is the whole remaining work, and it
+		// is the whole remaining work whether or not the destination could
+		// be read this cycle: there is nothing left to delete, and the
+		// re-verification exists to authorise a delete.
+		//
+		// This ordering is the fix for the archive-class half of #372's
+		// shape. The source delete only ever runs after a re-verification
+		// that worked, so a restore was in effect at the instant the file
+		// went; an hour later the window has expired, and if the
+		// capability refusal below returned before the guard could speak,
+		// the move stayed at SOURCE_DELETE_PENDING for ever with a source
+		// row saying DELETE_PENDING about a file that does not exist.
+		// Nothing could move it but a restore of a copy nobody needs to
+		// read.
+		//
+		// Nothing is noted on the row here, and that is the one asymmetry
+		// worth pointing at: every other exit from this switch records why
+		// it stopped, and this one is not stopping. It is finishing.
+	case unreadable:
+		// "I could not check it" is not "I checked and it is wrong", and
+		// at this phase the difference decides whether a good copy gets
+		// destroyed. The destination here is not the disposable one it was
+		// at VERIFYING: the VERIFIED write gave it a placements row, the
+		// journal believes in it, and FR-30's standing invariant is
+		// currently resting on it because the source is DELETE_PENDING.
+		//
+		// recopyOrAbandon would delete it and copy it again. Against a
+		// read that timed out that is merely wasteful. Against an archive
+		// class it is the loop this change exists to stop, and it throws
+		// away an object that is fine and buys another minimum billing
+		// period to arrive back in exactly this position. Against a
+		// restore window that expired mid-move it destroys the only copy
+		// the operator has already paid to have restored once.
+		//
+		// So nothing moves. The source stays DELETE_PENDING, which is the
+		// durable intent and is true, the destination stays where it is,
+		// and the reason is recorded on the move row and reported every
+		// cycle until somebody acts on it. That is the same standing
+		// refusal guardSourceDelete's own clauses produce, and it is
+		// reached the same way: by returning rather than by advancing.
+		//
+		// The guard's own answer is deliberately not reported here even
+		// when it also refused. Both sentences are true, and the one an
+		// operator can act on is the first thing that went wrong: the
+		// endpoint would not serve the bytes, and it says so in the
+		// provider's own words. What the guard was asked for is the one
+		// answer above, which changes what happens rather than what is
+		// printed. Asking it costs one restore-status call per cycle on a
+		// move that is already stuck, which is the price of that move
+		// being able to finish at all.
+		return e.noteOnRow(ctx, mv, fmt.Errorf(
+			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
+			mv.Artifact, mv.DestinationMedium, want, err))
+	case guardErr != nil:
+		return e.noteOnRow(ctx, mv, guardErr)
 	default:
 		if err := e.remove(ctx, target); err != nil {
 			return e.noteOnRow(ctx, mv, fmt.Errorf(

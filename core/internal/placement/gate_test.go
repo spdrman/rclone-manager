@@ -236,37 +236,23 @@ func TestVerifyWithAccessRefusesEverythingAgainstAMediumThatDidNotAnswer(t *test
 	}
 }
 
-// TestTheAutomaticClassNeverCostsEgress is FR-31's "anything that costs
-// egress is operator-initiated", as a property over every access state
-// rather than as a constant somebody could raise.
-//
-// It reads Class.CostsEgress, which is the mechanism, so a future change
-// that made an extra class free would flow through here rather than
-// needing this test edited, and a change that made a billed class
-// automatic would fail it.
-func TestTheAutomaticClassNeverCostsEgress(t *testing.T) {
-	for _, s := range archive.States {
-		got := AutomaticClass(s)
-		if got == "" {
-			continue
-		}
-		if got.CostsEgress() {
-			t.Errorf("AutomaticClass(%q) = %q, which costs egress; an unattended pass must never download an artifact", s, got)
-		}
-		if got.Stronger(Ceiling(s)) {
-			t.Errorf("AutomaticClass(%q) = %q, which is stronger than the ceiling %q", s, got, Ceiling(s))
-		}
-	}
-}
-
-// TestAnArchiveClassCannotBeRevalidatedIntoASurpriseBill is the same rule
-// aimed at the case that would actually generate one.
+// TestAnArchiveClassCannotBeRevalidatedIntoASurpriseBill is FR-31's
+// "anything that costs egress is operator-initiated", aimed at the case
+// that would actually generate a bill.
 //
 // An archived object's content check does not merely cost egress. It
 // cannot happen at all without a restore first, and a restore is billed
-// per object for a window measured in days. So the automatic class for an
-// archived copy has to be existence, and getting there has to be
-// impossible to reach by configuration rather than merely unusual.
+// per object for a window measured in days. So a content check against an
+// archived copy has to be impossible to reach by configuration rather than
+// merely unusual, and CheckClass is what makes it impossible: there is no
+// path through VerifyWithAccess that runs a class it refuses.
+//
+// It used to assert AutomaticClass here too. #438 deleted that function
+// (see gate.go for why), and the automatic ceiling is now asserted where
+// it is actually run, by internal/revalidate's
+// TestTheAutomaticCeilingIsAClassThisPassMayRunAgainstEveryMedium. What is
+// left here is the refusal, which is this package's half of the same rule
+// and the half a caller can reach.
 func TestAnArchiveClassCannotBeRevalidatedIntoASurpriseBill(t *testing.T) {
 	for _, class := range archive.Classes() {
 		if !archive.IsArchive(class) {
@@ -276,8 +262,8 @@ func TestAnArchiveClassCannotBeRevalidatedIntoASurpriseBill(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Access(%q): %v", class, err)
 		}
-		if got := AutomaticClass(access); got != Existence {
-			t.Errorf("AutomaticClass for %s is %q, want %q", class, got, Existence)
+		if got := Ceiling(access); got != Existence {
+			t.Errorf("the ceiling for %s is %q, want %q", class, got, Existence)
 		}
 		if err := CheckClass(access, Content); !errors.Is(err, ErrClassUnavailable) {
 			t.Errorf("CheckClass(%s, content) = %v, want a refusal", class, err)
