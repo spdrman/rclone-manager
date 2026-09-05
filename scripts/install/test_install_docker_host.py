@@ -3945,7 +3945,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     to the identity container/release-manifest.json recorded (issue #484).
 
     A tag is a mutable pointer, which this project's own release tooling
-    says in as many words, so "install 0.2.0" is a claim about a name
+    says in as many words, so "install 0.3.0" is a claim about a name
     until something compares the name to a recorded identity. One
     anonymous HEAD does that, and it is the reason a previous release can
     be named at all: an installer that floated onto a future tag could
