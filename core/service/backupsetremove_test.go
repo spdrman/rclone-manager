@@ -1,3 +1,26 @@
+// This file covers removing a backup set, and almost none of it is about
+// the config file losing an entry.
+//
+// Removal is the one control that has to stop something that is already
+// happening. A cycle can run for hours on the configuration snapshot it
+// started with, so the entry disappearing from disk reaches it not at
+// all, and the set it is still walking is one FR-15 authorises deleting
+// the source copies of. The hold is what reaches that cycle, and most of
+// the cases below are about the hold rather than the write: it is taken
+// before the write, given back when the write fails, kept when a
+// duplicate removal loses the race, and never expires.
+//
+// The other half is what removal must NOT do. Nothing already collected
+// is touched, the source's own safety posture survives its last set
+// going, an unknown id pauses nothing, and a second removal is refused
+// rather than reported as another success. Every one of those is a way an
+// operator could read "removed" as "deleted", which it never is.
+//
+// The fixture carries two backup sets and a configurable read-only
+// posture for reasons its own doc gives, and both are load-bearing rather
+// than convenience: neither claim in this file is provable against a
+// single set, and half the file needs a source that genuinely would
+// delete.
 package service
 
 import (

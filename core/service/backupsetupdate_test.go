@@ -1,3 +1,26 @@
+// This file covers editing a configured backup set (#350), and the whole
+// suite turns on one distinction: a request that does not name a field
+// and a request that names it empty are different asks.
+//
+// Every editable field is a pointer for that reason, and the tests here
+// are the argument that the distinction survives the round trip. A save
+// from a per-box form sends one field; two successive single-field saves
+// must both still be there; a field the operator's own file never spelled
+// out must not appear in it afterwards just because this release has a
+// default for it.
+//
+// Assertions go through readBackupSetFromDisk rather than through the
+// service, because a change only this process can see is precisely the
+// failure this feature exists to end, and the two are indistinguishable
+// from inside a running process. yamlNormalized is the other half of
+// that: the encoder expands zero values, so comparing a persisted set
+// against a hand-built one without it compares two different spellings of
+// the same thing and fails for no reason.
+//
+// The isolation test at the end is the control on the rest. A test that
+// edits one field and checks the others are unchanged stops covering each
+// new field the day somebody adds one, unless something insists every
+// field was actually populated first.
 package service
 
 import (

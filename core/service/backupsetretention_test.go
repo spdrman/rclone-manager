@@ -1,3 +1,24 @@
+// This file covers per-set retention (issue #333, #362): a backup set
+// keeping its own chain instead of the deployment's, and every way that
+// override can be got wrong.
+//
+// The interesting failures are all about resolution rather than storage.
+// A set with no chain of its own is not a set with no policy, it is a set
+// under the deployment's, and code that reaches for the product defaults
+// at that moment produces an answer that is plausible, wrong, and
+// invisible against a deployment whose policy happens to be the defaults.
+// That is why the fixture's global chain here is deliberately nothing
+// like 7/3/12: it makes the bug show up as a wrong number rather than as
+// a coincidence.
+//
+// The rest is about the override behaving like configuration and not like
+// a patch. Setting one replaces rather than merges, half a chain is
+// refused on the same terms the deployment policy is refused on, clearing
+// returns the set to inheritance rather than to the defaults, and an
+// unrelated settings save does not quietly drop it. A preview says which
+// of the two policies decided each verdict, including when the two chains
+// are identical, because "why is this being deleted" has a different fix
+// depending on the answer.
 package service
 
 import (

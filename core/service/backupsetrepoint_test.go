@@ -1,3 +1,19 @@
+// This file is the update path's half of the repoint acknowledgement
+// (issue #350). backupsetrepoint.go argues which three fields decide what
+// data a set is about and why an acknowledgement rather than a refusal;
+// this proves the argument is actually implemented.
+//
+// Two shapes carry most of the value. The negative cases (an ordinary
+// edit, a field resent unchanged) matter as much as the refusals, because
+// an acknowledgement an operator meets on every save is one they click
+// through without reading, and a guard nobody reads guards nothing.
+//
+// The last test does not check for a refusal at all. It repoints a set
+// for real and then shows what the repoint would have cost: the new
+// dataset read as already backed up, not one byte fetched, the cycle
+// reporting success. That is the failure the whole feature exists to
+// prevent, and a test suite that only ever asserted the error message
+// would keep passing if the mechanism underneath it stopped mattering.
 package service
 
 import (
