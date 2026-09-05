@@ -145,7 +145,14 @@ func reachableProperties(t *testing.T, roots ...string) ([]property, map[string]
 
 // theReadSurfaces are the schemas this issue's rules apply to: everything
 // a client can reach from one backup and from the settings document.
-var theReadSurfaces = []string{"Artifact", "SettingsResponse", "UpdateSettingsRequest", "Operation"}
+//
+// RetentionPlan joined them with issue #430, which put EPIC E's placement
+// facts on the retention preview. A move names two places and an
+// artifact, and the pressure to grow "what will this cost" and "how long
+// will it take" beside them is highest exactly where an operator is being
+// asked to authorise the copy, so the shape that carries them is held to
+// the same three rules as the surfaces that already carry a medium.
+var theReadSurfaces = []string{"Artifact", "SettingsResponse", "UpdateSettingsRequest", "Operation", "RetentionPlan"}
 
 // TestContract_NoCostFigureReachesTheWire is FR-34's "no cost figures
 // anywhere", made structural.
@@ -163,7 +170,7 @@ func TestContract_NoCostFigureReachesTheWire(t *testing.T) {
 	// The scan actually reached what this issue added. Without this, a
 	// walker that silently stopped at the first $ref would pass every
 	// assertion below by looking at nothing.
-	for _, want := range []string{"Placement", "StorageMediumSummary", "StorageSchema", "VerificationClassInfo", "CycleOutcome"} {
+	for _, want := range []string{"Placement", "StorageMediumSummary", "StorageSchema", "VerificationClassInfo", "CycleOutcome", "RetentionMove"} {
 		if !visited[want] {
 			t.Fatalf("the scan never reached schema %q, so it proved nothing about it", want)
 		}

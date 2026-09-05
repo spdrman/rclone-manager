@@ -330,3 +330,84 @@ func TestApplyRetentionPlan_AMoveThatAppearedAfterThePreviewIsStale(t *testing.T
 		t.Errorf("the local file is gone after a refused apply (%v); a stale plan deletes nothing", statErr)
 	}
 }
+
+// localMonthlyChain is offsiteMonthlyChain with the medium taken off the
+// monthly tier: the same two tiers, selecting the same artifacts, in a
+// deployment that has exactly one place to put anything. That is every
+// deployment written before EPIC E, and it is the shape the test below
+// exists to keep working.
+func localMonthlyChain() config.Retention {
+	off := false
+	return config.Retention{
+		Timezone: "UTC", WeekStartsOn: "monday",
+		Tiers: []config.RetentionTier{
+			{Name: "daily", Granularity: config.GranularityDay, Keep: 2},
+			{Name: "monthly", Granularity: config.GranularityMonth, Keep: 12},
+		},
+		ProtectLastKnownGood: &off,
+	}
+}
+
+// previewOfALegacyRow seeds one month-old artifact with NO placement row
+// at all, which is exactly what every artifact ingested before FR-29's
+// placement table looks like, and returns the plan a preview computes
+// over it under chain.
+func previewOfALegacyRow(t *testing.T, chain config.Retention) RetentionPlan {
+	t.Helper()
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	// seedCompleteArtifact, not seedPlacedArtifact: the whole point is a
+	// COMPLETE record the journal holds no placement for.
+	seedCompleteArtifact(t, ctx, journal, bs, "legacy.dump", now().AddDate(0, -1, 0), "twenty bytes!!!!!!!!")
+
+	svc := New(retentionTestConfig(bs, chain), journal, nil, nil)
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+	return plan
+}
+
+// TestPreviewRetention_AMediumFreeDeploymentSaysNothingAboutPlacement is a
+// fix folded into issue #430 rather than a restatement of #239, and it is
+// what makes #430's "a medium-free deployment's response does not change"
+// true of a real upgrade instead of only of a fresh install.
+//
+// A placement row records a DURABLE copy, so nothing ingested before
+// FR-29's table existed has one, and every such artifact reads as "I could
+// not confirm where this is". In a deployment that declares a storage
+// medium that is worth saying: the copy really might be somewhere else. In
+// one that declares none there is nowhere else it could be, so it is
+// noise, and putting it on the preview would greet an upgrade with every
+// backup it already had listed under a heading that reads like a fault.
+//
+// `backup-manager retention` already refuses to print exactly this
+// (printPlacementPlan's own doc, core/cmd/backup-manager/retention.go).
+// The plan the API is built on did not, so the two operator surfaces
+// disagreed about the same deployment.
+func TestPreviewRetention_AMediumFreeDeploymentSaysNothingAboutPlacement(t *testing.T) {
+	// The positive control, first and deliberately: the same journal row,
+	// under a chain that DOES name a medium, really does come back
+	// unconfirmed. Without it the empty list below would be equally
+	// consistent with a fixture that never produced one, which is how an
+	// absence assertion passes for the wrong reason.
+	declared := previewOfALegacyRow(t, offsiteMonthlyChain())
+	if len(declared.UnconfirmedPlacements) != 1 || declared.UnconfirmedPlacements[0] != "legacy.dump" {
+		t.Fatalf("with a storage medium declared, UnconfirmedPlacements = %v, want exactly [legacy.dump]; "+
+			"the assertion below is only meaningful if this fixture really does produce an unconfirmed placement",
+			declared.UnconfirmedPlacements)
+	}
+
+	mediumFree := previewOfALegacyRow(t, localMonthlyChain())
+	if len(mediumFree.UnconfirmedPlacements) != 0 {
+		t.Errorf("with no storage medium declared, UnconfirmedPlacements = %v, want none: "+
+			"there is nowhere but local for this copy to be, so 'I could not confirm where this is' "+
+			"is a heading with no action under it",
+			mediumFree.UnconfirmedPlacements)
+	}
+	if len(mediumFree.Moves) != 0 {
+		t.Errorf("with no storage medium declared, Moves = %+v, want none: every home this chain names is local", mediumFree.Moves)
+	}
+}

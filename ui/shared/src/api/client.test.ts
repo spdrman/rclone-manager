@@ -184,6 +184,13 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       // dropped either would have to produce something visibly wrong
       // rather than something plausible.
       retentionIsOverride: true,
+      // Issue #430: this wire response omits `moves` and
+      // `unconfirmed_placements`, which is what a deployment declaring no
+      // storage medium serves. They arrive as [] rather than undefined,
+      // and toEqual DOES compare an empty array against a missing key, so
+      // a mapper that passed the absence through fails here.
+      moves: [],
+      unconfirmedPlacements: [],
       retention: {
         timezone: "Europe/Berlin",
         weekStartsOn: "monday",
@@ -236,6 +243,59 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
     const headers = init.headers as Record<string, string>;
     expect(headers["X-CSRF-Token"]).toBe("csrf-value-123");
     expect(plan.operationId).toBe("op_1");
+
+    vi.unstubAllGlobals();
+  });
+
+  // Issue #430. EPIC E's placement facts reach this UI only through this
+  // mapper, so a field the wire carries and this drops is a field that
+  // does not exist as far as any page is concerned. The fixture populates
+  // every one of them, because a mapper test whose fixture leaves the new
+  // fields empty passes against a mapper that never reads them.
+  it("carries the moves, the unconfirmed placements and the per-verdict medium through", async () => {
+    const fetchMock = mockFetchOk({
+      plan_id: "retplan_abc",
+      backup_set_id: "production/postgres-primary",
+      inventory_revision: "inv_1",
+      config_revision: "cfg_1",
+      expires_at: "2026-08-29T06:09:48Z",
+      keep_count: 2,
+      delete_count: 2,
+      reclaim_bytes: 4096,
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false,
+      moves: [
+        { artifact: "month-old.dump", from_medium: "local", to_medium: "cold_offsite" },
+        { artifact: "older.dump", from_medium: "warm_s3", to_medium: "cold_offsite" }
+      ],
+      unconfirmed_placements: ["midmove.dump"],
+      verdicts: [
+        { artifact: "month-old.dump", action: "KEEP", reason: "kept by the MONTHLY tier" },
+        // The deletion that would NOT happen on this machine, and the one
+        // that would. The wire spells local by omitting the field, so the
+        // two are only distinguishable if the mapper reads it at all.
+        { artifact: "offsite.dump", action: "DELETE", medium: "cold_offsite", reason: "no tier selects this" },
+        { artifact: "here.dump", action: "DELETE", reason: "no tier selects this" }
+      ]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const plan = await httpApi.previewRetention("production", "postgres-primary");
+
+    expect(plan.moves).toEqual([
+      { artifact: "month-old.dump", fromMedium: "local", toMedium: "cold_offsite" },
+      { artifact: "older.dump", fromMedium: "warm_s3", toMedium: "cold_offsite" }
+    ]);
+    expect(plan.unconfirmedPlacements).toEqual(["midmove.dump"]);
+
+    const medium = (artifact: string) =>
+      plan.verdicts.find((v) => v.artifact === artifact)?.medium;
+    expect(medium("offsite.dump")).toBe("cold_offsite");
+    // toBeUndefined, not a check for "local": absence is the wire's
+    // spelling for the implicit local medium AND for the two REFUSE
+    // shapes that establish nothing, so resolving it here would turn the
+    // second into a claim. See RetentionVerdict.medium (types/backup.ts).
+    expect(medium("here.dump")).toBeUndefined();
 
     vi.unstubAllGlobals();
   });

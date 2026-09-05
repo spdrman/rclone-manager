@@ -28,10 +28,28 @@ const maxApplyRetentionBodyBytes = 1 << 20 // 1 MiB
 // with a reason) needs exactly this, so it travels alongside the required
 // fields rather than needing a second round trip.
 type retentionVerdictResponse struct {
-	Artifact string   `json:"artifact"`
-	Action   string   `json:"action"`
-	Reason   string   `json:"reason"`
-	Tiers    []string `json:"tiers,omitempty"`
+	Artifact string `json:"artifact"`
+	Action   string `json:"action"`
+
+	// Medium is WHERE this verdict's copy lives, and it is set only when
+	// that is a configured storage medium (EPIC E FR-30, issue #430).
+	//
+	// A copy on the implicit local medium is spelled by the ABSENCE of
+	// the field, which is the one decision on this projection that is not
+	// a straight translation. It is what keeps a deployment that declares
+	// no storage medium serving exactly the bytes it served before this
+	// field existed, and `backup-manager retention` already states the
+	// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
+	// retention.go), so the two operator surfaces read alike.
+	//
+	// The service-side value is not tested against the literal "local"
+	// here: that id belongs to core/service, which answers the question
+	// through RetentionArtifactVerdict.OnStorageMedium so this package
+	// never acquires a second copy of a reserved identifier.
+	Medium string `json:"medium,omitempty"`
+
+	Reason string   `json:"reason"`
+	Tiers  []string `json:"tiers,omitempty"`
 
 	// TierSelections carries the same tiers, in the same order, each
 	// paired with which of FR-18's two placements selected it (issue
@@ -54,6 +72,22 @@ type retentionTierSelectionResponse struct {
 	SelectedBy string `json:"selected_by"`
 }
 
+// retentionMoveResponse is one artifact a plan would relocate, and both
+// ends of the move: service.RetentionMove, translated to snake_case JSON
+// (EPIC E FR-27, issue #430).
+//
+// Both mediums are carried verbatim, "local" included, because a move is
+// about the DIFFERENCE between two places and naming only one of them
+// would leave a client to infer the other. That is the opposite choice
+// from retentionVerdictResponse.Medium above, and deliberately: a verdict
+// answers "where would this happen", which has an implicit default, and a
+// move answers "from where to where", which has none.
+type retentionMoveResponse struct {
+	Artifact   string `json:"artifact"`
+	FromMedium string `json:"from_medium"`
+	ToMedium   string `json:"to_medium"`
+}
+
 // retentionPlanResponse is both GET .../retention/preview's and POST
 // .../retention/apply's response shape (docs/EPIC-B-multi-nas.md §15.6's
 // own example): a caller never has to reconcile two different shapes for
@@ -71,6 +105,24 @@ type retentionPlanResponse struct {
 	ReclaimBytes      int64                      `json:"reclaim_bytes"`
 	OperationID       string                     `json:"operation_id,omitempty"`
 	Verdicts          []retentionVerdictResponse `json:"verdicts"`
+
+	// Moves is every artifact this plan would relocate, in verdict order,
+	// and UnconfirmedPlacements names every kept artifact whose current
+	// location could not be established (EPIC E FR-27, issue #430).
+	//
+	// Both are absent in a deployment that declares no storage medium.
+	// That is not this projection's doing: core/service leaves them out
+	// for such a deployment (summarizeRetentionPlan, and
+	// omitPlacementInAMediumFreeDeployment for why), and omitempty here
+	// carries the same answer onto the wire rather than serving an empty
+	// array that a client would have to know to read as "nothing to say"
+	// instead of "nothing found".
+	//
+	// They travel with the plan for Retention's own reason: an apply is
+	// confirmed against a plan_id, and what that plan_id commits to has
+	// to be the whole of what was shown.
+	Moves                 []retentionMoveResponse `json:"moves,omitempty"`
+	UnconfirmedPlacements []string                `json:"unconfirmed_placements,omitempty"`
 
 	// Retention is the policy these verdicts were decided under, and
 	// RetentionIsOverride says whether it is this backup set's own or the
@@ -97,14 +149,29 @@ func toRetentionPlanResponse(p service.RetentionPlan) retentionPlanResponse {
 			tiers = append(tiers, sel.Tier)
 			selections = append(selections, retentionTierSelectionResponse{Tier: sel.Tier, SelectedBy: sel.SelectedBy})
 		}
+		medium := ""
+		if v.OnStorageMedium() {
+			medium = v.Medium
+		}
 		verdicts[i] = retentionVerdictResponse{
 			Artifact:       v.Artifact,
 			Action:         v.Action,
+			Medium:         medium,
 			Reason:         v.Reason,
 			Tiers:          tiers,
 			TierSelections: selections,
 		}
 	}
+
+	var moves []retentionMoveResponse
+	for _, m := range p.Moves {
+		moves = append(moves, retentionMoveResponse{
+			Artifact:   m.Artifact,
+			FromMedium: m.FromMedium,
+			ToMedium:   m.ToMedium,
+		})
+	}
+
 	return retentionPlanResponse{
 		PlanID:            p.PlanID,
 		BackupSetID:       p.BackupSetID,
@@ -116,6 +183,9 @@ func toRetentionPlanResponse(p service.RetentionPlan) retentionPlanResponse {
 		ReclaimBytes:      p.ReclaimBytes,
 		OperationID:       p.OperationID,
 		Verdicts:          verdicts,
+
+		Moves:                 moves,
+		UnconfirmedPlacements: p.UnconfirmedPlacements,
 
 		Retention:           toRetentionSettingsBody(p.Retention),
 		RetentionIsOverride: p.RetentionIsOverride,

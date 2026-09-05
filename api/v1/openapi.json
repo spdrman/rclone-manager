@@ -719,6 +719,11 @@
           "action": {
             "type": "string"
           },
+          "medium": {
+            "type": "string",
+            "description": "Where the copy this verdict is about lives, when that is a configured storage medium (EPIC E, FR-30). ABSENT means the implicit local medium, which is where every copy in a deployment that declares no storage medium is; spelling local by absence is what keeps such a deployment's response exactly what it was before this field existed, and the command-line dry-run states the same asymmetry the same way. It is also absent on the two REFUSE verdicts that establish nothing at all, a location the journal records twice (a move in flight) and a backup whose local path could not be resolved; each says so in its own reason, and a kept one is additionally named in the plan's unconfirmed_placements. A DELETE always establishes its medium, so on a deletion absent means local and nothing else, which is the question FR-30 asks this field to answer: \"delete 40 backups\" means something very different when half of them are objects in a bucket somebody else pays for.",
+            "x-go-omitempty": true
+          },
           "reason": {
             "type": "string"
           },
@@ -743,6 +748,30 @@
           "artifact",
           "action",
           "reason"
+        ]
+      },
+      "RetentionMove": {
+        "type": "object",
+        "description": "One backup this plan would relocate, and both ends of the move (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing else: planning one never adds a backup to the keep set and never removes one, which is why moves travel beside the verdicts rather than inside them. There is deliberately no field here for what a provider would charge to run this, how long a provider might take, or the key material that reaches either end, and there never will be: this product holds none of those three, so a field for one could only be filled with a guess.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "The backup's own name, not its fully-qualified id. A plan is already scoped to one backup set, so re-spelling the set on every row would be noise a client has to strip to render a table."
+          },
+          "from_medium": {
+            "type": "string",
+            "description": "Where the one confirmed copy is today: \"local\" for the backup set's own directory on this machine, or the id of a configured storage medium, spelled exactly as Placement.medium spells it."
+          },
+          "to_medium": {
+            "type": "string",
+            "description": "The medium the first tier in chain order that selects this backup names as its home. Always different from from_medium: a backup already at home is not a move."
+          }
+        },
+        "required": [
+          "artifact",
+          "from_medium",
+          "to_medium"
         ]
       },
       "RetentionPlan": {
@@ -790,6 +819,22 @@
             "items": {
               "$ref": "#/components/schemas/RetentionVerdict"
             }
+          },
+          "moves": {
+            "type": "array",
+            "description": "Every backup this plan would relocate, in verdict order (EPIC E, FR-27). Absent in a deployment that declares no storage medium, which is every deployment before EPIC E. It travels with the plan rather than behind a second call because an apply is confirmed against a plan_id, and what that plan_id commits to has to be the whole of what was shown: a moves section fetched separately could be rendered beside verdicts it does not belong to.",
+            "items": {
+              "$ref": "#/components/schemas/RetentionMove"
+            },
+            "x-go-omitempty": true
+          },
+          "unconfirmed_placements": {
+            "type": "array",
+            "description": "Every kept backup whose current location could not be established, in verdict order: the journal holds no confirmed copy of it, or holds more than one, which is a move already in flight. No move is planned for one, and that is exactly why the list exists rather than the backup being quietly skipped: \"I could not confirm where this is\" and \"this is already where it belongs\" produce the same silence and are not the same claim. Absent in a deployment that declares no storage medium, where there is nowhere else a copy could be and the answer would be noise on every backup an upgrade inherits.",
+            "items": {
+              "type": "string"
+            },
+            "x-go-omitempty": true
           },
           "retention": {
             "$ref": "#/components/schemas/RetentionSettings"
