@@ -104,6 +104,18 @@ type BackupSetHealth struct {
 	// action, and this is a report of a refusal, not a control over it.
 	HaltReason string
 
+	// Placement is FR-24's medium half (issue #444): how far this set's
+	// artifacts are from the storage mediums its retention chain names,
+	// and whether the relocations meant to close that gap are getting
+	// anywhere.
+	//
+	// It is the same computation `backup-manager status` prints, reached
+	// through the same call, which is the property this whole type exists
+	// to hold: a CLI and a Web UI that compute health separately will
+	// eventually disagree about whether a deployment is healthy, and the
+	// one that disagrees quietly is the one nobody is looking at.
+	Placement PlacementHealth
+
 	// TotalBytes and StorageLevel come from the same FR-21 capacity
 	// assessment ListStorageStatus reports, read here so one call can
 	// answer "are my backups healthy" completely rather than leaving a
@@ -113,6 +125,66 @@ type BackupSetHealth struct {
 	// from OK and must not be collapsed into it.
 	TotalBytes   uint64
 	StorageLevel string
+}
+
+// PlacementHealth is where one backup set's artifacts actually are, as
+// opposed to how fresh they are (issue #444).
+//
+// All of it comes from durable state: the placements journal joined
+// against the set's resolved retention chain, and the move journal. None
+// of it is a statement about the last cycle. That distinction is the
+// whole reason this exists: a move's outcome was already visible on the
+// exit status, in the activity feed, in the event stream and on the
+// dashboard's last-run panel, and every one of those describes ONE PASS,
+// so an operator opening a status page on a deployment nobody has run a
+// cycle in front of saw none of it.
+//
+// The two ages here are plain durations rather than optionals, and they
+// are meaningful exactly when the count beside them is non-zero:
+// OldestAwayFromHomeAge with AwayFromHome, OldestFailedMoveAge with
+// FailedMoves. A zero age next to a zero count is not a reading, and
+// there is nothing for it to be a reading of.
+type PlacementHealth struct {
+	// AwayFromHome is how many of this set's artifacts have a durable
+	// copy somewhere other than where the chain says. On its own this is
+	// not a complaint: a retention pass that has just decided an artifact
+	// belongs offsite puts it here, and the move runs in the same cycle.
+	AwayFromHome int
+
+	// OldestAwayFromHomeAge is how long the oldest of those copies has
+	// existed on the medium it is sitting on. Read it for exactly that:
+	// it is an upper bound on how long the artifact has been in the wrong
+	// place, because nothing durable records when a chain last changed an
+	// artifact's home. OldestFailedMoveAge is the number measured from a
+	// moment this manager actually wrote down.
+	OldestAwayFromHomeAge time.Duration
+
+	// UnconfirmedLocation is how many artifacts this pass could not place
+	// at all: no durable copy recorded yet, or a move mid-flight leaving
+	// two answers to "where is this". They are not thereby at home, and
+	// reporting them as such is the collapse the away-from-home count
+	// exists to end.
+	UnconfirmedLocation int
+
+	// OpenMoves is how many relocations the move journal has not
+	// finished, in any non-terminal phase.
+	OpenMoves int
+
+	// FailedMoves is the subset of OpenMoves whose last attempt failed.
+	// This is the one number here that changes State, and it is what
+	// makes a week of failing moves reach a status page at all.
+	FailedMoves int
+
+	// OldestFailedMoveAge is how long the oldest failing relocation has
+	// been open, from when this manager planned it. It is the difference
+	// between a blip and a wedge.
+	OldestFailedMoveAge time.Duration
+
+	// FailedMoveReason is what the engine last recorded on that move.
+	// Never rendered on its own: a count without a reason sends an
+	// operator looking, and the reason is the only account of the failure
+	// that outlives the cycle that hit it.
+	FailedMoveReason string
 }
 
 // HealthReport is FR-24's backup-freshness half: every configured backup
@@ -197,6 +269,20 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 
 		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
 		ReadOnlyRetainedCount:         bs.ReadOnlyRetainedCount,
+
+		Placement: PlacementHealth{
+			AwayFromHome:        bs.Placement.AwayFromHome,
+			UnconfirmedLocation: bs.Placement.UnconfirmedLocation,
+			OpenMoves:           bs.Placement.OpenMoves,
+			FailedMoves:         bs.Placement.FailedMoves,
+			FailedMoveReason:    bs.Placement.FailedMoveReason,
+		},
+	}
+	if bs.Placement.OldestAwayFromHomeAge != nil {
+		out.Placement.OldestAwayFromHomeAge = *bs.Placement.OldestAwayFromHomeAge
+	}
+	if bs.Placement.OldestFailedMoveAge != nil {
+		out.Placement.OldestFailedMoveAge = *bs.Placement.OldestFailedMoveAge
 	}
 	if bs.NewestGoodBackupAt != nil {
 		out.NewestGoodBackupAt = *bs.NewestGoodBackupAt

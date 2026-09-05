@@ -78,6 +78,31 @@ func cmdStatus(args []string) int {
 			fmt.Printf("  remote retained, read-only source: %d\n", bs.ReadOnlyRetainedCount)
 			fmt.Printf("    this backup set is declared read-only: this manager will never delete these remote copies.\n")
 		}
+		// Issue #444, FR-24's placement half. Printed only when there is
+		// something to say, for the reason the two lines above are: most
+		// deployments declare no storage medium at all and a line that
+		// permanently reads zero is a line an operator stops seeing.
+		//
+		// When there IS something, the failing relocation comes first and
+		// gets the age, because the count on its own is the half of the
+		// sentence that was already visible for one pass in the cycle
+		// report. How long it has been failing is the half that was not,
+		// and it is what separates a transient upload error from a bucket
+		// policy nobody has looked at since a Tuesday in July.
+		if bs.Placement.FailedMoves > 0 {
+			fmt.Printf("  relocations failing: %d, the oldest for %s\n",
+				bs.Placement.FailedMoves, bs.Placement.OldestFailedMoveAge.Round(time.Minute))
+			fmt.Printf("    %s\n", bs.Placement.FailedMoveReason)
+			fmt.Printf("    the backups themselves are fine; they are not on the medium your retention chain asks for.\n")
+		}
+		if bs.Placement.AwayFromHome > 0 {
+			fmt.Printf("  away from home: %d (oldest copy %s), relocations open: %d\n",
+				bs.Placement.AwayFromHome, ageOrUnknown(bs.Placement.OldestAwayFromHomeAge), bs.Placement.OpenMoves)
+		}
+		if bs.Placement.UnconfirmedLocation > 0 {
+			fmt.Printf("  location not confirmed: %d\n", bs.Placement.UnconfirmedLocation)
+			fmt.Printf("    these are mid-move or have no durable copy recorded yet; neither is a claim that they are where they belong.\n")
+		}
 		if bs.FreeBytes != nil {
 			fmt.Printf("  free space: %d bytes\n", *bs.FreeBytes)
 		}
@@ -87,6 +112,19 @@ func cmdStatus(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// ageOrUnknown is ageOrNever's counterpart for an age that is missing
+// because this pass could not read it, rather than because the thing it
+// would measure has never happened. "never" and "unknown" are different
+// claims and only one of them is available here (see
+// health.PlacementHealth.OldestAwayFromHomeAge, which is nil in a race
+// between two reads of a live database).
+func ageOrUnknown(age *time.Duration) string {
+	if age == nil {
+		return "age unknown"
+	}
+	return age.Round(time.Minute).String()
 }
 
 func ageOrNever(age *time.Duration) string {
