@@ -136,12 +136,59 @@ var _ Journal = (*state.Journal)(nil)
 // sequentially (see cycle.go and daemon.go). An unbounded retry against one
 // unreachable source would starve every other configured backup set for as
 // long as the outage lasts, which is exactly the failure this bound exists
-// to prevent. Six attempts with this schedule spans a little over two
-// minutes worst case (1s, 2s, 4s, 8s, 16s, capped at 30s), long enough to
-// ride out a genuine blip without holding a whole cycle hostage to a
-// genuinely down source; a source still unreachable after that is picked up
-// again next cycle, which for `daemon` is a bounded wait of its own
-// (poll_interval), not a lost recovery opportunity.
+// to prevent.
+//
+// # The budget, counting the attempts and not only the gaps
+//
+// A source that is DOWN, in the sense an operator means when they say a NAS
+// is off, costs a little over two minutes before the set reports FAILED,
+// and both halves of that are real:
+//
+//   - the waiting BETWEEN attempts, at most 31 seconds, since full jitter
+//     never exceeds the cap for its step (1s, 2s, 4s, 8s, 16s, and the
+//     30s ceiling is never reached with only five gaps);
+//   - the attempts THEMSELVES, at most six times
+//     transport/rclone.ConnectTimeout, because an attempt against a source
+//     that never answers ends at the connect deadline.
+//
+// The second half used to be worth nothing, because a connect timeout
+// classified as a cancellation and retry.DefaultIsTransient would not
+// retry it: the loop gave up after the first dial. Issue #388 corrected
+// the classification, which made those six dials real, and #415 is what
+// that cost at rclone's own 60s default: about six and a half minutes,
+// against the two this doc claimed. transport/rclone.ConnectTimeout is
+// the ceiling that puts it back; TestUnreachableSourceBudgetIsPinned holds
+// the arithmetic so neither number can move without this sentence moving
+// too.
+//
+// Two minutes is long enough to ride out a genuine blip without holding a
+// whole cycle hostage to a genuinely down source; a source still
+// unreachable after that is picked up again next cycle, which for `daemon`
+// is a bounded wait of its own (poll_interval), not a lost recovery
+// opportunity.
+//
+// # What two minutes is NOT
+//
+// It is not a bound on every way an attempt can fail, and saying so plainly
+// is the whole point of #415: the doc this replaced claimed a number the
+// code had stopped keeping, and a replacement that overreached in a
+// different direction would be the same defect wearing a newer date.
+//
+// ConnectTimeout bounds a DIAL. An attempt that gets past the dial and then
+// stalls is bounded by rclone's --timeout instead, an idle timeout on the
+// transfer itself, which nothing here overrides and which defaults to five
+// minutes. Six of those is half an hour, and that is the real worst case
+// for a source that answers, accepts the session, and then goes quiet
+// partway through a read.
+//
+// That number is deliberately left alone. --timeout is a bound on a
+// transfer that is making no progress, and shortening it to make this
+// paragraph tidier would start failing slow-but-live links, which is a
+// behaviour change about transfers rather than about reachability. The two
+// numbers bound two different failures and only the first one is what an
+// operator means by "the source is down".
+// TestAStalledSourceIsBoundedByADifferentNumber pins the distinction so it
+// cannot quietly become one number again.
 var DefaultRetryPolicy = retry.Policy{
 	BaseDelay:   time.Second,
 	MaxDelay:    30 * time.Second,

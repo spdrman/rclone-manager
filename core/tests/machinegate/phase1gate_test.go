@@ -42,20 +42,33 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
+
+// The mid-transfer cancellation row that used to live in this gate moved
+// to tests/sftpintegration under issue #414, and its constants, its
+// can-still-fail guard and the slow-link relay it needs went with it.
+//
+// It moved because it needs a container and this file is unit tier. That
+// was already true of this whole file, which is on internal/testtier's
+// ledger for #448, but a ledger is a list of things being migrated and not
+// a licence to add to them: a new arrival that reaches a container from a
+// unit package is exactly what internal/testtier refuses, and it refused
+// this one. See docs/architecture/test-tiers.md.
+//
+// What is left here is the two already-cancelled rows below, which need no
+// throttling of any kind because a context that is cancelled before the
+// call cannot race with it.
 
 func TestPhase1Gate(t *testing.T) {
 	f := machines.Start(t).Source(t)
@@ -218,75 +231,6 @@ func TestPhase1Gate(t *testing.T) {
 			}
 		})
 
-		t.Run("MidTransferCancellation", func(t *testing.T) {
-			// Rather than relying on a payload big enough to outrun loopback
-			// Docker networking (which can need hundreds of MiB and is not
-			// disk-friendly), throttle rclone's own bandwidth limiter down to
-			// a crawl and use a small payload. rclone's accounting layer
-			// checks ctx.Err() before every chunk read (fs/accounting:
-			// Account.checkReadBefore), so a slow, small transfer proves
-			// cancellation just as well as a fast, huge one would.
-			const bwLimit = 64 * 1024 // bytes/sec
-			const size = 1024 * 1024  // 1 MiB: several chunks at any plausible chunk size
-			estimatedFullDuration := time.Duration(float64(size) / bwLimit * float64(time.Second))
-
-			bwCtx, ci := fs.AddConfig(context.Background())
-			if err := (&ci.BwLimit).Set(fmt.Sprintf("%d", bwLimit)); err != nil {
-				t.Fatalf("set bwlimit: %v", err)
-			}
-			accounting.TokenBucket.StartTokenBucket(bwCtx)
-			t.Cleanup(func() {
-				unthrottled, _ := fs.AddConfig(context.Background())
-				accounting.TokenBucket.StartTokenBucket(unthrottled)
-			})
-
-			writeUploadFile(t, f, "cancel-source.bin", make([]byte, size))
-
-			group := fmt.Sprintf("gate-cancel-%d", time.Now().UnixNano())
-			ctx, cancel := context.WithCancel(accounting.WithStatsGroup(context.Background(), group))
-			const cancelDelay = 150 * time.Millisecond
-			time.AfterFunc(cancelDelay, cancel)
-
-			localPath := filepath.Join(t.TempDir(), "cancel-source.bin.partial")
-			start := time.Now()
-			_, err := a.CopyToLocal(ctx, src(), "cancel-source.bin", localPath)
-			elapsed := time.Since(start)
-
-			t.Logf("throttled to %d B/s, %d B payload, ~%v estimated if uncancelled; cancelled after %v, returned after %v",
-				bwLimit, size, estimatedFullDuration, cancelDelay, elapsed)
-
-			if err == nil {
-				t.Fatalf("cancelling after %v did not interrupt a transfer estimated to take ~%v; "+
-					"either this environment is far faster than expected or cancellation is not wired through",
-					cancelDelay, estimatedFullDuration)
-			}
-			if !errors.Is(err, context.Canceled) {
-				t.Logf("note: returned error does not wrap context.Canceled directly, got %v (%T); "+
-					"still counts as evidence as long as the transfer was actually interrupted", err, err)
-			}
-
-			if elapsed >= estimatedFullDuration {
-				t.Errorf("copy took %v (>= the ~%v an uncancelled transfer was estimated to need); "+
-					"this does not demonstrate a mid-transfer interruption", elapsed, estimatedFullDuration)
-			}
-
-			if info, statErr := os.Stat(localPath); statErr == nil {
-				t.Logf("partial local file left behind: %d of %d bytes", info.Size(), size)
-				if info.Size() >= size {
-					t.Fatalf("local file is fully sized (%d bytes) after a cancelled transfer; not actually interrupted", info.Size())
-				}
-			} else if !os.IsNotExist(statErr) {
-				t.Fatalf("unexpected error stat-ing local partial file: %v", statErr)
-			} else {
-				t.Log("local backend removed the partially-written file on cancellation (backend/local's own cleanup-on-error path)")
-			}
-
-			partialBytes := accounting.StatsGroup(ctx, group).GetBytes()
-			t.Logf("accounting recorded %d of %d bytes before the interruption", partialBytes, size)
-			if partialBytes >= size {
-				t.Errorf("accounting recorded the full %d bytes despite cancellation", size)
-			}
-		})
 	})
 
 	t.Run("RemoteHashCapability", func(t *testing.T) {

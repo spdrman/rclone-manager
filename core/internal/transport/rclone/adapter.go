@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	// local and sftp are the two backends FR-4 requires, and s3 is the
 	// third, added by EPIC E's FR-28 as the storage-medium implementation.
@@ -154,15 +155,73 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 // fs.AddConfig copies the caller's ConfigInfo rather than replacing it, so
 // everything else the caller configured (a bandwidth limit, in particular)
 // survives untouched. That matters more than it looks: rclone captures the
-// ambient ConfigInfo into an Fs at construction, and the mid-transfer
-// cancellation gate exists precisely because one caller's settings
-// reaching another operation is how a transfer stops being interruptible.
+// ambient ConfigInfo into an Fs at construction, so one caller's settings
+// reaching another operation would be permanent for that Fs's whole life.
+// TestOneConnectionAtATimeLeavesEverythingElseAlone is what holds it.
+//
+// It also caps ConnectTimeout, for a reason that has nothing to do with
+// connection counts but everything to do with being the one place every
+// operation passes through. See ConnectTimeout.
 func oneConnectionAtATime(ctx context.Context) context.Context {
 	ctx, ci := fs.AddConfig(ctx)
 	ci.Checkers = 1
 	ci.MultiThreadStreams = 1
+	if ci.ConnectTimeout <= 0 || ci.ConnectTimeout > fs.Duration(ConnectTimeout) {
+		ci.ConnectTimeout = fs.Duration(ConnectTimeout)
+	}
 	return ctx
 }
+
+// ConnectTimeout is the ceiling this adapter puts on rclone's own
+// --contimeout, which is the deadline both of rclone's dials are built
+// with: fs/fshttp's NewDialer sets net.Dialer.Timeout from it, and
+// backend/sftp sets ssh.ClientConfig.Timeout from the same value.
+//
+// # Why a ceiling exists at all
+//
+// rclone's default is 60 seconds, and app.DefaultRetryPolicy allows six
+// attempts. Since issue #388 correctly reclassified a connect timeout
+// rclone imposed on itself as Transient rather than as a cancellation
+// nobody asked for, those six attempts are all really spent, so a source
+// that blackholes costs six dials plus backoff before a cycle reports
+// FAILED. At rclone's 60s that is about six and a half minutes, against
+// the "a little over two minutes" DefaultRetryPolicy's own doc claims and
+// used to hold. Issue #415 is that gap: the bound still holds in the sense
+// that matters for safety, because the budget is per set and cycles are
+// sequential, but a doc describing a bound the code no longer keeps is the
+// same defect class as a comment describing a pragma that had stopped
+// being true.
+//
+// # Where fifteen seconds comes from
+//
+// From both ends, and neither of them is a preference.
+//
+// The ceiling is the budget the doc already claims. Six attempts and this
+// policy's backoff caps (1s, 2s, 4s, 8s, 16s) put at most 31 seconds of
+// waiting between them, so the dialling has to fit inside roughly 89
+// seconds for the whole thing to land near two minutes: (120s - 31s) / 6
+// is 14.8s per attempt. Fifteen gives a worst case of 2m1s, which is what
+// "a little over two minutes" means, and app.DefaultRetryBudget is the
+// test-pinned arithmetic rather than this sentence.
+//
+// The floor is a measured handshake.
+// TestConnectTimeoutLeavesARealHandshakeRoom dials the real Docker sshd
+// fixture through this exact code path and reports what a legitimate
+// connect actually costs on the host running it, so the margin between a
+// real connect and this ceiling is a number in the run's own output rather
+// than an assurance here. That fixture is loopback Docker, so it
+// establishes a floor and not a WAN worst case; what makes fifteen seconds
+// safe for a slow link is the size of the margin over it, which that test
+// prints and asserts.
+//
+// # Why it is a ceiling rather than an assignment
+//
+// A caller that has already asked for LESS keeps what it asked for. That
+// is what makes this a bound rather than a policy: errors_test.go's
+// connect-timeout evidence runs at 500ms so that six real dials into a
+// blackhole cost three seconds instead of ninety, and a bound that
+// overwrote it would make its own proof unaffordable.
+const ConnectTimeout = 15 * time.Second
 
 // shutdownFs releases the backend resources an Fs holds, which for sftp
 // means its pool of open SSH connections (#264).
@@ -178,13 +237,14 @@ func oneConnectionAtATime(ctx context.Context) context.Context {
 //
 // Releasing after each operation rather than caching the Fs is deliberate.
 // rclone captures the ambient ConfigInfo into an Fs at construction and
-// never re-reads it, so a cached Fs silently applies the first caller's
-// bandwidth limit and cancellation wiring to every later one. The
-// mid-transfer cancellation gate in gate_test.go catches that, and a backup
-// tool that cannot cancel a transfer is a worse outcome than a connection
-// setup per operation, which is what main was already paying anyway (see
-// this function's caller doc and #355: main opened a fresh pool per
-// operation too, it just never closed one).
+// never re-reads it, so a cached Fs would silently apply the first caller's
+// settings, a bandwidth limit above all, to every later one for as long as
+// it lived. Nothing tests that directly, because there is no cache to test:
+// the discipline is what makes the question unaskable, and a backup tool
+// that quietly transfers at somebody else's limit is a worse outcome than a
+// connection setup per operation, which is what main was already paying
+// anyway (see this function's caller doc and #355: main opened a fresh pool
+// per operation too, it just never closed one).
 //
 // The error is swallowed for a future backend rather than for this one.
 // sftp's Shutdown is `return f.drainPool(ctx)` and drainPool has no path
