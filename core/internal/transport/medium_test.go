@@ -11,6 +11,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file tests a SHAPE rather than a behaviour, which is why almost
+// every case here is reflection over a type and not a call.
+//
+// The MediumStore boundary's guarantees are mostly about what it does not
+// offer. There is no Move, so no implementation gets to pick its own
+// ordering for a migration. There is no field on Medium or
+// MediumCredentials that a literal secret would fit into, so a descriptor
+// is safe to log. There is no ETag on ObjectInfo, so an ETag cannot be
+// compared to a recorded hash. None of those can be proved by exercising
+// the interface, because the failure is a declaration somebody adds, not
+// a call somebody makes, and it would arrive in a PR that touches neither
+// this package's behaviour nor its tests.
+//
+// So the assertions are made against reflect.Type, and they are made in
+// both directions wherever an omission would be as bad as an addition:
+// TestMediumStoreSurfaceIsExactlyThis fails on a method that appeared and
+// on one that vanished, because an interface only ever guarded negatively
+// grows by whatever nobody thought to ban.
+//
+// The pattern to keep when adding to this file is the vacuity guard.
+// Several cases here would pass trivially against a type with no methods
+// or no fields at all, which is exactly what a botched refactor produces,
+// so they check they are looking at something before they conclude
+// anything about it.
+
 // TestMediumStoreOffersNoMoveMethod is the FR-3/FR-30 decision, asserted
 // the way artifactstore's TestSeamOffersNoMoveMethod asserts the same one
 // about the local seam: a move is upload, verify and an explicit delete,

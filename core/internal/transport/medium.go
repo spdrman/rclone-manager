@@ -9,6 +9,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// This file is EPIC E's second boundary: everything about a storage MEDIUM
+// that code above the adapter is allowed to know (FR-28).
+//
+// It sits in the same package as Transport rather than in one of its own,
+// and that is worth a sentence because they are different seams. Transport
+// is where artifacts come FROM, a producer's host this manager only ever
+// reads; a medium is where a durable copy GOES, a place this manager
+// writes to and eventually deletes from. What they share is the rule that
+// justifies one package: exactly one adapter implements both, that adapter
+// is the only importer of rclone there is, and the FR-3 vocabulary either
+// half speaks (Source and Medium, Category and Error, HashAlgorithm) is
+// one vocabulary. Splitting them would mean two packages agreeing on a
+// third, or one importing the other, for no gain.
+//
+// Two shapes recur below and both are deliberate. Nothing here holds a
+// secret: Medium names where a credential comes FROM and never carries
+// one, so a Medium is safe to log and medium_test.go proves the struct has
+// nowhere for a value to hide. And nothing here volunteers a digest:
+// ObjectInfo has no ETag field, because FR-32 says an ETag is not a
+// content hash and the surest way to keep one out of a comparison is to
+// give a caller nowhere to read it from.
+
 // MediumType names a storage-medium backend. The set is closed, and it
 // grows only by an FR-4 architecture decision, never by an import line
 // (EPIC E, FR-28).
@@ -471,4 +493,9 @@ var (
 // package by an equality check that meant to compare something else.
 type mediumKeyError string
 
+// Error makes the constant its own message. There is nothing to format:
+// each value above states one rule, and a segment that broke it is
+// deliberately not interpolated, because a caller that wants to know WHICH
+// segment has the artifact id in hand already and a message that echoed it
+// would be the only place an unprintable key segment gets printed.
 func (e mediumKeyError) Error() string { return string(e) }

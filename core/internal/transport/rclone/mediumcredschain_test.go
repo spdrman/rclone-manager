@@ -11,6 +11,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is about the AWS credential CHAIN, which is the part of the
+// preferred `file` source that is invisible from the configuration.
+//
+// rclone can only be made to open a credentials file by setting
+// env_auth=true, and that hands the SDK its whole chain rather than the
+// one file. The configured file is not the first link: an AWS_ACCESS_KEY_ID
+// in this process's environment simply wins, and the backup then runs as
+// an account nobody chose, with no error, no log line and no symptom
+// except artifacts appearing somewhere else. A file whose only profile is
+// named something other than [default] is worse, because the chain does
+// not fail on it, it keeps walking to EC2 instance metadata and stalls
+// until the operation times out.
+//
+// So every case here is about a refusal that happens BEFORE rclone is
+// handed anything, and the two shapes to preserve are these.
+//
+// The environment cases cover every variable on the list, one each,
+// because a list is only as good as its least-checked entry and the two
+// that are easiest to omit (AWS_SHARED_CREDENTIALS_FILE and
+// AWS_CONFIG_FILE) are the subtle ones: rclone's option name says
+// "credentials" and the SDK reads it as "config", so the file variable
+// wins over the option meant to control it.
+//
+// And every case writes its credentials file at the custody
+// checkCredentialsFileCustody demands, through writeCreds, so a case about
+// the chain cannot pass because the permission check refused it first.
+
 // writeCreds writes a credentials file at the custody this package
 // demands, so a case about the CHAIN cannot accidentally pass because the
 // permission check refused it first.
@@ -27,6 +54,8 @@ func writeCreds(t *testing.T, body string) string {
 	return path
 }
 
+// fileMedium is a medium whose credentials come from path and nothing
+// else, which is the only configuration any case in this file is about.
 func fileMedium(path string) transport.Medium {
 	return transport.Medium{
 		ID:          "offsite_s3",
@@ -36,6 +65,10 @@ func fileMedium(path string) transport.Medium {
 	}
 }
 
+// goodCredsBody is a credentials file that would work: a [default]
+// profile with both required keys. Every refusal in this file is therefore
+// about something OTHER than the file's content, which is what makes each
+// case name its own cause.
 const goodCredsBody = "[default]\naws_access_key_id = AKIAEXAMPLEEXAMPLE\naws_secret_access_key = examplesecretexamplesecret\n"
 
 // TestTheFileSourceRefusesAnAmbientAWSEnvironment is the guard on the one

@@ -15,6 +15,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
+// This file covers #74's env and command key resolvers, and #269's
+// passphrase on top of them. Three things about how it is built are
+// deliberate and worth keeping.
+//
+// The key material is REAL. Every case runs against a freshly generated
+// ed25519 key, or against an ssh-keygen-produced encrypted one in both PEM
+// containers x/crypto/ssh knows about, rather than against a string that
+// looks key-shaped. The resolvers' whole job is to decide whether bytes
+// parse as a private key, so a fixture that never was one cannot exercise
+// the decision.
+//
+// The command resolver is driven by a real subprocess. /bin/cat, /bin/dd
+// and a temporary script are used instead of an in-process fake, because
+// the properties being checked (a bounded timeout that kills the process
+// group, a bounded stdout, stderr surfaced and stdout never) are
+// properties of os/exec's plumbing and not of this package's logic.
+//
+// And no case ever asserts that a secret appears somewhere. The rule this
+// file exists to enforce runs the other way: a refusal names the SHAPE of
+// the problem (empty, encrypted, not a key at all) and never the bytes
+// that had it, so the junk-stdout cases assert the resolver's output is
+// ABSENT from the error while the stderr case asserts stderr is present.
+
 // mustUnencryptedKeyPEM generates a fresh, unencrypted ed25519 private key
 // and returns its PEM bytes. It reuses ssh_test.go's
 // generateClientSSHKeyPair (same package, same Docker-fixture client-key

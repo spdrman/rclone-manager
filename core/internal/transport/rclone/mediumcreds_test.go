@@ -14,6 +14,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file proves FR-33's custody rules, and it is built around a canary
+// because the property it checks is an ABSENCE.
+//
+// "The credential does not leak" cannot be asserted by looking at the
+// happy path: every rendering, every error message and every log line
+// would have to be enumerated, and the one nobody thought of is exactly
+// the one that leaks. So a string that exists nowhere else in this
+// repository is fed through each resolver, and the assertions are that it
+// is not in the error, not in the rendering, not in the log record. A hit
+// on that string cannot be a coincidence.
+//
+// The subprocess resolver re-executes this test binary rather than
+// shipping a fixture script, which is the standard os/exec idiom, and the
+// canary reaches the child in none of the three ways a real deployment
+// would leak one: not in argv, where a process listing would show it; not
+// in a file, which would put it on disk; and not in the environment,
+// because runResolverCommand gives the child none. The text is a constant
+// compiled into the binary both sides share.
+//
+// The custody cases are the other half, and they are about the file source
+// specifically, which is the PREFERRED one precisely because rclone opens
+// the file itself and the secret never enters this process. What that
+// preference costs is that everything protecting it has to happen before
+// the handoff: the file's own mode, every ancestor directory's mode, and
+// the ambient AWS environment (mediumcredschain_test.go's half) that the
+// SDK's chain would consult ahead of it.
+
 // canary is a value that exists nowhere else in this repository, so a scan
 // for it cannot be satisfied by anything but a real leak of what a
 // resolver produced.
@@ -21,6 +48,11 @@ const canary = "CANARY-a2f4c1e07b9d43ab-DO-NOT-LOG"
 
 const canaryAccessKeyID = "AKIA" + canary + "ID"
 
+// canaryCredentialsText is well-formed shared-credentials text whose two
+// values are both canaries, so a leak of either half is caught. FR-33
+// treats an access key id as part of the credential, not as a harmless
+// identifier, which is why it is a canary too rather than a plausible
+// AKIA literal.
 func canaryCredentialsText() string {
 	return "[default]\n" +
 		"aws_access_key_id = " + canaryAccessKeyID + "\n" +
@@ -62,6 +94,11 @@ func TestMediumCredentialHelperProcess(t *testing.T) {
 // flag.Args() rather than failing as an unknown flag.
 const helperMarker = "medium-creds-helper"
 
+// helperCommand builds the argv a `command` resolver is given: this test
+// binary, narrowed to the helper test by -test.run, with the mode after
+// the "--" the flag package stops parsing at. The -test.run anchor is
+// exact (^...$) so a future test whose name contains this one's cannot be
+// dragged into the child process.
 func helperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=^TestMediumCredentialHelperProcess$", "--", helperMarker, mode}
 }
@@ -148,6 +185,15 @@ func TestResolveCredentialsFromEachSource(t *testing.T) {
 	})
 }
 
+// assertStaticCredentials is the env and command sources' shared
+// expectation: both resolved values reach rclone, and env_auth is
+// explicitly off. The last one is the part worth asserting rather than
+// assuming, because a static key and the ambient AWS chain are two
+// different answers to who this process authenticates as, and rclone only
+// skips the chain while it has a key.
+//
+// The parameter is an interface rather than configmap.Simple so a caller
+// can pass either that or a *configmap.Map without the assertion caring.
 func assertStaticCredentials(t *testing.T, cfg interface{ Get(string) (string, bool) }) {
 	t.Helper()
 	if got, _ := cfg.Get("access_key_id"); got != canaryAccessKeyID {
@@ -243,6 +289,14 @@ func TestResolveCredentialsAcceptsASingleNamedProfile(t *testing.T) {
 	}
 }
 
+// TestMediumAuthOptionsRequiresExactlyOneSource pins "exactly one", not
+// "at least one". Two configured sources is a config mistake and not a
+// precedence order for this adapter to pick through silently: whichever it
+// chose would be the account the backups actually ran as, decided by the
+// order of a switch statement nobody reading the config could see.
+//
+// internal/config enforces the same rule, so this is the backstop for a
+// transport.Medium built directly, which every test in this package does.
 func TestMediumAuthOptionsRequiresExactlyOneSource(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

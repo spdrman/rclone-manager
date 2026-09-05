@@ -5,6 +5,28 @@ import (
 	"fmt"
 )
 
+// This file is the vocabulary half of FR-22's error classification, and it
+// is deliberately the half that knows nothing about rclone.
+//
+// Classifying a failure is two jobs: deciding what an error IS, in words
+// this project owns, and working out which of those words an
+// rclone-shaped error deserves. Only the first is here. The second lives
+// in transport/rclone, beside the sentinels it matches on, and the split
+// is what turns failure-safety invariant 13 from a convention somebody has
+// to remember into a fact about the import graph: internal/lifecycle
+// imports this package to read a Category and has no path from here to the
+// adapter that produced it, so there is no line through which an rclone
+// type could arrive.
+//
+// The thing to know before adding anything below: a Category is not a
+// label, it is a branch. Retryable is written against this set, so is
+// internal/app/halt.go's haltReasonFor, so is every consumer that decides
+// whether a failure stops a cycle. A new value is a decision about what
+// lifecycle policy DOES, and every one of those switches has to be asked
+// about it. That is why ErrCredentialsUnavailable further down is a
+// sentinel wrapped into a cause chain rather than a fourteenth category:
+// it needed to be distinguishable, not decided upon.
+
 // Category is the manager-owned classification of a transport failure
 // (FR-22). Lifecycle code switches on Category, never on the underlying
 // error's text or type. That is failure-safety invariant 12 ("Lifecycle
@@ -64,6 +86,19 @@ const (
 	Cancelled
 )
 
+// categoryNames is written as an indexed literal, keyed BY the constants
+// above rather than listed in their declaration order. That is not style:
+// a positional list silently renames every category below the point where
+// somebody inserts one, and the categories are inserted in the middle
+// (Configuration went in between PermissionDenied and IntegrityFailure
+// when EPIC E added it). Keying by the constant makes an insertion a
+// no-op for every other name, and leaves a new one rendering as "" rather
+// than as its neighbour's word, which is the failure that is at least
+// visible.
+//
+// The names are snake_case because they are read by machines as well as
+// people: they land in log lines and in operator-facing surfaces beside
+// the rest of this project's machine-readable values.
 var categoryNames = [...]string{
 	Unclassified:          "unclassified",
 	Transient:             "transient",
@@ -142,6 +177,10 @@ type Error struct {
 	Cause error
 }
 
+// Error renders the operation, the category and the cause. Op is dropped
+// when it is empty rather than printed as an empty field, because a
+// classified error built without one (retry.Do's cancellation, for
+// instance) still has to read as a sentence.
 func (e *Error) Error() string {
 	if e.Op != "" {
 		return fmt.Sprintf("%s: %s: %v", e.Op, e.Category, e.Cause)

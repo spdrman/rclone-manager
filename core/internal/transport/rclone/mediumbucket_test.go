@@ -12,6 +12,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// This file exists because of four measured wrong answers, and it is
+// organised around them rather than around the adapter's methods.
+//
+// Every one of them came from the same cause: rclone translates a 404 into
+// a filesystem-shaped sentinel before this adapter sees it, throwing away
+// the S3 error code that is the only thing separating "this key is not
+// there" from "this bucket is not there". Against a real MinIO, before
+// confirmBucket existed, a mistyped bucket made DeleteObject return
+// success, ListObjects return an empty listing, and StatObject and
+// OpenObject report the object missing. Each of those is read downstream
+// as a fact about an ARTIFACT, so a typo in one config line would have
+// been recorded as a medium that had lost everything on it.
+//
+// It runs against rclone's LOCAL backend on every gate, which is not a
+// compromise. A local Fs rooted at a directory that does not exist
+// produces the identical pair of sentinels, so the disambiguation is
+// exercised with no container anywhere; the MinIO run proves the same
+// thing against the endpoint the bug was actually found on.
+//
+// Every case carries a positive control against an existing container,
+// and that is the part to keep. "A missing container is refused" also
+// passes if the adapter started refusing everything, which would be a
+// worse bug than the one being fixed and would look like a green test.
+
 // TestAMissingContainerIsNeverReportedAsAMissingObject is confirmBucket's
 // guard, and it is the reason it exists.
 //
@@ -149,6 +173,17 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 	})
 }
 
+// requireConfigurationNotNotFound is the assertion this whole file is
+// about, written once so no case can express it slightly differently.
+//
+// It checks four things, and the second is the one that would be easy to
+// leave out. The failure has to carry a category at all, it must not be
+// NotFound (which a reconciler reads as the medium having LOST the
+// artifact and a mover reads as permission to delete the local copy), it
+// has to be Configuration specifically rather than the Permanent label for
+// a failure nobody can act on, and its text has to actually say the
+// container is missing, because a correctly categorised error an operator
+// cannot read is only half a fix.
 func requireConfigurationNotNotFound(t *testing.T, err error, op, wantOp string) {
 	t.Helper()
 	if err == nil {
@@ -178,6 +213,11 @@ func requireConfigurationNotNotFound(t *testing.T, err error, op, wantOp string)
 	}
 }
 
+// requireNotFound is the positive control's half of the same assertion:
+// against a container that DOES exist, an absent key still has to be
+// NotFound. Without it every case here would pass against an adapter that
+// had simply started calling everything a configuration problem, which
+// would quarantine working deployments instead of fixing mistyped ones.
 func requireNotFound(t *testing.T, err error, op string) {
 	t.Helper()
 	if err == nil {

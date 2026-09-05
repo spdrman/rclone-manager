@@ -58,19 +58,12 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The MediumStore half of the compile-time assertion adapter.go makes for
+// Transport. One type implements both, which is what keeps the FR-3 rule
+// (this package is the only importer of rclone there is) from needing a
+// second adapter to enforce it.
 var _ transport.MediumStore = (*Adapter)(nil)
 
-// mediumFs builds an rclone Fs rooted at the medium's bucket, without
-// touching any on-disk rclone config file: everything comes from the
-// manager's own configuration, so there is no ambient rclone state to leak
-// in, exactly as fsFor already guarantees for a Source.
-//
-// The Fs is rooted at the BUCKET, not at the bucket plus prefix, because
-// transport.MediumKey already builds a whole key including the prefix.
-// One place composes a key, and every method here addresses objects by
-// that key verbatim; splitting the prefix between the Fs root and the key
-// would give the same object two spellings depending on which side of the
-// boundary you asked.
 // mediumRetries is how many times rclone, and the AWS SDK underneath it,
 // may retry one low-level request before giving the failure back.
 //
@@ -173,9 +166,17 @@ func s3Options(medium transport.Medium) (configmap.Simple, error) {
 	return cfg, nil
 }
 
-// mediumFs builds the Fs every method here addresses objects through:
-// rooted at the medium's BUCKET, so a key composed by transport.MediumKey
-// (prefix included) is used verbatim on the other side.
+// mediumFs builds the Fs every method here addresses objects through,
+// without touching any on-disk rclone config file: everything comes from
+// the manager's own configuration, so there is no ambient rclone state to
+// leak in, exactly as fsFor already guarantees for a Source.
+//
+// It is rooted at the BUCKET, not at the bucket plus prefix, because
+// transport.MediumKey already builds a whole key including the prefix. One
+// place composes a key, and every method here addresses objects by that
+// key verbatim; splitting the prefix between the Fs root and the key would
+// give the same object two spellings depending on which side of the
+// boundary you asked.
 func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs, error) {
 	return a.mediumFsAt(ctx, medium, medium.Bucket)
 }
@@ -289,6 +290,7 @@ var errBucketAbsent = errors.New("the medium's bucket does not exist")
 // does not call it: an upload's own failure carries the real NoSuchBucket
 // code intact, and probing there would put a round trip on the hot path to
 // answer a question the endpoint already answered.
+//
 // The op the CALLER was performing is threaded through rather than being
 // this function's own name, so an operator reads "delete_object: the
 // medium's bucket does not exist" and knows which operation hit it.
@@ -340,6 +342,17 @@ func toObjectInfo(ctx context.Context, o fs.Object) transport.ObjectInfo {
 	return info
 }
 
+// StatObject reports what the medium holds at key, and is careful about
+// the one answer it must not give.
+//
+// An absent object comes back as a NotFound-classified error rather than a
+// zero ObjectInfo, because a mover cannot tell a zero struct from a real
+// empty object and would read either as "the copy is not there". Then,
+// before that not-found is handed back, confirmBucket asks whether the
+// BUCKET exists at all: rclone's s3 backend turns both a missing key and a
+// missing bucket into the same fs sentinel, and a reconciler told
+// not-found for a mistyped bucket concludes the medium lost every artifact
+// on it.
 func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key string) (transport.ObjectInfo, error) {
 	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
@@ -406,6 +419,16 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 	return transport.UploadResult{Key: key, BytesUploaded: dst.Size()}, nil
 }
 
+// OpenObject returns a reader over the object's bytes; the caller closes
+// it.
+//
+// This is the one method here that cannot release its Fs with a defer,
+// because the reader it hands back is still reading through it. So every
+// failure path shuts the Fs down by hand and the success path binds the
+// release to the reader's own Close (fsBoundReadCloser). Getting one of
+// those branches wrong leaks an HTTP client and a pacer per call, which is
+// the shape #264 found on the sftp side when nothing released an Fs at
+// all.
 func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key string) (io.ReadCloser, error) {
 	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
@@ -447,6 +470,11 @@ type fsBoundReadCloser struct {
 	ctx context.Context
 }
 
+// Close closes the reader and then the Fs, in that order and
+// unconditionally. The reader's own error is what is returned: a failure
+// to hang up cleanly, after the bytes have already been read, must not
+// turn a completed read into a reported failure, and it must not mask a
+// read that genuinely did not finish either.
 func (r *fsBoundReadCloser) Close() error {
 	err := r.ReadCloser.Close()
 	shutdownFs(r.ctx, r.fs)
@@ -624,6 +652,14 @@ type backendDefaults struct {
 	options fs.Options
 }
 
+// Get answers with the registered default for key, and false for a key the
+// backend does not declare at all.
+//
+// The false matters as much as the value: configmap consults getters in
+// priority order and stops at the first that claims the key, so answering
+// "" and true for an unknown option would shadow every lower-priority
+// getter for it. The linear scan is over one backend's option list, once
+// per Fs construction, which is not a loop worth indexing.
 func (d backendDefaults) Get(key string) (string, bool) {
 	for i := range d.options {
 		if d.options[i].Name == key {

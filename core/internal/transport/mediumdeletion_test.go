@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+// This file is a whole-module source scan with an allow-list, and it is
+// worth saying why a structural test of that kind earns its keep here when
+// it would be overkill almost anywhere else.
+//
+// Deleting a copy of a backup is the one operation in this product that
+// cannot be undone, and the safety of any particular delete comes from the
+// ORDER of the steps around it: prove another copy exists, record that
+// proof durably, then remove. That ordering is only reviewable if there
+// are few enough places doing it to hold in your head. A per-package test
+// cannot enforce that, because the failure it guards against is a NEW
+// package growing a delete somewhere the existing suites never look.
+//
+// So the claim is deliberately exhaustive rather than local: these named
+// files call DeleteObject and nothing else in production does. Every entry
+// in the allow-list carries the argument for why it is there, which is the
+// actual review artefact; the scan is just what stops the list going
+// stale in either direction. It also fails on an entry that no longer
+// deletes, because a permission nobody is using is one the next file to
+// need it inherits by accident.
+//
+// The second test is the positive control, and it is not decoration. An
+// absence assertion that visits nothing passes forever and looks exactly
+// like a clean repository, which is a shape this project has been caught
+// by before.
+
 // TestOnlyTheMoveEngineDeletesFromAMedium is the line EPIC E's Phase 1
 // exit gate held, moved forward by exactly one package.
 //

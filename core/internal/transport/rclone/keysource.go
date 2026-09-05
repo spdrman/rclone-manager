@@ -214,7 +214,9 @@ func runResolverCommand(argv []string, limit int) (*boundedBuffer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keyCommandTimeout)
 	defer cancel()
 
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...) // A fixed, minimal environment, never this process's own os.Environ():
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
+
+	// A fixed, minimal environment, never this process's own os.Environ():
 	// the resolver command is meant to be self-sufficient (an absolute
 	// executable path, any auth it needs already configured on disk or
 	// baked into a wrapper script), not handed ambient state this manager
@@ -388,6 +390,14 @@ type boundedBuffer struct {
 	truncated bool
 }
 
+// Write keeps at most limit bytes and reports len(p) regardless, which is
+// the whole point. An io.Writer that returned a short count would make
+// os/exec's copier treat the truncation as a write error and kill the
+// pipe, so a resolver that printed too much would look like a resolver
+// that crashed. Instead everything past the limit is dropped, truncated
+// records that it happened, and the caller decides: runResolverCommand
+// refuses to treat truncated output as secret material rather than
+// silently using a prefix of a key.
 func (w *boundedBuffer) Write(p []byte) (int, error) {
 	room := w.limit - w.buf.Len()
 	switch {
@@ -404,6 +414,9 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// String returns what was retained. Only ever called on the stderr buffer:
+// stdout's content is secret material and is never rendered into an error,
+// which is the distinction this whole file is built around.
 func (w *boundedBuffer) String() string { return w.buf.String() }
 
 // zero overwrites this buffer's retained bytes in place. Meaningful only

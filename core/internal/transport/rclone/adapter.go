@@ -34,12 +34,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
-// Adapter implements transport.Transport over embedded rclone packages.
+// Adapter implements transport.Transport over embedded rclone packages,
+// and (in medium.go and mediumrestore.go) transport.MediumStore as well.
+//
+// It is empty, and that is load-bearing rather than incidental. Every
+// method builds its own Fs from the Source or Medium it was handed and
+// releases it on the way out, so there is no cached connection, no cached
+// configuration and no cross-call state for one caller's settings to reach
+// another caller through. rclone captures the ambient ConfigInfo into an
+// Fs at construction and never re-reads it, so a field here holding a
+// reusable Fs would silently apply the first caller's bandwidth limit to
+// every later one for as long as the process ran. shutdownFs's doc argues
+// the same decision from the other end.
 type Adapter struct{}
 
 // New returns an adapter. It takes no rclone types, by design.
 func New() *Adapter { return &Adapter{} }
 
+// The compile-time assertion that this type really satisfies the
+// Transport half of the boundary; medium.go carries the matching one for
+// MediumStore. It is worth having because nothing here forces it:
+// production wiring hands rclone.New() straight to a constructor
+// (core/service's New, core/cmd/backup-manager's setup), so a method whose
+// signature drifted would fail over there, with an error about the caller
+// rather than one about the adapter.
 var _ transport.Transport = (*Adapter)(nil)
 
 // ErrUnsupportedHash is returned by RemoteHash when the requested algorithm
@@ -73,6 +91,20 @@ func (a *Adapter) fsForHashing(ctx context.Context, src transport.Source) (fs.Fs
 	return a.newFs(ctx, src, true)
 }
 
+// newFs is what fsFor and fsForHashing both are. The boolean is not a flag
+// a caller passes; it is the difference between those two named entry
+// points, which exist so no call site ever has to decide what `true` means
+// here. See withSHA256 in ssh.go for why the hashing options must not
+// reach the Fs that copies.
+//
+// info.NewFs is called directly rather than through fs.NewFs, and that is
+// this adapter's whole premise rather than a shortcut: fs.NewFs layers in
+// a getter that reads the on-disk rclone config file for a stanza matching
+// the remote name, so an rclone config sitting in the service account's
+// home directory could otherwise change where a backup is read from. The
+// price is that no backend default applies either, which sftpConfig pays
+// explicitly (see the four options it pins) and medium.go pays with
+// withBackendDefaults.
 func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bool) (fs.Fs, error) {
 	info, err := fs.Find(src.Type)
 	if err != nil {
@@ -124,8 +156,8 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 //
 // An Fs is not a connection, it is a pool, and two of rclone's own
 // settings decide how wide one operation opens that pool. Both default
-// above one, and both were measured against the real fixture in
-// connections_gate_test.go:
+// above one, and both were measured against the real fixture in what is
+// now core/tests/machinegate/connections_test.go:
 //
 //   - Checkers (8 by default) is how many goroutines walk a tree that the
 //     backend cannot list recursively, and sftp has no ListR, so a plain
@@ -266,6 +298,32 @@ func shutdownFs(ctx context.Context, f fs.Fs) {
 	}
 }
 
+// toArtifact carries the three attributes a LISTING can produce for free.
+//
+// It deliberately does not hash and does not ask for a stable id. Both are
+// per-object round trips on sftp (rclone computes a hash by running a
+// command on the server), and a listing is over every object under a
+// source root, so doing it here would turn discovery into one round trip
+// per artifact for attributes discovery has no use for yet. Stat is where
+// those get added, because Stat is the pre-delete recheck and that is the
+// one place the strong attributes decide something.
+//
+// Two details are worth knowing rather than rediscovering.
+//
+// The context.Background() is not a lost ctx. fs.Object.ModTime takes one
+// for backends that would have to fetch the time, and neither backend
+// reachable through a Source does: rclone v1.75.0's local and sftp Objects
+// both return a time they already hold and ignore the argument entirely.
+// A backend that did fetch would need the operation's own context
+// threaded here.
+//
+// And this does not guard against a zero time the way medium.go's
+// toObjectInfo does, so a backend reporting no modification time would
+// produce time.Time{}.Unix(), a large negative number, where
+// RemoteArtifact.ModTime documents 0. Nothing hits it today for the same
+// reason as above (both backends always report one), and the comparison
+// that would read it, model.CompareIdentity, compares two captures of the
+// same object and so would see the same wrong number twice.
 func toArtifact(o fs.Object) transport.RemoteArtifact {
 	return transport.RemoteArtifact{
 		Path:    o.Remote(),
@@ -404,6 +462,22 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 	return art, nil
 }
 
+// CopyToLocal fetches one remote object to localPartialPath, which is the
+// .partial file internal/lifecycle owns and later renames. This method
+// never chooses that path and never touches the final name: the rename is
+// the moment an artifact becomes real, and it belongs to the code that
+// records it in the journal, not to the code that moved the bytes.
+//
+// The destination Fs is built from the local DIRECTORY and the copy is
+// addressed by leaf name, because that is the shape operations.Copy takes.
+// splitPath below does that split rather than filepath.Split, deliberately.
+//
+// BytesTransferred is read off the destination object after the copy, so
+// it is what landed rather than what was sent. Checksummed is left false,
+// which transport.TransferResult's own doc explains: operations.Copy does
+// compare a hash when the two sides share one, but it does not report
+// whether it found one, so this cannot honestly claim a comparison
+// happened.
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
@@ -440,6 +514,22 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil
 }
 
+// RemoteHash asks the backend to compute alg over the object at
+// remotePath, and refuses rather than degrades when it cannot (FR-13).
+//
+// It is the only method here that builds its Fs through fsForHashing, and
+// that separation is the point rather than a detail: the two sftp options
+// that make SHA-256 reachable would break the COPY path if they were on
+// the Fs that copies, because a hardened shell-less account would then
+// advertise a hash it cannot compute and rclone would report the resulting
+// mismatch as "corrupted on transfer". withSHA256's doc in ssh.go has the
+// measurement.
+//
+// Every refusal here joins ErrUnsupportedHash, so errors.go can classify
+// it by identity. The empty string is never returned with a nil error: a
+// caller comparing "" against a recorded digest gets a mismatch it would
+// read as corruption, which is the same silent-downgrade failure the
+// capability rule exists to prevent.
 func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsForHashing(ctx, src)
@@ -496,6 +586,22 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	return sum, nil
 }
 
+// DeleteRemote removes exactly the object at remotePath from the source.
+//
+// It performs no safety proof of its own, and that is deliberate: FR-15
+// and FR-16's proof (the identity captured at discovery still matches the
+// object that is there now) is re-derived by internal/lifecycle
+// immediately before this is called, where the journal and the local copy
+// are both in hand. A second, weaker opinion here would be a second place
+// that decides a producer's file may be destroyed.
+//
+// An object that is already gone IS an error here, which is the opposite
+// of MediumStore.DeleteObject's rule and is not an inconsistency. A medium
+// object is one this manager wrote at a key it computed, so finding it
+// absent means an earlier attempt of its own already succeeded. A source
+// object is a producer's file this manager only ever read, so finding it
+// absent means the world moved underneath the proof that authorised the
+// delete, and the caller has to hear about it.
 func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remotePath string) error {
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
@@ -510,6 +616,14 @@ func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remote
 	return WrapCtx(ctx, "delete_remote", o.Remove(ctx))
 }
 
+// splitPath splits a local path into the directory an Fs is built from and
+// the leaf name a copy is addressed by, returning "." for a bare name.
+//
+// It scans for "/" itself rather than calling filepath.Split because what
+// it produces is fed to rclone, whose remotes are "/"-separated on every
+// platform, and because filepath.Split keeps the trailing separator on the
+// directory it returns, which fs.NewFs would then treat as part of the
+// remote's name.
 func splitPath(p string) (dir, name string) {
 	for i := len(p) - 1; i >= 0; i-- {
 		if p[i] == '/' {

@@ -15,6 +15,34 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file tests a pair of operations that cannot be tested against the
+// thing they act on, and the way it works around that is the point.
+//
+// rclone's s3 `restore` command is addressed by a REMOTE and restores
+// every archived object it walks under it. The adapter roots its Fs at the
+// bucket, so the confinement (NoTraverse plus a files-from filter) is the
+// only thing between one restore request and a per-object retrieval charge
+// for every backup the deployment holds, accepted by the provider before
+// anything here could notice and not cancellable afterwards. That is a
+// bill, not a slow test, so it has to be proved rather than reasoned
+// about.
+//
+// MinIO cannot emulate a Glacier restore, so proving it against a real
+// endpoint is not available. What IS available is the enumeration itself:
+// the confinement is implemented in rclone's own walk layer, so running
+// operations.ListFn over a real local Fs under the same confined context
+// answers exactly the question that costs money, "which objects would that
+// command have acted on", against a directory holding three. The local
+// backend is a stand-in for the walk and for nothing else; no case here
+// claims a directory can be restored.
+//
+// The other half is that neither command FAILS the way a Go caller
+// expects. `restore` returns nil and a per-object list whose Status field
+// carries the refusal, so a caller checking only err believes a restore
+// started and then waits hours for it. checkRestoreAccepted is tested as a
+// free function for that reason: the three answers that are not a success
+// are answers a real endpoint gives rarely and expensively.
+
 // localFsWith builds a real rclone local-backend Fs over a directory
 // holding names, so the tests below run the same walk code the s3 restore
 // command runs rather than a re-implementation of it.
