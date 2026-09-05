@@ -2,7 +2,7 @@
 // so the MediumStore contract suite can be run against something that
 // speaks the real S3 API rather than against a hand-written double.
 //
-// It exists for the same reason sftpfixture does, and it is the same
+// It exists for the same reason the source machine does, and it is the same
 // argument: a double answers the way its author expected, and every
 // interesting thing this adapter had to get right was something a double
 // would have got wrong. Writing this fixture is what turned up that a bare
@@ -34,7 +34,7 @@ import (
 )
 
 // minioImage is pinned by name rather than by digest, matching
-// sftpfixture's own choice: this is a test fixture, not a shipped artifact,
+// the source machine's own choice: this is a test fixture, not a shipped artifact,
 // and the supply-chain rules that govern the product's own images
 // (distribution/packaging/canonical.json) are about what an operator runs.
 const minioImage = "minio/minio:latest"
@@ -103,7 +103,7 @@ func startMedium(t *testing.T, opts mediumOptions) *Medium {
 	// that cannot have changed.
 
 	// Ask the daemon first and pull only when the image is missing, which
-	// is sftpfixture.ensureImage's shape (#243): a gate that reaches a
+	// is ensureImage's shape (#243): a gate that reaches a
 	// registry on every run fails on network weather that has nothing to
 	// do with the change under test. A missing image that cannot be
 	// pulled stays a failure, never a skip.

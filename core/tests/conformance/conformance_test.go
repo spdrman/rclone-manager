@@ -100,7 +100,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // The scenario's fixed points. They are constants rather than literals
@@ -152,7 +152,7 @@ const (
 
 	// absentBucket is the bucket mediumUnreachable names, and nothing in
 	// this package ever creates it. The adapter never creates a bucket
-	// either (miniofixture makes them by hand for exactly that reason),
+	// either (the machines harness makes them by hand for exactly that reason),
 	// so a PUT into this one is answered by the server.
 	absentBucket = "this-bucket-was-never-created"
 
@@ -176,7 +176,7 @@ type world struct {
 	t   *testing.T
 	ctx context.Context
 
-	fixture *miniofixture.Fixture
+	fixture *machines.Medium
 
 	// dir is the scenario's own temp directory; root is the backup set's
 	// local_path underneath it.
@@ -241,7 +241,7 @@ func newWorld(t *testing.T) *world {
 func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
 	t.Helper()
 
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	offsiteBucket := fixture.NewBucket(t).Bucket
 	annualBucket := fixture.NewBucket(t).Bucket
 	deepBucket := fixture.NewBucket(t).Bucket

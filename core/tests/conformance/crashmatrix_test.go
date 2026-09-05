@@ -19,7 +19,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // This file is #242's other half of job one: "the full crash matrix from
@@ -65,7 +65,7 @@ var crashNow = time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
 // the real engine, in this process, against the journal and the bucket the
 // dead process left behind.
 func TestTheCrashMatrixAgainstARealS3Endpoint(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 
 	for _, cell := range []struct {
 		// name is the boundary, in the words tests/movecrash uses for the
@@ -240,7 +240,7 @@ func TestTheCrashMatrixAgainstARealS3Endpoint(t *testing.T) {
 // flags to the same binary and a suppressed kill would turn every cell
 // above into an ordinary uninterrupted run that still went green.
 func TestTheS3CrashCellsAreReallyKilled(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	w := newCrashWorld(t, fixture)
 	res := w.crash("-plan", "-kill-after-phase=VERIFIED", "-suppress-kill")
 	if res.killed() {
@@ -271,7 +271,7 @@ type crashWorld struct {
 	key      string
 }
 
-func newCrashWorld(t *testing.T, fixture *miniofixture.Fixture) *crashWorld {
+func newCrashWorld(t *testing.T, fixture *machines.Medium) *crashWorld {
 	t.Helper()
 
 	medium := fixture.NewBucket(t)
