@@ -1,3 +1,16 @@
+// Whether a KEEP line says which of the two timestamps earned it.
+//
+// A tier name alone is half an answer. Since a tier can select an artifact
+// by the time this manager discovered it or by the producer's own timestamp
+// on the remote object, and those two are trusted differently, an operator
+// asking "why is this kept" needs to know which one did it.
+//
+// The expectation is derived rather than recorded. One artifact in a backup
+// set is the only candidate in every bucket it lands in under both
+// placements, so every tier that keeps it must be attributed to both, and
+// the protection term is not a placement so it carries no attribution at
+// all. That reasoning is what the pattern below spells out, which is why it
+// is a pattern and not a captured line.
 package main
 
 import (

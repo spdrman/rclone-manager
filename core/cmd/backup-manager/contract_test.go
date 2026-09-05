@@ -1,3 +1,18 @@
+// What each command exits with, and what it says on the way out.
+//
+// The exit status is half a contract on its own. A refusal that exits 2
+// without explaining itself is as bad for the operator as one that exits 0,
+// so every row here asserts both, and a row that expects nothing on stderr
+// means exactly that: a successful command may not print a warning nobody
+// reads.
+//
+// The tables are built around agreement rather than around coverage. The
+// interesting failures in this binary have all been two commands answering
+// the same question differently: a filter naming a set that does not exist
+// has to be refused in the same words wherever it is typed, and a flag has
+// to work on either side of an operand for every command that takes one.
+// Each table therefore pairs its refusals with a positive control, because
+// a command that refused everything would satisfy the refusals alone.
 package main
 
 import (

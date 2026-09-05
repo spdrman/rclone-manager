@@ -1,3 +1,17 @@
+// The `backup-set patch` verb: that it writes, that it writes only what it
+// was asked to, and that it refuses the edits that need an operator to say
+// something out loud first.
+//
+// Every persistence claim is read back through a SECOND run() call rather
+// than from the value the first one returned. That is what separates a real
+// write from an echoed request: the second call loads the file fresh, so the
+// assertion is about what is on disk and hot-reloadable, not about what the
+// command said it did.
+//
+// The refusals are the harder half. An empty string is a real value here and
+// not a missing flag, an unnamed field has to come back unchanged, and
+// repointing a set that already has artifacts on record is a decision an
+// operator has to acknowledge rather than something the command guesses at.
 package main
 
 import (

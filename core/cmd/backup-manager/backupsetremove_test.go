@@ -1,3 +1,18 @@
+// The `backup-set remove` verb: what leaves the config file, what stays on
+// disk, and what the operator is told about the difference.
+//
+// Removal is the verb in this command with the widest gap between what it
+// does and what somebody might assume it does. It takes a set out of the
+// configuration and touches no backup at all, so the cells here check both
+// halves: the file afterwards contains exactly the other sets, and the
+// artifacts of the removed one are still listed.
+//
+// The count of what was left behind is reported on a best-effort basis, and
+// two cells pin that shape from both sides. A count that cannot be taken
+// must not stop the removal, because refusing to remove a set because the
+// journal was unreadable would leave the operator with no way out at all,
+// and a count that can be taken has to actually be reported rather than
+// quietly dropped.
 package main
 
 import (

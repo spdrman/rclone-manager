@@ -1,3 +1,15 @@
+// The `backup-set retention` verb: showing which policy is in force for one
+// set, setting a chain on it, and clearing it again.
+//
+// The fixture deliberately gives the deployment a policy that is not the
+// product default. Every inheritance claim here rests on that: a bug that
+// reaches for the documented defaults instead of this deployment's own
+// policy is invisible against a fixture whose deployment policy already is
+// the default, and inheritance is the thing this verb is for.
+//
+// The refusals are checked in the config layer's own words rather than in
+// words this command invents, so an operator gets the same explanation for
+// half a chain or a contradictory pair of flags wherever they type it.
 package main
 
 import (

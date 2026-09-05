@@ -1,3 +1,20 @@
+// The `backup-set create` verb, on a fresh install and on an existing one.
+//
+// The two are genuinely different situations and both are checked, because
+// the interesting failures live at the edges: a create on a machine with no
+// config file has to write the first one, and a create on a machine that
+// already has one has to add to it and must never replace it. A verb that
+// got the second wrong would silently delete every other backup set in the
+// deployment.
+//
+// The refusals are checked against the service's own words rather than
+// against a message this layer invents, so the CLI and the API cannot end up
+// giving different answers to the same bad input.
+//
+// Its key material is generated per run rather than checked in, for the
+// reason every fixture in this repository generates its own: a private key
+// committed to a repository is a private key forever, whatever it was
+// generated for.
 package main
 
 import (

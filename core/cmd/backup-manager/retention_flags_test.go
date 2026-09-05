@@ -1,3 +1,21 @@
+// The FR-18/FR-19 override flags: how each one folds onto a loaded config,
+// and what happens when one of them is wrong.
+//
+// A refusal here has to arrive in the config layer's own words. That is
+// asserted rather than assumed throughout, because the alternative is this
+// command growing a second, differently-worded vocabulary for the same bad
+// value, and an operator who fixed the YAML by reading one message would
+// then meet a different one from the flag.
+//
+// Two properties are easy to lose and are pinned separately. An unset
+// boolean is not the same as an explicit false, since the config layer reads
+// the zero as "the operator did not say", and a refused override has to
+// leave the policy exactly as it was rather than half-applied.
+//
+// captureStderr lives here and is used by most of the package. It swaps
+// os.Stderr for a pipe, which catches both writers these suites care about,
+// since this package's own failure path and a flag set with no explicit
+// output both resolve os.Stderr at the moment they write.
 package main
 
 import (

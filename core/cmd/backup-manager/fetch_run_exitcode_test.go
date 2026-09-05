@@ -1,3 +1,17 @@
+// `fetch` and `run` held to the same definition of a failed cycle, against a
+// deployment where everything fails for a real reason.
+//
+// The fixture names a validator that always refuses, so every artifact
+// genuinely transfers and then genuinely fails verification. That matters
+// more than it looks: the failure shape being checked is "discovery
+// succeeded and then everything after it failed", and a hand-built journal
+// row in that state would prove the exit arithmetic without proving the
+// pipeline ever reaches it.
+//
+// The two commands are asked in pairs throughout, because the bug that
+// produced this file was not either of them being wrong on its own. They
+// disagreed, and a disagreement is only visible when both are asked the same
+// question about the same deployment in the same run.
 package main
 
 import (

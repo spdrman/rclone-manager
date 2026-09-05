@@ -1,3 +1,16 @@
+// Whether `medium preflight` can be found, and whether it refuses before it
+// opens anything.
+//
+// Discoverability is checked because a verb that is dispatchable and unlisted
+// has shipped invisibly here before. What is unusual is that the usage text
+// itself is asserted for specific words: this command writes a probe object
+// into an operator's bucket, and a usage line reading "checks your medium"
+// would leave somebody expecting a reachability ping.
+//
+// The refusal cells run with no resolvable config at all. That is the
+// strongest available form of "nothing was opened": if a refusal ever leaked
+// past the argument checks, the command would fail for want of a config
+// rather than for the reason under test, and the cell would notice.
 package main
 
 import (

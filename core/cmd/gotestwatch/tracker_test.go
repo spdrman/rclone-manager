@@ -1,3 +1,18 @@
+// The tracker's arithmetic, proved against a synthetic clock.
+//
+// Every bound this tool has is derived from what the run itself has already
+// been measured doing, so the cases below are all the same shape: feed
+// events at chosen instants, then ask whether the window is open or closed
+// at another chosen instant. Nothing sleeps, which is what makes it possible
+// to check the interesting cases at all. Demonstrating a livelock or a
+// widened-then-closed window against a real clock would cost minutes per
+// case and would still only sample the behaviour.
+//
+// Two of the cells are about the ways this design fails rather than the ways
+// it works: an outlier must not inflate the window permanently, or one slow
+// package at the start of a run buys every later hang an unlimited budget,
+// and a package- or build-level event carries no test name, which is the
+// shape that panics if the tracker assumes every event names a test.
 package main
 
 import (

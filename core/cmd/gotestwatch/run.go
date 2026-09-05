@@ -1,3 +1,18 @@
+// Running `go test -json` under the tracker: the process, the stream, and
+// putting the human-readable output back together.
+//
+// The JSON stream is not a preference, it is the only way to know what is
+// still running. A plain `go test` prints a package's output when the
+// package finishes, so a run that hangs prints nothing at all and the
+// watchdog would have nothing to name; -json emits an event per test action
+// as it happens, which is both the progress signal the tracker needs and the
+// list of tests to blame when the window closes.
+//
+// Reconstructing the ordinary output from those events is what keeps the
+// switch invisible to a caller. Each event carries the exact bytes the test
+// binary printed, so what a person reads on the terminal is what `go test -v`
+// would have shown, and no caller has to learn to read JSON to use the
+// watchdog.
 package main
 
 import (

@@ -1,13 +1,3 @@
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"regexp"
-	"testing"
-	"time"
-)
-
 // Issue #292's own reproduction: a producer (the issue's example is a
 // Gitea backup host) writes one restore point as two files sharing the
 // same run timestamp -- a portable archive and a database dump. GFS picks
@@ -17,6 +7,15 @@ import (
 // backend fetch, the same way retention_attribution_test.go's
 // TestRun_RetentionLineSaysWhichPlacementSelectedEachTier does, and reads
 // what it actually printed.
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"testing"
+	"time"
+)
 
 // siblingRunFixtureTimestamp is the shared run instant both files in this
 // fixture carry as their on-disk modification time. internal/discovery

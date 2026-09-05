@@ -1,3 +1,16 @@
+// The command's own edges: the default bounds, the argument split, and the
+// exit status.
+//
+// It holds nothing that decides anything. The bound arithmetic is in
+// tracker.go so it can be proved against a synthetic clock, and the process
+// handling is in run.go; what is left here is the part that only makes sense
+// as a program, which is where a caller's arguments stop being gotestwatch's
+// and start being `go test`'s.
+//
+// That split is why "--" is optional. The gate's own invocations pass
+// nothing but package paths and flags meant for `go test`, so the common
+// case has to work with no separator at all, and a leading "--" is still
+// accepted so a package path beginning with a dash is never ambiguous.
 package main
 
 import (

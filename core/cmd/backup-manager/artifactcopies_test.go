@@ -1,3 +1,24 @@
+// What the per-artifact copy block prints, and the deployments where it must
+// print nothing at all.
+//
+// The first cell is the compatibility one and it is the reason the rest are
+// worth having. Every artifact in every deployment that never configured a
+// storage medium has one ACTIVE local copy, and local_path is already on the
+// screen, so a copy block for it would add a paragraph to every artifact of
+// every existing install. FR-35 allows an additive column only where there
+// is something additive to say, and this is where that promise is either
+// kept or broken.
+//
+// The others are the vocabulary half of FR-34: an archived copy has to tell
+// a terminal operator it cannot be read right now, an unverified copy has to
+// say so in words rather than by printing an empty field, and a local copy
+// the journal has stopped believing in has to appear rather than being
+// filtered out for looking ordinary.
+//
+// They render from a view struct rather than from a journal, deliberately.
+// What is under test is the printing, and staging four different placement
+// shapes through a real journal would put most of the file's weight on
+// fixture-building for a claim about output.
 package main
 
 import (

@@ -1,3 +1,15 @@
+// The hazard that only exists because the verbs share one flag set.
+//
+// Separately, each verb declared its own flags, so passing another verb's
+// was an unknown flag and the parser refused it. Merged, every flag parses
+// for every verb, and the failure mode changes from a refusal into silence:
+// a verb accepting a flag it does not act on exits 0 having changed nothing
+// the operator asked for.
+//
+// So this is the composition's own test rather than any one verb's. It is
+// paired with a control that the same invocation without the wrong flag
+// really does succeed, because a command that refused everything would pass
+// the refusal half on its own.
 package main
 
 import (

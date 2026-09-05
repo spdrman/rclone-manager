@@ -1,3 +1,17 @@
+// The three quarantine actions, against artifacts driven into quarantine
+// through the real lifecycle.
+//
+// The fixture writes against the journal directly and bypasses the CLI, and
+// it has to: these three verbs exist for artifacts an ordinary cycle can
+// never produce on demand. What it does not do is poke a row that merely
+// reads like a quarantined artifact. It walks the same lifecycle sequence
+// the app layer's own suite uses, so a verdict reached here is reached over
+// a genuine history.
+//
+// The corrupt variant is the one that makes the cells discriminate. An
+// intact copy has to be trusted again and a corrupt one has to be refused,
+// and a revalidation that always said yes would satisfy every cell that only
+// staged healthy artifacts.
 package main
 
 import (
