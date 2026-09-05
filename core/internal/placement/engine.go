@@ -595,6 +595,19 @@ func (e *Engine) advance(ctx context.Context, mv state.Move, resumed bool) Outco
 	out := Outcome{Artifact: mv.Artifact, MoveID: mv.ID, Resumed: resumed}
 	attempts := 0
 
+	// The pre-delete proof (#439, predelete.go), and this is the only
+	// place it can live.
+	//
+	// verifyDestination fills it in when its read passes, deleteSource
+	// spends it, and its scope is this one call: one walk of one move, in
+	// this process, in this cycle. A move that a restart or a later cycle
+	// finds at SOURCE_DELETE_PENDING arrives here with an empty one and
+	// pays for a full read, which is the case the read is actually for.
+	// Hoisting it anywhere wider is what would make the resume path stop
+	// being the same path, so it is pinned there by
+	// TestNothingHoldsAPreDeleteProofBeyondOneWalkOfOneMove.
+	var proof readBackProof
+
 	for step := 0; step < maxPhaseStepsPerMove; step++ {
 		phase := Phase(mv.Phase)
 		out.Phase = phase
@@ -627,11 +640,11 @@ func (e *Engine) advance(ctx context.Context, mv state.Move, resumed bool) Outco
 		case Copied:
 			next, err = e.startVerify(ctx, mv)
 		case Verifying:
-			next, err = e.verifyDestination(ctx, mv)
+			next, err = e.verifyDestination(ctx, mv, &proof)
 		case Verified:
 			next, err = e.intendSourceDelete(ctx, mv)
 		case SourceDeletePending:
-			next, err = e.deleteSource(ctx, mv)
+			next, err = e.deleteSource(ctx, mv, &proof)
 		default:
 			// Unreachable while the switch covers NonTerminalPhases, which
 			// TestEveryNonTerminalPhaseHasAResumeCase proves it does.
@@ -836,7 +849,7 @@ func (e *Engine) startVerify(ctx context.Context, mv state.Move) (state.Move, er
 // medium configured for attested against an endpoint that cannot attest
 // gets ErrClassUnavailable and this move refuses, rather than quietly
 // verifying less than the operator asked for.
-func (e *Engine) verifyDestination(ctx context.Context, mv state.Move) (state.Move, error) {
+func (e *Engine) verifyDestination(ctx context.Context, mv state.Move, proof *readBackProof) (state.Move, error) {
 	rec, err := e.Journal.Get(ctx, mv.Artifact)
 	if err != nil {
 		return mv, err
@@ -846,6 +859,14 @@ func (e *Engine) verifyDestination(ctx context.Context, mv state.Move) (state.Mo
 		return e.abandon(ctx, mv, fmt.Sprintf(
 			"%s no longer has a placement on %q, so there is no recorded hash to verify the destination against", mv.Artifact, mv.SourceMedium))
 	}
+
+	// What the medium says this object is, taken BEFORE its bytes are
+	// read, so that a proof made from the read is a proof about a
+	// described object rather than about whatever was at the key. See
+	// predelete.go: an identity taken after the read would describe an
+	// object that had already been replaced while the read was streaming
+	// the previous one.
+	before := e.identifyBeforeReadBack(ctx, mv)
 
 	result, want, err := e.verifyCopy(ctx, mv, src, true)
 	if errors.Is(err, ErrClassRefused) {
@@ -868,6 +889,11 @@ func (e *Engine) verifyDestination(ctx context.Context, mv state.Move) (state.Mo
 		return e.recopyOrAbandon(ctx, mv, Verifying, fmt.Sprintf(
 			"the destination copy on %q failed %s verification: %s", mv.DestinationMedium, result.Class, result.Detail))
 	}
+
+	// The read passed, so it is worth something to the delete that
+	// follows. record decides whether it is worth enough; nothing about
+	// this move changes if it decides not.
+	proof.record(mv, src, want, result, before)
 
 	return e.Journal.AdvanceMove(ctx, e.checked(state.MoveAdvance{
 		MoveID: mv.ID, From: state.MoveVerifying, To: state.MoveVerified,
@@ -1046,7 +1072,7 @@ func (e *Engine) intendSourceDelete(ctx context.Context, mv state.Move) (state.M
 // nothing, touches no placement, and makes nothing terminal. See its own
 // doc for why a refusal that changes nothing observable is a refusal a
 // health surface cannot see.
-func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, error) {
+func (e *Engine) deleteSource(ctx context.Context, mv state.Move, proof *readBackProof) (state.Move, error) {
 	rec, err := e.Journal.Get(ctx, mv.Artifact)
 	if err != nil {
 		return mv, err
@@ -1056,7 +1082,7 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		return mv, fmt.Errorf("placement: %s has no placement on %q to delete", mv.Artifact, mv.SourceMedium)
 	}
 
-	result, want, err := e.verifyCopy(ctx, mv, src, false)
+	result, want, err := e.reverifyForDelete(ctx, mv, src, proof)
 
 	// unreadable is the one verification outcome that does not decide this
 	// on its own, and it is the reason the guard below is consulted even
