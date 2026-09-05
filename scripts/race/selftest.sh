@@ -163,33 +163,84 @@ expect_gate_passes() {
   fi
 }
 
-# plant_configstate_race <dir>
+# plant_revision_cache_race <dir>
 #
-# The mutation, and it is deliberately the smallest one that is a real
-# data race rather than a broken program: instead of publishing a NEW
-# configState behind the atomic pointer, write the fields of the one
-# every reader is already holding. Single-goroutine behaviour is
-# identical; the file, the journal and the returned revision are all
-# unchanged; nothing about the mutant is observable except through the
-# memory model. That is why R3 can hold.
+# The mutation: memoise the configuration revision in a plain field on
+# BackupService, and have every caller of ConfigRevision write it. Two
+# anchors, both in service.go, because the field and the write to it are
+# in different places.
 #
-# It is also the exact defect service.go's own doc records as having been
-# there once ("inner and revision were two plain fields written under
-# configMu but read by every one of those call sites with no lock at
-# all"), so this control plants the mistake this code has actually made.
-plant_configstate_race() {
-  swap "$1/core/service/configreload.go" \
-'	revision := computeConfigRevision(cfg)
-	b.state.Store(&configState{inner: newInner, revision: revision})' \
-'	revision := computeConfigRevision(cfg)
-	// PLANTED DATA RACE (scripts/race/selftest.sh). Publishing by
-	// mutating the configState every reader already holds, instead of
-	// swapping in a new one. Same result on one goroutine, unsynchronised
-	// write on more than one.
-	planted := b.state.Load()
-	planted.inner = newInner
-	planted.revision = revision
-	b.state.Store(planted)'
+# It is a real mistake rather than a contrived one. Caching a computed
+# value in a struct field is the most ordinary optimisation there is, and
+# this is the exact defect service.go's own doc records this code having
+# had once: "inner and revision were two plain fields written under
+# configMu but read by every one of those call sites with no lock at all".
+# The mutant compiles, vets, and returns the same string; nothing about it
+# is observable except through the memory model, which is what R3 rests
+# on. computeConfigRevision returns a fixed 16-character hex digest, so
+# even a torn read of that string header cannot produce an out-of-bounds
+# slice, which is why the un-instrumented run is not merely usually green
+# but reliably so.
+#
+# # Why it is here rather than in adoptConfig, which is where it started
+#
+# The first version of this control planted the same class of race in
+# adoptConfig: publish by mutating the configState every reader already
+# holds instead of swapping in a new one. That is the more evocative shape,
+# and it worked on this branch, 10 runs out of 10.
+#
+# It stopped working the moment this branch was composed with the other
+# lanes of its wave, and the reason is worth writing down, because it is
+# the same failure this whole file exists to catch. #411's create-path
+# repoint check added two journal queries to CreateBackupSet BEFORE it
+# reaches adoptConfig. That pushed the planted write past the point where
+# the 150 reader goroutines in the racing test had finished, and
+# ThreadSanitizer keeps only a few shadow entries per word, so the readers'
+# accesses had aged out by the time the write landed. The race was still
+# there in the code; the detector simply had nothing left to compare it
+# against. Measured: 0 catches in 10 runs composed, 10 in 10 with that
+# one new pre-write check short-circuited.
+#
+# So the old plant's visibility depended on a timing overlap it did not
+# control, and any lane adding work ahead of adoptConfig could silently
+# make this control prove nothing. The cell did fail loudly rather than go
+# green, which is the one thing that went right, but a control that has to
+# be re-earned every time somebody edits CreateBackupSet is not a control.
+#
+# ConfigRevision has no such dependence. The racing test calls it from
+# fifty goroutines directly and fifty more through SubmitRunCycle, all
+# concurrent with each other by construction rather than by scheduling, so
+# a write in there races roughly a hundred ways at once no matter what any
+# other code path does first. Verified 10 of 10 on this branch AND 10 of 10
+# on the composed tree that broke the old one, with the un-instrumented
+# run green 10 of 10 in both.
+plant_revision_cache_race() {
+  # The field the mutant caches into. Nothing reads it except the method
+  # below; it exists so the plant has somewhere unsynchronised to write.
+  swap "$1/core/service/service.go" \
+'	state atomic.Pointer[configState]
+
+	journal *state.Journal' \
+'	state atomic.Pointer[configState]
+
+	// PLANTED DATA RACE (scripts/race/selftest.sh). The memoised
+	// revision ConfigRevision writes below, in a plain field, exactly
+	// as inner and revision themselves were before #155 made them one
+	// atomic pointer.
+	plantedRevisionCache string
+
+	journal *state.Journal'
+
+  swap "$1/core/service/service.go" \
+'func (b *BackupService) ConfigRevision() string {
+	return b.state.Load().revision
+}' \
+'func (b *BackupService) ConfigRevision() string {
+	// PLANTED DATA RACE (scripts/race/selftest.sh). One read turned
+	// into a write, on a field every concurrent caller shares.
+	b.plantedRevisionCache = b.state.Load().revision
+	return b.plantedRevisionCache
+}'
 }
 
 echo "==> R1 negative control: the racing test is clean under -race on the real tree"
@@ -197,16 +248,18 @@ expect_gate_passes "core/service under -race, unmutated" "$root"
 
 echo
 echo "==> R2 the planted race is caught, and named"
-d=$(mutant configstate-written-in-place)
-plant_configstate_race "$d"
-# The write side of the planted race, named in the report's own stack.
-expect_race_caught "a configState published by mutation instead of by swap" "$d" \
-  "core/service.(*BackupService).adoptConfig"
+d=$(mutant revision-cached-in-a-plain-field)
+plant_revision_cache_race "$d"
+# The write side of the planted race, named in the report's own stack. A
+# bare non-zero exit is not enough: a mutant that failed to compile gives
+# one too.
+expect_race_caught "a revision memoised into a plain field every reader writes" "$d" \
+  "core/service.(*BackupService).ConfigRevision"
 
 echo
 echo "==> R3 the same mutant is invisible without the detector"
-d=$(mutant configstate-written-in-place-no-race)
-plant_configstate_race "$d"
+d=$(mutant revision-cached-in-a-plain-field-no-race)
+plant_revision_cache_race "$d"
 expect_race_missed "the same tree, the same test, -race off" "$d"
 
 echo
