@@ -149,12 +149,18 @@ real backend, so it stays in the gate rather than being retired now that it is g
 that exists today.** `apps/common/webhost/gate.go`'s `NotYetImplementedGate` is the only
 `DestructiveGate` this repository ships, its `Passed()` returns `false` unconditionally,
 and there is deliberately no flag, environment variable or config key that opens it: a
-production wiring that names no gate gets that one. So `POST /api/v1/backup-sets` with
-`run_immediately` set, retention apply, and everything else behind the gate answer 403
-`DESTRUCTIVE_OPERATIONS_DISABLED` no matter how the deployment is configured. Opening it is
-#92's job and #92's alone. This is worth reading twice before treating the API as the
-equal of the CLI, because the CLI has no such gate: it talks to `config.yaml` and the
-journal directly and will happily run a cycle.
+production wiring that names no gate gets that one, so the failure is closed by
+construction rather than by a flag nobody remembered to leave off. Three things are behind
+it: `POST /operations`, `POST /backup-sets/{source}/{set}/retention/apply`, and
+`POST /backup-sets` on the one branch where `run_immediately` turns a plain persist into a
+run. All three answer 403 `DESTRUCTIVE_OPERATIONS_DISABLED` no matter how the deployment is
+configured, and opening them is #92's job and #92's alone.
+
+The consequence worth spelling out is that `POST /operations` is where a restore, a cycle
+and a retry are submitted, so **the HTTP restore is written and unreachable**, and the CLI
+is the only surface that can actually run one today. That asymmetry is worth reading twice
+before treating the two surfaces as equals: the CLI has no such gate, because it talks to
+`config.yaml` and the journal directly rather than to a server.
 
 ### What is built but not exposed
 
@@ -169,7 +175,8 @@ journal directly and will happily run a cycle.
   `POST /api/v1/operations` with `action: restore_placement` both exist, and both mean
   something narrower than the sentence above. They ask a storage provider to make an
   ARCHIVED copy readable again, which is a precondition for the manual procedure rather
-  than a replacement for it. See
+  than a replacement for it. The HTTP one is behind the destructive gate and therefore
+  unreachable today, so the CLI is the only surface that can run it. See
   [Archive classes, and asking for a copy back](#archive-classes-and-asking-for-a-copy-back).
 - A release build does select a provider frontend, since #167 and #169. `serve-ui`
   resolves its bundle at run time (`--ui-dir`, then `--ui-root/<profile>`, then the
@@ -1395,10 +1402,12 @@ round from a force flag: the value that costs nothing is the default, so a resto
 something a caller reaches by omission. It is billed and it takes hours. `--days` defaults
 to 7 and is bounded to 1 to 30, because zero is not a shorter restore, it is one that is
 billed and then immediately unavailable, and a fat-fingered large number is a month of
-double billing. Over HTTP it is `POST /api/v1/operations` with `action: restore_placement`.
-There is no percentage field, no completion-time field and no cost field on either surface:
-S3 reports a restore as running or finished and nothing else, and this product holds no
-price list, so all three would be invented.
+Over HTTP it is `POST /api/v1/operations` with `action: restore_placement`, which is
+written and, today, unreachable: that route is behind the destructive gate, and the gate
+denies unconditionally until #92. So the CLI is the only surface that can actually ask for
+a restore right now. There is no percentage field, no completion-time field and no cost
+field on either surface: S3 reports a restore as running or finished and nothing else, and
+this product holds no price list, so all three would be invented.
 
 A bucket LIFECYCLE RULE can transition an object to an archive class days after it was
 written, whatever class the medium declares and whatever the endpoint reported at the
