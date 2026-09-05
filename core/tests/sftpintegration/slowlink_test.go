@@ -1,7 +1,8 @@
-package rclone
+package sftpintegration_test
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
 
@@ -26,8 +28,8 @@ import (
 // Because a test that needs a transfer to last long enough to interrupt has
 // two ways to get one, and only one of them is about the transfer.
 //
-// rclone's own --bwlimit is the other one, and it was what
-// gate_test.go's MidTransferCancellation used until issue #414. It throttles
+// rclone's own --bwlimit is the other one, and it was what the
+// mid-transfer cancellation row used until issue #414. It throttles
 // INSIDE rclone, in two places: fs/accounting's Account.accountRead pays
 // the token bucket after every chunk it hands the copy loop, and
 // fs/fshttp's dialer pays it again on every socket read. Both wait with
@@ -253,4 +255,59 @@ func repinKnownHosts(t *testing.T, knownHostsFile string, port int) string {
 		t.Fatalf("slowLink: writing the re-pinned known_hosts: %v", err)
 	}
 	return repinned
+}
+
+// SourceWithKnownHosts is Source with a different known_hosts file, which
+// exists only so the negative control below can point a relay Source at the
+// wrong key.
+func (l *slowLink) SourceWithKnownHosts(id, root, knownHosts string) transport.Source {
+	src := l.Source(id, root)
+	src.KnownHosts = knownHosts
+	return src
+}
+
+// BadKnownHosts is the fixture's decoy host key, re-pinned to this relay's
+// port the same way the real one is.
+func (l *slowLink) BadKnownHosts(t *testing.T) string {
+	t.Helper()
+	return repinKnownHosts(t, l.fixture.BadKnownHostsFile, l.Port())
+}
+
+// TestSlowLinkStillVerifiesHostKeys is the negative control on the detour
+// itself, and it is here because of how quietly this one fails.
+//
+// Putting a relay in front of the fixture means the Source no longer points
+// at the address the fixture's known_hosts pins, so the obvious way to make
+// the connection work again is to stop verifying the host key. That would
+// leave every test using this relay passing while silently no longer
+// exercising FR-6, which is the shape of defect this repository keeps
+// finding rather than a hypothetical.
+//
+// So the relay re-pins the fixture's REAL keys to its own port, and this row
+// proves the re-pinning is load-bearing: the same connection, through the
+// same relay, with the fixture's decoy key pinned instead, has to be
+// refused. If host-key verification had been quietly relaxed for the sake of
+// the detour, this row would pass the wrong way round and say so.
+func TestSlowLinkStillVerifiesHostKeys(t *testing.T) {
+	f := sftpfixture.Start(t)
+	a := rclone.New()
+	// Rate is irrelevant here: nothing gets far enough to transfer.
+	link := startSlowLink(t, f, cancelLinkRate)
+
+	// Positive control first. Without it, "the bad key was refused" has a
+	// second explanation, which is that nothing can connect through the
+	// relay at all and the refusal has nothing to do with the key.
+	if _, err := a.List(context.Background(), link.Source("slowlink-hostkey-good", "")); err != nil {
+		t.Fatalf("the relay could not connect with the fixture's own host keys re-pinned to its port, so this row "+
+			"cannot say anything about which key was refused: %v", err)
+	}
+
+	bad := link.SourceWithKnownHosts("slowlink-hostkey-bad", "", link.BadKnownHosts(t))
+	_, err := a.List(context.Background(), bad)
+	if err == nil {
+		t.Fatal("a connection through the relay succeeded against the fixture's DECOY host key. " +
+			"Host-key verification is not happening on this path, so every test that reaches the fixture through " +
+			"the relay has been proving less than it says (FR-6).")
+	}
+	t.Logf("the relay refused the decoy host key, so verification is real on this path: %v", err)
 }
