@@ -44,22 +44,23 @@ func run(args []string) int {
 }
 
 var commands = map[string]func([]string) int{
-	"run":        cmdRun,
-	"daemon":     cmdDaemon,
-	"check":      cmdCheck,
-	"status":     cmdStatus,
-	"sources":    cmdSources,
-	"backup-set": cmdBackupSet,
-	"artifacts":  cmdArtifacts,
-	"fetch":      cmdFetch,
-	"retention":  cmdRetention,
-	"reconcile":  cmdReconcile,
-	"validate":   cmdValidate,
-	"catalog":    cmdCatalog,
-	"quarantine": cmdQuarantine,
-	"restore":    cmdRestore,
-	"settings":   cmdSettings,
-	"version":    cmdVersion,
+	"run":          cmdRun,
+	"daemon":       cmdDaemon,
+	"check":        cmdCheck,
+	"status":       cmdStatus,
+	"sources":      cmdSources,
+	"backup-set":   cmdBackupSet,
+	"artifacts":    cmdArtifacts,
+	"fetch":        cmdFetch,
+	"retention":    cmdRetention,
+	"reconcile":    cmdReconcile,
+	"validate":     cmdValidate,
+	"catalog":      cmdCatalog,
+	"quarantine":   cmdQuarantine,
+	"unconfigured": cmdUnconfigured,
+	"restore":      cmdRestore,
+	"settings":     cmdSettings,
+	"version":      cmdVersion,
 }
 
 func usage() {
@@ -98,6 +99,13 @@ commands:
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
+  unconfigured                                   list the backup sets the journal remembers and the configuration no
+                                                  longer names, what they still hold on storage, and the retention
+                                                  policy governing them, which is none (#418)
+  unconfigured clear <source/backup-set> [--acknowledge]
+                                                  clear the .partial residue a removal stranded mid-transfer, and end
+                                                  the journal rows nothing will ever advance. It never touches a
+                                                  retained backup; without --acknowledge it only prints what it would do
   quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
                                                   act on one quarantined artifact: revalidate re-checks it and moves
                                                   nothing; retry re-enters the pipeline from DISCOVERED; reinstate
