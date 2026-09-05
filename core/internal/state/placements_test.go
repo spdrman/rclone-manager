@@ -1,3 +1,24 @@
+// Migration 0007 and the placement reads it created, which is the largest
+// single behaviour change EPIC E made to an existing deployment: every
+// artifact that already had a durable local copy gets a placement row
+// backfilled for it.
+//
+// The bar for a backfill is higher than "it produced rows". It has to
+// produce a row for exactly the artifacts that have a copy and none for the
+// ones that do not, it has to be safe to run twice, it has to leave the
+// schema version unadvanced if it is interrupted, and it must not touch a
+// single value retention reads. That last one has a guard of its own here
+// with its own falsification test, because a compatibility check that
+// cannot fail is worse than none: it certifies the thing it stopped
+// looking at.
+//
+// The two driver-ceiling tests near the end are not about placements at
+// all. They pin the number of bound parameters modernc.org/sqlite actually
+// accepts, which is the measurement loadPlacementsFor's design rests on,
+// and then read a backup set larger than it. A comment quoting a limit
+// nobody has measured on the driver in use is how the familiar 999 gets
+// repeated for a build where it is not true.
+
 package state
 
 import (
@@ -187,6 +208,12 @@ func seedArtifacts(t *testing.T, db *sql.DB) []artifactFixture {
 	return fixtures
 }
 
+// hashAlgFor mirrors what migration 0007's backfill does with the algorithm
+// column: a placement gets one exactly when it has a hash to name it for.
+//
+// It is spelled here rather than inlined so the expectation is written once
+// and can be compared against what the migration produced, instead of every
+// fixture restating a rule that would then agree with itself.
 func hashAlgFor(hash string) string {
 	if hash == "" {
 		return ""
@@ -477,6 +504,14 @@ func countArtifacts(t *testing.T, db *sql.DB) int {
 // artifact is kept, plus the identity it is keyed by.
 type retentionSnapshot map[string]string
 
+// snapshotRetention reads every column FR-18 consults, keyed by artifact
+// name, so the same read before and after a migration can be compared as
+// two plain maps.
+//
+// The empty check at the end is what stops this being a guard that cannot
+// fail. A snapshot of nothing equals another snapshot of nothing, so a
+// query that stopped returning rows, or a seed that stopped inserting them,
+// would certify perfect compatibility over zero artifacts.
 func snapshotRetention(t *testing.T, db *sql.DB) retentionSnapshot {
 	t.Helper()
 	rows, err := db.Query(`

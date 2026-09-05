@@ -16,8 +16,21 @@ import (
 // claims placement_moves has to hold for the move engine's safety argument
 // to mean anything.
 
+// moveNow is a fixed instant every write in this file is stamped with, so a
+// created_at and an updated_at that differ can only have differed because
+// the code under test wrote a different one, never because two calls landed
+// in different clock ticks.
 var moveNow = time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
 
+// moveJournal builds the only starting position a move is legal from: an
+// artifact walked all the way to COMPLETE with an ACTIVE local placement
+// recorded on it.
+//
+// It walks the real lifecycle rather than inserting rows, because PlanMove
+// resolves its source by looking for that placement and the schema's own
+// constraints have to be satisfied on the way. A hand-inserted fixture
+// would let a test pass against a shape the product cannot actually
+// produce.
 func moveJournal(t *testing.T) (*Journal, model.ArtifactID) {
 	t.Helper()
 	ctx := context.Background()
@@ -56,6 +69,9 @@ func moveJournal(t *testing.T) (*Journal, model.ArtifactID) {
 	return j, artifact
 }
 
+// planOne opens the one move most tests here need. The destination key
+// looks like FR-28's layout rather than being a placeholder, so a test
+// reading the row sees the shape production writes.
 func planOne(t *testing.T, j *Journal, artifact model.ArtifactID) Move {
 	t.Helper()
 	mv, err := j.PlanMove(context.Background(), MovePlan{

@@ -1,3 +1,20 @@
+// The operations table: that a row exists before any caller acts on it,
+// that a resubmitted request finds the row it already made, and that a key
+// presented for a different request is refused rather than answered.
+//
+// The refusals are the half worth testing hardest, because the convenient
+// behaviour is the dangerous one. Serving back an existing operation for a
+// key whose actor or action differs would tell a caller its request is
+// already in flight about a request it never made, and hand it another
+// caller's result text on the way.
+//
+// Two tests here reach past the public API on purpose. One drives
+// insertOperation directly to prove a UNIQUE violation is classified rather
+// than surfaced raw, because the race that produces it needs two connections
+// to the same file and cannot be provoked through a single Journal. The
+// other runs concurrent CreateOperation calls, which is the only shape that
+// can tell a real transaction from a check-then-insert that usually wins.
+
 package state
 
 import (

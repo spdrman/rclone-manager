@@ -1,3 +1,20 @@
+// A source-scanning guard rather than a behaviour test: it reads the four
+// production files FR-29 named and refuses one that asks whether an
+// artifact is readable locally without also asking where else it is.
+//
+// It is a scan because the failure it prevents cannot be caught by
+// exercising this package. Every one of those callers used to read
+// Record.LocalPath and os.Stat it, and reading only the new bool is a
+// perfectly compiling, perfectly passing way to preserve the old bug: it
+// reads "no readable local path" as "no copy at all" and quarantines a
+// healthy artifact that has just been moved to a medium. That shipped once.
+//
+// A test that scans source is only as good as its own falsifiability, which
+// is why the second test here plants a violation and insists the scan
+// catches it. A sweep whose file list has gone stale, or whose pattern no
+// longer matches anything, passes silently and looks exactly like a sweep
+// that found nothing wrong.
+
 package state_test
 
 import (

@@ -1,3 +1,14 @@
+// One test, because the address record has one contract and its three
+// clauses only mean anything together: a write records, a second write
+// replaces rather than appends, and an id nobody ever recorded is
+// distinguishable from one recorded with empty fields.
+//
+// The third clause is the one worth having a test for. If absence and
+// emptiness collapsed, a backup set created over an id that predates
+// migration 0008 would look like a set that had been pointing at "" and
+// moved, and the create path would refuse it for a relocation nobody can
+// show ever happened.
+
 package state
 
 import (
