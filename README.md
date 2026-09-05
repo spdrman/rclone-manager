@@ -447,14 +447,18 @@ providers is **build-supported and uncertified**. A green conformance matrix pro
 packaging metadata is well-formed and mutually consistent, and it proves nothing whatsoever
 about how any of these platforms behaves.
 
-The image is published now, which is the other thing this section used to deny. EPIC F cut
-v0.1.0 and then v0.2.0 to `ghcr.io/spdrman/backup-manager`, and
-`container/release-manifest.json` carries a real `index_digest` and a real
-`registry_digest` per architecture rather than the nulls it used to.
-`distribution/packaging/canonical.json`'s `published` flag and those digests move together,
-and a test refuses either one without the other, because a flag with no digest is a
-half-truth. Every acceptance procedure still keeps its step 0 for a deployment that cannot
-reach ghcr.io, and every profile keeps the reference substitutable.
+The image is published, which is the other thing this section used to deny, and the
+version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
+`ghcr.io/spdrman/backup-manager`, both are still there, keyless-signed with the SBOM
+attested beside them, and `0.2.0`'s image index is `sha256:0ba1fba4`. `0.3.0` is cut and
+not pushed, which is what a release looks like between the cut and the push:
+`distribution/packaging/canonical.json` records `published: false` and
+`container/release-manifest.json` is back to a null `index_digest` and a null
+`registry_digest` per architecture. That flag and those digests move together, and a test
+refuses either one without the other, because a flag with no digest is a half-truth. So
+until the push lands, run 0.2.0 or build your own: every acceptance procedure keeps its
+step 0 for a deployment that cannot reach ghcr.io, and every profile keeps the reference
+substitutable.
 
 ### There are no screenshots in this document
 

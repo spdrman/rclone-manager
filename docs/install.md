@@ -20,7 +20,7 @@ python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
     --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.2.0
+    --image ghcr.io/spdrman/backup-manager:0.3.0
 ```
 
 **One file, and no checkout.** Copy
@@ -133,7 +133,7 @@ and would start the UI before the engine was listening.
 carries:
 
 ```
-python3 install_docker_host.py install --release 0.1.0
+python3 install_docker_host.py install --release 0.2.0
 ```
 
 It fills the tag in `--image` and nothing else. It is not `--version`: that name
@@ -163,19 +163,38 @@ Preflight prints the reference it is about to install before anything is created
 and then proves it:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.2.0
-  ok   ghcr.io/spdrman/backup-manager:0.2.0 is sha256:0ba1fba4f9f35c93..., the identity
-       the release manifest records for 0.2.0
+  ok   installing ghcr.io/spdrman/backup-manager:0.3.0
+  ok   ghcr.io/spdrman/backup-manager:0.3.0 is sha256:..., the identity the release
+       manifest records for 0.3.0
 ```
 
 A registry tag is a mutable pointer, which `scripts/release/publish-image.sh` says
 in its own words, so "install this version" is a claim about a name until something
-compares the name to a recorded identity. `container/release-manifest.json` recorded
+compares the name to a recorded identity. `container/release-manifest.json` records
 that identity at push time, the installer carries a copy of it, and one anonymous
 HEAD against the registry settles it. If the tag has moved, this refuses with exit
 52 and tells you how to install the recorded digest by identity instead. No cosign,
 no dependency: the installer is standard library only because a NAS may not let you
 install anything.
+
+**Read the version you have before you expect that line.** A release is cut before it
+is pushed, and in that window the manifest records `index_digest: null`, the installer
+carries no digest, and what preflight prints is this instead:
+
+```
+  ok   installing ghcr.io/spdrman/backup-manager:0.3.0
+  !!   0.3.0 is cut and not pushed, so container/release-manifest.json records no
+       identity for it and there is nothing here to hold
+       ghcr.io/spdrman/backup-manager:0.3.0 to.
+```
+
+That is 0.3.0 today. It is a warning and never a refusal, and the difference is the
+whole design: the alternative was to move the version and leave 0.2.0's digest behind,
+which compares a perfectly correct 0.3.0 image against the previous release's identity
+and hands every operator exit 52 on a good install. The digest is filled in, and this
+installer reissued with it, when the release workflow has pushed and the digests are
+recorded back into the manifest. Until then, `--release 0.2.0` installs the last
+release this can prove, or `--image-archive` installs a build you made yourself.
 
 That proof only covers the release the installer carries, and a release cut after
 this installer was written can never have a digest in it. That is why the `--image`
