@@ -72,23 +72,31 @@
 #
 # # Cost, measured on this machine rather than guessed
 #
-# Measured on the 4 CPU / 4 GB Docker Desktop VM this gate runs against,
-# arm64 native, running all four machine-tier packages:
+# On the 4 CPU / 4 GB Docker Desktop VM this gate runs against, arm64
+# native, running every machine package:
 #
-#   cold (both caches empty):     210s wall, 195s inside the manager
-#   warm (both caches populated): 120s wall, 119s inside the manager
+#   warm, --race, under gotestwatch:  169s wall, 164s inside, compile 3s
+#   the compile alone, both caches empty, --race:  45s
 #
-# So the compile of everything the tier needs, from an empty module cache
-# and an empty build cache, is about 76 seconds. #451 asked for this number
-# because a cold compile of rclone's module graph took over six minutes in
-# CI with no cache, and that is the figure the "run every test on two
-# machines" option was rejected on. It does not reproduce here, for two
-# reasons worth knowing before anybody quotes either number: only the
-# packages the tier actually imports get compiled, not the whole product,
-# and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is linux/amd64 on
-# this machine, and with it in force the manager was built emulated and the
-# compile was measuring qemu, which is why the platform is named explicitly
-# below.
+# and, measured before this took --race and gotestwatch, on four packages
+# under a plain `go test`: 210s wall cold and 120s warm, so about 76s of
+# compile.
+#
+# #451 asked for the cold figure because a cold compile of rclone's module
+# graph took over six minutes in CI with no cache, and that is what the
+# "run every test on two machines" option was rejected on. It does not
+# reproduce here, for two reasons worth knowing before either number is
+# quoted again: only the packages the tier imports get compiled, not the
+# whole product, and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is
+# linux/amd64 on this machine, and with it in force the manager was built
+# emulated and the compile was measuring qemu, which is why the platform is
+# named from the daemon's own architecture below.
+#
+# The 45 seconds is worth its own line, because it is exactly gotestwatch's
+# unmeasured floor. A cold compile inside the watched window does not merely
+# risk tripping the watchdog, it lands on the boundary, and under any load
+# at all it goes over. That is why the compile is its own step above the
+# watched run rather than inside it.
 #
 # The caches are volumes rather than being thrown away with the container
 # precisely so the warm number is the one a gate pays.
