@@ -1081,6 +1081,245 @@ the week start and each tier so you can compare policies without editing config;
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 
+## Where a durable copy actually lives (EPIC E)
+
+Everything above this section assumes an artifact's durable copy is a file at the backup
+set's `local_path`, because until EPIC E it always was. A **storage medium** is a named
+destination it can live on instead, chosen per retention tier: daily on local disk so a
+recent restore is a filesystem read, monthly on S3, annual on a colder readable class.
+`s3` is the only type, which means any endpoint speaking the S3 API, MinIO and Wasabi
+included, because it is the same rclone backend and no AWS SDK is imported anywhere in this
+repository.
+
+[`docs/storage-mediums.md`](docs/storage-mediums.md) is the operator's half: every field,
+what the disclosure commits you to, and what each verification class proves and costs.
+[`docs/EPIC-E-alternative-storage.md`](docs/EPIC-E-alternative-storage.md) is the
+specification, and
+[`docs/conformance/epic-e-matrix.md`](docs/conformance/epic-e-matrix.md) is the account of
+which of its gate lines are checked by something that has been watched to fail. This
+section is the part a reader of this document needs before any of those.
+
+```yaml
+storage_mediums:
+  - id: offsite_s3
+    type: s3
+    region: us-east-1
+    bucket: nas-backups
+    prefix: rclone-manager
+    storage_class: STANDARD
+    upload_verification: readback
+    credentials:
+      file: /var/lib/backup-manager/s3/offsite_s3.creds
+
+retention:
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7                    # no medium key: local disk, exactly as today
+    - name: monthly
+      granularity: month
+      keep: 12
+      medium: offsite_s3
+```
+
+A credential is a `file`, an `env` or a `command`, and there is deliberately no field for a
+literal key. `local` is reserved for the implicit medium every deployment already has, so a
+configured medium can never claim it. Which medium an artifact calls home is the **first
+tier in chain order that currently selects it**, which gives chain order a second meaning:
+order still never changes WHICH artifacts are kept, because `KEEP` is the union of every
+tier's selections, but it now decides WHERE a multiply-selected one lives.
+
+### The verification ladder, and why it is not a boolean
+
+Off local disk, "is this copy good" stops being one question with one answer. Reading a
+hundred gigabytes back out of an object store to re-hash it is a real bill; asking the
+endpoint what it thinks the checksum is costs nothing and proves less; asking whether the
+object exists at all costs less still and proves less still. So `core/internal/placement`
+has three rungs, ordered:
+
+| Class | What it does | What it proves |
+|---|---|---|
+| `content` | reads the bytes back and hashes them | they are the bytes the journal recorded at ingestion |
+| `attested` | one metadata call for the provider's own full-object checksum | the endpoint's word, which an endpoint that lies can make worthless |
+| `existence` | one HEAD | the object is there at the recorded size, and nothing about its content |
+
+**Every surface reports the class that was actually ACHIEVED, never the one that was
+configured or hoped for.** That is the whole reason the package exists: an existence check
+reported as "verified" is worse than no check at all, because it turns "nobody has looked
+at this backup in a year" into a green tick. `Verify` returns the class it ran and has no
+path that returns a class it did not run, and where an endpoint cannot produce what a class
+needs the answer is an explicit capability refusal rather than a weaker class wearing a
+stronger name, which is FR-13's rule restated by FR-31. An unverified placement carries no
+class at all, and the empty string is deliberately not one of the three: a caller reaching
+for a name for "unverified" is usually about to record it as a weak pass. `existence` is
+never sufficient to delete a source copy.
+
+One measured consequence, because it is the kind of thing that should not be discovered
+during a move: against rclone v1.75.0 an `s3` medium can never produce an `attested`
+answer, since the only digest that backend serves is not a whole-object content hash. A
+medium declared `upload_verification: attested` therefore cannot serve one move on this
+build, and `medium preflight` asks and reports the refusal rather than reporting the step
+green.
+
+### Placements, and what their absence means
+
+A **placement** is one durable copy of one backup and where it actually is
+(`core/migrations/0007_placements.sql`). A placement exists because the journal recorded a
+finished copy, so the absence of a placement is the absence of a copy: a transfer still in
+flight has none, and neither does a copy this deployment has released. That is what lets a
+surface tell "there is no copy here" apart from "there is a copy here nobody can confirm",
+which is what the access and verification-class fields are for.
+
+`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
+with its location, status, access, storage class, the class it was verified as and when,
+the class it could be checked at right now, and whether reading it back is billed. It
+prints nothing at all when the artifact has one ordinary local copy and nothing else, which
+is every artifact in every deployment that has not configured a medium. Over HTTP the same
+facts are on the artifact surface rather than on a route of their own.
+
+### Moving a copy is three phases and a journal
+
+`core/internal/placement/engine.go` executes FR-30's journaled three-phase moves, and the
+phase table in `phases.go` is written the way `core/internal/lifecycle/machine.go` is
+written, for the same reason: a crash can land the process anywhere, so which changes are
+legal has to be a table a test can walk rather than a rule spread across whichever
+functions happen to make each change.
+
+```text
+PLANNED -> COPYING -> COPIED -> VERIFYING -> VERIFIED -> SOURCE_DELETE_PENDING -> DONE
+   \          \         \          \                            |
+    \          \         \          \                           v
+     ---------- ABANDONED -----------                        COPYING
+```
+
+The whole safety argument is the order: the source copy is deleted only after `VERIFIED` is
+durably recorded, and the wrong order is not a mistake somebody can make in a function
+body, it is an edge that does not exist. `VERIFIED` is the disposability boundary and that
+is why it has no `ABANDONED` edge. `ABANDONED` means "the destination copy was disposable
+and has been disposed of, and the source was never touched", which is true at `PLANNED`,
+`COPYING`, `COPIED` and `VERIFYING` and stops being true the instant the destination gets
+its placements row. The edge back from `SOURCE_DELETE_PENDING` to `COPYING` is FR-30's
+restart semantics and not a tidy-up: a destination that has just failed a verification it
+previously passed does not hold the artifact, so the source goes back to `ACTIVE`, the
+destination is thrown away and the copy runs again. The engine takes that edge only after
+restoring the source, so there is no instant at which the journal calls both copies
+disposable. The artifact itself stays `COMPLETE` throughout; move phases never appear on an
+artifact row.
+
+The source delete at the end is guarded the way `remotedelete.go` guards the remote one:
+every fact re-derived from the artifact's own journal record and the backup set's own
+configured root at the moment of the delete, never trusted from what the caller already
+checked, even though `deleteSource` has already re-verified the destination and the phase
+table has already made arriving here from anywhere but `SOURCE_DELETE_PENDING` impossible.
+The redundancy is the design, because the cost of being wrong once is a backup that no
+longer exists.
+
+**A chain with two medium tiers needs a hop from one medium to another, and that one goes
+through local disk.** The engine reads the source down to a `.moves` directory under the
+backup set's own `local_path`, proves what arrived hashes to what the journal recorded at
+ingestion, uploads that, and removes it. So such a chain needs room on the NAS for the
+largest artifact that will ever hop, transiently, even though nothing is stored there
+permanently, and a hop that will not fit is refused before anything is downloaded, with the
+copy it would have moved left exactly where it is. The source placement stays `ACTIVE` and
+content-verified for the whole copy phase, so the staging file is never itself a placement.
+
+Every reason a move did not happen is visible without reading logs: a cycle in which
+artifacts were due to move and none arrived says so on the last-run panel, in the operation
+record the activity feed reads, in the FR-23 event stream under `op=move`, and in
+`backup-manager run`'s exit status, which becomes 1 with the reason on stderr.
+
+### Archive classes, and asking for a copy back
+
+`GLACIER` and `DEEP_ARCHIVE` are the storage classes where a copy is durable, intact, and
+completely out of reach for the next several hours. `core/internal/archive` owns the closed
+four-word vocabulary for what can be done with a copy right now, and it is the only
+definition of it in this repository, held there by a test that fails on a second
+declaration of any of the four strings anywhere under `core/internal`. There is
+deliberately no fifth word for "unknown": a surface that cannot work out which applies has
+a bug, and printing a fifth word would turn that bug into something operators learn to
+ignore.
+
+**A retention tier whose medium names an archive class is refused when the config loads,
+and the refusal names the tier, the medium, the class and what to write instead.** The
+manager will not delete a copy against a destination it could not read back, an archived
+object cannot be read back, and there is no `upload_verification` mode that says existence
+is enough. Refusing the pairing where an operator writes it beats accepting it and then
+refusing it silently once per cycle for ever. The refusal is about the PAIRING and not the
+medium: declaring an archive-class medium that no tier delivers to is legal, and it is what
+you want if you already hold objects on `DEEP_ARCHIVE`, because the manager can see them
+and restore them and will never write there.
+
+```bash
+backup-manager restore production/postgres/backup.dump --medium offsite_s3 --days 7 --acknowledge
+```
+
+`--acknowledge` is required rather than a `--force` to skip, which is the opposite way
+round from a force flag: the value that costs nothing is the default, so a restore is never
+something a caller reaches by omission. It is billed and it takes hours. `--days` defaults
+to 7 and is bounded to 1 to 30, because zero is not a shorter restore, it is one that is
+billed and then immediately unavailable, and a fat-fingered large number is a month of
+double billing. Over HTTP it is `POST /api/v1/operations` with `action: restore_placement`.
+There is no percentage field, no completion-time field and no cost field on either surface:
+S3 reports a restore as running or finished and nothing else, and this product holds no
+price list, so all three would be invented.
+
+A bucket LIFECYCLE RULE can transition an object to an archive class days after it was
+written, whatever class the medium declares and whatever the endpoint reported at the
+moment of the write. Nothing observable at write time tells such a bucket from one without,
+so a medium that passed its preflight can still hold objects that need a restore later.
+That is caught at the moment a read is attempted rather than assumed away.
+
+### Proving a medium before a real backup depends on it
+
+A backup set has had `POST /backup-sets/test-connection` since it was written. A storage
+medium had no equivalent, so the first thing in this product ever to touch a bucket was a
+move, in the middle of a cycle, after an artifact had already been selected to leave local
+disk: a wrong region, a bucket that is not there, a credentials file the daemon cannot
+read, a policy that denies `PutObject`, every one of them discovered by the operation that
+needed it to work.
+
+`backup-manager medium preflight <medium-id>` (and the button beside the medium on the
+settings form, and `POST /api/v1/storage-mediums/{id}/preflight`) is
+`core/internal/mediumcheck`, and it does what a move needs rather than what feels like
+enough: credentials and reach answered separately, because obtaining a credential is a
+question for the host and reaching a bucket with it is a question for the provider, then
+deliverable, write, read back byte for byte, the storage class the endpoint really reports
+against the one the configuration claims, the declared verification class asked live, and
+the probe object confirmed deleted. An archive class is refused at `deliverable` with
+nothing written at all, because a 180-day minimum billing period is not a thing to discover
+empirically.
+
+No report it produces ever carries key material, and that is structural rather than
+careful: every sentence in a report is one of the package's own strings, composed only out
+of facts this manager already publishes about a medium, and there is no field an underlying
+error's text could travel in. The classified cause goes to the log instead, because it
+names a path on this host or an environment variable, which is a fact an API caller has no
+use for.
+
+Two things it cannot prove, said out loud rather than left to a failed restore. The probe
+lives at its own key under a reserved segment of the medium's prefix, so a bucket policy
+scoped to the whole prefix covers both the probe and a real artifact and this check means
+what it looks like, while a policy scoped per backup set covers one and not the other and
+the check cannot tell. And a lifecycle rule that archives objects later is invisible at
+write time, as above.
+
+### The promise to a deployment that wants none of this
+
+FR-35: a deployment that declares no storage medium must be byte for byte the product it
+was before EPIC E. That is not a sentence anybody has to trust. `core/tests/compat` is a
+captured corpus of the medium-free surfaces (the config decisions, the journal schema an
+upgrade inherits, what the CLI prints, what the `/api/v1` contract promises), compared line
+for line on every gate run, and `scripts/compat/selftest.sh` plants a real violation per
+cell in a copy of the tree and requires the gate to fail AND to name the cell whose promise
+the violation broke. Naming the cell rather than merely failing is what stops a mutation
+that broke the build for an unrelated reason from reading as a pass. The one assertion a
+regeneration of that corpus cannot silence compares two captures from the same run rather
+than a capture against a file.
+
+The additive rule falls out of the same promise: the `copy:` block only renders when there
+is something additive to say, which is why an artifact with one ordinary local copy prints
+exactly what it always printed.
+
 ## Status and health
 
 `core/internal/health` computes two structurally separate things and enforces, by test, that
