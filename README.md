@@ -2085,16 +2085,17 @@ conformance module (#85/B4.4), which ships no product binary of its own and inst
 the release binaries unchanged and checks their digest against
 `container/release-manifest.json`.
 
-Eight providers carry packaging metadata next to their bridge and no lifecycle code at all:
-`apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
+Eight providers are adapters over the canonical image with no lifecycle code of their own,
+seven of them carrying packaging metadata next to their bridge and one carrying none on
+purpose: `apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
 `apps/unraid/` (two Community Applications Docker templates), `apps/openmediavault/` (a
 Compose deployment profile), `apps/proxmox/` (the same Compose profile again, for a
 dedicated container-host guest, because Proxmox VE has no application store to package into
 at all), `apps/portainer/` (a version 3 App Template and the stack it deploys),
 `apps/casaos/` and `apps/zimaos/` (one `x-casaos` Compose file that is both the runtime
 definition and the store submission, for two stores), and `apps/dockge/` (no packaging at
-all, on purpose, because Dockge imports `container/compose.yaml` itself). All of them are
-metadata and templates wrapping the exact canonical OCI image, and
+all, on purpose, because Dockge imports `container/compose.yaml` itself). Every one of them
+is metadata and templates wrapping the exact canonical OCI image, and
 `distribution/packaging/` holds them to that on every commit: one shared source of truth in
 `canonical.json`, plus scanners for the gate checks that are decidable from the repository
 alone.
