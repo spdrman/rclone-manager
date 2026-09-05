@@ -245,3 +245,110 @@ func stateOf(t *testing.T, configPath string, id model.ArtifactID) string {
 	}
 	return rec.State
 }
+
+// TestRun_Retention_NamesTheSetsNoPolicyGovernsAtAll is acceptance
+// criterion three on the command whose whole subject is which policy
+// applies to what. `retention` walks the configuration, so before this a
+// removed set's backups were not merely unmarked here, they were absent,
+// and absence reads as "nothing to think about".
+func TestRun_Retention_NamesTheSetsNoPolicyGovernsAtAll(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if code := run([]string{"run", "--config", configPath}); code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	removeTheOnlySet(t, configPath)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"retention", "--config", configPath}); code != 0 {
+			t.Errorf("retention = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "retained under no policy at all") {
+		t.Errorf("retention does not mention the backups no chain selects:\n%s", out)
+	}
+	if !strings.Contains(out, "production/postgres-primary") {
+		t.Errorf("retention does not name the set:\n%s", out)
+	}
+}
+
+// TestRun_Retention_SaysNothingExtraWhenEverySetIsConfigured is the
+// control that keeps the addition additive. This command's output is
+// pinned by the black-box suite in spdrman/rclone-manager-tests, and
+// every case there is a configured-sets-only deployment, so printing this
+// section unconditionally would mean a cross-repo pin move for a line
+// that says "none".
+func TestRun_Retention_SaysNothingExtraWhenEverySetIsConfigured(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if code := run([]string{"run", "--config", configPath}); code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"retention", "--config", configPath}); code != 0 {
+			t.Errorf("retention = %d, want 0", code)
+		}
+	})
+	if strings.Contains(out, "no policy at all") {
+		t.Errorf("retention printed the unconfigured section for a deployment that has none:\n%s", out)
+	}
+}
+
+// TestRun_Artifacts_MarksTheRowsNoPolicyGoverns. This list is the one
+// screen the removal confirmation promises those backups stay on, and
+// since #391 widened it they have appeared here as ordinary rows of an
+// ordinary set. The marker is what makes the promise honest rather than
+// merely kept.
+func TestRun_Artifacts_MarksTheRowsNoPolicyGoverns(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if code := run([]string{"run", "--config", configPath}); code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+
+	before := captureStdout(t, func() {
+		if code := run([]string{"artifacts", "--config", configPath}); code != 0 {
+			t.Errorf("artifacts = %d, want 0", code)
+		}
+	})
+	if strings.Contains(before, "configuration removed") {
+		t.Fatalf("a configured set's rows were marked:\n%s", before)
+	}
+
+	removeTheOnlySet(t, configPath)
+
+	after := captureStdout(t, func() {
+		if code := run([]string{"artifacts", "--config", configPath}); code != 0 {
+			t.Errorf("artifacts = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(after, "backup.dump") {
+		t.Fatalf("the removed set's backup stopped being listed, which is the promise #391 makes:\n%s", after)
+	}
+	if !strings.Contains(after, "no retention policy") {
+		t.Errorf("the row is listed with nothing saying which policy governs it:\n%s", after)
+	}
+}
+
+// TestRun_Status_ReportsWhatIsRetainedOutsideEveryConfiguredSet puts the
+// same fact on the screen an operator opens to ask whether anything is
+// wrong, and pins the half that keeps it usable: it does not fail the
+// command, because nothing has failed and a healthcheck that flapped on
+// a removal would teach people to ignore it.
+func TestRun_Status_ReportsWhatIsRetainedOutsideEveryConfiguredSet(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if code := run([]string{"run", "--config", configPath}); code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	removeTheOnlySet(t, configPath)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"status", "--config", configPath}); code != 0 {
+			t.Errorf("status = %d, want 0; a removed backup set is a state, not a failure", code)
+		}
+	})
+	if !strings.Contains(out, "retained outside every backup set this configuration names") {
+		t.Errorf("status says nothing about backups no configured set accounts for:\n%s", out)
+	}
+	if !strings.Contains(out, "under no retention policy") {
+		t.Errorf("status does not name the policy governing them:\n%s", out)
+	}
+}

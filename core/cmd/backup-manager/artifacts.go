@@ -74,11 +74,62 @@ func cmdArtifacts(args []string) int {
 		return fail(err)
 	}
 
+	// Issue #418. Showing a removed set's backups here without saying so
+	// is what this list has been doing since #391 widened it: they read
+	// as ordinary rows of an ordinary backup set, and an operator cannot
+	// tell "kept under the deployment's retention chain" from "kept
+	// because nothing is looking any more". The marker is per row rather
+	// than a footnote alone, because a footnote on a four-hundred-row
+	// list does not tell anyone WHICH rows it is about.
+	//
+	// The marker only ever appears on those rows, so a deployment that
+	// has never removed a backup set prints exactly what it printed
+	// before. That keeps this command's pinned cases in
+	// spdrman/rclone-manager-tests (suites/cli/) unchanged.
+	ungoverned, err := unconfiguredSetIDs(ctx, svc)
+	if err != nil {
+		return fail(err)
+	}
+
 	for _, r := range records {
-		fmt.Printf("%-60s %-22s remote=%-40s local=%s\n", r.Artifact, r.State, r.RemotePath, r.LocalPath)
+		marker := ""
+		if ungoverned[r.Artifact.Set.String()] {
+			marker = "  [configuration removed: no retention policy]"
+		}
+		fmt.Printf("%-60s %-22s remote=%-40s local=%s%s\n", r.Artifact, r.State, r.RemotePath, r.LocalPath, marker)
 	}
 	fmt.Printf("%d artifact(s)\n", len(records))
+	if len(ungoverned) > 0 && listedAny(records, ungoverned) {
+		fmt.Println("marked rows belong to backup sets whose configuration was removed: nothing retains, reconciles or")
+		fmt.Println("advances them. `backup-manager unconfigured` says what they hold and what can be done about it.")
+	}
 	return 0
+}
+
+// unconfiguredSetIDs is the set of backup set ids the journal remembers
+// and the configuration does not, as a lookup for the listing above.
+func unconfiguredSetIDs(ctx context.Context, svc *app.Service) (map[string]bool, error) {
+	sets, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(sets))
+	for _, u := range sets {
+		out[u.Set.String()] = true
+	}
+	return out, nil
+}
+
+// listedAny reports whether any row actually printed carries the marker,
+// so the explanation below the list is not offered for rows a --source or
+// --backup-set filter left out.
+func listedAny(records []state.Record, ungoverned map[string]bool) bool {
+	for _, r := range records {
+		if ungoverned[r.Artifact.Set.String()] {
+			return true
+		}
+	}
+	return false
 }
 
 // printArtifactDetail renders d field by field against

@@ -133,6 +133,34 @@ func cmdRetention(args []string) int {
 		printPlacementPlan(cfg, r)
 	}
 
+	// Issue #418: the backup sets no configuration names at all.
+	//
+	// This command's whole subject is which policy applies to what, and
+	// it walks the configuration, so a removed set's backups were absent
+	// from it entirely. Absent reads as "nothing here to think about",
+	// which is the opposite of the truth: those backups are retained by
+	// nothing, aged out by nothing, and pinned until somebody deletes
+	// them by hand.
+	//
+	// Printed only when there is something to print, so a deployment
+	// that has never removed a backup set gets byte-identical output to
+	// the one it got before. That is not only taste: this command's
+	// output is pinned by the black-box contract suite in
+	// spdrman/rclone-manager-tests (suites/cli/cases/retention/), and
+	// every case there is a configured-sets-only deployment.
+	unconfigured, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if len(unconfigured) > 0 {
+		fmt.Println("\nretained under no policy at all (issue #418):")
+		for _, u := range unconfigured {
+			fmt.Printf("  %s: %d artifact(s), %d retained, %d byte(s) on storage; this backup set's configuration was removed,\n", u.Set, u.Artifacts, u.Retained, u.Bytes)
+			fmt.Println("    so no retention chain selects or expires these and nothing here will ever delete them.")
+			fmt.Printf("    Create %s again to put them back under a policy: `backup-manager unconfigured` explains the rest.\n", u.Set)
+		}
+	}
+
 	if !*dryRun {
 		fmt.Println("\nnote: local deletion (FR-20) is not implemented anywhere in this codebase yet (issue #21 is open); this is a preview only, identical to --dry-run.")
 	}
