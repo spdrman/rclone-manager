@@ -35,12 +35,22 @@ import (
 // case).
 // ---------------------------------------------------------------------------
 
+// TestClassify_Nil pins the one input that has no failure to describe.
+// Unclassified rather than Permanent, because Permanent is a verdict and
+// there is nothing here to have a verdict about; CategoryOf makes the same
+// distinction from the other side.
 func TestClassify_Nil(t *testing.T) {
 	if got := classify(nil); got != transport.Unclassified {
 		t.Fatalf("classify(nil) = %v, want Unclassified", got)
 	}
 }
 
+// TestClassify_IsIdempotentOnAnAlreadyWrappedError matters because this
+// adapter wraps at every layer an error passes through, so double-wrapping
+// is a mistake somebody will make. An error that already carries a verdict
+// keeps it rather than being re-derived from a chain that now has a
+// classified error in the middle of it, where the sentinel checks below
+// would reach a different answer.
 func TestClassify_IsIdempotentOnAnAlreadyWrappedError(t *testing.T) {
 	wrapped := transport.NewError(transport.PermissionDenied, "stat", errors.New("boom"))
 	if got := classify(wrapped); got != transport.PermissionDenied {
@@ -48,6 +58,12 @@ func TestClassify_IsIdempotentOnAnAlreadyWrappedError(t *testing.T) {
 	}
 }
 
+// TestClassify_NotFound_RealLocalError runs the same absent path through
+// three adapter methods rather than one, because each reaches rclone
+// differently and what comes back is not the same sentinel in every case:
+// rclone's own fs.ErrorObjectNotFound in some, the standard library's
+// os.ErrNotExist surviving unwrapped in others. errors.go checks for both,
+// and this is the case that says why it has to.
 func TestClassify_NotFound_RealLocalError(t *testing.T) {
 	ctx := context.Background()
 	adapter := New()

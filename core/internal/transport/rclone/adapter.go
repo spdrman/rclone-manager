@@ -156,8 +156,8 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 //
 // An Fs is not a connection, it is a pool, and two of rclone's own
 // settings decide how wide one operation opens that pool. Both default
-// above one, and both were measured against the real fixture in
-// connections_gate_test.go:
+// above one, and both were measured against the real fixture in what is
+// now core/tests/machinegate/connections_test.go:
 //
 //   - Checkers (8 by default) is how many goroutines walk a tree that the
 //     backend cannot list recursively, and sftp has no ListR, so a plain

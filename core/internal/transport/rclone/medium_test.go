@@ -14,6 +14,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// This file is the always-available half of the MediumStore evidence: the
+// full contract suite against rclone's local backend, plus the refusals
+// that happen before any backend is reached at all.
+//
+// Running the contract against the easy backend first is the same
+// discipline the Transport suite uses, and the reason is that an
+// integration run which is also the suite's first run cannot tell "S3 is
+// wrong" from "the suite is wrong". By the time core/tests/miniointegration
+// executes, every assertion here has already passed against something, so
+// a failure there is about the endpoint.
+//
+// What the local backend can and cannot stand in for is the thing to keep
+// straight. It CAN stand in for the boundary's own logic: key handling,
+// the not-found and bucket-absent distinction, delete semantics, listing
+// order. It CANNOT stand in for anything about S3's wire behaviour, which
+// is why the API-error table below classifies fabricated error codes
+// (against a locally declared ErrorCode interface, exactly as errors.go
+// matches them) rather than pretending a directory can produce a
+// NoSuchBucket.
+//
+// AttestsSHA256 is true here and false everywhere else, which is what
+// makes this the one run that exercises ObjectChecksum's success path.
+
 // localMediumFixtures runs the MediumStore contract suite against rclone's
 // local backend, in-tree, with no container and no network.
 //
@@ -25,6 +48,9 @@ import (
 // says anything about S3.
 type localMediumFixtures struct{}
 
+// NewMedium hands back a medium rooted at a fresh t.TempDir, so the
+// isolation MediumFixtures asks for comes from the testing package's own
+// cleanup rather than from this fixture remembering to tear anything down.
 func (localMediumFixtures) NewMedium(t *testing.T) transport.Medium {
 	t.Helper()
 	return transport.Medium{

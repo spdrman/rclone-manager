@@ -12,6 +12,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// This file exists because of four measured wrong answers, and it is
+// organised around them rather than around the adapter's methods.
+//
+// Every one of them came from the same cause: rclone translates a 404 into
+// a filesystem-shaped sentinel before this adapter sees it, throwing away
+// the S3 error code that is the only thing separating "this key is not
+// there" from "this bucket is not there". Against a real MinIO, before
+// confirmBucket existed, a mistyped bucket made DeleteObject return
+// success, ListObjects return an empty listing, and StatObject and
+// OpenObject report the object missing. Each of those is read downstream
+// as a fact about an ARTIFACT, so a typo in one config line would have
+// been recorded as a medium that had lost everything on it.
+//
+// It runs against rclone's LOCAL backend on every gate, which is not a
+// compromise. A local Fs rooted at a directory that does not exist
+// produces the identical pair of sentinels, so the disambiguation is
+// exercised with no container anywhere; the MinIO run proves the same
+// thing against the endpoint the bug was actually found on.
+//
+// Every case carries a positive control against an existing container,
+// and that is the part to keep. "A missing container is refused" also
+// passes if the adapter started refusing everything, which would be a
+// worse bug than the one being fixed and would look like a green test.
+
 // TestAMissingContainerIsNeverReportedAsAMissingObject is confirmBucket's
 // guard, and it is the reason it exists.
 //

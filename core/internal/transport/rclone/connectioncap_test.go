@@ -13,6 +13,34 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the in-process half of #264 and #355: how many connections
+// one operation is allowed to open, how long it may spend dialling, and
+// what happens to a caller's own settings on the way through.
+//
+// The observable half, what a real sshd actually sees, lives in
+// core/tests/machinegate/connections_test.go and needs Docker. This half
+// deliberately needs nothing: every case here reads an option map or a
+// ConfigInfo, so a machine with no container runtime still fails when a
+// bound is removed. That matters because the bounds below are invisible
+// when they work and expensive when they do not; the production hosts this
+// manager pulls from reject a third simultaneous SSH connection with a TCP
+// reset, so an unbounded walk does not run slowly, it fails, as a bare
+// "connection refused" naming nothing.
+//
+// Two shapes recur and both are load-bearing.
+//
+// Every bound is checked as a BOUND, not as an assignment: a caller that
+// already asked for less keeps what it asked for, and a caller's unrelated
+// settings survive. rclone captures the ambient ConfigInfo into an Fs at
+// construction and never re-reads it, so a bound that overwrote things
+// would make one caller's bandwidth limit permanent for that Fs's whole
+// life.
+//
+// And the connect-timeout rows check rclone's own default first, and fail
+// if it is already at or under the ceiling. A ceiling test against a
+// default that is already lower proves nothing, and it would go quiet
+// exactly when an rclone upgrade changed the number underneath it.
+
 // A source that says nothing about connection limits must not constrain
 // them, because that is what every configuration written before this field
 // existed means and none of them should change behaviour.
@@ -81,6 +109,11 @@ func TestSftpConfigRefusesANegativeConnectionCeiling(t *testing.T) {
 	}
 }
 
+// baseSource is a valid sftp Source with the two files sftpConfig
+// actually stats. Neither file's CONTENT is ever read on this path (the
+// key is only ever handed to rclone as a path, and known_hosts likewise),
+// so a placeholder is enough, and the key is written 0600 because #293's
+// mode check refuses anything else before any of these cases get to run.
 func baseSource(t *testing.T) transport.Source {
 	t.Helper()
 	dir := t.TempDir()
@@ -95,6 +128,11 @@ func baseSource(t *testing.T) transport.Source {
 	return source(key, kh)
 }
 
+// source is the Source literal itself, separated from the file setup
+// above so that what these cases hold constant (an sftp source with a key,
+// a known_hosts and no connection ceiling) is readable without the
+// t.TempDir plumbing around it. Every field sftpConfig branches on is set
+// here, so a case can vary exactly one of them by name.
 func source(key, knownHosts string) transport.Source {
 	return transport.Source{
 		ID:         "s/b",
@@ -132,9 +170,9 @@ func TestSftpConfigRestoresRclonesOwnPoolDrainer(t *testing.T) {
 // its own connection, so discovery alone opens eight against a host that
 // may reject the third.
 //
-// The observable proof is in connections_gate_test.go, against a real
-// server. This is the same claim without a container, so a machine with no
-// docker still fails when the bound is removed.
+// The observable proof is in core/tests/machinegate/connections_test.go,
+// against a real server. This is the same claim without a container, so a
+// machine with no docker still fails when the bound is removed.
 func TestOneConnectionAtATimeBoundsTheWalkAndTheTransfer(t *testing.T) {
 	ctx := oneConnectionAtATime(context.Background())
 	ci := fs.GetConfig(ctx)

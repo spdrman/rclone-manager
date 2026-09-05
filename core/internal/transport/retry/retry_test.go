@@ -10,6 +10,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file proves FR-22's bounded backoff without ever waiting out a real
+// one, which is the whole reason the retry loop was split out of the
+// adapter in the first place.
+//
+// The backoff math is tested by calling delay directly with a seeded
+// *rand.Rand, so the "never exceeds MaxDelay" claim is checked over many
+// samples in microseconds rather than inferred from a handful of real
+// sleeps. That is why delay takes the source as a parameter at all: it is
+// the one piece of this package whose correctness is statistical, and a
+// statistical property asserted from three observations is not asserted.
+//
+// The loop itself is tested with a policy whose delays are sub-millisecond
+// (fastPolicy), so a case about how many attempts happen is not also a
+// case about how long they take. The two cancellation cases are the
+// exception and they are timed on purpose: FR-22 says a caller who cancels
+// gets control back promptly, and "promptly" is only a claim about the
+// clock.
+//
+// Errors here are built with transport.NewError rather than mocked,
+// because the classification they carry is exactly what
+// DefaultIsTransient reads, and a fake that carried something else would
+// be testing this file's idea of the vocabulary instead of the one in
+// errors.go.
+
 // transientErr builds an error DefaultIsTransient (and so Do, by default)
 // treats as retryable.
 func transientErr(msg string) error {

@@ -12,6 +12,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 )
 
+// This file is where the progress numbers are actually proved, against a
+// real rclone copy through the real Adapter. internal/transport's own
+// progress_test.go covers the context plumbing; nothing there can say
+// whether a sample ever reads anything but 0 or 100 percent, which is the
+// only thing issue #221 was about.
+//
+// Getting an intermediate reading reliably is the whole difficulty, and
+// the technique is a throttle rather than a large file. "Make it big
+// enough" is a race against whatever disk is underneath: a file large
+// enough to guarantee several sampling windows on fast NVMe is too large
+// to be welcome in a suite. Turning rclone's own bandwidth limiter down
+// and shrinking both the payload and the sampling interval makes the
+// timing a fact instead of a hope, and the test fails outright if the copy
+// finished faster than the limit implies, because an intermediate reading
+// observed under a throttle that did not engage is luck rather than
+// evidence.
+//
+// One thing to carry away before copying this shape into a cancellation
+// test: --bwlimit is the right lever HERE and the wrong one there. It
+// throttles by parking inside rclone, and both parking spots wait with
+// WaitN(context.Background(), n), so a copy under it is slow AND partly
+// uninterruptible. A mid-transfer cancellation test built on it cannot
+// prove what it says, which is what #414 found; that case runs over a slow
+// TCP relay now instead.
+
 // TestCopyToLocal_ReportsIntermediateProgressForARealTransfer is the
 // evidence issue #221 asks for, and it is deliberately not a test that can
 // pass by only ever seeing 0 and 100.
@@ -186,6 +211,10 @@ func TestCopyToLocal_WithNoReporterIsUnchanged(t *testing.T) {
 	}
 }
 
+// byteCounts renders the samples for the one failure message that needs
+// them. A progress feed that only ever read 0 or the full size is exactly
+// what #221 reports as useless, so the failure has to show the readings
+// rather than just say there were none in between.
 func byteCounts(samples []transport.ByteProgress) []int64 {
 	out := make([]int64, 0, len(samples))
 	for _, s := range samples {

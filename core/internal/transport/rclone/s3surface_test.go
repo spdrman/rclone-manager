@@ -13,6 +13,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file guards the S3 surface at its two edges: what configuration can
+// reach rclone's s3 backend, and what code can reach an AWS SDK.
+//
+// Neither is a behaviour anybody would notice going wrong. rclone's s3
+// backend takes well over a hundred options, and the ones that matter here
+// (assume-role, the SSE-C family, download_url, presigned requests, v2
+// signing, versioned views, ACL headers) change WHERE a backup goes or WHO
+// writes it, silently and successfully. What keeps them out is that
+// s3Options is an allowlist, and an allowlist is only an allowlist while
+// something checks it, so the first test measures the complete producible
+// key set in both directions: a key that appeared fails, and so does one
+// that vanished, because losing `endpoint` sends a backup to AWS instead
+// of the configured service and losing `no_check_bucket` lets this adapter
+// provision a bucket somebody mistyped.
+//
+// The second test is FR-28's "no AWS SDK enters this repository" read the
+// only way it can honestly be read. Registering rclone's s3 backend DOES
+// put aws-sdk-go-v2 in go.mod, and no test can make that untrue; what
+// would be a mistake is a SECOND S3 implementation written against the SDK
+// directly, outside the FR-3 boundary and outside rclone's upgrade
+// contract. So it scans import lines this repository OWNS rather than
+// checking go.mod, which cannot tell the two apart, and it fails on a file
+// it could not parse rather than skipping it, because an unparsed file is
+// an unchecked one. Its file count is a positive control: a walk that
+// visited nothing reports no offenders and looks exactly like a clean
+// repository.
+
 // TestS3OptionsAreExactlyThisAllowlist pins the COMPLETE set of rclone s3
 // options this adapter can ever produce.
 //

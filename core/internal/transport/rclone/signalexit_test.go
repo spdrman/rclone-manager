@@ -19,6 +19,33 @@ import (
 	"github.com/rclone/rclone/lib/atexit"
 )
 
+// This file is a test about exit statuses, so it cannot run in the process
+// that would be exiting.
+//
+// The claim under test is that after DisableSignalExit, a SIGTERM is
+// handled by this binary's own handler and the process leaves with the
+// status that handler chose, rather than with rclone's 128+signal. Nothing
+// inside a process can observe its own exit status, and a test that
+// asserted the handler ran would not be the same claim: the bug (#190) was
+// a RACE, where rclone's handler and the program's own both woke and
+// rclone's reached os.Exit first. So every case re-executes this test
+// binary as a child, in a mode named through an environment variable, and
+// asserts on what the child's exit status turned out to be.
+//
+// Three things make that honest rather than flaky, and all three are worth
+// keeping.
+//
+// The child announces readiness before the parent signals, so no case can
+// pass or fail on having signalled a process whose handlers were not
+// installed yet. The child spends real time shutting down, because both
+// handlers wake on the same signal and with an instantaneous shutdown the
+// winner would be a coin toss the test would then report on. And the
+// -race build runs the children under a ThreadSanitizer suppression, for
+// a genuine data race inside rclone's own lib/atexit that this feature
+// provokes every time and that no synchronisation this repository can add
+// would fix; without it the detector's exit status lands in the one number
+// this test reads.
+
 // Whether a signal ends a process, and with what status, can only be
 // observed from outside that process, so these cases run in a child: this
 // test binary re-executes itself with signalExitChildEnv set to one of
