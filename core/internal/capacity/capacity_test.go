@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+// This file covers the arithmetic half of the guard, which is the half
+// where a wrong answer still looks entirely reasonable.
+//
+// The requirement formula is asserted against its literal shape rather than
+// against "an assessment came back", and the doubled-artifact formula is
+// written out and explicitly rejected. Counting the artifact twice yields a
+// plausible refusal on a nearly full disk and a plausible admission on an
+// empty one, so a test that only checked for a non-nil result would agree
+// with the bug on almost every input.
+//
+// The overflow case is here for a sharper reason. The requirement is a
+// uint64 sum of an operator-set margin and an artifact size, and a wrapped
+// sum comes out smaller than either input, so it reads as plenty of room.
+// That is the one arithmetic mistake available in this package that fails
+// open rather than closed.
+//
+// Levels are walked at their boundaries rather than sampled inside the
+// bands, and the does-not-fit case is asserted on its own because it is a
+// claim about precedence rather than about a number: it has to come back
+// Critical whatever the configured thresholds happen to be.
+
 // ---------------------------------------------------------------------------
 // Thresholds.Validate
 // ---------------------------------------------------------------------------

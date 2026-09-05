@@ -36,8 +36,9 @@ import (
 // complete restore point that has satisfied required verification: exactly
 // gfsIsManagedComplete's Committed/RemoteDeletePending/Complete/
 // RemoteRetained set, the same one gfs.go already uses for "managed,
-// completed backup". REMOTE_RETAINED is easy to leave off this list and
-// costly to: it is the only state a read-only backup set ever reaches, so
+// completed backup". That is four states, and writing the count out is
+// deliberate. REMOTE_RETAINED is easy to leave off this list and costly
+// to: it is the only state a read-only backup set ever reaches, so
 // omitting it reads as "a read-only set has no restore points at all".
 // The README said exactly that until #478. FAILED,
 // QUARANTINED, QUARANTINED_LOST and every .partial (pre-Committed) state
@@ -47,7 +48,7 @@ import (
 // map (health depends on nothing upstream of it, and importing it here
 // would invert that), so the equivalence is enforced by review and by
 // TestLastKnownGoodEligibilityMatchesGFSManagedComplete rather than by a
-// shared symbol, but the three states involved are the same three states,
+// shared symbol, but the four states involved are the same four states,
 // on purpose, in both places.
 //
 // Reusing gfs.go's own eligibility check is not just convenient: it is

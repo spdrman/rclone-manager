@@ -325,6 +325,15 @@ func (r *run) record(step Step, outcome Outcome, category, detail string) {
 
 func (r *run) pass(step Step, detail string) { r.record(step, Passed, "", detail) }
 func (r *run) skip(step Step, detail string) { r.record(step, Skipped, "", detail) }
+
+// fail is the one place FR-33 is enforced rather than remembered. The
+// error itself goes to the log through observe, where an operator's own
+// diagnostics already live and where a host path or an environment
+// variable name is exactly what somebody needs. The Check gets only the
+// category name and a sentence this package composed. There is no
+// argument by which err could reach a Check and no field on one it could
+// sit in, so the split is a property of this function rather than of
+// everyone who calls it.
 func (r *run) fail(step Step, err error, detail string) {
 	r.deps.observe(step, err)
 	r.record(step, Failed, categoryName(err), detail)
@@ -395,6 +404,12 @@ func (r *run) reachable(ctx context.Context) {
 	}
 }
 
+// The sentence builders from here down are what make a Report safe to
+// hand to an API caller. Every string an operator reads is assembled out
+// of values this manager already publishes about a medium, its id, its
+// bucket, its storage class, so no underlying error text is ever a source
+// for one. They hang off run rather than standing alone so the medium is
+// in scope without being threaded through each.
 func (r *run) credentialsPassed() string {
 	return fmt.Sprintf("the credential storage medium %q declares was obtained and the endpoint accepted it", r.medium.ID)
 }

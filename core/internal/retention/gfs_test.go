@@ -14,6 +14,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// GFS is calendar arithmetic, and calendar arithmetic goes wrong on the
+// days nobody pictures while writing it. So most of this file's weight is
+// in the table in TestGFSDecideCalendarCases, and its cases are chosen for
+// boundaries rather than for breadth: the edge of each tier's window, two
+// artifacts sharing a bucket, a bucket with nothing in it, and the week
+// boundary under a configured week start.
+//
+// Determinism then gets three tests rather than one, because it has three
+// independent ways of breaking. The same records in a different order have
+// to give the same answer, two artifacts that tie have to resolve the same
+// way twice, and two artifacts on one calendar day at different times of
+// day have to count as the same day. Any one of those passing says nothing
+// whatever about the other two.
+//
+// The future-dated case is its own test and not an assertion inside
+// another. A record dated past the clock reading falls outside every
+// window, so it can never be a representative, and yet it still has to
+// appear in the output because it is eligible. Those two halves are what
+// tell "correctly not kept" apart from "quietly dropped", which look
+// identical from any assertion that only counts what was kept.
+
 // --- test helpers (prefixed gfs* so a sibling FR-19/FR-20 test file in
 // this same package can declare its own without colliding with these) ---
 

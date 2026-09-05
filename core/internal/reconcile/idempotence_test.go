@@ -12,6 +12,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Running this pass twice has to be indistinguishable from running it once,
+// and that is a claim about two kinds of repeat.
+//
+// The ordinary kind is a second Reconcile over a journal the first one
+// already fixed, which the tests below drive across the whole table rather
+// than on one representative row: each row converges for its own reason,
+// and a row that converged by accident looks the same as one that converged
+// by design until it stops.
+//
+// The sharper kind is a retry inside a single artifact's transition chain,
+// where the first write landed and the second did not. That is why the
+// fixtures hold the clock and the transport still. Idempotence has to hold
+// when nothing outside this package changed between the two calls, because
+// the key that makes it hold is derived from the row's own UpdatedAt, and a
+// transport that answered differently the second time would let a test pass
+// without the key ever doing its job.
+
 // idempotenceFixture is one artifact, already journaled through driveTo,
 // plus the Stat response its remote path should give both times Reconcile
 // runs against it. Every fixture below is built to be answerable by a

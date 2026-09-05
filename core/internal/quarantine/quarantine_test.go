@@ -9,6 +9,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The tests below follow the three questions the package doc says an
+// operator has, and each one is written to fail in the direction that would
+// hurt the operator rather than in whichever direction was convenient.
+//
+// The exclusion test is the one that is easy to write weakly. Summarize is
+// handed a whole backup set rather than a pre-filtered list, so it has to
+// ignore every state that is not one of the two quarantine states, and a
+// test naming three or four of them by hand would keep passing on the day a
+// new state is added to the lifecycle. It walks lifecycle.AllStates
+// instead, so a state added upstream is covered here as soon as it exists.
+//
+// Ordering gets two tests rather than one because the sort has two separate
+// jobs. Lost entries have to come first, so an irrecoverable loss cannot be
+// scrolled past, and equal timestamps have to resolve the same way twice,
+// so a report does not reshuffle itself between two runs over identical
+// input.
+
 func mustArtifact(t *testing.T, name string) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")

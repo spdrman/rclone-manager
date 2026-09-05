@@ -9,6 +9,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-24's four states are a precedence order rather than four independent
+// checks, so most of what can go wrong here is a verdict that is perfectly
+// defensible on its own and wrong next to another one.
+//
+// That is why so much of this file is pairs rather than single cases. A
+// QUARANTINED_LOST artifact is put next to a fresh known-good backup and
+// then next to a stale set; a retrying failure is put next to a stuck one;
+// a quarantined newest arrival is put next to an older good backup that is
+// still perfectly fine. Read alone, each of those has an answer that looks
+// reasonable. Only the pairing says which one is supposed to win.
+//
+// The stale window has both its edges asserted, exactly at the threshold
+// and one nanosecond past it, because "inside the window" is where an
+// off-by-one hides and the two answers either side of it are a page an
+// operator gets and a page they do not.
+//
+// TestInjectedInputsPassThroughUnchangedAndNeverAffectState is the one
+// guarding the package doc's central claim. Free space and version strings
+// arrive as caller-supplied inputs, and this checks they reach the report
+// and move no verdict. It is the readable half of a separation that
+// evidence's own shape already enforces structurally, and it is here so a
+// reader can see the claim tested rather than only argued.
+
 var testSet = mustSet("prod", "postgres-primary")
 
 func mustSet(source, set string) model.BackupSetID {

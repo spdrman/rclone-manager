@@ -15,6 +15,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-20 asks for six safety checks before a delete, and they are
+// independent on purpose: each one is the last thing standing between this
+// package and a different way of removing the wrong file.
+//
+// So each check gets a case that reaches it with the other five already
+// satisfied. A symlink at the final path, a crafted name that traverses out
+// of the root, a sibling directory that merely shares the root's prefix, a
+// journal path disagreeing with the computed one, a .partial the caller
+// explicitly asked to delete, a file the journal has never heard of: every
+// one of those fixtures is otherwise a perfectly good delete candidate. A
+// test that could fail for two reasons at once would not tell anybody that
+// the check it is named after is the one that fired.
+//
+// The last-known-good pair is the sharpest thing here. One case refuses an
+// LKG artifact through the ordinary path; the other hands prune a GFS
+// verdict that says outright to delete it. Prune re-derives protection
+// instead of trusting what it was handed, so the second case fails against
+// the implementation almost anybody would write first, which is the one
+// that reads its input.
+//
+// TestPruneDryRunAndApplyAgree covers the mandatory dry run. Nothing about
+// the two code paths forces them to reach the same verdict, and a preview
+// that can disagree with the apply is worse than no preview at all, so the
+// agreement is asserted rather than assumed.
+
 // --- test helpers (prefixed prune* so they never collide with gfs_test.go's
 // gfs*-prefixed helpers or lastknowngood_test.go's lkg*-prefixed ones in
 // this same package; gfsMustSet and gfsMustArtifact are generic enough to

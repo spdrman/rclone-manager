@@ -1,5 +1,20 @@
 package testtier
 
+// The ledger is how a rule with known violations gets switched on anyway.
+//
+// A guard that fires on the tree as it stands is a guard nobody can merge:
+// either it lands red, or the rule gets watered down until it fires on
+// nothing. So the violations that existed when the rule was written are
+// listed here by file and rule, the scan subtracts them, and everything
+// else is a failure. The list is the migration plan sitting where the guard
+// can hold it, which is what stops the two from drifting apart. Fixing a
+// file without removing its entry fails as a stale entry, and adding a
+// violation without an entry fails as an unexpected finding.
+//
+// Diff is the whole of that subtraction, and its symmetry is the point. A
+// ledger that only caught new violations would quietly turn into a list of
+// files somebody fixed years ago.
+
 // LedgerEntry is one file known to be in the wrong tier, and the issue
 // that moves it. The ledger is the migration, written down where the
 // guard can hold it: a file that stops violating has to come off the

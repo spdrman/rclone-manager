@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+// Every haystack here is a string this project did not write, so they are
+// reproduced as the libraries actually emit them rather than invented. The
+// IPv6 case earns its own test for that reason: the bracketed host:port
+// form is the shape most likely to slip past a substring rule somebody
+// wrote while picturing IPv4.
+//
+// Two tests exist purely because the filter is allowed to do nothing.
+// NewRedactor returns nil rather than an empty Redactor when no endpoint
+// contributes a needle, and a nil receiver has to filter to a no-op instead
+// of panicking. That pair is what makes it safe for emit to call Filter
+// unconditionally on every string it writes, which is what makes coverage
+// total rather than opt-in.
+//
+// The resolution tests are the ones easiest to leave out and most
+// expensive to. A dial failure prints the address the stack reached, never
+// the name the process was configured with, so an endpoint given as a DNS
+// name is redacted nowhere at all unless what it resolves to is registered
+// alongside it.
+
 func TestNewRedactor_NilForNoEndpoints(t *testing.T) {
 	if r := NewRedactor(); r != nil {
 		t.Fatalf("NewRedactor() = %v, want nil for zero endpoints", r)

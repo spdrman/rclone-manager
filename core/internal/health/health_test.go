@@ -6,6 +6,24 @@ import (
 	"time"
 )
 
+// These tests are about the types rather than about any calculation, and
+// the first one is doing more work than it looks like.
+//
+// TestProcessAndBackupSetHealthShareNoFields walks both structs by
+// reflection and fails on a single shared field name. That reads as an odd
+// thing to assert until you take invariant 14 seriously: the two halves of
+// FR-24 answer different questions, and the way that separation actually
+// breaks is never a bad calculation. It is a field called Status or OK
+// turning up on both types and a renderer reading whichever one it happens
+// to be holding. Reflection catches that the moment it is written, and code
+// review reliably does not.
+//
+// The rest pins what the four state names render as and that NewReport only
+// bundles what it was handed. The names are compared against literals
+// rather than against the constants because an operator greps for HEALTHY
+// and a dashboard matches on STALE, and neither of those would fail here if
+// a rename went through cleanly.
+
 // TestProcessAndBackupSetHealthShareNoFields proves the separation the
 // package doc claims is structural, not just a matter of discipline: the
 // two types that answer FR-24's two questions cannot even accidentally

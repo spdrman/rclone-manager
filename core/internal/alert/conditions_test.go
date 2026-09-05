@@ -12,6 +12,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// conditions.go turns verdicts other packages already reached into the four
+// names the dispatcher de-duplicates on, and this file's job is to stop
+// that translation from acquiring an opinion of its own.
+//
+// Every case hands over a finished verdict, a health.State, a
+// capacity.Level, a transport category, and checks which conditions come
+// back out. None of them builds a scenario and expects this package to work
+// out whether it is bad, because working that out is precisely what
+// conditions.go is not allowed to do.
+//
+// RepeatedFailure gets its two arms tested apart because they answer
+// different questions. The count arm weighs an operator's configured number
+// against a count health already produced. The Failing arm ignores the
+// count entirely, since FR-24's "a human is needed right now" state gated
+// behind a threshold would leave the single most severe state as the one
+// that never alerts. The non-positive case then pins which way an
+// unconfigured threshold fails, which is quiet on the count and still loud
+// on Failing.
+//
+// The timestamp case is the smallest here and the most structural. A
+// Condition holds no clock reading at all, so ObservedAt can only have come
+// from the caller's own now, and that is what lets everything above run
+// against a frozen clock and mean something.
+
 func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 	t.Helper()
 	id, err := model.NewBackupSetID(source, set)

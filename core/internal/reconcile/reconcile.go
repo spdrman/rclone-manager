@@ -11,6 +11,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the FR-17 table turned into a dispatch: one function per row
+// that acts, and one explicit arm per row that does not.
+//
+// The arms that do nothing carry most of the reasoning, which is why they
+// are arms rather than a default case. DISCOVERED and the five states
+// before COMMITTED are not gaps in the handling. Each one already points at
+// exactly what the pipeline's next step expects to find, there is nothing
+// durable for this pass to repair, and FR-17 runs before normal processing
+// rather than instead of it. Folding them into a default would erase the
+// difference between "reconciliation looked and this is fine" and
+// "reconciliation has no idea what this is", and the final arm is a hard
+// error precisely so a state added upstream cannot land in the quiet half
+// by accident.
+//
+// Every write goes through lifecycle.Advance rather than straight at the
+// journal, so an edge assembled wrongly here is refused by the state
+// machine instead of recorded. The REMOTE_DELETE_PENDING chain leans on
+// that directly: it reaches QUARANTINED_LOST in two writes because no
+// single edge between them exists, and getting the order wrong comes back
+// as a Validate failure rather than as a row nobody can explain later.
+
 // Reconcile runs FR-17's startup reconciliation pass for one backup set:
 // it lists every artifact deps.Journal already holds for set, compares
 // each one's journal state against local files and remote state, and

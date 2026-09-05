@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+// The claim this file has to establish is a negative one about every
+// rendering path at once, and a negative of that shape is usually asserted
+// by checking the output looks redacted. That is the weaker check, because
+// a path that renders nothing, or renders some other field, passes it too.
+//
+// So every case reduces to assertNeverLeaked, which hunts for the raw bytes
+// in whatever came out the other end. The placeholder turning up is a
+// separate and secondary assertion. Only the absence of the secret is the
+// property being defended.
+//
+// The last test is the odd one out on purpose: it asserts the leak. fmt
+// cannot pull an interface value out of an unexported struct field, so a
+// Secret held in one renders its contents whenever the enclosing struct is
+// formatted. Pinning the hole means a future Go that closes it shows up
+// here as a failing test, rather than leaving secret.go carrying a warning
+// that quietly stopped being true.
+
 // theSecret is the raw value every test below wraps and then hunts for in
 // whatever came out the other end. If any assertion below ever needs to
 // change what "the raw value" is, this is the one place to do it.

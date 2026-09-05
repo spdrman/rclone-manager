@@ -9,6 +9,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// A renderer's tests are only as good as their idea of who is reading the
+// output, and here the reader is a scraper rather than a person. Most of
+// what is below follows from that.
+//
+// Metric names are pinned literally rather than checked for plausibility,
+// because a name is a contract. A dashboard, an alert rule and a recording
+// rule all break silently when one is renamed, and none of them lives in
+// this repository to fail. That is the same reasoning internal/obs applies
+// to its event constants, for the same reason.
+//
+// The absent-versus-zero pair is the other half of it. Prometheus reads a
+// missing sample as "nobody knows" and a zero as "known to be zero", so the
+// two readings are asserted apart: a field the caller never populated has
+// to omit its sample, and a counter that is genuinely zero has to emit one
+// anyway. Collapsing those into a single test is how a gauge starts
+// reporting a fabricated zero for something nothing ever measured.
+//
+// Determinism gets two tests because rendering sorts, and the caller's
+// slice has to survive the sort. Prometheus itself tolerates any order, but
+// a human diffing two scrapes does not, and a renderer that reorders a
+// slice it was lent has changed something it does not own.
+
 func mustSet(source, set string) model.BackupSetID {
 	id, err := model.NewBackupSetID(source, set)
 	if err != nil {

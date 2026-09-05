@@ -11,6 +11,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This is the file that tells an operator who changed nothing that nothing
+// changed for them, and it is built to be hard to satisfy accidentally.
+//
+// The resolved policy is not typed out here as a literal. It comes from the
+// same config.ValidateRetention call config.Validate itself makes, so what
+// this file pins is the real defaulting path rather than a second copy of
+// it that could go stale in exactly the situation the test exists to catch.
+// The resolved values are then asserted before DecideKeep is even reached,
+// because a drift there has already broken the promise no matter what the
+// verdicts come out as.
+//
+// One fixture carries all of it deliberately. It exercises every GFS tier,
+// the artifact nothing keeps, protection landing on an artifact a tier
+// already kept, and the two states that must never appear in a verdict at
+// all. A baseline assembled from several narrow fixtures would pass while
+// the composed pipeline an operator actually runs was broken between them.
+
 // goldenRecords is the golden fixture's record set, extracted so a second
 // test can run the IDENTICAL records rather than a copy of them that
 // could drift. issue #239's medium-invariance test is that second reader:
