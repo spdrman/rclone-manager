@@ -255,10 +255,20 @@ func Parse(data []byte, source string, env map[string]string) (Document, error) 
 	return Document{Source: source, root: root, env: env}, nil
 }
 
+// clone is what makes the mutation controls safe to run in parallel. Each
+// WithX method builds a broken document from a good one, and a shallow
+// copy would let a t.Parallel subtest planting one violation corrupt the
+// document another subtest is reading. env is shared on purpose: it is
+// read-only and identical for every mutation.
 func (d Document) clone() Document {
 	return Document{Source: d.Source, root: deepCopy(d.root).(map[string]any), env: d.env}
 }
 
+// deepCopy handles maps and slices and returns everything else as is,
+// which is complete for a parsed YAML tree: scalars are immutable values,
+// and the parser produces nothing else. It is written for that tree
+// rather than reached for from a library so it stays obvious what a
+// mutation can and cannot reach.
 func deepCopy(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -311,6 +321,14 @@ func (d Document) Roles() map[string]Role {
 	return out
 }
 
+// roleOf scans the whole argv for the subcommand rather than reading a
+// fixed position, so the rule says nothing about how the binary is
+// spelled. The canonical definition writes an absolute path and an
+// adapter may not, and neither is the thing being decided here.
+//
+// Anything that runs neither subcommand comes back RoleUnknown rather
+// than defaulting to a role, because a service quietly assigned the
+// engine role is a service every engine rule then passes on.
 func roleOf(command []string) Role {
 	for _, arg := range command {
 		switch arg {
@@ -384,6 +402,19 @@ func (d Document) UnparseableMounts(service map[string]any) []string {
 	return refused
 }
 
+// mounts returns what it could read AND what it refused, which is the
+// whole reason it is one function with two results. An entry whose host
+// side does not resolve used to be parsed anyway, and a colon inside an
+// unresolved ${VAR:?message} made the split produce a host path that was
+// wrong rather than absent, so a prohibition check ran against a
+// plausible-looking string that came from nowhere. Refusing is the
+// correct answer, and the refusals have to come back so a caller can
+// report them rather than see a short list and believe it.
+//
+// The three-part limit is compose's own shape (host:container[:mode]),
+// and a spec with more parts is refused rather than truncated for the
+// same reason: guessing which colon was the separator is how the earlier
+// bug happened.
 func (d Document) mounts(service map[string]any) ([]Mount, []string) {
 	var out []Mount
 	var refused []string
@@ -501,6 +532,13 @@ func (d Document) CheckField(field Field) []Finding {
 	}
 }
 
+// checkServiceKey is the plain case: a key on the service itself. It
+// reports a role it cannot resolve as a finding rather than skipping it,
+// which is the difference between this check and one that quietly passes
+// on a document whose services were renamed out of recognition.
+//
+// Present-but-empty counts as absent, because `command:` with nothing
+// after it satisfies a presence test and declares nothing.
 func (d Document) checkServiceKey(field Field) []Finding {
 	var out []Finding
 	for _, roleName := range field.Roles {
@@ -553,6 +591,12 @@ func (d Document) checkServiceHealthcheck(field Field) []Finding {
 	return out
 }
 
+// checkServiceEnv reads through mapOf, so it sees compose's mapping form
+// of `environment:` and not its list form. That is a real limitation
+// rather than an oversight worth papering over: the canonical definition
+// and every artifact derived from it use the mapping form, and a reader
+// that silently coped with both would let an adapter switch forms without
+// anyone deciding to.
 func (d Document) checkServiceEnv(field Field) []Finding {
 	var out []Finding
 	for _, roleName := range field.Roles {
@@ -570,6 +614,12 @@ func (d Document) checkServiceEnv(field Field) []Finding {
 	return out
 }
 
+// checkServiceMount matches on the CONTAINER path, the half the image
+// fixes, and then checks the write mode as a separate claim. ReadOnly and
+// Writable are tested independently rather than as one boolean because a
+// field is allowed to require neither: the contract has mounts it wants
+// present and has no opinion about, and folding the two into a tri-state
+// would make "no opinion" indistinguishable from "writable".
 func (d Document) checkServiceMount(field Field) []Finding {
 	var out []Finding
 	for _, roleName := range field.Roles {
@@ -600,6 +650,10 @@ func (d Document) checkServiceMount(field Field) []Finding {
 	return out
 }
 
+// checkDocumentKey covers fields that belong to the document rather than
+// to a service, addressed by dotted path. It reports no service name,
+// since attaching one to a top-level key would send the reader into a
+// service that has nothing to do with the finding.
 func (d Document) checkDocumentKey(field Field) []Finding {
 	v, ok := lookupDotted(d.root, field.Key)
 	if !ok || isEmpty(v) {
@@ -738,6 +792,11 @@ func (d Document) WithWrongWriteMode(field Field) (Document, string, bool) {
 	return out, "", false
 }
 
+// withoutArg drops arguments by substring, which is deliberately loose:
+// its callers are the mutation controls, and they need to remove a flag
+// whose value they do not want to spell out. It returns []any because the
+// result goes straight back into the generic tree, where a []string would
+// not survive a round trip through the YAML encoder the same way.
 func withoutArg(args []string, contains string) []any {
 	out := make([]any, 0, len(args))
 	for _, a := range args {
@@ -769,6 +828,16 @@ func (d Document) CheckProhibited(c Contract) []Finding {
 	return out
 }
 
+// checkRule dispatches on the rule's kind, and the three kinds exist
+// because "prohibited" means three different things. A key whose VALUE is
+// the problem (privileged: true) has to be read, since privileged: false
+// is fine. A key whose PRESENCE is the problem (cap_add) needs no value
+// read, only an emptiness test, so an empty list is not reported. And a
+// host path is neither: it is a mount that has to be parsed and compared
+// path-wise, because /var/run/./docker.sock is the same socket.
+//
+// The first two walk the whole tree rather than the services map, so a
+// prohibited key on a document-level or extension block is still seen.
 func (d Document) checkRule(rule ProhibitedRule) []Finding {
 	var out []Finding
 	add := func(service, detail string) {
@@ -1058,6 +1127,10 @@ func ImplementedProfiles() ([]string, error) {
 // Small helpers over the generic tree
 // ---------------------------------------------------------------------
 
+// mapOf answers nil for anything that is not a mapping instead of
+// panicking on the type assertion. Every caller is walking a document
+// somebody else wrote, where a key holding a string where a block was
+// expected is a malformed file to report, not a crash to debug.
 func mapOf(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
@@ -1083,6 +1156,11 @@ func stringList(v any) []string {
 	}
 }
 
+// stringListAny keeps every entry exactly as the parser produced it,
+// which is what stringList cannot do. compose's `volumes:` mixes short
+// form strings with long form mappings in one list, and stringList would
+// render a mapping through fmt and hand the mount parser a string that
+// looks like a volume spec and is not one.
 func stringListAny(v any) []any {
 	if l, ok := v.([]any); ok {
 		return l
@@ -1093,6 +1171,10 @@ func stringListAny(v any) []any {
 	return []any{v}
 }
 
+// scalarString renders a YAML scalar for comparison. Booleans are spelled
+// out rather than left to %v so that a rule written as `value: "true"` in
+// JSON matches a document that wrote it unquoted, which is how compose
+// files actually spell privileged.
 func scalarString(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -1109,6 +1191,9 @@ func scalarString(v any) string {
 	}
 }
 
+// parseScalar is scalarString's inverse, and only for booleans. The
+// mutation controls read a prohibited value out of JSON, where it is a
+// string, and have to plant it as the type the checker will look for.
 func parseScalar(v string) any {
 	switch strings.ToLower(v) {
 	case "true":
@@ -1120,6 +1205,11 @@ func parseScalar(v string) any {
 	}
 }
 
+// isEmpty is what stops a declaration from counting when it declares
+// nothing. `command:`, `volumes: []` and `environment: {}` all parse, all
+// satisfy a presence test, and all mean the key is not really there;
+// treating them as present is how a required-field check passes against a
+// file that is missing the field.
 func isEmpty(v any) bool {
 	switch t := v.(type) {
 	case nil:
@@ -1135,6 +1225,11 @@ func isEmpty(v any) bool {
 	}
 }
 
+// lookupDotted walks a dotted path and gives up at the first level that
+// is not a mapping, so a contract field addressing x.y.z through a scalar
+// y reports "not found" rather than panicking. The contract is a JSON
+// file anyone can edit, and a typo there should fail the check it belongs
+// to and nothing else.
 func lookupDotted(root map[string]any, dotted string) (any, bool) {
 	cur := any(root)
 	for _, part := range strings.Split(dotted, ".") {
