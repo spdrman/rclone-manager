@@ -1900,8 +1900,8 @@ negative control where getting it wrong by hand would be silent: `KnownHostsFor`
 a machine's real host keys against a relay's address, and `DecoyKnownHostsFor` is the
 control that proves pinning the wrong one fails.
 
-`scripts/e2e/run-machine-tier.sh` (#451) is the second placement for that tier and the one
-the gate uses: a manager machine built from a Go toolchain with a Docker client, the
+`scripts/e2e/run-machine-tier.sh` (#451) is the second placement for that tier, run by hand
+rather than by the gate: a manager machine built from a Go toolchain with a Docker client, the
 repository mounted at the same absolute path inside as out, joined to the network as an
 ordinary user, running the machine-tier packages from inside. On Docker Desktop for macOS a
 host process cannot sit on a bridge network, so by default the source publishes a port on
