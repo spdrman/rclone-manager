@@ -1,3 +1,7 @@
+package packaging
+
+import "strings"
+
 // The keyless signing identity, and the command a verifier runs against it.
 //
 // Sigstore keyless signing binds a signature to the Subject Alternative
@@ -34,9 +38,6 @@
 // TestSigningIdentityMatchesTheWorkflowTriggerThatPublishes reads the
 // workflow and refuses any disagreement between its trigger and these
 // constants, so moving one forces the other.
-package packaging
-
-import "strings"
 
 const (
 	// SigningWorkflowPath is the workflow whose OIDC identity signs a
