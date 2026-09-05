@@ -107,3 +107,7 @@ hangs forever on a cold machine is worse than one that fails.
 
 # Cost, written down rather than left to be rediscovered
 
+One case is about seventy seconds on the machine this was written on,
+once the image under test is built. The image build is the expensive
+part on a cold Docker cache (minutes: it compiles the Go binaries and
+builds the UI bundle) and is done once for the whole run.

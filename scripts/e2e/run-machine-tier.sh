@@ -83,7 +83,6 @@
 #
 # and, measured before this took --race and gotestwatch, on four packages
 # under a plain `go test`: 210s wall cold and 120s warm, so about 76s of
-# HELP-END
 # compile.
 #
 # #451 asked for the cold figure because a cold compile of rclone's module
@@ -111,6 +110,7 @@
 # interrupt. Everything carries a per-run id, nothing publishes a host
 # port, and the harness reclaims its own machines. Two of these can run at
 # once.
+# HELP-END
 # Everything below is one brace group, and that is not a style choice.
 #
 # bash reads a script from the file incrementally, by byte offset, so
