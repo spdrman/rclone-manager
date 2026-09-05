@@ -256,9 +256,20 @@ python3 - "$d/core/cmd/backup-manager/retention.go" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = '''			fmt.Printf("  %-6s %-40s tiers=%v\\n", decision, v.Artifact.Name, v.Tiers)'''
-new = '''			fmt.Printf("  %-6s %-40s medium=local tiers=%v\\n", decision, v.Artifact.Name, v.Tiers)'''
-assert old in s, "the retention preview line no longer has the shape this control mutates"
+# #239 gave this line a mediumSuffix() call, so the old edit no longer
+# matches and the control could not plant its violation. It now mutates the
+# function instead, which is closer to the thing being guarded: the line is
+# allowed to say medium= when there IS one, and FR-35's promise is that a
+# deployment naming no medium sees exactly what it saw before.
+old = '''	default:
+		return ""
+	}
+}'''
+new = '''	default:
+		return " medium=local"
+	}
+}'''
+assert old in s, "mediumSuffix no longer has the default branch this control mutates"
 open(p, "w").write(s.replace(old, new, 1))
 PY
 expect_cell_fails "the retention preview line growing a medium column for a local-only deployment" "$d" "07-cli-retention-preview"
