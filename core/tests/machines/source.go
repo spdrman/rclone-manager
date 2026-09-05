@@ -1,6 +1,15 @@
-// Package machines stands up a disposable SFTP server in Docker so the
-// Phase-1 gate tests can drive the real rclone sftp backend against a real
-// server, rather than reasoning about the API from the outside.
+// The source machine: a disposable SFTP server in a container, so a test
+// drives the real rclone sftp backend against a real server rather than
+// reasoning about the API from the outside.
+//
+// It is the machine the rest of the tier is arranged around, playing the VPS
+// being backed up, and everything a test reads off it (host-key
+// verification, the chroot, key-only login, a connection cap) is the
+// server's own behaviour rather than a double's answer. What this file adds
+// on top of the container is the part that is easy to get wrong once and
+// then copy: bounded docker calls, a watchdog armed before the first of
+// them, a per-machine client identity, and known_hosts files written the way
+// OpenSSH actually matches them.
 //
 // It uses atmoz/sftp (OpenSSH's sshd, chrooted, forced into internal-sftp)
 // because that gives us a genuine SSH/SFTP endpoint with real host-key

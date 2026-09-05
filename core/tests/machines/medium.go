@@ -1,6 +1,6 @@
-// Package machines stands up a disposable MinIO server in a container,
-// so the MediumStore contract suite can be run against something that
-// speaks the real S3 API rather than against a hand-written double.
+// The storage medium: a disposable MinIO server in a container, so the
+// MediumStore contract suite runs against something that speaks the real S3
+// API rather than against a hand-written double.
 //
 // It exists for the same reason the source machine does, and it is the same
 // argument: a double answers the way its author expected, and every

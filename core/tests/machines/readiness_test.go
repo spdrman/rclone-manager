@@ -6,7 +6,6 @@
 // about the rclone adapter, so this is where they belong. What they point
 // at is waitForSSHAuth, which is the probe every machine this package
 // starts has to satisfy before Start returns.
-
 package machines
 
 import (

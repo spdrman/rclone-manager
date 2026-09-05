@@ -1,5 +1,3 @@
-package machines
-
 // This file gives the source machine's image build a progress-derived
 // timeout instead of a fixed one (issue #309).
 //
@@ -29,6 +27,7 @@ package machines
 // longer-lived process where one early outlier must not permanently
 // inflate the bound for everything after it) - that decay problem does
 // not have room to arise inside one docker build.
+package machines
 
 import (
 	"bytes"

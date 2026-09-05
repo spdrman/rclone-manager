@@ -1,3 +1,19 @@
+// The build watchdog's bounds, proved against a synthetic clock, and the
+// watched build itself, proved against real docker.
+//
+// The split is deliberate and it is what keeps this file cheap. Everything
+// about how the two bounds widen, when they trip and where they stop
+// widening is arithmetic over an injected clock, so it is pinned exactly and
+// costs milliseconds; demonstrating the same properties through real builds
+// would mean waiting out a hang per case. What is left for real docker is
+// only what a synthetic clock cannot answer: that the plumbing wires
+// `docker build --progress=plain` up to the tracker at all, that no output
+// line is lost on the way, and that a genuinely hung build is caught.
+//
+// The line-tap cases exist because that plumbing has a specific failure
+// mode. A watchdog fed by a tap that silently drops or coalesces lines still
+// looks like it is working, and it would trip on a healthy build under load,
+// which is the failure the whole progress-derived design exists to avoid.
 package machines
 
 import (
