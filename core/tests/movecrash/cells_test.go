@@ -319,12 +319,34 @@ func TestCrashMatrixOverAStagedMediumToMediumHop(t *testing.T) {
 		// object at all, because a staging copy it could use was already
 		// on disk.
 		noSourceRead bool
+		// afterCrash inspects what the dead process actually left, before
+		// the restart tidies it away. It is how a cell pins WHERE it
+		// died: "the process was killed and the engine recovered" is
+		// true of a kill at a harmless moment too, and a crash cell that
+		// cannot tell those apart is not testing the boundary it names.
+		afterCrash func(t *testing.T, w *world)
 	}{
 		{
 			name:   "S1 part-way through reading the source down onto local disk",
 			kill:   []string{"-plan", "-kill-during-stage"},
 			proves: "an interrupted read leaves no file at the staging name, so the resumed hop downloads again and converges rather than uploading a fragment",
 			want:   placement.Done,
+			// The kill landed in the middle of the download and nowhere
+			// else: bytes have started arriving, nothing is at the
+			// staging name because the local store links only a
+			// finished file into place, and nothing has been uploaded.
+			afterCrash: func(t *testing.T, w *world) {
+				left := w.stagingLeftovers()
+				if len(left) != 1 {
+					t.Fatalf("the staging area holds %v; an interrupted download leaves exactly one temporary file", left)
+				}
+				if left[0] == crashArtifact {
+					t.Fatalf("the staging area holds the artifact under its own name, so the download had finished and this cell did not interrupt one")
+				}
+				if n := w.objectCountOn(t, w.secondBucket); n != 0 {
+					t.Fatalf("%q holds %d object(s) after a crash during the download, so the kill landed after the upload", crashSecondMedium, n)
+				}
+			},
 		},
 		{
 			name:         "S2 the instant the staging copy is complete, before the upload",
@@ -381,6 +403,9 @@ func TestCrashMatrixOverAStagedMediumToMediumHop(t *testing.T) {
 			}
 			if v := res.violations(); len(v) > 0 {
 				t.Fatalf("the crashed process reported invariant violations: %v", v)
+			}
+			if cell.afterCrash != nil {
+				cell.afterCrash(t, w)
 			}
 
 			// 1. The invariant held at the instant of the crash, judged

@@ -120,9 +120,40 @@ the whole copy phase and the staging file is never a placement. The
 composed second hop asserts arrival now rather than refusal, and P2.1 is
 PASS.
 
-Running it also turned up a defect in this suite's own watcher, which is
-worth recording because it is the shape that makes a guard useless rather
-than noisy. The watcher identified a copy by its LOCATOR, and FR-28's key
+Extending that crash matrix over the staged hop found three more things,
+and none of them was in the phase machine, which is worth saying because
+the argument for extending it was that the phase machine is unchanged and
+that is exactly the kind of argument an exception hides in. The staging
+happens INSIDE the copy phase, so the boundaries really are the same ones,
+and the cells confirmed that rather than assuming it.
+
+What a real SIGKILL did find is a leak no planted fixture would have
+produced. `artifactstore.Local.Put` writes through a temporary file and
+links it into place, and removes the temporary name on every path out of
+itself; a SIGKILL takes none of those paths, so a process killed part-way
+through a staged download leaves a temp file behind and nothing at the
+staging name at all. Nothing collected it, because the name is random and
+belongs to no artifact, so an interrupted hop cost one artifact-sized file
+on the backup set's own disk, for ever, on the disk the NEXT hop's size
+check is about. The staged copy path sweeps them now, before the size check
+rather than after, and cell S1 is what says the sweep is looking for the
+right thing: if that temporary prefix ever changes, the cell fails with the
+actual leftover name in its message.
+
+The other two were in the suite rather than the product, and both are the
+copy-identity defect described below found in two more places. The crash
+guards, in the harness and in the restarting process, each subtracted the
+copy being deleted by LOCATOR, so deleting the source subtracted the
+destination and every staged cell reported a breach that had not happened.
+And the harness's corrupt helper wrote into the FIRST medium's bucket
+whatever medium it was handed, so a staged cell corrupted the source and
+read as the engine refusing a source delete on a size mismatch. Nothing
+about the key could have caught either, because both mediums give one
+artifact the same key.
+
+Running the composed suite also turned up a defect in this suite's own
+watcher, which is worth recording because it is the shape that makes a
+guard useless rather than noisy. The watcher identified a copy by its LOCATOR, and FR-28's key
 is `<prefix>/<source>/<set>/<artifact-name>`, so two mediums declaring no
 prefix give one artifact the same key on both buckets. Nothing had two
 medium copies at once until the second hop did. Keyed that way, deleting
@@ -131,9 +162,12 @@ breach that had not happened; the dangerous direction is the same bug
 seen from the other side, where a stale entry for one medium masks a live
 copy on another and a real breach reads clean. The set is keyed by medium
 AND locator now, the same fix is applied to `internal/placement`'s own
-fixture guard before it has anything to catch, and the composed cell
+fixture guard and to both crash-matrix guards, and the composed cell
 asserts that the two keys really do collide so the coverage cannot
-evaporate the day somebody adds a prefix.
+evaporate the day somebody adds a prefix. Four guards had it, in three
+suites, and every one of them was written by somebody who knew what a copy
+was; what none of them had was a world in which one artifact had two
+medium copies at the same time.
 
 #239's rows (P2.4 and V6) are PASS as of this run, and what changed is more
 than a word. Its code is in the tree. The prune cell that used to pin
@@ -173,7 +207,7 @@ cells on evidence read out of a pull request description.
 | # | Outcome | Certifies | Where | Falsification |
 | --- | --- | --- | --- | --- |
 | P2.1 | PASS (except the cold class, which cannot be run here) | A three-tier chain (daily local, monthly `s3`, annual `s3`) runs end to end against MinIO, with the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness rather than sampled. | `core/tests/conformance` (`threetier_test.go` runs the chain, `watcher_test.go` is the watcher, `sampler_test.go` is the control that gives "continuously" its meaning) | The gate line's own, and it fires: the source released one phase early opens a window in which neither copy is verified, and the SAME run judged two ways has the sampler seeing nothing and the watcher failing at "after the journal wrote phase COPIED". A completed move that never removes the source copy is caught too (`still has a local copy after a completed move to "annual_s3"`). All three rungs take delivery in one run, with the bytes read back off each bucket, and the artifact now WALKS the chain: the second hop is medium to medium, which the engine refused until #429 and which now goes through a staging copy on the backup set's own disk. Two more falsifications are automated for that hop in `scripts/conformance/selftest.sh` and both watched red: the old outright refusal put back (`want DONE (refusal:`), and the staging copy never removed (`the staging copy is still at`). What this row still does NOT claim is the gate line's word "cold": the annual rung is an ordinary class here and cannot be anything else, for two independent reasons each written down as a check. This MinIO refuses every archive class (`archiveboundary_test.go`), and a retention tier on an archive class is refused when the config loads (#428, answered by #437 and then by #442, asserted in `TestAnArchiveClassTierIsRefusedAtLoad`). |
-| P2.2 | PASS | The crash matrix passes: a forced crash at every move phase boundary, restart reconciliation, and the move either completed or abandoned with the source intact. | `core/tests/movecrash` (eleven cells against rclone's local backend) and `core/tests/conformance/crashmatrix_test.go` (the same eleven against MinIO, through the same harness binary) | The spec's own, run and caught: the source delete issued before `VERIFIED` is durably recorded, which takes three edits (the phase edge, the driver's case, and the phase `intendSourceDelete` names as the one it is leaving) and is refused as an illegal write with only two. Automated in `scripts/conformance/selftest.sh`, together with a destination trusted instead of re-verified, which turns the two hostile-endpoint cells red on the bytes rather than on the phase. |
+| P2.2 | PASS | The crash matrix passes: a forced crash at every move phase boundary, restart reconciliation, and the move either completed or abandoned with the source intact. Since #429 that includes a hop whose two ends are both mediums, which goes through a staging copy on the backup set's own disk. | `core/tests/movecrash` (eleven cells against rclone's local backend, plus seven over the staged hop) and `core/tests/conformance/crashmatrix_test.go` (the same eighteen against MinIO, through the same harness binary) | The spec's own, run and caught: the source delete issued before `VERIFIED` is durably recorded, which takes three edits (the phase edge, the driver's case, and the phase `intendSourceDelete` names as the one it is leaving) and is refused as an illegal write with only two. Automated in `scripts/conformance/selftest.sh`, together with a destination trusted instead of re-verified, which turns the two hostile-endpoint cells red on the bytes rather than on the phase. The staged cells carry three falsifications of their own, all run and caught: the temporary-file sweep removed (S1 goes red naming the leftover), an existing staging copy ignored and downloaded again (S2 goes red on the COUNT of source reads rather than on the outcome, because a build that re-downloaded would converge just as well and cost twice as much), and `-kill-during-stage` mutated to fire AFTER the staging write instead of during it (S1 goes red on `the download had finished and this cell did not interrupt one`, which is the "died somewhere harmless" way a crash cell passes for the wrong reason). |
 | P2.3 | PASS | Moving an artifact does not change its retention bucketing: verdicts before and after are bit-identical. | `TestAMoveDoesNotChangeARetentionVerdict` in `core/tests/conformance` for the across-a-move half, plus cells `04-retention-verdicts` and `11-upgraded-retention-verdicts` in `core/tests/compat` for the migration half | Both halves caught. Rewriting the journal's discovery timestamp turns cell 11 red (`scripts/compat/selftest.sh`), and bucketing an artifact by when its copy was VERIFIED rather than when it was discovered, which is the value a move itself writes and therefore the likeliest way FR-32 would be broken by one, turns the across-a-move check red (`scripts/conformance/selftest.sh`). The comparison is bit-identical rather than tier-for-tier, because a move that shifted a bucket by a month would keep the artifact under a tier name that still looked right and change which artifact each bucket keeps. |
 | P2.4 | PASS | Prune against a medium refuses on identity mismatch, and the mandatory dry-run names the medium for every proposed deletion. | `core/tests/conformance/prune_test.go` for both halves composed over MinIO, on an artifact this same process really moved onto a bucket; `core/internal/placement/reclaim_test.go` for the FR-16 re-check against a double, including the same-length swap a size comparison cannot see and this endpoint cannot show; `core/internal/retention/pruneonmedium_test.go` for the refusal-first decision table; `core/cmd/backup-manager/retention_placement_test.go` for the dry-run's `medium=` field and the control that a local artifact's line did not grow one | The spec's own, run and caught: a fixture that swaps the object behind a key before prune, and the apply has to refuse and leave the object where it is. Four mutations automated in `scripts/conformance/selftest.sh` and all four watched red: the medium copy sent down FR-20's local path (`is REFUSE, want DELETE`), a medium delete reported but never made (`PruneApply asked the medium pruner for []`), the FR-16 re-check run and its answer ignored (`prune's verdict is DELETE, not REFUSE`), and a dry-run that stops naming the medium (`does not say where its deletion would happen`). The composed cell's own control is that one pass produces three different answers over artifacts on three different mediums, so a build that refused everything or deleted everything fails it. The local half of the same rule stays live: cell `05-prune-verdicts` goes red when prune is mutated to delete a file it could not stat instead of refusing. |
 | P2.5 | PASS | A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests. The same gate stands in front of a backup set's own chain (`PUT /backup-sets/{source}/{set}/retention`) and the CLI's `backup-set retention --policy-file`, since an override can name a medium per tier too. | `core/service/placements_test.go` (the deny, allow, does-not-ask-again and per-set halves against the real service), `apps/common/webhost/placements_contract_test.go` (the typed `MEDIUM_DISCLOSURE_REQUIRED` refusal on both routes, and the acknowledgment crossing the seam), `core/cmd/backup-manager/backupsetretention_test.go` (the CLI half) | The spec's own: the gate removed from `core/service.UpdateSettings` and from `SetBackupSetRetention`, each run and caught by its refuses-a-first-mapping test; the per-set gate reading the deployment's chain instead of the set's own, run, caught; the handler mapping the refusal onto `INVALID_REQUEST`, run, caught; the acknowledgment dropped at the HTTP seam or echoed back out, each run, caught; the CLI flag not wired, run, caught. |

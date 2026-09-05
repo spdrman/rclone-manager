@@ -330,21 +330,38 @@ func (s *killerStore) OpenObject(ctx context.Context, medium transport.Medium, k
 	return &dyingReader{ReadCloser: rc, what: key}, nil
 }
 
-// dyingReader serves one read and then kills the process, so the write
-// consuming it is interrupted in flight rather than completed.
+// dyingReader serves a short first read and then kills the process, so the
+// write consuming it has landed some bytes and is genuinely part-way
+// through rather than either untouched or finished.
+//
+// The first read is capped rather than passed through, and that is not
+// tidiness. io.Copy stops the moment a reader returns io.EOF alongside its
+// data, and a small object served by a real S3 endpoint comes back in ONE
+// read that does exactly that: pass it through and the copy finishes, the
+// second read never happens, and the kill never fires. Capping the buffer
+// means the reader cannot signal EOF yet, so the copy has to come back for
+// more, and that second call is the crash point. Against a directory
+// backend it behaves the same way, so one flag means one thing on both.
 type dyingReader struct {
 	io.ReadCloser
 	what string
 	read bool
 }
 
+// firstReadBytes is how much of the object the interrupted write gets to
+// keep. Small, so the write is unmistakably incomplete, and non-zero, so
+// the temporary file it is writing through has really been written to.
+const firstReadBytes = 16
+
 func (r *dyingReader) Read(p []byte) (int, error) {
 	if r.read {
 		selfDestruct("the read of " + r.what + " was interrupted in flight")
 	}
-	n, err := r.ReadCloser.Read(p)
 	r.read = true
-	return n, err
+	if len(p) > firstReadBytes {
+		p = p[:firstReadBytes]
+	}
+	return r.ReadCloser.Read(p)
 }
 
 func (s *killerStore) UploadFromLocal(ctx context.Context, medium transport.Medium, localPath, key string, opts transport.UploadOptions) (transport.UploadResult, error) {
