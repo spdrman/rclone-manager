@@ -530,11 +530,13 @@ swap "$d/core/tests/conformance/watcher_test.go" \
 	}
 	return mv, err'
 swap "$d/core/tests/conformance/watcher_test.go" \
-  '	// destroyed is the set of locators this run has watched being
-	// deleted and has not seen rewritten.
+  '	// destroyed is the set of copies this run has watched being deleted
+	// and has not seen rewritten, keyed by medium AND locator. See this
+	// file'"'"'s own comment for why the locator alone will not do.
 	destroyed map[string]bool' \
-  '	// destroyed is the set of locators this run has watched being
-	// deleted and has not seen rewritten.
+  '	// destroyed is the set of copies this run has watched being deleted
+	// and has not seen rewritten, keyed by medium AND locator. See this
+	// file'"'"'s own comment for why the locator alone will not do.
 	destroyed map[string]bool
 	sampler   *sampler'
 swap "$d/core/tests/conformance/sampler_test.go" \
