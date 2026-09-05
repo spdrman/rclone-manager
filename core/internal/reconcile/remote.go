@@ -9,6 +9,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the whole of what reconciliation asks a remote, and the
+// restraint is the content.
+//
+// There are two questions here and there is no third: is the object still
+// there, and is it still the same object. Both come out of a Stat, and a
+// Stat that failed for any reason other than a confirmed NotFound is handed
+// back untouched rather than read as an absence. That one rule is what
+// stops this package manufacturing "the remote is gone", which in this
+// project's vocabulary is only ever established through the
+// delete-and-reconfirm path FR-15 owns, never through a bare Stat taken
+// before anybody recorded an intent to delete.
+
 // statRemote stats remotePath on source and reports whether the object
 // exists. A transport.NotFound category is the only outcome I treat as a
 // confirmed absence; every other error comes back unchanged, because FR-17

@@ -16,6 +16,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Every fixture this package's tests run on is built here, and sharing them
+// is not just about repetition. Reconciliation's inputs are expensive to
+// state honestly: an artifact at REMOTE_DELETE_PENDING is not a struct
+// literal, it is a journal row that arrived there through every transition
+// the state machine required, and driveTo walks it rather than writing the
+// destination state in directly.
+//
+// That distinction is load-bearing. A record assembled by hand can hold a
+// combination the machine would have refused, and a test built on one is
+// proving something about a journal this project cannot actually produce,
+// while looking exactly like a test that is not.
+
 // --- journal and identity fixtures ---
 
 func openTestJournal(t *testing.T) *state.Journal {

@@ -14,6 +14,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file answers one question, and the shape of the answer is the part
+// worth explaining: three verdicts rather than a bool.
+//
+// "Not valid" has two meanings here that must never be run together. An
+// artifact that should have a readable local copy and does not is a
+// corruption finding, and it quarantines. An artifact whose durable copy is
+// on a storage medium has no local copy to check, which is not a fault and
+// is not a verdict about the artifact at all.
+//
+// A bool cannot hold both, and the price of collapsing them has already
+// been paid once. The comment saying a completed move must not read as a
+// missing local file sat directly above four lines that read it exactly
+// that way, and the first move to complete in production was quarantined as
+// lost on the following cycle. The third verdict exists so that mistake
+// stops being expressible.
+
 // localVerdict is what checkLocalFinal concluded about an artifact's local
 // copy. It has three values rather than a bool because "not valid" has
 // two meanings that reconcile must never confuse, and a bool cannot hold
