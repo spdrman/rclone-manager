@@ -9,6 +9,32 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
 )
 
+// Proving a storage medium works before a real backup finds out for an
+// operator (issue #443).
+//
+// internal/mediumcheck owns what a working medium means and what each step
+// proves. This file is the two decisions about who may ask and when, and both
+// are narrower than the equivalent for a backup set's source.
+//
+// It takes an id and never a candidate, which is the opposite of a source
+// test-connection. A source is proven before it is written down, because the
+// wizard's whole job is to check a host somebody just typed. A medium cannot
+// work that way: the only fields that would make a candidate meaningful are
+// the three credential references, and putting those on a request body turns
+// a path on this host, or the name of an environment variable, into something
+// an API caller sends. FR-33 settles it the other way, so a medium is declared
+// in the configuration file and nowhere else, and this reads the reference
+// back out of it.
+//
+// And nothing calls it on a schedule. It writes a probe object into somebody's
+// bucket and deletes it, which is entirely reasonable when a person asked and
+// entirely unreasonable every poll interval forever.
+//
+// The two refusals in front of it are separate on purpose. A medium the
+// configuration does not declare is a typo an operator can fix. A declared
+// medium this build cannot resolve is a different problem, and reporting it
+// as "not declared" sends somebody looking for a typo that is not there.
+
 // PreflightMedium proves one declared storage medium actually works,
 // before a cycle carrying a real backup finds out for an operator (issue
 // #443). See internal/mediumcheck for what it proves and why each step is

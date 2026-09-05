@@ -8,6 +8,26 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-34's answer to "where is my backup and can I have it", computed over no
+// network at all.
+//
+// Every field on ArtifactCopy comes from a journal row and a configuration
+// block. Nothing here asks a medium anything, which is not a limitation
+// being worked around: FR-34's rule is that a read never initiates a restore
+// as a side effect, and a status page that quietly probed a provider on every
+// render is exactly how that rule gets broken by accident. So an archived
+// copy reads as requires_restore, because being on an archive class IS the
+// artifact's state until somebody does something about it, and the state that
+// would need a round trip to establish is the temporary one.
+//
+// The two things this file decides are what counts as a copy and what may be
+// said about one. A GONE placement is not a copy and is dropped, because the
+// struct's shape is a copy's shape and a renderer would faithfully print five
+// true-looking fields about a file that is not there. And no price, no
+// percentage, no estimate: this product has no price list and S3 reports a
+// restore as running or finished, so each of those three would be a number
+// invented at the last layer before an operator reads it.
+
 // ArtifactCopy is one durable copy of one artifact, as an operator asking
 // "where is my backup and can I have it" reads it (EPIC E, FR-34).
 //

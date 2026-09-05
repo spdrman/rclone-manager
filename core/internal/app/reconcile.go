@@ -9,6 +9,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
 )
 
+// Driving FR-17 reconciliation, which is all this package is allowed to do
+// about it.
+//
+// internal/reconcile owns every rule: what a remote object being missing
+// means, when a local copy counts as rotten, which per-artifact problems are
+// isolated rather than fatal. What is left over is sequencing and failure
+// policy, and that is this file.
+//
+// Both decisions here are the package's standard ones, applied to
+// reconciliation. The retry wraps the WHOLE call rather than the one Stat
+// that failed, which is only safe because FR-17 requires reconciliation to
+// be idempotent and because a failed Stat never half-writes a journal row;
+// reconcileOne's own doc carries the argument. The per-set isolation is
+// FR-1's "continue processing unrelated sources after one source fails",
+// which cycle.go applies to the rest of a cycle and ReconcileAll applies
+// here, so a `reconcile` across every set behaves the same way a `run` does
+// when one NAS is off.
+
 // ReconcileSetReport pairs one backup set's FR-17 reconciliation Report
 // with any systemic error reconciling it hit (Deps incomplete, listing the
 // journal failed, or every retry attempt against a Transient transport

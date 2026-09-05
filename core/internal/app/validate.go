@@ -17,6 +17,38 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// FR-14's operator door: one artifact, checked right now, because somebody
+// asked.
+//
+// Three other places in this codebase check a durable copy. internal/verify
+// does it once, at ingestion. internal/reconcile does it as part of a cycle.
+// internal/revalidate does it on a cadence a backup set opts into. All three
+// are schedules or pipelines, and all three answer to a policy. This one
+// answers to a person, and that difference is what the file is arranged
+// around.
+//
+// It buys two things a scheduled check cannot have. It runs against a backup
+// set that has configured no revalidation at all, because there is no
+// due-ness to be due. And it is the one place in the product where a content
+// check of a copy on a storage medium is legitimate, because FR-31 makes
+// egress operator-initiated and this command IS the operator initiating it;
+// validatemedium.go is that half and carries the rules.
+//
+// Reaching a medium needs a transport, and `validate` opened its Service
+// without one for as long as the medium fork existed, so it refused every
+// moved artifact in every deployment for a reason no operator could act on.
+// Service.MediumStore is filled in from the transport adapter (app.go), so
+// "this command needs no remote, it only reads a local file" is true right
+// up until it is asked about an artifact that has been moved. The comment
+// that keeps it wired lives on cmdValidate in cmd/backup-manager, next to
+// the argument that would be edited to break it again.
+//
+// The other thing worth knowing before changing anything here is that a
+// failure is not neutral. A failed check quarantines, which is protective
+// rather than destructive and is why there is no --dry-run, but it does mean
+// every "I could not check" that leaks into the verdict path costs a good
+// backup its standing.
+
 // ValidateResult is `backup-manager validate <artifact-id>`'s use case
 // output.
 type ValidateResult struct {

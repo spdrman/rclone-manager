@@ -15,6 +15,37 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-24's `status`, assembled from inputs that know nothing about each other.
+//
+// internal/health owns every verdict. This file is the assembly: per-set
+// journal rows, a live free-space reading, the durable connection refusal,
+// whatever this process remembers about its own polling, and since issue
+// #444 the placement evidence. What is worth reading before trusting the
+// output is which of those survive a process boundary and which do not.
+//
+// Two do not. LastSuccessfulPollAt and LastRetentionRunAt are tracked in
+// memory by a running Service, and `status` is normally its own short-lived
+// process that has cycled nothing, so it reports both as unknown rather than
+// fabricating a value. Nothing persists them; the follow-up that would needs
+// a schema change this package cannot make, and BuildHealthReport's own doc
+// names it. FreeBytes never depended on process history. HaltReason is the
+// one that does survive, because issue #245 gave it a table.
+//
+// The placement evidence is computed here rather than in internal/health
+// because reaching it takes a retention classification and a read of the move
+// journal, and handing that package either would make it depend on both. It
+// is also the one input with a gate in front of it, and placementEvidence's
+// doc is worth reading for why the gate is an exact test rather than a
+// convenience: a deployment that predates EPIC E must gain no new way for
+// `status` to fail.
+//
+// The failure policy is not uniform across the inputs, and that is
+// deliberate. A placement question that cannot be answered fails the whole
+// report, because reporting zero artifacts away from home is
+// indistinguishable from a deployment where everything is where it belongs.
+// A free-space reading is allowed to be missing, because it is a live reading
+// of something outside the journal and its absence is itself reportable.
+
 // BuildHealthReport is `backup-manager status`' use case (FR-24). It calls
 // internal/health.ComputeBackupSetHealth once per configured backup set,
 // against that set's freshly-loaded journal rows, and bundles the result

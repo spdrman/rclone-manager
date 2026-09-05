@@ -7,6 +7,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The live feed a caller subscribes to while a cycle is running.
+//
+// cycleoutcome.go is the counterpart and the two are easy to confuse: that
+// file counts what a FINISHED cycle achieved, for a command that has to
+// produce an exit status. This one reports what is happening right now, for a
+// screen.
+//
+// Two decisions shape everything here. There is no percentage of the cycle,
+// because a cycle discovers what it will find set by set as it goes, so the
+// denominator for "how much is left" does not exist until the last set has
+// been discovered; the counters that ARE known are the ones on Progress.
+// And the byte fields are pointers, so that "not being measured" and
+// "measured, nothing yet" stay different facts. Collapsing them would make an
+// unmeasured stage indistinguishable from a stalled transfer, which is the
+// one reading a person watching a progress bar most needs to be able to make.
+//
+// The observer rides on the context rather than on the Service for the reason
+// holds.go gives for the hold registry: a Service is shared and is rebuilt on
+// every configuration reload, a cycle is neither, and a field on a shared
+// struct is something a second cycle can overwrite. The stage names are a
+// published contract, not internal vocabulary: apps/common/webhost serves them
+// verbatim and api/v1/openapi.json declares the same set, held together by a
+// test in that package.
+
 // The stages a run cycle passes through, in order. They are this package's
 // names for the steps pipeline.go actually performs, not a second
 // vocabulary invented for a display: "discovering" is FR-17 reconcile plus

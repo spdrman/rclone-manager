@@ -10,6 +10,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// One backup set's share of a cycle, on an operator's word rather than a
+// schedule.
+//
+// A real Fetch is not a smaller kind of cycle, it is the same cycle narrowed
+// to one set: the same reconcile, the same discovery, the same walk over the
+// same journal rows, through the same functions RunCycle calls. That is what
+// makes it safe to run beside a daemon and what keeps `fetch` from being a
+// second implementation of the pipeline that drifts.
+//
+// --dry-run is where the two genuinely part company, and it costs something
+// worth knowing about. A dry run must not write, and discovery writes, so it
+// cannot call discovery at all: it lists the remote and cross-references the
+// journal instead. Every line it prints is a real object the remote reported
+// just now, but the completion strategies, the include patterns and the
+// producer-temp-name rules all live unexported inside internal/discovery, so
+// the preview cannot say which of those objects discovery would actually
+// take. It says what is there and whether the journal has seen it, and Fetch's
+// own doc is explicit that this is coarser rather than pretending otherwise.
+//
+// FetchResult.Verdict (cycleoutcome.go) is what turns any of this into an
+// exit status. A caller that checks only Reconcile.Errors and
+// Discovery.Errors is asking whether the pass was systemically broken, which
+// is a different question from whether a backup happened.
+
 // FetchPreviewEntry is one remote object `fetch --dry-run` saw, before any
 // decision about it is recorded anywhere.
 type FetchPreviewEntry struct {
