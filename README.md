@@ -458,9 +458,9 @@ the project owner's call rather than mine.
 
 ### What is left, and what each of them is waiting on
 
-Four epics have closed: the engine, the multi-NAS support model, the release and installer,
-and alternative storage mediums. What is open is open for reasons worth stating rather than
-leaving to be inferred from a quiet section.
+Three epics have closed: #1, the engine itself; #81, the multi-NAS support model; and #232,
+alternative storage mediums. Three are open, and each is open for a reason worth stating
+rather than leaving to be inferred from a quiet section.
 
 **EPIC C (UGOS platform runtime boundary) and EPIC D (UGOS UPK artifact lifecycle) both
 need real UGREEN hardware and neither has had it.** #92 is the UGOS authentication and
@@ -472,18 +472,20 @@ channel and the App Center submission. The UGOS column in the conformance matrix
 of the totals. The support table above says the same thing in one line: UGOS Pro ships the
 frontend bridge and nothing else, no `.UPK` and no packaging.
 
-**#92 is not only EPIC C's problem.** It is the issue that owns opening the destructive-
-operation gate, so until it lands every deployment refuses every destructive HTTP operation,
-as [the API section](#the-api-and-the-web-ui-meet-in-the-middle) says. That is a
+**#92 is not only EPIC C's problem.** It is the issue that owns opening the gate in front of
+destructive operations, so until it lands every deployment refuses every destructive HTTP
+operation, as [the API section](#the-api-and-the-web-ui-meet-in-the-middle) says. That is a
 product-wide consequence of an epic that looks provider-specific.
 
-**#264 is blocked on a credential, not on code.** The two production VPS this manager exists
-to back up are reached over SFTP on a port that is deliberately in no tracked file, and the
-reader account for them does not exist yet. The path itself is proven without them, against
-a real sshd in the machine tier, and pointing the installer at a real source is
-configuration rather than a code change. What is missing is the last acceptance criterion:
-a real backup run from each production host, with anything the account cannot read reported
-rather than worked around.
+**EPIC F (#265) has one issue left, and #264 is blocked on a credential rather than on
+code.** Everything else in it shipped: the release branch policy, the publish path, v0.1.0
+and then v0.2.0, the installer, and the proof on the NAS. What is left is pointing this
+manager at the two production VPS it exists to back up. They are reached over SFTP on a
+port that is deliberately in no tracked file, and the reader account for them does not
+exist yet. The path itself is proven without them, against a real sshd in the machine tier,
+and pointing the installer at a real source is configuration rather than a code change.
+What is missing is the last acceptance criterion: a real backup run from each production
+host, with anything the account cannot read reported rather than worked around.
 
 **The provider acceptance procedures are still prose**, and the screenshots are still
 absent, both as the two sections above say.
@@ -1821,9 +1823,11 @@ since #450 folded the SFTP and MinIO fixtures and three copies of the Docker plu
 one place. `machines.Start(t)` creates a network and nothing else; `m.Source(t)` starts the
 machine being backed up on it (a real sshd, chrooted, key-only, with iptables so it can
 carry a connection cap), `m.Medium(t)` joins a real S3 API to the same network, and
-`m.AnotherSource(t)` gives a genuinely second server, which is what "this address has no
+`m.AnotherSource(t)` gives a second, independent server, which is what "this address has no
 known_hosts entry" needs to be real rather than a rebuilt image. Nothing starts that a test
-did not ask for. Failure shapes are methods rather than paragraphs, and each one has a
+did not ask for, which is not a micro-optimisation: an eagerly started source would have
+added an `ssh-keygen rsa 2048` and a container start to every one of the MinIO suite's
+eight tests. Failure shapes are methods rather than paragraphs, and each one has a
 negative control where getting it wrong by hand would be silent: `KnownHostsFor` re-records
 a machine's real host keys against a relay's address, and `DecoyKnownHostsFor` is the
 control that proves pinning the wrong one fails.
@@ -1842,9 +1846,13 @@ runs the harness, which is orchestration and not the product.
 
 Measured on a quiet machine, after #448 and #450: every machine package inside the manager
 container, `-race`, under `gotestwatch`, warm, is 164s, and 169s with both caches empty, of
-which 45s is the compile. That last number is why the tier is a tier: 76 seconds of cold
-compile per package, times the number of packages, is the reason "run every test on two
-machines" was rejected, and #451 asked for it to be measured here rather than inherited.
+which 45s is the compile. Only the packages the tier imports get compiled, not the whole
+product, and this builds arm64 natively, which matters because
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` left in force had an earlier attempt measuring qemu.
+That compile figure is why the tier is a tier at all: multiplied by the number of packages,
+it is the reason "run every test on two machines" was rejected rather than adopted, and
+#451 asked for the number to be measured here rather than inherited from the original
+estimate.
 
 ### Turning parts of the gate off, out loud
 
