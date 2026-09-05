@@ -44,4 +44,4 @@
 # until somebody moves it. Both of those commits are in that position right
 # now: they need that file moved to #465's own merge commit.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=a794c38581d3c2f7df73e3bee9753c063fc9d72a
+TESTS_REPO_SHA=6520d0ae3c284c7e4d266de2d5c5567ba3c1f233
