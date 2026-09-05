@@ -274,6 +274,15 @@ func TestARefusedProviderRequestFailsTheRowRatherThanLeavingItRunning(t *testing
 
 // TestASecondRestoreOfAnObjectAlreadyRestoringIsRefused, because asking
 // twice does not make it faster and on some providers it is billed twice.
+//
+// It is also the other half of #490, and the half that is easy to drop
+// while fixing the first. Submit now resolves the idempotency key ahead of
+// this check, and the tempting way to do that is to write the row first
+// and read it back. The key here is deliberately a NEW one, so the request
+// reaches this refusal, and the row count at the end is what says the
+// refusal happened with the operations table still untouched. Move
+// CreateOperation above the provider check and this goes red on that
+// count, not on the error.
 func TestASecondRestoreOfAnObjectAlreadyRestoringIsRefused(t *testing.T) {
 	store := &fakeMedium{restore: &RestoreState{InProgress: true}}
 	r, j := newTestRestorer(t, store)
@@ -345,6 +354,104 @@ func TestReplayingAnIdempotencyKeyStartsNothingNew(t *testing.T) {
 	}
 	if _, _, _, _, initiates := store.counts(); initiates != 1 {
 		t.Fatalf("initiates = %d after a replay, want 1", initiates)
+	}
+}
+
+// TestAReplayedKeyPresentedByADifferentCallerIsRefused is the guard that
+// had to move when Submit started short-circuiting on a row it found for
+// itself.
+//
+// CreateOperation makes this check on every replay it serves, and it makes
+// it for a reason that has nothing to do with tidiness: an operation row
+// carries an actor, and result text that actor wrote, so serving it back
+// to somebody else presenting the same key is an information leak wearing
+// a convenience's clothes. Submit no longer reaches CreateOperation on a
+// replay, so the check has to exist here too or it exists nowhere.
+//
+// Each row plants a different half of the identity a key promises, and the
+// last assertion is the one that matters most: the refusal must not have
+// touched the original operator's restore.
+func TestAReplayedKeyPresentedByADifferentCallerIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(Request) Request
+	}{
+		{"a different actor", func(r Request) Request { r.Actor = "mallory"; return r }},
+		{"a different configuration revision", func(r Request) Request { r.ConfigRevision = "rev-2"; return r }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeMedium{}
+			r, j := newTestRestorer(t, store)
+			ctx := context.Background()
+
+			first, err := r.Submit(ctx, restoreRequest())
+			if err != nil {
+				t.Fatalf("first Submit: %v", err)
+			}
+
+			replay, err := r.Submit(ctx, tc.mut(restoreRequest()))
+			if !errors.Is(err, state.ErrOperationIdempotencyKeyReused) {
+				t.Fatalf("Submit: err = %v, want ErrOperationIdempotencyKeyReused", err)
+			}
+			if replay.OperationID != "" {
+				t.Fatalf("the refusal handed back operation %q anyway", replay.OperationID)
+			}
+			if _, _, _, _, initiates := store.counts(); initiates != 1 {
+				t.Fatalf("initiates = %d, want the original 1 and nothing more", initiates)
+			}
+			ops, err := j.ListOperations(ctx, 10)
+			if err != nil {
+				t.Fatalf("ListOperations: %v", err)
+			}
+			if len(ops) != 1 || ops[0].OperationID != first.OperationID {
+				t.Fatalf("the refused replay changed the table: %+v", ops)
+			}
+			if ops[0].Actor != "alice" {
+				t.Fatalf("the original row's actor is now %q", ops[0].Actor)
+			}
+		})
+	}
+}
+
+// TestAReplayReportsTheWindowTheRowRecorded pins which of the two
+// candidate answers a replay gives.
+//
+// A key's identity is its actor, its action and the configuration
+// revision; the window is not part of it, so CreateOperation accepts a
+// replay that carries a different one and so does Submit. That leaves two
+// numbers in play, and only one of them describes a restore that exists.
+// The row's is what the provider was actually asked for. The request's is
+// a number nothing ever acted on, and answering with it would tell an
+// operator their copy stays readable for a fortnight when it was booked
+// for three days.
+//
+// Swap replayOf's params.WindowDays for the request's and this goes red.
+func TestAReplayReportsTheWindowTheRowRecorded(t *testing.T) {
+	store := &fakeMedium{}
+	r, _ := newTestRestorer(t, store)
+	ctx := context.Background()
+
+	if _, err := r.Submit(ctx, restoreRequest()); err != nil {
+		t.Fatalf("first Submit: %v", err)
+	}
+
+	wider := restoreRequest()
+	wider.WindowDays = 14
+	replay, err := r.Submit(ctx, wider)
+	if err != nil {
+		t.Fatalf("replayed Submit: %v", err)
+	}
+	if replay.Created {
+		t.Fatal("Created = true for a replayed idempotency key")
+	}
+	if replay.WindowDays != 3 {
+		t.Fatalf("the replay reports a %d day window; the provider was asked for 3", replay.WindowDays)
+	}
+	if got := store.initiatedWindows; len(got) != 1 || got[0] != 3 {
+		t.Fatalf("initiated windows = %v, want the original [3] and nothing more", got)
+	}
+	if replay.Wait == "" || replay.Billing == "" {
+		t.Fatal("a replay dropped the class's own words about waiting and being billed")
 	}
 }
 

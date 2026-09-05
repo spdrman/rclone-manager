@@ -73,6 +73,14 @@ type RestorePlacementRequest struct {
 	// IdempotencyKey identifies this exact logical request, exactly as
 	// RunCycleRequest's does: a retry finds the original row rather than
 	// starting, and paying for, a second restore.
+	//
+	// It holds whether or not the first attempt reached the provider,
+	// which is the case that matters here and the case that was broken.
+	// An operator whose client timed out mid-submission does not know
+	// which happened, and the correct thing for them to do is send the
+	// same request again; a retry that came back as "a restore of this
+	// copy is already running" would be describing their own request to
+	// them, and the way out of it costs a second retrieval charge.
 	IdempotencyKey string
 
 	// Actor is the authenticated caller's identity, recorded on the row.
@@ -161,6 +169,13 @@ func (b *BackupService) restorer() *archive.Restorer {
 // that now points at a different bucket, and a restore against the wrong
 // bucket is not a no-op: it is a retrieval charge against somebody's
 // objects.
+//
+// A retry of a request that already landed comes back with Created false
+// and the original operation on it, having asked the provider nothing at
+// all. internal/archive resolves the idempotency key before it asks
+// anything, so the two promises meeting here (a retry finds its row, a
+// refusal leaves nothing behind) both hold; see archive.Restorer.Submit
+// for why the order is the whole mechanism.
 func (b *BackupService) SubmitRestorePlacement(ctx context.Context, req RestorePlacementRequest) (RestoreSubmission, error) {
 	if req.IdempotencyKey == "" {
 		return RestoreSubmission{}, fmt.Errorf("%w: an idempotency key is required", ErrInvalidRequest)

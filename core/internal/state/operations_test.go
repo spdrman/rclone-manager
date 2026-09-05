@@ -210,6 +210,55 @@ func TestCreateOperation_ReusedKeyForDifferentActorIsRefused(t *testing.T) {
 	}
 }
 
+// TestGetOperationByIdempotencyKey_FindsTheRowWithoutWritingOne is the
+// read that lets a caller find out whether a request already landed before
+// it does anything irreversible about it.
+//
+// CreateOperation cannot answer that, because answering it is the same
+// call as writing the row, and internal/archive has a caller that needs
+// the answer and must leave nothing behind if it goes on to refuse (a
+// restore is billed at the provider). So the two halves are asserted
+// together: the row comes back, and the table is exactly as long as it was
+// whether the key was found or not.
+func TestGetOperationByIdempotencyKey_FindsTheRowWithoutWritingOne(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+
+	created, err := j.CreateOperation(ctx, testOperationRequest("op_1", "idem-1"))
+	if err != nil {
+		t.Fatalf("CreateOperation: %v", err)
+	}
+
+	found, err := j.GetOperationByIdempotencyKey(ctx, "idem-1")
+	if err != nil {
+		t.Fatalf("GetOperationByIdempotencyKey: %v", err)
+	}
+	if found.OperationID != created.Operation.OperationID {
+		t.Errorf("found %q, want %q", found.OperationID, created.Operation.OperationID)
+	}
+	if found.Actor != "alice" || found.Action != "run_cycle" || found.ConfigRevision != "rev-1" {
+		t.Errorf("the row came back without the identity a caller has to match on: %+v", found)
+	}
+
+	if _, err := j.GetOperationByIdempotencyKey(ctx, "a-key-nobody-has-used"); !errors.Is(err, ErrOperationNotFound) {
+		t.Errorf("an unused key: err = %v, want ErrOperationNotFound", err)
+	}
+	if _, err := j.GetOperationByIdempotencyKey(ctx, ""); err == nil {
+		t.Error("an empty key was accepted as a question")
+	}
+
+	// Neither of those three reads is allowed to have been a write. An
+	// upsert-shaped implementation would satisfy every assertion above
+	// and fail this one.
+	ops, err := j.ListOperations(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListOperations: %v", err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("looking operations up left %d rows in the table, want the 1 that was created", len(ops))
+	}
+}
+
 func TestCreateOperation_RequiresIdempotencyKeyOperationIDAndAction(t *testing.T) {
 	base := testOperationRequest("op_1", "idem-1")
 
