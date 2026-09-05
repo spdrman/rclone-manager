@@ -70,6 +70,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,6 +184,25 @@ func gateRequiresDocker() bool {
 func Start(t *testing.T) *Machines {
 	t.Helper()
 
+	// The network's name and its removal come FIRST, before anything else
+	// registers a cleanup.
+	//
+	// t.Cleanup runs LIFO, so whatever registers first is torn down last,
+	// and a network with an endpoint still on it cannot be removed. Getting
+	// this backwards is not a tidiness bug: Docker's default address pool
+	// is about thirty /16s, every leaked network holds one for the fifteen
+	// minutes until the lease sweep will touch it, and the failure lands on
+	// whoever asks next as "all predefined address pools have been fully
+	// subnetted". That is what it did here, on the run that found it: 25
+	// leaked networks and a conformance package that could not start a
+	// container at all.
+	name := os.Getenv(NetworkEnv)
+	inNetwork := name != ""
+	if !inNetwork {
+		name = fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
+		t.Cleanup(func() { removeNetwork(t, name) })
+	}
+
 	// The watchdog is armed before the first external command, not after
 	// it. Everything from here on shells out to docker, and #161 is what
 	// happens when one of those calls never returns and nothing is
@@ -199,15 +219,13 @@ func Start(t *testing.T) *Machines {
 	dockerlease.Sweep()
 	dockerlease.SweepNetworks()
 
-	network := os.Getenv(NetworkEnv)
-	inNetwork := network != ""
 	if !inNetwork {
 		pending.setStage("docker network create")
-		network = createNetwork(t)
+		createNetwork(t, name)
 	}
 	pending.setStage("waiting for the test to ask for a machine")
 
-	return &Machines{Network: network, inNetwork: inNetwork, pending: pending}
+	return &Machines{Network: name, inNetwork: inNetwork, pending: pending}
 }
 
 // Source starts the machine being backed up the first time it is called and
@@ -291,22 +309,52 @@ func (m *Machines) Medium(t *testing.T) *Medium {
 
 // --- the network ----------------------------------------------------------
 
-func createNetwork(t *testing.T) string {
+func createNetwork(t *testing.T, name string) {
 	t.Helper()
-	name := fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
-	// Registered before the network exists and before any machine joins
-	// it, so t.Cleanup's LIFO order removes the machines first. A network
-	// with an endpoint on it cannot be removed, and "network is in use" at
-	// teardown is how a network survives a run.
-	t.Cleanup(func() {
-		_, _, _ = dockerRun(dockerNetworkTimeout, "network", "rm", name)
-	})
 	if _, errOut, err := dockerRun(dockerNetworkTimeout, "network", "create",
 		dockerlease.LabelFlag, dockerlease.LabelSpec, name); err != nil {
 		t.Fatalf("machines: could not create the network %s: %v\n%s", name, err, errOut)
 	}
-	return name
 }
+
+// removeNetwork gives the network back, and says so out loud when it
+// cannot.
+//
+// It retries, because `docker rm -f` on a container returns before the
+// daemon has finished detaching its endpoint, so the first `network rm`
+// after a teardown can legitimately answer "network is in use" for a
+// fraction of a second. It does not retry forever: past that window the
+// answer means a machine really did outlive its test, and the leak is worth
+// more than a clean-looking log. The pool this comes out of is about thirty
+// networks wide, so a leak that goes unreported takes down whatever runs
+// next rather than the run that caused it.
+func removeNetwork(t *testing.T, name string) {
+	deadline := time.Now().Add(networkRemoveBudget)
+	var lastErr error
+	var lastOut string
+	for {
+		_, errOut, err := dockerRun(dockerNetworkTimeout, "network", "rm", name)
+		if err == nil {
+			return
+		}
+		// Already gone is success: the lease sweep or another teardown got
+		// there first, which is a normal outcome on a shared daemon.
+		if strings.Contains(errOut, "not found") || strings.Contains(errOut, "No such network") {
+			return
+		}
+		lastErr, lastOut = err, errOut
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Errorf("%s machines: the network %s could not be removed within %s: %v\n%s\nA network that outlives its test holds one of the daemon's ~30 address-pool slots until the lease sweep reclaims it %s later, and the run that runs out of slots is not this one. Something joined to it is still alive.",
+		infraMarker, name, networkRemoveBudget, lastErr, lastOut, dockerlease.StaleAfter)
+}
+
+// networkRemoveBudget is how long teardown waits for the daemon to finish
+// detaching endpoints before calling a network leaked.
+const networkRemoveBudget = 15 * time.Second
 
 func shortID(t *testing.T) string {
 	t.Helper()
