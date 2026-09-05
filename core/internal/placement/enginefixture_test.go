@@ -102,6 +102,34 @@ type fakeMedium struct {
 	// object actually does.
 	archiveRefusesReads bool
 
+	// modTimes is what StatObject reports for each key, in unix seconds,
+	// which is exactly what the rclone adapter reports: toObjectInfo
+	// carries o.ModTime(ctx).Unix() and leaves the field at zero when the
+	// backend has none.
+	//
+	// A fake that left it at zero for everything could not exercise the
+	// pre-delete proof at all, because a mod time is one of the three
+	// things that proof rests on. It advances on every write, the way an
+	// endpoint's does.
+	modTimes map[string]int64
+
+	// endpointClock is the fake endpoint's own clock, in unix seconds. It
+	// is separate from the engine's clock on purpose: the two are the
+	// same clock nowhere in production, and the pre-delete proof compares
+	// mod times only against other mod times for exactly that reason.
+	endpointClock int64
+
+	// noModTime makes StatObject report no mod time at all, which is what
+	// a backend with no mod-time support gives. It is the negative
+	// control for the proof: with nothing to compare, every move pays for
+	// the second read.
+	noModTime bool
+
+	// statClass overrides the storage class StatObject reports, so a test
+	// can transition an object under a move the way a bucket lifecycle
+	// rule does. Empty means the medium's own configured class.
+	statClass string
+
 	// afterOpen runs at the end of a SUCCESSFUL OpenObject, with the
 	// mutex already held, so it must touch the fake's fields directly and
 	// must not call back into a locking method.
@@ -124,15 +152,19 @@ type fakeMedium struct {
 	deleteErr  error
 	restoreErr error
 
-	uploads, opens, stats, deletes, restoreStatuses int
-	uploadedKeys                                    []string
+	uploads, opens, stats, checksums, deletes, restoreStatuses int
+	uploadedKeys                                               []string
 }
 
 func newFakeMedium() *fakeMedium {
-	return &fakeMedium{objects: map[string][]byte{}}
+	return &fakeMedium{
+		objects:       map[string][]byte{},
+		modTimes:      map[string]int64{},
+		endpointClock: testNow2.Add(-time.Hour).Unix(),
+	}
 }
 
-func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
+func (f *fakeMedium) StatObject(_ context.Context, medium transport.Medium, key string) (transport.ObjectInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stats++
@@ -143,7 +175,33 @@ func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, key strin
 	if !ok {
 		return transport.ObjectInfo{}, &transport.Error{Category: transport.NotFound, Op: "stat", Cause: errors.New("no such key")}
 	}
-	return transport.ObjectInfo{Key: key, Size: int64(len(b))}, nil
+	class := medium.StorageClass
+	if f.statClass != "" {
+		class = f.statClass
+	}
+	info := transport.ObjectInfo{Key: key, Size: int64(len(b)), StorageClass: class}
+	if !f.noModTime {
+		info.ModTime = f.modTimes[key]
+	}
+	return info, nil
+}
+
+// putLocked writes b at key and stamps it with a fresh mod time, which is
+// what a real endpoint does to an object somebody overwrites. The caller
+// already holds the mutex, so it is callable from afterOpen.
+func (f *fakeMedium) putLocked(key string, b []byte) {
+	f.endpointClock++
+	f.objects[key] = append([]byte(nil), b...)
+	f.modTimes[key] = f.endpointClock
+}
+
+// touchLocked stamps a fresh mod time on an object whose bytes are
+// unchanged. It is how a test says "something wrote here" without saying
+// "and what it wrote is wrong", which is the difference between the proof
+// being void and the artifact being bad.
+func (f *fakeMedium) touchLocked(key string) {
+	f.endpointClock++
+	f.modTimes[key] = f.endpointClock
 }
 
 func (f *fakeMedium) UploadFromLocal(_ context.Context, _ transport.Medium, localPath, key string, _ transport.UploadOptions) (transport.UploadResult, error) {
@@ -164,7 +222,7 @@ func (f *fakeMedium) UploadFromLocal(_ context.Context, _ transport.Medium, loca
 	case f.truncate > 0 && f.truncate < len(b):
 		b = b[:f.truncate]
 	}
-	f.objects[key] = b
+	f.putLocked(key, b)
 	return transport.UploadResult{Key: key, BytesUploaded: int64(len(b))}, nil
 }
 
@@ -198,6 +256,7 @@ func (f *fakeMedium) OpenObject(_ context.Context, medium transport.Medium, key 
 func (f *fakeMedium) ObjectChecksum(_ context.Context, _ transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.checksums++
 	if !f.attests {
 		// Exactly what rclone v1.75.0's s3 backend forces: it exposes MD5
 		// from the ETag and refuses every other algorithm, so no S3
@@ -262,6 +321,18 @@ func (f *fakeMedium) openCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.opens
+}
+
+func (f *fakeMedium) statCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stats
+}
+
+func (f *fakeMedium) checksumCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checksums
 }
 
 func (f *fakeMedium) restoreStatusCount() int {
@@ -569,6 +640,14 @@ type fixtureOpts struct {
 	// storageClass is the class the medium writes with. Empty means the
 	// medium names none, which internal/archive reads as STANDARD.
 	storageClass string
+	// clockStep is how far the engine's clock advances on every reading.
+	// Zero means one second, which is what every test that does not care
+	// gets.
+	//
+	// A test that wants a move to take longer than the pre-delete proof's
+	// validity window has no other way to say so: the window is a bound on
+	// elapsed time and a test cannot wait out a real one.
+	clockStep time.Duration
 }
 
 func newFixture(t *testing.T, opts fixtureOpts) *fixture {
@@ -632,6 +711,10 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 
 	guarded := &guardedJournal{Journal: journal, guard: g}
 	clock := testNow2
+	step := opts.clockStep
+	if step <= 0 {
+		step = time.Second
+	}
 
 	f := &fixture{
 		t: t, ctx: ctx, journal: journal, guarded: guarded, guard: g,
@@ -654,7 +737,7 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 		},
 		Sets:             sets,
 		Tiers:            tiers,
-		Now:              func() time.Time { f.clock = f.clock.Add(time.Second); return f.clock },
+		Now:              func() time.Time { f.clock = f.clock.Add(step); return f.clock },
 		MaxMovesPerCycle: 4,
 	}
 	return f

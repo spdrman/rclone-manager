@@ -250,10 +250,13 @@ func TestAnArchivedCopyNobodyRestoredIsRefusedBeforeTheGuardEverSpeaks(t *testin
 //
 // The gap is not a millisecond, either, which is what makes this worth a
 // test rather than a curiosity. deleteSource's re-verification is a FULL
-// download of the object (TestACompletedMoveReadsTheObjectBackTwice pins
-// that it is the second of two), so on a large artifact the read runs for
-// minutes or hours, and the restore window it started inside can perfectly
-// ordinarily end before it finishes.
+// download of the object on the path this test drives, which is the resume
+// path: the move is planted at SOURCE_DELETE_PENDING, so there is no
+// pre-delete proof for it to stand on and it reads from scratch
+// (predelete_test.go's TestAProofCannotCrossACycleBoundary pins that).
+// On a large artifact that read runs for minutes or hours, and the restore
+// window it started inside can perfectly ordinarily end before it
+// finishes.
 func TestTheEighthClauseIsReachedByAWindowThatLapsesMidMove(t *testing.T) {
 	for _, w := range archiveWorlds {
 		if !w.reachesTheGuard {
