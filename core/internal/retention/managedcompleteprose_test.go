@@ -57,6 +57,13 @@ const managedCompleteEnumerationFloor = 3
 // matches), and no run may be silently forgiven without one.
 var notTheManagedCompleteSet = []proseException{
 	{
+		path: "README.md",
+		run:  "COMMITTED, REMOTE_DELETE_PENDING, REMOTE_RETAINED",
+		why: "the lifecycle summary's list of what QUARANTINED is reachable from. COMPLETE " +
+			"is absent because a COMPLETE artifact found bad goes to QUARANTINED_LOST " +
+			"instead: the remote copy is already gone, so there is nothing left to re-fetch.",
+	},
+	{
 		path: "core/internal/app/validate.go",
 		run:  "COMMITTED/REMOTE_DELETE_PENDING/REMOTE_RETAINED",
 		why: "the quarantine routing, not the eligible set: these three go to QUARANTINED " +
