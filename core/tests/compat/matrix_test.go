@@ -236,6 +236,12 @@ func TestTheMatrixHasARowPerGateLine(t *testing.T) {
 // row" had no row at all, so the one guard about a backfill that hands a
 // `.partial` an ACTIVE placement, which is what lets a move delete a source
 // against an incomplete copy, was in the ledger nowhere. V9 is that row.
+//
+// It is V9 rather than V8, which is where the spec puts that guard,
+// because renumbering an existing row breaks every reference anybody has
+// written to it, #522 included. So this compares the SET of rows against
+// the spec's guards rather than their order, and the row itself says which
+// guard it is.
 func TestTheViolationLedgerHasARowPerSpecGuard(t *testing.T) {
 	matrix, err := os.ReadFile(matrixPath)
 	if err != nil {
