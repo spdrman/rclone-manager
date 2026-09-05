@@ -420,18 +420,50 @@ swap "$d/docs/conformance/epic-e-matrix.md" \
 expect_cell_fails "a PASS row citing a suite this repository does not have" "$d" \
   "name something this repository does not have"
 
-d=$(mutant matrix-has-nothing-blocked)
-mutate_py "$d/docs/conformance/epic-e-matrix.md" <<'PYEOF'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-# The optimistic edit: every blocked row quietly promoted to PASS.
-out = re.sub(r"\| BLOCKED \(#[0-9, #]+\) \|", "| PASS |", s)
-assert out != s, "no BLOCKED row left to promote"
-open(p, "w").write(out)
-PYEOF
-expect_cell_fails "every blocked row promoted to PASS" "$d" \
-  "no row in the matrix is BLOCKED"
+# This slot used to hold "every blocked row promoted to PASS", against a
+# floor in core/tests/compat that asserted SOME row was still BLOCKED. The
+# floor was correct when it was written and it barred the finished state, so
+# #522 replaced it, and the control had to move with it: the mutation now
+# has nothing to promote, since every row earned its PASS.
+#
+# What replaced the floor is the promise the floor was standing in for. The
+# matrix carries one row per line of the spec's two exit gates, and the row
+# nobody can make green is the row most worth deleting, so that is the
+# mutation. P2.6 is the row in question: it is the only one that is not
+# PASS, its outcome is a paragraph about which half of an archive claim can
+# be run here, and it is exactly the cell somebody tidying a table would
+# take out.
+#
+# It is planted by making the row invisible to the parser rather than by
+# cutting the line, and that is the same edit as far as every check is
+# concerned, with an anchor that survives the row's prose being rewritten.
+d=$(mutant matrix-drops-the-row-nobody-can-make-green)
+swap "$d/docs/conformance/epic-e-matrix.md" \
+  '| P2.6 | PARTIAL (the end-to-end archive half cannot be run here) |' \
+  '| ~~P2.6~~ | PARTIAL (the end-to-end archive half cannot be run here) |'
+expect_cell_fails "the one row nobody can make green, dropped from the table" "$d" \
+  "it has to carry one row per line"
+
+# And the spec's own checkboxes, in both directions, because the drift #522
+# found ran both ways: every box in both exit gates sat unticked long after
+# phase 2 landed, and nothing in the repository could tell.
+#
+# The optimistic direction first: a box ticked for a row that is not PASS.
+d=$(mutant spec-ticks-a-box-the-matrix-does-not-support)
+swap "$d/docs/EPIC-E-alternative-storage.md" \
+  '- [ ] An artifact on an archive class shows' \
+  '- [x] An artifact on an archive class shows'
+expect_cell_fails "a spec box ticked for a row the matrix calls PARTIAL" "$d" \
+  "which claims more than anything has been watched to prove"
+
+# And the direction that actually happened: a row is PASS, watched, and the
+# document somebody reads to find out where the EPIC stands still says no.
+d=$(mutant spec-leaves-a-passing-line-unticked)
+swap "$d/docs/EPIC-E-alternative-storage.md" \
+  '- [x] FR-35 holds:' \
+  '- [ ] FR-35 holds:'
+expect_cell_fails "a spec box left unticked after its row earned its PASS" "$d" \
+  "the spec is the document somebody reads to find out where this EPIC stands"
 
 echo
 echo "==> the gate's own corpus"
