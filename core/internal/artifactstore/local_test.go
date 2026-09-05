@@ -1,3 +1,26 @@
+// These cover Local, and three of them cover the package's design rather
+// than its behaviour.
+//
+// The design tests are the unusual part and they are unusual on purpose.
+// TestSeamOffersNoMoveMethod, TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage
+// and the rootless-store test all assert things a normal unit test cannot
+// reach: that a method does NOT exist, that another package does not call
+// one, and that a value built the wrong way refuses rather than guesses.
+// The package doc's whole argument is about which operations are offered
+// and in what order a caller composes them, and an argument that lives only
+// in a comment is one refactor from being lost.
+//
+// It is an external test package (artifactstore_test) because two of those
+// tests need it: reaching for internal/lifecycle would be an import cycle
+// from inside the package, and asserting the exported method set is only
+// meaningful from outside.
+//
+// The recurring trap here is the tautology. Several of these tests once
+// compared this package's answer against another implementation of the same
+// formula, which went green the moment the two became one function and
+// stopped detecting the thing they existed to detect. Every path assertion
+// below is pinned to a literal string instead, and the comments on the
+// individual tests say where each one was burnt.
 package artifactstore_test
 
 import (
@@ -25,6 +48,11 @@ import (
 // runs a package's tests from.
 const lifecycleDir = "../lifecycle"
 
+// testSetID builds the backup set every artifact in this file belongs to.
+// It goes through model.NewBackupSetID rather than a composite literal so
+// the ids these tests use are the same shape the pipeline produces, and it
+// fails the test rather than returning an error, because a fixture that
+// cannot be built is not a case worth reporting on.
 func testSetID(t *testing.T) model.BackupSetID {
 	t.Helper()
 	id, err := model.NewBackupSetID("src", "set")
@@ -34,6 +62,14 @@ func testSetID(t *testing.T) model.BackupSetID {
 	return id
 }
 
+// testArtifact builds one artifact id in that set.
+//
+// Going through model.NewArtifactID matters more here than it looks: that
+// constructor is what refuses "/", "\\", "." and "..", so every name in
+// the locator table below is one the pipeline could genuinely produce. A
+// composite literal would let a test assert what Local does with a crafted
+// name, and Local is not the layer that defends against those; see
+// localLocator's comment and internal/retention's pruneVerifySafeToDelete.
 func testArtifact(t *testing.T, name string) model.ArtifactID {
 	t.Helper()
 	a, err := model.NewArtifactID(testSetID(t), name)
@@ -141,6 +177,15 @@ func TestZeroLocalRefusesToLocate(t *testing.T) {
 	}
 }
 
+// TestLocalStatReportsSizeAndAbsence covers both halves of Stat's contract
+// in one case, and they belong together: reporting a size is only useful if
+// absence is reported as something a caller can distinguish from it.
+//
+// ErrNotPresent is asserted with errors.Is rather than by comparing the
+// message, because the package doc rests a mover's whole failure model on
+// that sentinel being routable. ModTime is only checked for being present:
+// the value is whatever the filesystem recorded a moment ago, and pinning
+// it would be pinning the clock.
 func TestLocalStatReportsSizeAndAbsence(t *testing.T) {
 	dir := t.TempDir()
 	present := filepath.Join(dir, "present.dump")
@@ -184,6 +229,15 @@ func TestLocalStatRefusesASymlink(t *testing.T) {
 	}
 }
 
+// TestLocalOpenReadsTheBytesAndReportsAbsence pins that Open translates a
+// missing file into ErrNotPresent too.
+//
+// The absence half is the reason this is not just "Open reads a file". Open
+// is the second method that can observe an artifact not being there, and
+// the distinction between an absent artifact and an unreachable backend has
+// to hold on every one of them: a caller that got a raw os.ErrNotExist from
+// one method and ErrNotPresent from another would end up classifying the
+// same fact two ways depending on which one it happened to call.
 func TestLocalOpenReadsTheBytesAndReportsAbsence(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.dump")

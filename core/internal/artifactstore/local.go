@@ -11,6 +11,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// This file is the one implementation of the seam store.go describes: the
+// local backup root, which is where every deployment's artifacts sit today
+// and where they sat before this package existed.
+//
+// It is worth reading as the reference for a second backend, because the
+// interface states obligations and this is where one of them is actually
+// discharged. The three that have real content are the ones the package
+// doc argues a mover's failure model rests on: Put is atomic, durable and
+// refuses an occupied locator, and each of those is a specific system call
+// choice here rather than a property of writing a file. os.CreateTemp plus
+// os.Link is the atomicity and the refusal; fsyncDir is the durability;
+// os.Rename would have been shorter and would have quietly given up the
+// refusal.
+//
+// Everything else in here is deliberately thin. Locator is pure string
+// computation with no filesystem access at all, Remove is a bare
+// os.Remove with the safety proof left to internal/retention, and there is
+// no enumeration. Where a method looks too small to be doing its job, the
+// reason is almost always that the work belongs to a caller, and the
+// comment on that method says which one.
+
 // Local is the local backup root: the store every existing configuration
 // uses, and the only implementation today.
 //
@@ -132,6 +153,13 @@ func (Local) Stat(_ context.Context, locator string) (Stat, error) {
 }
 
 // Open reads the artifact's bytes.
+//
+// The absence translation is the part worth naming: a missing file comes
+// back as ErrNotPresent, the same sentinel Stat uses, so a caller can tell
+// "the store answered and the artifact is not there" from "the store could
+// not be reached". The package doc calls that distinction the one a mover
+// must never collapse, and it has to hold on every method that can observe
+// absence, not only on the one whose job is to report it.
 func (Local) Open(_ context.Context, locator string) (io.ReadCloser, error) {
 	f, err := os.Open(locator)
 	if errors.Is(err, os.ErrNotExist) {
