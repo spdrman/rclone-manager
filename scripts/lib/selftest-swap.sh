@@ -80,18 +80,39 @@ selftest_note_stale() {
 # violation the control describes. Either way the control cannot run, and
 # either way the answer is to fix the anchor, not to guess.
 _selftest_anchor() {
-  local mode=$1 file=$2 old=$3 new=${4:-} out status=0
+  local mode=$1 file=$2 old=$3 new=${4:-} out status=0 display
+  # display=$file cannot go on the line above: bash declares every name in a
+  # `local` before it assigns any of them, so under `set -u` the reference
+  # would read an unbound $file.
+  display=$file
   selftest_anchors_checked=$((selftest_anchors_checked + 1))
-  out=$(python3 - "$mode" "$file" "$old" "$new" <<'PY'
-import os
+  # A complaint names the product file, spelled the way the diff that broke
+  # the anchor spells it. Which copy of the tree it was reached through is
+  # noise the reader has to strip by eye, so strip it here instead. $root
+  # and $tmp are the selftests' own, and this is the only thing that uses
+  # them: without them the message just carries the longer path.
+  if [ -n "${tmp:-}" ]; then
+    case "$display" in
+      "$tmp"/*)
+        display=${display#"$tmp"/}
+        display=${display#*/}
+        ;;
+    esac
+  fi
+  if [ -n "${root:-}" ]; then
+    case "$display" in
+      "$root"/*) display=${display#"$root"/} ;;
+    esac
+  fi
+  out=$(python3 - "$mode" "$file" "$old" "$new" "$display" <<'PY'
 import sys
 
-mode, path, old, new = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+mode, path, old, new, shown = sys.argv[1:6]
 
 try:
     src = open(path).read()
 except OSError as err:
-    sys.exit("%s: %s" % (path, err))
+    sys.exit("%s: %s" % (shown, err))
 
 n = src.count(old)
 if n == 1:
@@ -104,11 +125,10 @@ def quoted(text):
     return "\n".join("      | " + line for line in text.split("\n"))
 
 
-head = os.path.relpath(path) if os.path.isabs(path) else path
 if n > 1:
     sys.exit(
         "%s contains this anchor %d times, so the plant would land in more "
-        "than one place:\n%s" % (head, n, quoted(old))
+        "than one place:\n%s" % (shown, n, quoted(old))
     )
 
 # Where it stopped matching. Reporting the first anchor line that is no
@@ -119,7 +139,7 @@ kept = 0
 while kept < len(lines) and "\n".join(lines[: kept + 1]) in src:
     kept += 1
 
-detail = "%s no longer contains this anchor:\n%s" % (head, quoted(old))
+detail = "%s no longer contains this anchor:\n%s" % (shown, quoted(old))
 if kept == 0:
     detail += "\n      not even its first line survives, so the whole block moved or went away."
 else:
