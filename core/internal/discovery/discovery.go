@@ -88,8 +88,20 @@ import (
 // lifecycle.Advance, and a test can build one Deps value and use it for both
 // this package's assertions and any lifecycle-level ones in the same table.
 type Deps struct {
+	// Transport is the read side of the remote: List to enumerate, Stat
+	// and RemoteHash to capture an identity for what is about to be
+	// journaled. Nothing here writes to the remote, which is why a
+	// discovery pass is safe to run against a source an operator has only
+	// given this manager read access to (FR-6).
 	Transport transport.Transport
-	Journal   lifecycle.Journal
+
+	// Journal is narrowed to lifecycle.Journal rather than being the
+	// concrete *state.Journal, so that the only writes this package can
+	// reach are the ones lifecycle.Advance performs. Discover does call
+	// Get directly, but only to read back a row the journal has just
+	// refused to duplicate, which is how a collision gets the path it
+	// collided with.
+	Journal lifecycle.Journal
 
 	// Now is injectable so a test can control both the "has this been
 	// stable long enough" judgement and the OccurredAt every newly
@@ -98,6 +110,21 @@ type Deps struct {
 	Now func() time.Time
 }
 
+// now resolves the clock once, and normalises to UTC whichever branch it
+// takes.
+//
+// Discover calls this exactly once per pass and threads the result
+// everywhere, rather than asking the clock again at each candidate. That is
+// what makes a "stable for 10 minutes" judgement mean the same thing for
+// the first artifact in a listing and the thousandth, and it is what makes
+// every artifact discovered in one pass share an OccurredAt, so a later
+// reader can tell which pass found them.
+//
+// The UTC call is applied to the injected clock too, not only to
+// time.Now. A test that hands back a time in a named location would
+// otherwise produce journal timestamps in that location, and the whole
+// point of injecting a clock is that the test and production go down the
+// same path.
 func (d Deps) now() time.Time {
 	if d.Now == nil {
 		return time.Now().UTC()
@@ -105,6 +132,15 @@ func (d Deps) now() time.Time {
 	return d.Now().UTC()
 }
 
+// lifecycleDeps re-packs this package's Deps as the lifecycle package's.
+//
+// The two structs carry the same three fields on purpose (see Deps' own
+// doc), and this is where that deliberate duplication is paid for. It
+// forwards d.Now rather than d.now(): lifecycle has the identical nil-means-
+// time.Now convention, so handing it the function keeps one clock
+// convention rather than two, and handing it a resolved instant would give
+// lifecycle a clock frozen at the top of the pass with no way to tell that
+// had happened.
 func (d Deps) lifecycleDeps() lifecycle.Deps {
 	return lifecycle.Deps{Journal: d.Journal, Transport: d.Transport, Now: d.Now}
 }
@@ -112,16 +148,34 @@ func (d Deps) lifecycleDeps() lifecycle.Deps {
 // PendingCandidate is a remote object Discover saw, matched against the
 // backup set's include patterns, but could not yet prove complete.
 type PendingCandidate struct {
+	// RemotePath is the path as the listing gave it, already known to be
+	// clean: a candidate reaches Pending only after isCleanRelativePath
+	// and model.NewArtifactID have both accepted it.
 	RemotePath string
-	Reason     string
+
+	// Reason is isComplete's own words for what is still missing. It is
+	// carried rather than recomputed because pending is the normal, boring
+	// outcome an operator sees most of, and "waiting for backup.dump.done"
+	// is the difference between a pass that looks stuck and one that is
+	// obviously waiting for the producer.
+	Reason string
 }
 
 // RejectedEntry is a remote object Discover refused to treat as a candidate
 // at all: a hostile or malformed name, or a path shaped like a traversal
 // attempt. See the package doc's "Untrusted input" section.
 type RejectedEntry struct {
+	// RemotePath is the raw string from the listing, reported exactly as
+	// it arrived. It has failed validation by the time it lands here, so
+	// it is untrusted for every purpose except being shown to a person,
+	// and it is deliberately not cleaned or truncated first: an operator
+	// looking at a rejection needs to see what the producer actually
+	// wrote.
 	RemotePath string
-	Reason     string
+
+	// Reason is which check refused it, either this package's own
+	// traversal refusal or model.NewArtifactID's message.
+	Reason string
 }
 
 // Conflict is a basename collision: a second remote path that would resolve
@@ -145,11 +199,25 @@ type Conflict struct {
 // the batch: Discover keeps going so one bad remote object cannot hide every
 // other artifact's result behind it.
 type CandidateError struct {
+	// RemotePath names which candidate failed. Without it an error slice
+	// from a thousand-object listing is unactionable.
 	RemotePath string
-	Err        error
+
+	// Err is the underlying failure, wrapped with a phrase saying which
+	// step it came from ("capturing identity", "recording as discovered")
+	// so the two are distinguishable in a list.
+	Err error
 }
 
+// Error renders as "path: reason".
 func (e CandidateError) Error() string { return fmt.Sprintf("%s: %v", e.RemotePath, e.Err) }
+
+// Unwrap exposes the underlying failure so a caller can route on it with
+// errors.Is. That matters because these are collected rather than returned:
+// a systemic problem, a context cancellation say, shows up here once per
+// candidate rather than as Discover's own error, and a caller that wants to
+// tell "the run was cancelled" from "one object is broken" has nothing but
+// the wrapped error to ask.
 func (e CandidateError) Unwrap() error { return e.Err }
 
 // Result is everything one Discover call found, partitioned by what
@@ -167,10 +235,27 @@ type Result struct {
 	// nothing (Outcome.Applied == false).
 	AlreadyKnown []state.Record
 
-	Pending   []PendingCandidate
-	Rejected  []RejectedEntry
+	// Pending is the routine one: matched the include patterns, has not
+	// proven complete yet. It is expected to be non-empty on a healthy
+	// system, because a producer that is mid-write is exactly what the
+	// completion strategies exist to wait for.
+	Pending []PendingCandidate
+
+	// Rejected is a name this package refused to build an identity from.
+	// Unlike Pending, this never resolves on its own: the same object will
+	// be rejected on every future pass until a person renames it.
+	Rejected []RejectedEntry
+
+	// Conflicts is two remote paths in one backup set claiming the same
+	// basename. Also never self-resolving, and the one an operator most
+	// needs to see, because the artifact that lost the collision is not
+	// being backed up at all and nothing else says so.
 	Conflicts []Conflict
-	Errors    []CandidateError
+
+	// Errors is per-candidate failure that did not stop the batch. A
+	// transient one clears itself on the next pass, which is why it is
+	// separate from Rejected rather than folded into it.
+	Errors []CandidateError
 }
 
 // Discover lists source through deps.Transport, decides which of the
