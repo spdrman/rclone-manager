@@ -66,15 +66,25 @@
 # # Cost, measured on this machine rather than guessed
 #
 # Measured on the 4 CPU / 4 GB Docker Desktop VM this gate runs against,
-# with the caches mounted as named volumes:
+# arm64 native, running all four machine-tier packages:
 #
-#   cold (empty module and build caches):  RUN_MACHINE_TIER_COLD
-#   warm (both caches populated):          RUN_MACHINE_TIER_WARM
+#   cold (both caches empty):     210s wall, 195s inside the manager
+#   warm (both caches populated): 120s wall, 119s inside the manager
 #
-# The cold number is dominated by compiling rclone's module graph, which is
-# why the caches are volumes rather than being thrown away with the
-# container: they persist between runs and are what makes the warm number
-# the one a gate actually pays.
+# So the compile of everything the tier needs, from an empty module cache
+# and an empty build cache, is about 76 seconds. #451 asked for this number
+# because a cold compile of rclone's module graph took over six minutes in
+# CI with no cache, and that is the figure the "run every test on two
+# machines" option was rejected on. It does not reproduce here, for two
+# reasons worth knowing before anybody quotes either number: only the
+# packages the tier actually imports get compiled, not the whole product,
+# and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is linux/amd64 on
+# this machine, and with it in force the manager was built emulated and the
+# compile was measuring qemu, which is why the platform is named explicitly
+# below.
+#
+# The caches are volumes rather than being thrown away with the container
+# precisely so the warm number is the one a gate pays.
 #
 # # Hygiene
 #

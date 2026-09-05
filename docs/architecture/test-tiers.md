@@ -161,12 +161,37 @@ Read out of the gate logs rather than guessed. On a quiet machine
 | `core/tests/miniointegration` (8 tests) | 21 to 32s |
 | two-machine script | about 70s a case, four cases, plus the image build |
 
+After #448 and #450, on the same machine:
+
+| suite | wall clock |
+|---|---|
+| `core/internal/transport/rclone`, now with no container in it at all | 23s |
+| `core/service`, same | 8s |
+| `go test ./internal/... ./service/... ./cmd/...` with no daemon reachable | 52s |
+| `core/tests/machines` (the harness and its own #161, #243 and #456 proofs) | 35s |
+| `core/tests/machinegate` (the six moved tests, plus #463's) | 107s |
+| `core/tests/sftpintegration` | 121s |
+| `core/tests/miniointegration` | 16s |
+| all four machine-tier packages inside a manager container, warm | 119s |
+| the same, with an empty module cache and an empty build cache | 195s |
+
 A two-machine case per test function, for the 1555 test functions under
 `core/internal`, `core/service` and `core/cmd`, would be thirty hours. One
 per package would be thirty-five minutes of setup before a test ran, with
 `go test` inside the manager container, where a cold compile of rclone's
 260-module graph took over six minutes in CI. That is the number the
 "literal" option was rejected on, alongside the table above.
+
+#451 asked for that number to be measured here rather than inherited, and
+it does not reproduce: the compile inside the manager container, from an
+empty module cache and an empty build cache, is about 76 seconds. Two
+reasons, both worth knowing before either figure is quoted again. Only the
+packages the tier imports get compiled, not the whole product. And this
+builds arm64 natively, where `DOCKER_DEFAULT_PLATFORM=linux/amd64` is set on
+this machine and, left in force, had the manager built emulated and the
+measurement measuring qemu. The conclusion above is unchanged: 76 seconds
+per package, times the number of packages, is still the reason the tier is a
+tier and not a default.
 
 ## Writing a new test
 
