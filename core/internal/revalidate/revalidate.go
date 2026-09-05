@@ -98,6 +98,10 @@ type Mediums interface {
 // is reported as not checked rather than as passed, which is exactly the
 // checked-versus-passed distinction this package already draws.
 type Deps struct {
+	// Journal is both the source of what to consider and the destination
+	// for what is found. It is the wider interface rather than
+	// lifecycle.Journal because this package has to enumerate a backup set
+	// before it can decide anything, which lifecycle never needs to do.
 	Journal Journal
 
 	// Store reaches storage mediums. Nil means this deployment cannot
@@ -114,6 +118,15 @@ type Deps struct {
 	Now func() time.Time
 }
 
+// now resolves the clock once per pass, in UTC whichever branch it takes.
+//
+// Run calls this once and hands the instant to SelectDue, rather than
+// letting each artifact ask again. That matters more here than it looks:
+// due-ness is a comparison against UpdatedAt, so a clock read per artifact
+// would make the interval boundary land in a different place for the first
+// record in a batch than for the last, and an artifact sitting exactly on
+// the boundary would be selected or not depending on how long the pass had
+// been running.
 func (d Deps) now() time.Time {
 	if d.Now == nil {
 		return time.Now().UTC()
@@ -128,9 +141,17 @@ func (d Deps) lifecycleDeps() lifecycle.Deps {
 
 // Finding is one artifact Run examined.
 type Finding struct {
+	// Artifact is which one was examined.
 	Artifact model.ArtifactID
-	From     lifecycle.State
-	To       lifecycle.State
+
+	// From and To are the states either side of what this pass recorded.
+	// They are equal for a pass and for a not-checked artifact alike, so
+	// they are not on their own a way to tell those two apart: Checked is.
+	// To is read back out of the journal's own answer rather than assumed
+	// from the requested edge, so a Finding reports where the artifact
+	// actually ended up.
+	From lifecycle.State
+	To   lifecycle.State
 
 	// Checked is false when nothing cfg enables could actually produce a
 	// verdict for this specific artifact (see runChecks's doc). When
@@ -166,17 +187,39 @@ type Finding struct {
 // the same convention internal/reconcile.ArtifactError already
 // established.
 type ArtifactError struct {
+	// Artifact names which one could not be given a verdict. Without it a
+	// batch of these is unactionable.
 	Artifact model.ArtifactID
-	Err      error
+
+	// Err is the infrastructure problem, never a verdict. A check that ran
+	// and said "this artifact is corrupt" is a Finding with Passed false;
+	// only a check that could not run at all lands here.
+	Err error
 }
 
+// Error renders as "artifact: reason".
 func (e ArtifactError) Error() string { return fmt.Sprintf("%s: %v", e.Artifact, e.Err) }
+
+// Unwrap keeps the cause reachable through errors.Is. Run uses that itself,
+// through isCancelled, to tell a pass that was stopped from a pass where one
+// artifact went wrong, and a caller reading a Report needs the same ability
+// for the same reason.
 func (e ArtifactError) Unwrap() error { return e.Err }
 
 // Report is everything one Run call found and did.
 type Report struct {
+	// Findings is one entry per artifact that reached a conclusion,
+	// including the not-checked ones. A not-checked artifact belongs here
+	// rather than in Errors because nothing went wrong: the configuration
+	// simply enabled nothing that could produce a verdict for it, and
+	// reporting that as an error every cycle would train an operator to
+	// ignore the list.
 	Findings []Finding
-	Errors   []ArtifactError
+
+	// Errors is one entry per artifact that could not be given a verdict
+	// at all. An empty Errors with a short Findings list is the shape of a
+	// pass bounded by MaxPerCycle, not the shape of a pass that failed.
+	Errors []ArtifactError
 }
 
 // Run performs one scheduled-revalidation pass over set: it loads set's

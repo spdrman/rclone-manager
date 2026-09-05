@@ -1,3 +1,21 @@
+// These cover the local half of revalidation: scheduling, and re-checking an
+// artifact whose durable copy is a file on disk. The medium half is in
+// medium_test.go.
+//
+// The fixtures drive artifacts to their durable states through the REAL
+// journal, one transition at a time, rather than inserting a row that says
+// COMMITTED. That is more code than it looks like it needs to be and it is
+// deliberate: this package's whole scheduling decision reads UpdatedAt as a
+// proxy for "when was this last looked at", and UpdatedAt is a value the
+// journal computes from the transitions it is given. A hand-built record
+// would let a test pass while the real thing selected nothing.
+//
+// Every test pins the clock and expresses times as offsets from it, so the
+// interval boundary is exact. The recurring assertion to watch for is the
+// one about UpdatedAt after a pass that checked NOTHING: several tests run
+// twice and assert that the artifact is still selected the second time,
+// which is how the checked-versus-passed distinction is proved rather than
+// merely described.
 package revalidate
 
 import (
@@ -21,6 +39,9 @@ import (
 
 // --- fixtures ---
 
+// openJournal opens a real SQLite journal per test. See this file's header
+// for why these tests use the real one: UpdatedAt is the journal's own
+// computation, and it is the value every scheduling decision here turns on.
 func openJournal(t *testing.T) *state.Journal {
 	t.Helper()
 	j, err := state.Open(context.Background(), filepath.Join(t.TempDir(), "journal.db"))
@@ -31,6 +52,8 @@ func openJournal(t *testing.T) *state.Journal {
 	return j
 }
 
+// artifactNamed builds an id in one fixed backup set, so every artifact a
+// test creates is enumerated by the same ListByBackupSet call Run makes.
 func artifactNamed(t *testing.T, name string) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")
@@ -44,11 +67,23 @@ func artifactNamed(t *testing.T, name string) model.ArtifactID {
 	return id
 }
 
+// sha256Hex is the hash the fixtures record as a verification baseline. It
+// computes the same digest recomputeLocalHash does, which is what makes an
+// unmodified file pass and a modified one fail without either side being
+// told the answer.
 func sha256Hex(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
 }
 
+// mustScript writes an executable shell script for the restore-test hook
+// tests to run.
+//
+// A real executable rather than a stubbed hook interface, because the
+// distinction these tests exist to pin lives at the process boundary: a hook
+// that runs and exits non-zero is a verdict about the artifact, and a hook
+// that cannot be executed at all is an infrastructure error that must not
+// quarantine anything. Only a real file can be made to fail the second way.
 func mustScript(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hook.sh")
@@ -135,6 +170,14 @@ func retainedArtifact(t *testing.T, j *state.Journal, artifact model.ArtifactID,
 	return localPath
 }
 
+// completeArtifact drives an artifact all the way to COMPLETE, through
+// REMOTE_DELETE_PENDING, recording a deletion timestamp on the way.
+//
+// COMPLETE is the state whose failure routing differs from every other
+// eligible one: the remote original is confirmed gone, so a corrupted local
+// copy has nothing left to recover from and routes to QUARANTINED_LOST
+// rather than to the recoverable QUARANTINED. This fixture exists so that
+// difference can be tested against a record that genuinely got there.
 func completeArtifact(t *testing.T, j *state.Journal, artifact model.ArtifactID, content []byte, occurredAt time.Time) string {
 	t.Helper()
 	localPath := commitArtifact(t, j, artifact, content, occurredAt)
@@ -152,6 +195,14 @@ func completeArtifact(t *testing.T, j *state.Journal, artifact model.ArtifactID,
 
 // --- SelectDue ---
 
+// TestSelectDue_DisabledReturnsNil pins that MaxPerCycle <= 0 wins over
+// everything else, using a record that is overdue by 999 hours so it would
+// certainly be selected on any other reading.
+//
+// The second config is the case worth having: Hash and Interval both set,
+// MaxPerCycle still zero. A backup set half-configured that way is what an
+// operator produces when they enable revalidation and forget the bound, and
+// this pins that it stays off rather than becoming an unbounded sweep.
 func TestSelectDue_DisabledReturnsNil(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	records := []state.Record{
@@ -167,6 +218,14 @@ func TestSelectDue_DisabledReturnsNil(t *testing.T) {
 	}
 }
 
+// TestSelectDue_FiltersByEligibleState walks lifecycle.AllStates rather
+// than a hand-written list, which is what makes it useful: a state added to
+// the machine and not considered here shows up as a count that no longer
+// matches, so the question "should this new state be revalidated" has to be
+// answered rather than skipped.
+//
+// The count is asserted as well as the membership. Membership alone would
+// pass for an implementation that selected nothing at all.
 func TestSelectDue_FiltersByEligibleState(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	old := now.Add(-999 * time.Hour)
@@ -209,6 +268,13 @@ func TestSelectDue_IncludesRemoteRetained(t *testing.T) {
 	}
 }
 
+// TestSelectDue_FiltersByInterval puts one record exactly ON the boundary,
+// which is the only case with a decision in it.
+//
+// Due is >= Interval rather than >, so exactly-due.dump is selected. That
+// choice matters at scale rather than in the abstract: an artifact whose
+// UpdatedAt lands precisely on the interval, which is what a fixed-cadence
+// scheduler produces, would otherwise slip a whole cycle every time.
 func TestSelectDue_FiltersByInterval(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cfg := config.Revalidation{Hash: true, Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10}
@@ -240,6 +306,17 @@ func TestSelectDue_FiltersByInterval(t *testing.T) {
 	}
 }
 
+// TestSelectDue_BoundedByMaxPerCycleOldestFirst asserts the bound and the
+// order together, because the bound is only safe if the order is right.
+//
+// Truncating an unordered list to MaxPerCycle would let the same recent
+// artifacts be picked every cycle while the most overdue ones are never
+// reached, which is the shape of failure where revalidation is running,
+// reporting passes, and never looking at the artifact that rotted.
+//
+// The records are deliberately supplied newest-first, so an implementation
+// that skipped the sort would return the wrong pair rather than accidentally
+// the right one.
 func TestSelectDue_BoundedByMaxPerCycleOldestFirst(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cfg := config.Revalidation{Hash: true, Interval: config.Duration(time.Hour), MaxPerCycle: 2}
@@ -259,6 +336,13 @@ func TestSelectDue_BoundedByMaxPerCycleOldestFirst(t *testing.T) {
 	}
 }
 
+// TestSelectDue_DeterministicTieBreak covers what a large backfill actually
+// produces: hundreds of artifacts sharing one UpdatedAt to the nanosecond.
+//
+// Without a tie-break the bounded subset would depend on map or listing
+// order, so two identical passes could pick different artifacts and some
+// records might never be selected at all. The input is supplied in reverse
+// order so the sort has to do something.
 func TestSelectDue_DeterministicTieBreak(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cfg := config.Revalidation{Hash: true, Interval: config.Duration(time.Hour), MaxPerCycle: 10}
@@ -277,6 +361,10 @@ func TestSelectDue_DeterministicTieBreak(t *testing.T) {
 
 // --- Run ---
 
+// TestRun_DisabledDoesNothing pins the cheap path. Run is called every
+// cycle for every backup set, so a disabled set must cost nothing: the
+// assertion that the journal row is untouched is the visible half, and the
+// invisible half is that Run returns before it even lists the set.
 func TestRun_DisabledDoesNothing(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -301,6 +389,15 @@ func TestRun_DisabledDoesNothing(t *testing.T) {
 	}
 }
 
+// TestRun_HashStillMatches_StaysCommittedAndRefreshesTheClock is the happy
+// path, and the second Run at the end is the half that gives it teeth.
+//
+// A pass writes a same-state transition, which looks pointless until you
+// notice what it is for: it moves UpdatedAt, which is the due-ness clock, so
+// the artifact is not selected again immediately. Without the second call
+// this test would pass against an implementation that checked the same
+// artifact on every cycle for ever while ignoring everything else in the
+// backup set.
 func TestRun_HashStillMatches_StaysCommittedAndRefreshesTheClock(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -346,6 +443,13 @@ func TestRun_HashStillMatches_StaysCommittedAndRefreshesTheClock(t *testing.T) {
 	}
 }
 
+// TestRun_CorruptedCommitted_RoutesToQuarantined is bit rot staged
+// literally: the file is committed with a recorded hash and then rewritten
+// underneath the journal, which is what a failing disk does more slowly.
+//
+// QUARANTINED rather than QUARANTINED_LOST is the point. A COMMITTED
+// artifact has not had its remote original deleted, so the remote is
+// presumptively still there and this is recoverable.
 func TestRun_CorruptedCommitted_RoutesToQuarantined(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -387,6 +491,14 @@ func TestRun_CorruptedCommitted_RoutesToQuarantined(t *testing.T) {
 	}
 }
 
+// TestRun_CorruptedComplete_RoutesToQuarantinedLost is the same corruption
+// against an artifact whose remote original is confirmed gone, and the
+// routing has to differ: there is nothing left to recover from, so it lands
+// in the irrecoverable state.
+//
+// The pair with the COMMITTED test above is the whole assertion. Either test
+// alone would pass against an implementation that always chose one
+// destination.
 func TestRun_CorruptedComplete_RoutesToQuarantinedLost(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -503,6 +615,12 @@ func TestRun_RemoteRetainedHashStillMatches_StaysRetainedAndRefreshesTheClock(t 
 	}
 }
 
+// TestRun_RestoreTestHookFailure_RoutesToQuarantined pins that the hook's
+// own verdict is a verdict about the artifact, not an error.
+//
+// A hook that runs and exits non-zero has said something about the file: it
+// does not restore. That is exactly what an operator configured it to
+// discover, so it quarantines, the same as a hash mismatch would.
 func TestRun_RestoreTestHookFailure_RoutesToQuarantined(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -536,6 +654,9 @@ func TestRun_RestoreTestHookFailure_RoutesToQuarantined(t *testing.T) {
 	}
 }
 
+// TestRun_RestoreTestHookPasses_StaysCommitted is the positive control for
+// the hook tier. Without it, a hook that never ran at all would satisfy the
+// failure test above by simply never producing a failure.
 func TestRun_RestoreTestHookPasses_StaysCommitted(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -566,6 +687,17 @@ func TestRun_RestoreTestHookPasses_StaysCommitted(t *testing.T) {
 	}
 }
 
+// TestRun_HookCannotStart_ReportsAnErrorWithoutTouchingTheJournal is the
+// most important test in this file, and it is one character away from the
+// one above it.
+//
+// A hook that exits non-zero is the artifact failing. A hook that cannot be
+// executed, a wrong path or a lost execute bit, is the OPERATOR's
+// configuration failing, and treating that as a verdict would quarantine
+// every artifact in the backup set over a typo. So it lands in Report.Errors
+// and the journal is not touched at all, which the assertions check
+// separately: the error alone would be satisfied by an implementation that
+// reported it and quarantined anyway.
 func TestRun_HookCannotStart_ReportsAnErrorWithoutTouchingTheJournal(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -601,6 +733,15 @@ func TestRun_HookCannotStart_ReportsAnErrorWithoutTouchingTheJournal(t *testing.
 	}
 }
 
+// TestRun_NoHashBaseline_IsANoOpNotAFailure covers a backup set that
+// verifies without a hash, so there is a durable copy and nothing recorded
+// to compare it against.
+//
+// Neither available verdict is honest here. A pass would be a lie and would
+// reset the due-ness clock; a failure would quarantine a backup nobody has
+// found anything wrong with. So the finding is unchecked, the journal is
+// untouched, and the second Run proves the consequence: the artifact is
+// still selected, so if a hash baseline ever appears it will be used.
 func TestRun_NoHashBaseline_IsANoOpNotAFailure(t *testing.T) {
 	j := openJournal(t)
 	artifact := artifactNamed(t, "backup.dump")
@@ -644,6 +785,14 @@ func TestRun_NoHashBaseline_IsANoOpNotAFailure(t *testing.T) {
 	}
 }
 
+// TestRun_MaxPerCycleSpreadsWorkAcrossCalls is the backlog case: five
+// artifacts all due at once, which is what a large initial backfill leaves
+// behind, drained two at a time.
+//
+// It asserts that all five are eventually covered rather than which pair
+// came in which call. That is the real requirement, and it depends on the
+// pass write moving UpdatedAt: without it the same two artifacts would be
+// the most overdue for ever and the other three would never be checked.
 func TestRun_MaxPerCycleSpreadsWorkAcrossCalls(t *testing.T) {
 	j := openJournal(t)
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -688,28 +837,39 @@ func TestRun_MaxPerCycleSpreadsWorkAcrossCalls(t *testing.T) {
 // transport call, so the test below needs a Transport only to satisfy
 // DeleteRemote's own non-nil precondition, never expects any of it to
 // actually run.
+// unreachedDeleteTransport panics on every method rather than returning
+// zero values, which is the choice worth noticing: the test using it asserts
+// that a refusal happens BEFORE any remote call, and a double that answered
+// politely would let a regression reach the remote and still pass.
 type unreachedDeleteTransport struct{}
 
+// Panics: see the type comment.
 func (unreachedDeleteTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	panic("unreachedDeleteTransport: List not used")
 }
 
+// Panics: see the type comment.
 func (unreachedDeleteTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 	panic("unreachedDeleteTransport: Stat not used")
 }
 
+// Panics: see the type comment.
 func (unreachedDeleteTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
 	panic("unreachedDeleteTransport: CopyToLocal not used")
 }
 
+// Panics: see the type comment.
 func (unreachedDeleteTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
 	panic("unreachedDeleteTransport: RemoteHash not used")
 }
 
+// Panics: see the type comment.
 func (unreachedDeleteTransport) DeleteRemote(context.Context, transport.Source, string) error {
 	panic("unreachedDeleteTransport: DeleteRemote not used")
 }
 
+// The compile-time check that this double still satisfies the interface it
+// only exists to satisfy.
 var _ transport.Transport = unreachedDeleteTransport{}
 
 // TestRun_PicksUpArtifactWP32HeldBackFromDeletion is the INTEGRATION test
@@ -837,27 +997,38 @@ type statMismatchTransport struct {
 	statCalls int
 }
 
+// Panics: see the type comment.
 func (t *statMismatchTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	panic("statMismatchTransport: List not used")
 }
 
+// Stat is the one method that answers, and it counts its calls. The size it
+// reports is nothing like the one captured at discovery, so FR-16's identity
+// comparison refuses; the count is what proves the delete got as far as
+// asking, which is the actual assertion about the safety gate having
+// opened.
 func (t *statMismatchTransport) Stat(_ context.Context, _ transport.Source, path string) (transport.RemoteArtifact, error) {
 	t.statCalls++
 	return transport.RemoteArtifact{Path: path, Size: 999999}, nil
 }
 
+// Panics: see the type comment.
 func (t *statMismatchTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
 	panic("statMismatchTransport: CopyToLocal not used")
 }
 
+// Panics: see the type comment.
 func (t *statMismatchTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
 	panic("statMismatchTransport: RemoteHash not used")
 }
 
+// DeleteRemote panics, so a gate that let a delete through against a
+// mismatched identity would be impossible to miss.
 func (t *statMismatchTransport) DeleteRemote(context.Context, transport.Source, string) error {
 	panic("statMismatchTransport: DeleteRemote must never be reached: the remote identity does not match")
 }
 
+// The compile-time check, for the same reason as the one above.
 var _ transport.Transport = (*statMismatchTransport)(nil)
 
 // TestIsCancelled_AClassifiedFailureIsNeverACancellation is the revalidate

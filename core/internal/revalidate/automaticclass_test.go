@@ -1,3 +1,15 @@
+// This file holds one test, about one constant, and it is its own file
+// because of what it replaced.
+//
+// The rule it guards, how strong a check an unattended pass may run against
+// a copy on a storage medium, used to be stated twice: once as the constant
+// this package runs, and once as placement.AutomaticClass, which nothing
+// consulted and which did not derive what it claimed to. #438 deleted the
+// second statement, and the argument for why one statement is enough is
+// long enough to want somewhere to live. It lives here, next to the
+// assertions that make it true, rather than buried among the pass-level
+// tests in medium_test.go where the constant is only visible through its
+// effects.
 package revalidate
 
 import (

@@ -17,6 +17,35 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the checking half: given one artifact that scheduling picked,
+// go and find out whether its durable copy is still good.
+//
+// The organising idea is a distinction the rest of the package leans on
+// everywhere, between CHECKED and PASSED. Three outcomes are possible, not
+// two, and collapsing the third into either of the others causes real harm
+// in opposite directions. An artifact nothing was configured to check is not
+// a pass: recording one would reset its due-ness clock and it would drift
+// for ever, looking freshly verified. It is also not a failure: quarantining
+// a backup because nobody asked for a check on it would destroy an operator's
+// trust in the feature within a cycle. So runChecks returns checked
+// separately, and only checkArtifact's checked branch ever writes to the
+// journal.
+//
+// The second idea is that a verdict is only as strong as what it actually
+// did. Since EPIC E a durable copy can be a local file or an object on a
+// storage medium, and those are different checks, not one check with a
+// different path: re-reading a local file proves the bytes, HEADing an
+// object proves an object of the right size is at that key. Both are
+// legitimate, and reporting the second as if it were the first would be a
+// lie an operator only discovers during a restore. Every path out of here
+// carries the class it achieved for that reason.
+//
+// The third is that money is a correctness concern here. This pass runs
+// unattended on a schedule an operator set when everything was free, so
+// anything that would download an artifact is refused rather than
+// configured, and the refusal is a check on Class.CostsEgress at the moment
+// the request is about to be made rather than a rule written in a comment.
+
 // automaticMediumClass is the strongest verification class a scheduled,
 // unattended pass will ever run against a copy on a storage medium, and it
 // is now the only statement of that rule in the product.

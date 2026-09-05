@@ -1,3 +1,22 @@
+// These cover what revalidation does when an artifact's durable copy is on
+// a storage medium rather than on local disk, which is FR-31.
+//
+// Two things make this file's fixtures unusual and they are worth knowing
+// before reading any individual test.
+//
+// The placements are written straight through the journal. Nothing in Phase
+// 1 moves an artifact anywhere, so the states these tests need, an artifact
+// whose only ACTIVE copy is on a medium, or one mid-move with both, cannot
+// be reached by driving the real pipeline. A test that waited for the mover
+// would be a test that never runs.
+//
+// The store double counts requests rather than just answering them. Most of
+// FR-31 is a claim about what a pass does NOT do: it does not download, it
+// does not ask for an attestation, it does not spend money on a schedule an
+// operator set when checking was free. None of that is observable from the
+// verdict, so the fixture has to be able to say how many of each request
+// were made, and several tests assert on those counters instead of on the
+// Finding.
 package revalidate
 
 import (
@@ -29,6 +48,10 @@ type countingStore struct {
 	digest int
 }
 
+// StatObject is the one call an existence check is supposed to make. The
+// size it reports comes from the fixture rather than from the placement, so
+// a test can stage a size mismatch, and statErr is how a test makes the
+// medium refuse to answer at all.
 func (s *countingStore) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
 	s.stats++
 	if s.statErr != nil {
@@ -37,11 +60,21 @@ func (s *countingStore) StatObject(_ context.Context, _ transport.Medium, key st
 	return transport.ObjectInfo{Key: key, Size: s.size}, nil
 }
 
+// OpenObject succeeds and hands back nothing, which is deliberate: this
+// method exists to be COUNTED, not to be used. An automatic pass that
+// reached it has already broken FR-31 by starting a download, so returning
+// an empty reader rather than an error keeps the failure showing up as the
+// counter it is rather than as a confusing verification error.
 func (s *countingStore) OpenObject(_ context.Context, _ transport.Medium, _ string) (io.ReadCloser, error) {
 	s.opens++
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+// ObjectChecksum counts, then refuses with the refusal a real S3 backend
+// gives: rclone v1.75.0's s3 backend reports MD5 and nothing else, so a
+// full-object SHA-256 attestation is unavailable in this build no matter
+// what a medium opted into. Answering an attestation here would let a test
+// pass against a capability the product does not actually have.
 func (s *countingStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	s.digest++
 	return transport.ChecksumAttestation{}, transport.NewError(transport.UnsupportedCapability, "object_checksum", errors.New("this backend exposes md5 and nothing else"))
@@ -52,6 +85,10 @@ type fixedMediums struct {
 	id string
 }
 
+// MediumFor resolves only its one id and reports false for everything else,
+// which is what makes it useful in both directions: the same fixture stages
+// a reachable medium and, by naming a different id in the placement, a
+// medium this deployment was never configured to reach.
 func (m fixedMediums) MediumFor(id string) (transport.Medium, bool) {
 	if id != m.id {
 		return transport.Medium{}, false
@@ -547,6 +584,9 @@ func TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium(t *testing.T) {
 // where the one-entry fixedMediums cannot say which of them is configured.
 type namedMediums map[string]bool
 
+// MediumFor answers for any id in the set. The two-medium tests need to
+// configure one copy's medium and not the other's, which one entry cannot
+// express.
 func (m namedMediums) MediumFor(id string) (transport.Medium, bool) {
 	if !m[id] {
 		return transport.Medium{}, false
@@ -565,6 +605,10 @@ type perMediumStore struct {
 	digest int
 }
 
+// StatObject answers per medium, which is what the placement-scoped
+// quarantine tests need: one bucket says the object is gone, another says it
+// is fine, and the artifact's fate depends on combining the two rather than
+// on whichever was asked first.
 func (s *perMediumStore) StatObject(_ context.Context, m transport.Medium, key string) (transport.ObjectInfo, error) {
 	s.stats++
 	if err := s.statErrs[m.ID]; err != nil {
@@ -573,11 +617,17 @@ func (s *perMediumStore) StatObject(_ context.Context, m transport.Medium, key s
 	return transport.ObjectInfo{Key: key, Size: s.size}, nil
 }
 
+// OpenObject fails unconditionally. Unlike countingStore's, this double has
+// no counter, so a refusal is the only way a stray download shows up as a
+// test failure rather than as silence.
 func (s *perMediumStore) OpenObject(_ context.Context, _ transport.Medium, _ string) (io.ReadCloser, error) {
 	s.opens++
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+// ObjectChecksum fails unconditionally, for the same reason OpenObject
+// does: an automatic pass has no business asking for an attestation, so the
+// double refuses rather than making one up.
 func (s *perMediumStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, _ transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	s.digest++
 	return transport.ChecksumAttestation{}, transport.NewError(transport.UnsupportedCapability, "object_checksum", errors.New("this backend exposes md5 and nothing else"))
