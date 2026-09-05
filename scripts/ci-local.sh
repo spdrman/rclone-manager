@@ -169,19 +169,28 @@ if [ "$FAST" = "1" ]; then
   gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
 
-# The documentation anchor check, added under separate work. Guarded on the
-# file rather than assumed, because this branch and the branch that writes it
-# are in flight at the same time; once it has landed the guard can go and the
-# step becomes unconditional, which is the shape every other step here has
-# for #160's reason (a step that quietly skips itself when its own file is
-# missing is a silent skip wearing a different hat). It runs here, before the
-# first Go build, because it costs about a second and it is the check most
-# likely to be broken by the edit being committed.
+# The mutation-anchor check (#458), added under separate work. An anchor here
+# is a verbatim copy of product source that a mutation selftest plants a
+# violation into, not a link in a document. scripts/compat/selftest.sh and
+# scripts/conformance/selftest.sh plant deliberate violations to prove each
+# cell of their gate can go red, and every plant is anchored to a verbatim
+# copy of product source that lives in a script the author of the product
+# change never opens. A refactor drifts the anchor, the mutation then plants
+# nothing, and that control is dead while still reporting ok. This dry-runs
+# every anchor in both selftests against the real tree in about a second,
+# which is why it runs here rather than at minute 20 where the selftests
+# themselves would have found the same drift one anchor at a time.
+#
+# Guarded on the file rather than assumed, because this branch and the branch
+# that writes it are in flight at the same time; once that one has landed the
+# guard can go and the step becomes unconditional, which is the shape every
+# other step here has for #160's reason (a step that quietly skips itself
+# when its own file is missing is a silent skip wearing a different hat).
 if [ -f scripts/selftest/check-anchors.sh ]; then
-  gate_step "documentation anchors resolve (scripts/selftest/check-anchors.sh)"
+  gate_step "mutation anchors in the compat and conformance selftests still match the tree (#458)"
   bash scripts/selftest/check-anchors.sh
 else
-  echo "==> anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run"
+  echo "==> mutation anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run (#458)"
 fi
 
 gate_step "core/ go build"

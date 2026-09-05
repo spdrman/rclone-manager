@@ -1097,17 +1097,22 @@ run_gate "$tree"
 assert_contains "J7 the gate exports CI_LOCAL=1 to the steps it runs" \
   'CI-LOCAL-ENV=[1]' "$out"
 
-# J8: the anchors step. The file is written under separate work, so the gate
-# guards on its existence; these two cases are what stops that guard from
-# being a permanent silent skip. A tree that has the script must run it, and
-# a tree whose script fails must fail the run.
+# J8: the mutation-anchor step (#458). The file is written under separate
+# work, so the gate guards on its existence; these two cases are what stops
+# that guard from being a permanent silent skip. A tree that has the script
+# must run it, and a tree whose script fails must fail the run. The label is
+# asserted, not just the exit status: this step goes red when a mutation
+# anchor in the compat or conformance selftest has drifted off the code it
+# names, and the person reading the verdict line has to know that is what
+# broke.
 tree="$(make_full_tree)"
 mkdir -p "$tree/scripts/selftest"
 printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-RAN"\nexit 0\n' \
   >"$tree/scripts/selftest/check-anchors.sh"
 run_gate "$tree"
 assert_contains "J8 a tree with an anchors script runs it" 'ANCHORS-STUB-RAN' "$out"
-assert_contains "J8 the anchors step is announced" 'documentation anchors resolve' "$out"
+assert_contains "J8 the anchors step is announced, and says mutation anchors" \
+  'mutation anchors in the compat and conformance selftests' "$out"
 assert_eq "J8 a passing anchors script leaves the run green" 0 "$status"
 
 tree="$(make_full_tree)"
@@ -1117,7 +1122,7 @@ printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-FAILED"\nexit 1\n' \
 run_gate "$tree"
 assert_nonzero "J8 a failing anchors script fails the run" "$status"
 assert_contains "J8 the failure names the anchors step" \
-  'ci-local: FAILED (documentation anchors resolve' "$out"
+  'ci-local: FAILED (mutation anchors in the compat and conformance selftests' "$out"
 # And it fails EARLY: the point of putting a one-second check near the top is
 # that nobody waits twenty-five minutes to hear about a broken link.
 assert_not_contains "J8 a failing anchors script fails before the Go suites" \
