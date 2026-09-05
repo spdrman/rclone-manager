@@ -98,6 +98,7 @@ import type {
   UpdateSettingsRequest
 } from "./contracts";
 import type {
+  ArtifactRetentionPolicy,
   BackupArtifact,
   BackupPlacement,
   BackupSet,
@@ -905,6 +906,7 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     // does not carry.
     retentionClasses: retentionClassesFor(a.retention_tier),
     remoteSourceRemovedAt: stampOrNull(a.remote_source_removed_at),
+    retentionPolicy: retentionPolicyFor(a.retention_policy),
     placements: (a.placements ?? []).map(fromWirePlacement),
     quarantine: a.quarantined
       ? {
@@ -915,6 +917,33 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
         }
       : null
   };
+}
+
+/**
+ * Narrows the wire's retention_policy onto ArtifactRetentionPolicy.
+ *
+ * The parameter is widened to `string | undefined` rather than typed as
+ * the wire union, because the whole job of this function is the case the
+ * types say cannot happen: a response from a build that predates the
+ * field. The contract makes retention_policy required, and a type is a
+ * claim about a server this client did not compile.
+ *
+ * Anything the contract does not name becomes "unknown", never
+ * "configured". A backup nothing will ever delete is exactly the row an
+ * operator opens this screen to find, and resolving silence to the
+ * reassuring value would hide it behind a healthy-looking row: the shape
+ * of mapper bug this codebase has already shipped once (see
+ * fromWirePlacement's own verification_class note for the same rule one
+ * field over).
+ */
+function retentionPolicyFor(value: string | undefined): ArtifactRetentionPolicy {
+  switch (value) {
+    case "configured":
+    case "none":
+      return value;
+    default:
+      return "unknown";
+  }
 }
 
 /**

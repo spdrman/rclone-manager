@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -80,6 +81,30 @@ var ErrArtifactIrrecoverable = errors.New("service: artifact has no remaining so
 // instead). Collapsing the two would leave an operator with no way to tell
 // "your backup is gone" from "run the validator".
 var ErrReinstatementRefused = errors.New("service: the evidence is not enough to trust this artifact again")
+
+// The two values Artifact.RetentionPolicy takes, and the reason it is a
+// string rather than a bool.
+//
+// A bool would name the state ("configured", "not configured") and leave
+// the consequence to be worked out by every surface separately, which is
+// how four surfaces end up saying four different things about the same
+// row. A string also leaves room for the answer this will eventually
+// want, the name of the chain a configured set is actually retained
+// under, as a value change rather than a schema change: exactly the
+// argument UnconfiguredBackupSet.RetentionPolicy already makes for its
+// own field (unconfigured.go).
+const (
+	// RetentionPolicyConfigured means a retention chain still selects
+	// this artifact and will age it out in its own time.
+	RetentionPolicyConfigured = "configured"
+
+	// RetentionPolicyNone means the artifact's backup set configuration
+	// was removed (issue #391) while the backup stayed on storage. No
+	// chain ever selects it, so nothing in this product will ever delete
+	// it and it holds the space it occupies until somebody removes it by
+	// hand.
+	RetentionPolicyNone = "none"
+)
 
 // Artifact is the plain, provider-agnostic shape of one journal row: what
 // this backup is, where it came from, whether it is trustworthy, and
@@ -159,6 +184,23 @@ type Artifact struct {
 	// for retention, or empty.
 	RetentionTier string
 
+	// RetentionPolicy is what decides when this artifact is deleted:
+	// RetentionPolicyConfigured or RetentionPolicyNone, and the second is
+	// the whole point of the field (issue #523). An artifact under no
+	// policy is one nothing will ever delete, so it accumulates until the
+	// disk fills, and until this existed the only surface that said so
+	// was a terminal.
+	//
+	// It is never empty on a value this package produced. That matters
+	// downstream: a caller must not be able to read a third, silent state
+	// as "governed", because the whole failure this field exists to
+	// prevent is a backup nothing will delete reading as a healthy one.
+	// toServiceArtifact always sets one of the two, and it takes the
+	// index it needs to decide as an argument rather than defaulting,
+	// so a new call site has to supply the answer instead of inheriting
+	// a zero value.
+	RetentionPolicy string
+
 	// Placements is every durable copy this artifact currently has, one
 	// entry per place (EPIC E, FR-29).
 	//
@@ -222,6 +264,12 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 	}
 
 	mediums := indexMediums(st.inner.Config)
+	// Which sets the configuration still names, read from the SAME
+	// snapshot the records are read under. Two separate Loads could
+	// straddle a config reload and answer "no policy governs this" about
+	// a set that had just been created again, which is the one wrong
+	// answer this field must never give.
+	configured := indexConfiguredSets(st.inner.Config)
 
 	records, err := st.inner.ListArtifacts(ctx, appFilter)
 	if err != nil {
@@ -239,7 +287,7 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 
 	out := make([]Artifact, 0, len(records))
 	for _, rec := range records {
-		a := toServiceArtifact(rec, mediums)
+		a := toServiceArtifact(rec, mediums, configured)
 		if a.Quarantined {
 			if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 				return nil, err
@@ -267,7 +315,8 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 		}
 		return Artifact{}, fmt.Errorf("service: loading artifact %s: %w", id, err)
 	}
-	a := toServiceArtifact(rec, indexMediums(b.state.Load().inner.Config))
+	st := b.state.Load()
+	a := toServiceArtifact(rec, indexMediums(st.inner.Config), indexConfiguredSets(st.inner.Config))
 	if a.Quarantined {
 		if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 			return Artifact{}, err
@@ -515,7 +564,14 @@ func splitBackupSetID(id string) (source, set string, ok bool) {
 // mediums is the running configuration's view of the places placements
 // name, which the journal cannot supply: whether this deployment can still
 // REACH a medium is a fact about config.yaml (see placements.go).
-func toServiceArtifact(rec state.Record, mediums mediumIndex) Artifact {
+//
+// configured is the same kind of fact one level up: whether the backup set
+// this row belongs to is still in config.yaml at all, which decides
+// whether any retention chain will ever look at it again. Both are
+// parameters rather than defaults, so a record alone cannot answer either
+// question and no call site can accidentally answer them with a zero
+// value.
+func toServiceArtifact(rec state.Record, mediums mediumIndex, configured configuredSetIndex) Artifact {
 	a := Artifact{
 		ID:                rec.Artifact.String(),
 		BackupSetID:       rec.Artifact.Set.String(),
@@ -531,6 +587,7 @@ func toServiceArtifact(rec state.Record, mediums mediumIndex) Artifact {
 		ChecksumAlgorithm: rec.LocalHashAlg,
 		ValidationDetail:  rec.ValidationDetail,
 		RetentionTier:     rec.RetentionTier,
+		RetentionPolicy:   configured.retentionPolicyFor(rec.Artifact.Set.String()),
 		Placements:        toServicePlacements(rec.Placements, mediums),
 	}
 
@@ -564,4 +621,34 @@ func toServiceArtifact(rec state.Record, mediums mediumIndex) Artifact {
 	// both call attachQuarantineReason right after this returns, for
 	// every record where Quarantined ends up true.
 	return a
+}
+
+// configuredSetIndex is the ids of the backup sets the running
+// configuration names. It is the whole basis of Artifact.RetentionPolicy:
+// retention, reconcile and every processing cycle walk the configuration,
+// so a set that is not in it is a set none of them will ever visit again.
+type configuredSetIndex map[string]bool
+
+// indexConfiguredSets reads that index off one configuration snapshot.
+func indexConfiguredSets(cfg *config.Config) configuredSetIndex {
+	out := configuredSetIndex{}
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			out[bs.ID.String()] = true
+		}
+	}
+	return out
+}
+
+// retentionPolicyFor answers for one "source/set" id.
+//
+// The mapping is deliberately not "absent means fine". An id this index
+// does not hold is a backup set the configuration does not name, and the
+// honest answer about it is RetentionPolicyNone: nothing walks it, so
+// nothing will ever delete what it left behind.
+func (c configuredSetIndex) retentionPolicyFor(setID string) string {
+	if c[setID] {
+		return RetentionPolicyConfigured
+	}
+	return RetentionPolicyNone
 }

@@ -158,6 +158,23 @@ func listedAny(records []state.Record, ungoverned map[string]bool) bool {
 //
 // `reason`/`reason_at` themselves are NOT in that schema at all: they are
 // this command's whole reason for existing (issue #284).
+//
+// The second deliberate omission is `retention_policy` (issue #523),
+// which says whether any retention chain still selects this artifact or
+// whether its backup set's configuration was removed and nothing will
+// ever delete it. It is absent here and it is NOT a gap in what a
+// terminal can learn: the LIST form above marks exactly those rows and
+// prints the same explanation under the list, `unconfigured` gives the
+// whole picture per set, and `status` and `retention` both name it. What
+// is missing is only this one per-artifact line, and it is missing for a
+// reason worth stating rather than fixing quietly: this surface is
+// compared line for line by core/tests/compat's `06-cli-surfaces` cell,
+// whose own text is that FR-35 "allows this surface no additive column
+// either". An extra line here is a re-capture of that corpus and a
+// justification about upgrading operators, which is a decision of its
+// own rather than a detail of issue #523, and #523's boundary was the
+// HTTP API and the Web UI, neither of which had ANY way to tell the two
+// kinds of backup apart.
 func printArtifactDetail(d app.ArtifactDetail) {
 	rec := d.Record
 	const layout = time.RFC3339

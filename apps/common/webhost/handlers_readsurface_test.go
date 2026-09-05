@@ -97,6 +97,7 @@ var testArtifactFixture = service.Artifact{
 	Checksum:          "abc123",
 	ChecksumAlgorithm: "sha256",
 	Validation:        "passed",
+	RetentionPolicy:   service.RetentionPolicyConfigured,
 }
 
 var testQuarantinedFixture = service.Artifact{
@@ -111,6 +112,7 @@ var testQuarantinedFixture = service.Artifact{
 	Validation:       "failed",
 	Quarantined:      true,
 	QuarantineReason: "recomputed hash does not match",
+	RetentionPolicy:  service.RetentionPolicyConfigured,
 }
 
 // ------------------------------------------------------------- backups ---

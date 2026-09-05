@@ -75,7 +75,7 @@ const committed: BackupArtifact = {
   remoteOriginalPath: "h:/x.dump", localPath: "/data/x.dump",
   producedAt: "2026-08-28T02:00:11+02:00", receivedAt: "2026-08-28T02:00:53+02:00",
   sizeBytes: 10, checksum: "abc", checksumAlgorithm: "sha256",
-  validation: "verified", retentionClasses: ["daily"],
+  validation: "verified", retentionClasses: ["daily"], retentionPolicy: "configured",
   remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
   placements: [
     {

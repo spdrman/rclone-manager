@@ -69,6 +69,16 @@ type artifactResponse struct {
 	QuarantineReason        string `json:"quarantine_reason,omitempty"`
 
 	RetentionTier string `json:"retention_tier,omitempty"`
+
+	// RetentionPolicy is "configured" or "none", and it is NOT omitempty
+	// (issue #523). The whole reason the field exists is that a backup
+	// whose set was removed is one nothing will ever delete, so the disk
+	// fills; omitting it for any value would let a client read silence as
+	// "governed", which is the single wrong answer this can give. The
+	// contract makes it required for the same reason, and
+	// toArtifactResponse refuses to serve a value core/service did not
+	// set rather than guessing one.
+	RetentionPolicy string `json:"retention_policy"`
 }
 
 // placementResponse is one durable copy on the wire, a field-for-field
@@ -151,12 +161,36 @@ func toArtifactResponse(a service.Artifact) artifactResponse {
 		QuarantineIrrecoverable: a.QuarantineIrrecoverable,
 		QuarantineReason:        a.QuarantineReason,
 		RetentionTier:           a.RetentionTier,
+		RetentionPolicy:         retentionPolicyOf(a),
 		Placements:              toPlacementResponses(a.Placements),
 	}
 	resp.DiscoveredAt = formatTime(a.DiscoveredAt)
 	resp.UpdatedAt = formatTime(a.UpdatedAt)
 	resp.RemoteSourceRemovedAt = formatTime(a.RemoteSourceRemovedAt)
 	return resp
+}
+
+// retentionPolicyOf carries core/service's answer to the wire, reading an
+// UNSET one as "none".
+//
+// Which way that guard falls is the whole of it. core/service sets one of
+// its two constants on every artifact it produces, so an empty string can
+// only come from an Artifact somebody built without answering the
+// question, and between "a policy governs this backup" and "nothing will
+// ever delete this backup" the safe reading of a non-answer is the one
+// that gets looked at. Defaulting to "configured" would hide exactly the
+// row an operator opened this screen to find, which is the mapper bug
+// shape this repository has shipped once already.
+//
+// Any other non-empty value is passed through rather than narrowed, so
+// the day core/service names the chain a configured set is retained
+// under, that name reaches the wire instead of being flattened back into
+// the alarming answer.
+func retentionPolicyOf(a service.Artifact) string {
+	if a.RetentionPolicy == "" {
+		return service.RetentionPolicyNone
+	}
+	return a.RetentionPolicy
 }
 
 // formatTime renders t as RFC3339Nano, or "" for the zero time. One

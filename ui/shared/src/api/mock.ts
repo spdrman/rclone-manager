@@ -231,6 +231,7 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
+    retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
     // Two copies, and deliberately not two matching ones: the local copy
     // has been read back and hashed, the copy on the medium has only been
@@ -262,6 +263,7 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly"],
+    retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
     // The archive case: the bytes are there and cannot be read without a
     // restore, and nothing has ever verified them, so there is no class
@@ -285,7 +287,8 @@ const ARTIFACTS: BackupArtifact[] = [
     sizeBytes: 44040192,
     checksum: "c19f3ba7d0428e6591cf7d3b2801ea64c58a9f13d4b72e06ac931f5b8e7d2a40",
     checksumAlgorithm: "sha256", validation: "failed",
-    retentionClasses: ["daily"], remoteSourceRemovedAt: null,
+    retentionClasses: ["daily"],
+    retentionPolicy: "configured", remoteSourceRemovedAt: null,
     // Remote original stays put. Quarantine never triggers remote deletion.
     quarantine: {
       reason: "checksum-mismatch",
@@ -313,7 +316,8 @@ const ARTIFACTS: BackupArtifact[] = [
     sizeBytes: 3543348838,
     checksum: "e42b9c8f1a370d6512cf4b7d2098ae31c67d5f0a9b8241e3c07d5b6a2f918d04",
     checksumAlgorithm: "sha256", validation: "failed",
-    retentionClasses: [], remoteSourceRemovedAt: null,
+    retentionClasses: [],
+    retentionPolicy: "configured", remoteSourceRemovedAt: null,
     quarantine: {
       reason: "validation-failed",
       detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
@@ -344,11 +348,49 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["weekly"],
+    retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
     // No copies at all. This one is still arriving, and the partial file
     // on disk is not a copy, so the dev server can show the empty state
     // the same way a real backend produces it.
     placements: []
+  },
+  {
+    // Issue #523's row, and the reason it is HERE rather than only in a
+    // test: this fixture is what the dev server and the screenshots run
+    // on, so a Backups page whose every row is governed is a page whose
+    // new rendering nobody has ever actually looked at.
+    //
+    // Its setId names a backup set SETS deliberately does not have. That
+    // is the whole condition being modelled: the configuration was
+    // removed, the backups stayed, and this row is now under no retention
+    // policy at all. Nothing will ever select it, nothing will expire it,
+    // and it holds fourteen gigabytes until somebody deletes the file by
+    // hand. It is otherwise a perfectly healthy, verified backup, which
+    // is exactly what makes it hard to spot without the marker.
+    id: "art_01J8XK6D9P30", setId: "production/legacy-redis", setName: "Legacy Redis (removed)",
+    filename: "redis-20260812.rdb.zst",
+    remoteOriginalPath: "legacy-redis-01:/var/backups/redis/redis-20260812.rdb.zst",
+    localPath: "/data/backups/production/legacy-redis/2026/08/redis-20260812.rdb.zst",
+    producedAt: "2026-08-12T03:30:00+02:00", receivedAt: "2026-08-12T03:34:27+02:00",
+    sizeBytes: 14293651456,
+    checksum: "7d0e4b91cf2a8635ae10df4b27c9015e6a3b8f2d94c17e05bd236a9f8e410c73",
+    checksumAlgorithm: "sha256", validation: "verified",
+    // The journal still remembers which tier last selected it, and no
+    // chain will ever look at it again, so the cell shows the consequence
+    // instead of the stale claim.
+    retentionClasses: ["daily", "monthly"],
+    retentionPolicy: "none",
+    remoteSourceRemovedAt: "2026-08-12T03:34:41+02:00", quarantine: null,
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/legacy-redis/2026/08/redis-20260812.rdb.zst",
+        sizeBytes: 14293651456, storageClass: "",
+        verificationClass: "content", verifiedAt: "2026-08-12T03:34:39+02:00",
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   }
 ];
 

@@ -1795,6 +1795,14 @@
             "type": "string",
             "description": "The retention tier that most recently selected this backup to be kept.",
             "x-go-omitempty": true
+          },
+          "retention_policy": {
+            "type": "string",
+            "description": "Which retention policy decides when this backup is deleted. \"configured\" means its backup set is still configured, so a retention chain selects it and ages it out. \"none\" means the backup set's configuration was removed while the backup stayed on storage: no chain ever selects it, so nothing here will ever delete it and it holds the space it occupies until somebody removes it by hand. Always sent, and a client must NOT read an absent value as \"configured\": a response that does not say cannot vouch for either answer, and reading silence as governed is exactly how a backup nothing will ever delete comes to look healthy. A future release may name the policy instead of saying \"configured\", which is a value change rather than a schema change.",
+            "enum": [
+              "configured",
+              "none"
+            ]
           }
         },
         "required": [
@@ -1812,7 +1820,8 @@
           "validation",
           "quarantined",
           "quarantine_irrecoverable",
-          "placements"
+          "placements",
+          "retention_policy"
         ]
       },
       "ListArtifactsResponse": {
