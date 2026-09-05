@@ -133,6 +133,18 @@ func TestADestinationThatGoesBadBetweenTheReadAndTheDeleteKeepsTheSource(t *test
 			},
 		},
 		{
+			// An endpoint that overwrites without moving the mod time. It
+			// is not what S3 does, and it is exactly what makes size a
+			// signal of its own rather than one mod time already covers:
+			// this Store is an interface and the refusal has to hold for
+			// whatever is behind it.
+			name: "the bytes are replaced and the mod time does not move",
+			poison: func(f *fixture) func(*fakeMedium) {
+				key := f.key
+				return func(m *fakeMedium) { m.objects[key] = []byte("silently shorter") }
+			},
+		},
+		{
 			name: "the object is gone by the time the delete is issued",
 			poison: func(f *fixture) func(*fakeMedium) {
 				key := f.key
