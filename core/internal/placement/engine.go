@@ -997,32 +997,16 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	}
 
 	result, want, err := e.verifyCopy(ctx, mv, src, false)
+
+	// unreadable is the one verification outcome that does not decide this
+	// on its own, and it is the reason the guard below is consulted even
+	// when nothing is going to be deleted. See the case that reads it.
+	unreadable := errors.Is(err, ErrClassUnavailable)
+
 	switch {
-	case errors.Is(err, ErrClassUnavailable):
-		// "I could not check it" is not "I checked and it is wrong", and
-		// at this phase the difference decides whether a good copy gets
-		// destroyed. The destination here is not the disposable one it was
-		// at VERIFYING: the VERIFIED write gave it a placements row, the
-		// journal believes in it, and FR-30's standing invariant is
-		// currently resting on it because the source is DELETE_PENDING.
-		//
-		// recopyOrAbandon would delete it and copy it again. Against a
-		// read that timed out that is merely wasteful. Against an archive
-		// class it is the loop this change exists to stop, and it throws
-		// away an object that is fine and buys another minimum billing
-		// period to arrive back in exactly this position. Against a
-		// restore window that expired mid-move it destroys the only copy
-		// the operator has already paid to have restored once.
-		//
-		// So nothing moves. The source stays DELETE_PENDING, which is the
-		// durable intent and is true, the destination stays where it is,
-		// and the reason is reported every cycle until somebody acts on
-		// it. That is the same standing refusal guardSourceDelete's own
-		// clauses produce, and it is reached the same way: by returning
-		// rather than by advancing.
-		return mv, fmt.Errorf(
-			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
-			mv.Artifact, mv.DestinationMedium, want, err)
+	case unreadable:
+		// Fall through to the guard. The refusal is written out at the
+		// case that produces it, below.
 	case err != nil:
 		return e.recopyOrAbandon(ctx, mv, SourceDeletePending, fmt.Sprintf(
 			"the destination copy on %q could not be re-verified at %s class immediately before the source delete: %v",
@@ -1051,13 +1035,61 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	// them could ever fire. Two independent conditions are the point: what
 	// the journal durably recorded when it authorised this delete, and what
 	// is true about the destination right now. Both have to hold.
-	target, err := e.guardSourceDelete(ctx, mv, rec, want)
+	target, guardErr := e.guardSourceDelete(ctx, mv, rec, want)
 	switch {
-	case errors.Is(err, errSourceAlreadyGone):
+	case errors.Is(guardErr, errSourceAlreadyGone):
 		// The delete already happened and the process died before it could
-		// say so. Recording DONE below is the whole remaining work.
-	case err != nil:
-		return mv, err
+		// say so. Recording DONE below is the whole remaining work, and it
+		// is the whole remaining work whether or not the destination could
+		// be read this cycle: there is nothing left to delete, and the
+		// re-verification exists to authorise a delete.
+		//
+		// This ordering is the fix for the archive-class half of #372's
+		// shape. The source delete only ever runs after a re-verification
+		// that worked, so a restore was in effect at the instant the file
+		// went; an hour later the window has expired, and if the
+		// capability refusal below returned before the guard could speak,
+		// the move stayed at SOURCE_DELETE_PENDING for ever with a source
+		// row saying DELETE_PENDING about a file that does not exist.
+		// Nothing could move it but a restore of a copy nobody needs to
+		// read.
+	case unreadable:
+		// "I could not check it" is not "I checked and it is wrong", and
+		// at this phase the difference decides whether a good copy gets
+		// destroyed. The destination here is not the disposable one it was
+		// at VERIFYING: the VERIFIED write gave it a placements row, the
+		// journal believes in it, and FR-30's standing invariant is
+		// currently resting on it because the source is DELETE_PENDING.
+		//
+		// recopyOrAbandon would delete it and copy it again. Against a
+		// read that timed out that is merely wasteful. Against an archive
+		// class it is the loop this change exists to stop, and it throws
+		// away an object that is fine and buys another minimum billing
+		// period to arrive back in exactly this position. Against a
+		// restore window that expired mid-move it destroys the only copy
+		// the operator has already paid to have restored once.
+		//
+		// So nothing moves. The source stays DELETE_PENDING, which is the
+		// durable intent and is true, the destination stays where it is,
+		// and the reason is reported every cycle until somebody acts on
+		// it. That is the same standing refusal guardSourceDelete's own
+		// clauses produce, and it is reached the same way: by returning
+		// rather than by advancing.
+		//
+		// The guard's own answer is deliberately not reported here even
+		// when it also refused. Both sentences are true, and the one an
+		// operator can act on is the first thing that went wrong: the
+		// endpoint would not serve the bytes, and it says so in the
+		// provider's own words. What the guard was asked for is the one
+		// answer above, which changes what happens rather than what is
+		// printed. Asking it costs one restore-status call per cycle on a
+		// move that is already stuck, which is the price of that move
+		// being able to finish at all.
+		return mv, fmt.Errorf(
+			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
+			mv.Artifact, mv.DestinationMedium, want, err)
+	case guardErr != nil:
+		return mv, guardErr
 	default:
 		if err := e.remove(ctx, target); err != nil {
 			return mv, fmt.Errorf("placement: deleting %s's source copy on %q: %w", mv.Artifact, mv.SourceMedium, err)

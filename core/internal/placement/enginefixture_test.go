@@ -102,6 +102,22 @@ type fakeMedium struct {
 	// object actually does.
 	archiveRefusesReads bool
 
+	// afterOpen runs at the end of a SUCCESSFUL OpenObject, with the
+	// mutex already held, so it must touch the fake's fields directly and
+	// must not call back into a locking method.
+	//
+	// It exists because one refusal in this engine can only be reached by
+	// an endpoint whose answers change between two calls. deleteSource
+	// reads the destination's bytes back and then guardSourceDelete asks
+	// the medium whether a restore of that object is in effect; a restore
+	// window that lapses between those two calls is the case the eighth
+	// clause's own comment describes, and it is the only case in which
+	// the read can succeed and the clause can still refuse. A fake whose
+	// world is fixed for the whole cycle cannot produce it, so a test
+	// written against one is testing the capability refusal in front of
+	// the clause and calling it the clause.
+	afterOpen func(*fakeMedium)
+
 	uploadErr  error
 	statErr    error
 	openErr    error
@@ -172,6 +188,9 @@ func (f *fakeMedium) OpenObject(_ context.Context, medium transport.Medium, key 
 	b, ok := f.objects[key]
 	if !ok {
 		return nil, &transport.Error{Category: transport.NotFound, Op: "open", Cause: errors.New("no such key")}
+	}
+	if f.afterOpen != nil {
+		f.afterOpen(f)
 	}
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
 }
