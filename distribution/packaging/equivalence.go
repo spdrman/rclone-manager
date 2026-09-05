@@ -44,6 +44,10 @@ type Divergence struct {
 	Why      string
 }
 
+// String drops the role when there is none rather than printing an empty
+// field, because a divergence with no role is a statement about the stack
+// as a whole and reading "role: " with nothing after it invites the
+// reader to go looking for the service it must mean.
 func (d Divergence) String() string {
 	if d.Role == "" {
 		return fmt.Sprintf("%s: %s", d.Property, d.Detail)
@@ -115,6 +119,11 @@ func CheckStackEquivalence(adapter, canonical AdapterRuntime) []Divergence {
 	return out
 }
 
+// whyFor pulls a property's explanation out of the table above so every
+// Divergence carries it. The alternative is writing the sentence at each
+// construction site, which is how a failure message ends up saying what
+// differs and never what that difference does to an operator, and this
+// gate's output is read by somebody who did not write the adapter.
 func whyFor(id string) string {
 	for _, p := range EquivalenceProperties {
 		if p.ID == id {
@@ -124,6 +133,16 @@ func whyFor(id string) string {
 	return ""
 }
 
+// equivalentRoleSet checks the shape before anything checks the contents.
+// A third service is reported by name rather than ignored, because the
+// interesting way an adapter grows one is a sidecar somebody added to
+// solve a real problem, and the comparison below would never look at it.
+//
+// The last branch reports on the CANONICAL side, which reads strange
+// until you notice what it prevents: every comparison after this one
+// returns early on a nil role, so a canonical stack that failed to reduce
+// to two roles produces an empty divergence list, which is the same
+// answer as full equivalence.
 func equivalentRoleSet(adapter, canonical AdapterRuntime) []Divergence {
 	why := whyFor(PropRoleSet)
 	var out []Divergence
@@ -142,6 +161,11 @@ func equivalentRoleSet(adapter, canonical AdapterRuntime) []Divergence {
 	return out
 }
 
+// equivalentRole compares one role's command, mounts, ports and health
+// check. It returns nothing when either side is nil, and that is not a
+// silent pass: equivalentRoleSet has already reported the missing role,
+// and reporting it again as four more divergences would bury the one
+// fact that matters under its consequences.
 func equivalentRole(role string, got, want *Service) []Divergence {
 	if got == nil || want == nil {
 		return nil
@@ -173,6 +197,12 @@ func withoutProfile(argv []string) []string {
 	return out
 }
 
+// equivalentMounts walks both directions, because the two failures are
+// different and only one of them is obvious. A missing mount produces a
+// container that starts and cannot find its own state. An EXTRA mount is
+// the adapter handing the container a piece of the host nothing in the
+// canonical definition asked for, which no comparison of the canonical
+// list against the adapter's would ever see.
 func equivalentMounts(role string, got, want *Service) []Divergence {
 	why := whyFor(PropContainerMounts)
 	var out []Divergence
@@ -201,6 +231,11 @@ func equivalentMounts(role string, got, want *Service) []Divergence {
 	return out
 }
 
+// mountModes keys on the CONTAINER path and keeps only the write mode.
+// The host side is the operator's business and differs legitimately on
+// every platform; the container side is fixed by the binaries, and the
+// write mode is a claim about what the application does with what is
+// there.
 func mountModes(svc *Service) map[string]string {
 	out := map[string]string{}
 	for _, m := range svc.Mounts {
@@ -222,6 +257,11 @@ func sortedMountPaths(m map[string]string) []string {
 	return out
 }
 
+// equivalentPorts reports one divergence for the whole set rather than
+// one per port. The property being checked is "exactly one published
+// port, on the Web UI role", so the useful failure message is both lists
+// side by side; a per-port report of an adapter that publishes the engine
+// as well reads as two unrelated findings.
 func equivalentPorts(role string, got, want *Service) []Divergence {
 	why := whyFor(PropPublishedPort)
 	g := containerPorts(got)
@@ -248,6 +288,12 @@ func containerPorts(svc *Service) []string {
 	return out
 }
 
+// equivalentHealth compares how the check is EXPRESSED before comparing
+// what it says. The seam matters on its own: a platform that disables the
+// check and a platform that declares one are not two spellings of the
+// same thing, and comparing test commands alone would call an adapter
+// with no health check equivalent to one that has the canonical check,
+// since neither declares a differing test.
 func equivalentHealth(role string, got, want *Service) []Divergence {
 	why := whyFor(PropHealthCheck)
 	gotSeam, wantSeam := SeamOf(got), SeamOf(want)
@@ -265,6 +311,16 @@ func equivalentHealth(role string, got, want *Service) []Divergence {
 	return nil
 }
 
+// equivalentEngineEnvironment compares the engine's environment KEYS and
+// not their values. The values are what an operator sets; the key set is
+// what the adapter decided to expose, and a key that is absent is a
+// default nobody chose. Missing and extra are broken out into the detail
+// because the raw two-list diff is unreadable once the set passes about
+// four keys, and this one is at that size.
+//
+// The Web UI's environment is deliberately not compared here. Bundle
+// selection legitimately varies between carriers, which is the one
+// difference this whole file is prepared to accept.
 func equivalentEngineEnvironment(adapter, canonical AdapterRuntime) []Divergence {
 	if adapter.Engine == nil || canonical.Engine == nil {
 		return nil
