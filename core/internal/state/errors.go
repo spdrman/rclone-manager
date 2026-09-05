@@ -1,3 +1,7 @@
+package state
+
+import "errors"
+
 // The failures this package returns that a caller is expected to branch
 // on, gathered in one place instead of being formatted where they are
 // raised.
@@ -21,9 +25,6 @@
 // data out of a refusal. Each call site wraps one with %w and adds the
 // artifact, key or version it was working on, so the sentinel says what
 // kind of refusal happened and the wrapping says which one.
-package state
-
-import "errors"
 
 var (
 	// ErrUnknownSchemaVersion is returned by Open when the database already

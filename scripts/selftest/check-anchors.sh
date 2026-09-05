@@ -2,8 +2,8 @@
 # Are the mutation anchors in the selftests still anchored to real code?
 #
 # scripts/compat/selftest.sh, scripts/conformance/selftest.sh,
-# scripts/race/selftest.sh and scripts/format/selftest.sh plant deliberate
-# violations to prove each cell of
+# scripts/race/selftest.sh, scripts/format/selftest.sh and
+# scripts/docs/selftest.sh plant deliberate violations to prove each cell of
 # their gate can go red. Every plant is anchored to a verbatim copy of
 # product source living in a script the author of the product change never
 # opens, so a refactor drifts the anchor and the mutation stops planting
@@ -27,7 +27,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 status=0
 
-for selftest in scripts/compat/selftest.sh scripts/conformance/selftest.sh scripts/race/selftest.sh scripts/format/selftest.sh; do
+for selftest in scripts/compat/selftest.sh scripts/conformance/selftest.sh scripts/race/selftest.sh scripts/format/selftest.sh scripts/docs/selftest.sh; do
   echo "==> $selftest --check-anchors"
   if ! bash "$selftest" --check-anchors; then
     status=1
@@ -42,4 +42,4 @@ if [ "$status" -ne 0 ]; then
   exit 1
 fi
 
-echo "OK: every mutation anchor and precondition in the compat, conformance, race and format selftests still matches the real tree."
+echo "OK: every mutation anchor and precondition in the compat, conformance, race, format and docs selftests still matches the real tree."

@@ -1,5 +1,15 @@
 //go:build unix
 
+package service
+
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
 // This file is the two advisory locks §46.1's startup sequence runs on,
 // and the reason there are two of them rather than one.
 //
@@ -23,15 +33,6 @@
 // also why every acquisition here is non-blocking: a startup that queues
 // behind another process's lock is a container that hangs rather than one
 // that says what is in its way.
-package service
-
-import (
-	"errors"
-	"fmt"
-	"os"
-
-	"golang.org/x/sys/unix"
-)
 
 // ErrStartupLocked is returned by acquireStartupLock when another process
 // already holds the section-46.1 startup lock for the same state

@@ -1,3 +1,14 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
+)
+
 // This file is the unattended driver: the loop that keeps running cycles
 // when nobody is asking it to, for a process that cannot reach the one
 // internal/app already has.
@@ -30,16 +41,6 @@
 // panic that escaped while holding the single-flight lock would leave
 // every future tick and every future operator-submitted run waiting on a
 // lock nothing will ever release.
-package service
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-)
 
 // PollInterval reports the poll_interval this BackupService was
 // configured with (config.Config.PollInterval), the same value

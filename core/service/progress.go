@@ -1,3 +1,12 @@
+package service
+
+import (
+	"sync"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+)
+
 // This file is the volatile half of the operation model, and everything
 // about it follows from that word.
 //
@@ -21,14 +30,6 @@
 // sampling path, alongside the copy it is measuring. Every operation here
 // is a lock, a handful of field assignments and a return: observing a
 // transfer must never be a reason the transfer is slower.
-package service
-
-import (
-	"sync"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-)
 
 // OperationProgress is this package's plain, provider-agnostic reading of
 // one RUNNING operation's live progress (docs/EPIC-B-multi-nas.md §52).

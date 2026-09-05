@@ -1,3 +1,10 @@
+package service
+
+import (
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+)
+
 // This file is the shared tail of every configuration write: once the new
 // config.yaml is durably on disk, this is what makes the running process
 // agree with it.
@@ -16,12 +23,6 @@
 // so there is no failure this could report that would not leave the
 // process and its configuration disagreeing with each other and the
 // caller unable to do anything about either.
-package service
-
-import (
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-)
 
 // adoptConfig is the tail every configuration write shares once the file
 // on disk holds the change: build the new *app.Service over cfg, carry

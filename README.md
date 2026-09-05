@@ -1694,12 +1694,12 @@ twenty-five minutes.
 It opens with the cheap checks that can invalidate everything after them, because a control
 that turns out to have been planting nothing is worth knowing about in second one rather
 than in minute twenty-five. `scripts/selftest/check-anchors.sh` is the one worth naming:
-the compat, conformance, race and format self-tests each plant deliberate violations to
+the compat, conformance, race, format and docs self-tests each plant deliberate violations to
 prove their cells can go red, every plant is anchored to a verbatim copy of product source
 living in a script the author of the product change never opens, and a refactor drifts the
 anchor so the mutation quietly stops planting anything. That was caught before #458 too,
 loudly, but only at the end of a full run and one stale anchor at a time. Now every anchor
-in all four is dry-run against the real tree, building nothing, in about half a second, and
+in all five is dry-run against the real tree, building nothing, in about half a second, and
 one run names the whole list.
 
 Install the JS workspaces before the first full run in a new clone or `git worktree`:
@@ -1854,6 +1854,40 @@ the compatibility and conformance cells: it plants a real data race in real prod
 in a copy of the tree, requires the detector to catch it and to name the write that planted
 it, and then runs the same mutant with the flag off and requires it to go green. That last
 cell is the one that makes the other two mean anything.
+
+**Package documentation is the same blind spot again, found in #526.** A comment sitting
+immediately above `package` *is* the package doc, and `go/doc` concatenates every one of
+them across a package in sorted file order. Six documentation lanes put per-file openers
+there, so `go doc ./core/service` opened with "This file is the operator's activity feed",
+which is `activity.go` introducing itself, with the real overview several topics further
+down; `core/internal/state` went from one overview to eleven stacked openers the same way.
+Every gate step was green for the whole of it, because nothing here had ever assembled a
+package overview and looked at it. Reviewers could not see it either: in a diff of one
+file, an opener above `package` looks exactly like an opener below the imports, and the
+overview only exists once the files are put together.
+
+`scripts/docs/check-package-doc.sh` puts them together, through `go/doc`'s own
+`Package.Doc` in `core/cmd/docguard` rather than by shaping text, and records two things per
+package in `scripts/docs/package-doc.baseline`: a digest of the overview, and the files that
+carry a comment adjacent to `package`. The carrier list is the durable half, because a
+promoted opener shows up there as a line a reviewer can read. Size is deliberately not one
+of them: concatenation is in sorted order, so a promoted opener can land *before* the real
+overview and lead it, which reads as a replacement and can leave the header shorter than it
+was. `--against <ref>` asks the other question, whether the text still matches an earlier
+commit, and prints a diff per package rather than a verdict.
+
+Its controls are a pair, and the pairing is what makes either half mean anything.
+`scripts/docs/selftest.sh` promotes a comment adjacent to `package` in the real
+`core/service/activity.go` and requires the package-doc check to go red and name the file;
+then it runs the *same* mutation past `scripts/docs/check-comments-only.sh`, which compares
+token streams with comments dropped, and requires that one to stay silent. A promotion
+changes what `go doc` prints and changes no token, so the pair proves the two checks answer
+different questions rather than one of them firing on unrelated damage. A third control
+renames a function so the silent half is shown able to speak, and a fourth checks the real
+file went back the way it was. The comments-only check prints every `//go:` directive with
+which side of the package clause it sits on, because a `//go:build` line is a comment to the
+scanner and a build constraint to the toolchain: a header moved across one changes which
+platforms compile the file while the token stream stays byte-identical.
 
 ### Which tier a test belongs on
 

@@ -1,3 +1,11 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
 // This file is the operator's activity feed: the read side of the
 // append-only transition log internal/state writes as artifacts move
 // through the pipeline, projected into types a package outside core/ can
@@ -20,13 +28,6 @@
 // caller that asked for the whole deployment's history gets the newest
 // thousand instead of whatever the journal has accumulated since the day
 // it was created.
-package service
-
-import (
-	"context"
-	"fmt"
-	"time"
-)
 
 // DefaultActivityLimit is how many events ListActivity returns when a
 // caller does not ask for a number. It bounds a read of an append-only

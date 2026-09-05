@@ -1,3 +1,13 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+)
+
 // This file is FR-9's answer to "the journal is gone, or it is missing
 // rows nobody can explain": rebuild what can be rebuilt from the
 // non-secret sidecar recovery manifests every committed artifact already
@@ -19,15 +29,6 @@
 // already on local disk and writes only to the local journal, so it is
 // available in exactly the situation that needs it, which is the one
 // where the state of the remotes is the question rather than the answer.
-package service
-
-import (
-	"context"
-	"fmt"
-	"strings"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-)
 
 // CatalogReport is the outcome of a catalog scan or rebuild across every
 // configured backup set (FR-9's journal, reconstructed from the non-secret

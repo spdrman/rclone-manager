@@ -1,3 +1,13 @@
+package state
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+)
+
 // A backup set's standing connection refusal: the manager could not reach
 // the host at all, so nothing was backed up and somebody has to be told
 // why.
@@ -15,15 +25,6 @@
 // boolean anywhere in this file to let the two be confused (issue #231). A
 // refusal is cleared by deleting the row, and only ever on evidence that a
 // cycle actually connected.
-package state
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-)
 
 // Halt reasons: why the manager could not connect to a backup set at all.
 // These are the values the schema's CHECK constraint declares (migration

@@ -1,3 +1,14 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
+)
+
 // This file is issue #443's storage-medium preflight: prove a declared
 // medium actually works, at the moment an operator declares it, rather
 // than at the moment a cycle carrying a real backup finds out for them.
@@ -21,16 +32,6 @@
 // rendering a skipped write as anything resembling a pass would tell
 // somebody their bucket is writable on the strength of a credential that
 // was never obtained.
-package service
-
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
-)
 
 // ErrMediumNotFound is what PreflightStorageMedium returns for a medium id
 // the running configuration does not declare.

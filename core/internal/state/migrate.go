@@ -1,3 +1,21 @@
+package state
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/spdrman/rclone-manager/core/migrations"
+)
+
 // The migration runner: how a database reaches the schema this binary
 // expects, and the two situations where it refuses to touch one at all.
 //
@@ -29,23 +47,6 @@
 // been here (ErrUnknownSchemaVersion); a recorded version whose text no
 // longer matches means the rule above was broken (ErrSchemaDrift). Both
 // stop Open before it returns a Journal to anyone.
-package state
-
-import (
-	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"sort"
-	"strconv"
-	"strings"
-
-	"github.com/spdrman/rclone-manager/core/migrations"
-)
 
 // migration is one version-controlled schema change, loaded from a single
 // migrations/NNNN_name.sql file.

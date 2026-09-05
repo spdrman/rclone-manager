@@ -1,3 +1,18 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
 // This file is the one operation in this package that nothing here
 // executes (EPIC E, FR-34). Everything odd about it follows from that.
 //
@@ -25,20 +40,6 @@
 // then budgets against. The published wait for the storage class and the
 // plain statement that a bill exists are facts about the class, and they
 // are the honest substitutes.
-package service
-
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"github.com/google/uuid"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-)
 
 // ActionRestorePlacement is the durable operation an operator submits to
 // make an archived copy readable again (EPIC E, FR-34).

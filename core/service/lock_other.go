@@ -1,5 +1,13 @@
 //go:build !unix
 
+package service
+
+import (
+	"errors"
+	"fmt"
+	"runtime"
+)
+
 // This file is what lock_unix.go's advisory locking becomes on a GOOS
 // this project does not ship: nothing, loudly.
 //
@@ -17,13 +25,6 @@
 // one identifier on every platform. Neither is ever returned from this
 // build: acquiring fails first, with an error that names the GOOS, which
 // is the thing somebody porting this actually needs to read.
-package service
-
-import (
-	"errors"
-	"fmt"
-	"runtime"
-)
 
 // ErrStartupLocked mirrors lock_unix.go's sentinel of the same name so
 // callers on any GOOS can compare against one identifier; it is never

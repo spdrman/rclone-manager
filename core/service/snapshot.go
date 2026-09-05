@@ -1,3 +1,13 @@
+package service
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 // This file is the undo for a migration that went wrong: a byte-level
 // copy of a journal's on-disk files taken before §46.1's migration step,
 // and the code that puts it back.
@@ -22,15 +32,6 @@
 // would have to be read back on exactly the path that cannot afford a
 // second failure, and a journal of lifecycle rows (not of backup bytes)
 // is small enough that holding it costs nothing worth having.
-package service
-
-import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-)
 
 // sqliteSideFileSuffixes are the sidecar files a WAL-mode SQLite database
 // may have alongside its main file (internal/state.Open always runs in

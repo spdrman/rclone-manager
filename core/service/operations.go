@@ -1,3 +1,18 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // This file is the durable half of the operation model (§14): a caller
 // asks for work, the request is written down before anything runs, and
 // the answer to "what happened to it" outlives the request, the
@@ -32,20 +47,6 @@
 // naming SQLite internals, and this boundary's contract has to hold on
 // the failure paths too, which is where a leak is least likely to be
 // noticed and most likely to be logged.
-package service
-
-import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // ActionRunCycle is the only Action this skeleton supports: run one whole
 // internal/app.Service.RunCycle pass across every configured backup set.

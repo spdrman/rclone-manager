@@ -1,3 +1,14 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
 // The durable operations table: one row per request an API client made, so
 // a client can still find out what happened to it after the process that
 // was doing it died.
@@ -23,16 +34,6 @@
 // failed. The one thing that moves a row nobody is executing any more is
 // the startup sweep, because a row left at running by a process that was
 // killed would otherwise sit there for ever while a client polls it.
-package state
-
-import (
-	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"strings"
-	"time"
-)
 
 // Operation statuses. A row moves strictly forward through these: queued ->
 // running -> (completed | failed). Nothing in this package ever moves a row
