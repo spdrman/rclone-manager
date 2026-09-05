@@ -75,11 +75,12 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 		haltReasons[h.Set] = h.Reason
 	}
 
-	// Every move row this journal holds, indexed by backup set, loaded at
-	// most once for the whole report and only if some set actually needs
-	// it. See placementEvidence and movesBySet for why it is lazy: a
-	// deployment that has never declared a storage medium must not start
-	// requiring a journal that can answer a question it will never ask.
+	// Every relocation this journal still has open, indexed by backup
+	// set, loaded at most once for the whole report and only if some set
+	// actually needs it. See placementEvidence and movesBySet for why it
+	// is lazy: a deployment that has never declared a storage medium must
+	// not start requiring a journal that can answer a question it will
+	// never ask.
 	var moves movesBySet
 
 	var sets []health.BackupSetHealth
@@ -152,8 +153,9 @@ type moveReader interface {
 	ListMoves(ctx context.Context, phases ...string) ([]state.Move, error)
 }
 
-// movesBySet is every move row in the journal, grouped by the backup set
-// its artifact belongs to. A nil map means "not loaded yet", which is why
+// movesBySet is every non-terminal move row in the journal, grouped by
+// the backup set its artifact belongs to. A nil map means "not loaded
+// yet", which is why
 // this is a named type rather than a bare map: loaded-and-empty is a real
 // and common answer (a deployment with mediums configured that has never
 // had to move anything), and it must not re-trigger the load.
