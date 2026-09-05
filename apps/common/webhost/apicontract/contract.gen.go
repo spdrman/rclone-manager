@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "520d615adcae52dc6ab59d99605299a360b7ee937085fdc3b30a0e5e0ad8999f"
+const ContractSHA256 = "aeb4ffd8674dd0e6a0d67b3ed1c98c38e99163767d70027f412715ea197840bc"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -36,47 +36,48 @@ type ErrorCode string
 // here, and ui/shared reads the same registry through the TypeScript half of
 // these bindings, so the two can never hold different lists.
 const (
-	ErrorCodeAuthenticationFailed            ErrorCode = "authentication-failed"
-	ErrorCodeSSHHostKeyChanged               ErrorCode = "ssh-host-key-changed"
-	ErrorCodePermissionDenied                ErrorCode = "permission-denied"
-	ErrorCodeRemotePathMissing               ErrorCode = "remote-path-missing"
-	ErrorCodeChecksumMismatch                ErrorCode = "checksum-mismatch"
-	ErrorCodeBackupStale                     ErrorCode = "backup-stale"
-	ErrorCodeStorageCritical                 ErrorCode = "storage-critical"
-	ErrorCodeVersionMismatch                 ErrorCode = "version-mismatch"
-	ErrorCodeOperationConflict               ErrorCode = "operation-conflict"
-	ErrorCodeUnknown                         ErrorCode = "unknown"
-	ErrorCodeUnauthenticated                 ErrorCode = "UNAUTHENTICATED"
-	ErrorCodeRateLimited                     ErrorCode = "RATE_LIMITED"
-	ErrorCodeInvalidRequest                  ErrorCode = "INVALID_REQUEST"
-	ErrorCodeEnrollmentClosed                ErrorCode = "ENROLLMENT_CLOSED"
-	ErrorCodeBootstrapTokenInvalid           ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
-	ErrorCodeInternalError                   ErrorCode = "INTERNAL_ERROR"
-	ErrorCodeCSRFTokenMissing                ErrorCode = "CSRF_TOKEN_MISSING"
-	ErrorCodeCSRFTokenMismatch               ErrorCode = "CSRF_TOKEN_MISMATCH"
-	ErrorCodeRetentionPlanStale              ErrorCode = "RETENTION_PLAN_STALE"
-	ErrorCodeRetentionPlanNotFound           ErrorCode = "RETENTION_PLAN_NOT_FOUND"
-	ErrorCodeRetentionApplyBusy              ErrorCode = "RETENTION_APPLY_BUSY"
-	ErrorCodeBackupSetNotFound               ErrorCode = "BACKUP_SET_NOT_FOUND"
-	ErrorCodeOperationNotFound               ErrorCode = "OPERATION_NOT_FOUND"
-	ErrorCodeOperationAlreadyRunning         ErrorCode = "OPERATION_ALREADY_RUNNING"
-	ErrorCodeIdempotencyKeyConflict          ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
-	ErrorCodeConfigRevisionStale             ErrorCode = "CONFIG_REVISION_STALE"
-	ErrorCodeSSHKeyNotFound                  ErrorCode = "SSH_KEY_NOT_FOUND"
-	ErrorCodeHostKeyProbeFailed              ErrorCode = "HOST_KEY_PROBE_FAILED"
-	ErrorCodeDestructiveOperationsDisabled   ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
-	ErrorCodeInternal                        ErrorCode = "INTERNAL"
-	ErrorCodeAlreadyConfigured               ErrorCode = "ALREADY_CONFIGURED"
-	ErrorCodeNotConfigured                   ErrorCode = "NOT_CONFIGURED"
-	ErrorCodeArtifactNotFound                ErrorCode = "ARTIFACT_NOT_FOUND"
-	ErrorCodeArtifactNotQuarantined          ErrorCode = "ARTIFACT_NOT_QUARANTINED"
-	ErrorCodeArtifactIrrecoverable           ErrorCode = "ARTIFACT_IRRECOVERABLE"
-	ErrorCodeReinstatementRefused            ErrorCode = "REINSTATEMENT_REFUSED"
-	ErrorCodeBackupSetRepointNotAcknowledged ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
-	ErrorCodeMediumDisclosureRequired        ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
-	ErrorCodeRestoreRefused                  ErrorCode = "RESTORE_REFUSED"
-	ErrorCodeRestoreUnavailable              ErrorCode = "RESTORE_UNAVAILABLE"
-	ErrorCodeCopyNotFound                    ErrorCode = "COPY_NOT_FOUND"
+	ErrorCodeAuthenticationFailed                   ErrorCode = "authentication-failed"
+	ErrorCodeSSHHostKeyChanged                      ErrorCode = "ssh-host-key-changed"
+	ErrorCodePermissionDenied                       ErrorCode = "permission-denied"
+	ErrorCodeRemotePathMissing                      ErrorCode = "remote-path-missing"
+	ErrorCodeChecksumMismatch                       ErrorCode = "checksum-mismatch"
+	ErrorCodeBackupStale                            ErrorCode = "backup-stale"
+	ErrorCodeStorageCritical                        ErrorCode = "storage-critical"
+	ErrorCodeVersionMismatch                        ErrorCode = "version-mismatch"
+	ErrorCodeOperationConflict                      ErrorCode = "operation-conflict"
+	ErrorCodeUnknown                                ErrorCode = "unknown"
+	ErrorCodeUnauthenticated                        ErrorCode = "UNAUTHENTICATED"
+	ErrorCodeRateLimited                            ErrorCode = "RATE_LIMITED"
+	ErrorCodeInvalidRequest                         ErrorCode = "INVALID_REQUEST"
+	ErrorCodeEnrollmentClosed                       ErrorCode = "ENROLLMENT_CLOSED"
+	ErrorCodeBootstrapTokenInvalid                  ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
+	ErrorCodeInternalError                          ErrorCode = "INTERNAL_ERROR"
+	ErrorCodeCSRFTokenMissing                       ErrorCode = "CSRF_TOKEN_MISSING"
+	ErrorCodeCSRFTokenMismatch                      ErrorCode = "CSRF_TOKEN_MISMATCH"
+	ErrorCodeRetentionPlanStale                     ErrorCode = "RETENTION_PLAN_STALE"
+	ErrorCodeRetentionPlanNotFound                  ErrorCode = "RETENTION_PLAN_NOT_FOUND"
+	ErrorCodeRetentionApplyBusy                     ErrorCode = "RETENTION_APPLY_BUSY"
+	ErrorCodeBackupSetNotFound                      ErrorCode = "BACKUP_SET_NOT_FOUND"
+	ErrorCodeOperationNotFound                      ErrorCode = "OPERATION_NOT_FOUND"
+	ErrorCodeOperationAlreadyRunning                ErrorCode = "OPERATION_ALREADY_RUNNING"
+	ErrorCodeIdempotencyKeyConflict                 ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
+	ErrorCodeConfigRevisionStale                    ErrorCode = "CONFIG_REVISION_STALE"
+	ErrorCodeSSHKeyNotFound                         ErrorCode = "SSH_KEY_NOT_FOUND"
+	ErrorCodeHostKeyProbeFailed                     ErrorCode = "HOST_KEY_PROBE_FAILED"
+	ErrorCodeDestructiveOperationsDisabled          ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
+	ErrorCodeInternal                               ErrorCode = "INTERNAL"
+	ErrorCodeAlreadyConfigured                      ErrorCode = "ALREADY_CONFIGURED"
+	ErrorCodeNotConfigured                          ErrorCode = "NOT_CONFIGURED"
+	ErrorCodeArtifactNotFound                       ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrorCodeArtifactNotQuarantined                 ErrorCode = "ARTIFACT_NOT_QUARANTINED"
+	ErrorCodeArtifactIrrecoverable                  ErrorCode = "ARTIFACT_IRRECOVERABLE"
+	ErrorCodeReinstatementRefused                   ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeBackupSetRepointNotAcknowledged        ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged ErrorCode = "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeMediumDisclosureRequired               ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
+	ErrorCodeRestoreRefused                         ErrorCode = "RESTORE_REFUSED"
+	ErrorCodeRestoreUnavailable                     ErrorCode = "RESTORE_UNAVAILABLE"
+	ErrorCodeCopyNotFound                           ErrorCode = "COPY_NOT_FOUND"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -108,6 +109,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -167,6 +169,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -288,6 +291,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
+			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
 		},
@@ -973,11 +977,13 @@ type ConfigRevisionStaleResponse struct {
 	Error          ErrorBody `json:"error"`
 }
 
-// CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the one thing only a
-// create can ask for: that the new set also runs at once.
+// CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the two things only a
+// create can ask for: that the new set also runs at once, and that
+// it may take over history already on its id.
 type CreateBackupSetRequest struct {
 	BackupSetSpec
-	RunImmediately bool `json:"run_immediately"`
+	AcknowledgeRepoint bool `json:"acknowledge_repoint"`
+	RunImmediately     bool `json:"run_immediately"`
 }
 
 // CreateBackupSetResponse is POST /backup-sets. The created set, plus at most one of operation
@@ -1263,6 +1269,21 @@ type RestoreOperationRequest struct {
 	WindowDays   int    `json:"window_days"`
 }
 
+// RetentionMove is one backup this plan would relocate, and both ends of the move
+// (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
+// else: planning one never adds a backup to the keep set and never
+// removes one, which is why moves travel beside the verdicts rather
+// than inside them. There is deliberately no field here for what a
+// provider would charge to run this, how long a provider might take,
+// or the key material that reaches either end, and there never will
+// be: this product holds none of those three, so a field for one
+// could only be filled with a guess.
+type RetentionMove struct {
+	Artifact   string `json:"artifact"`
+	FromMedium string `json:"from_medium"`
+	ToMedium   string `json:"to_medium"`
+}
+
 // RetentionOverride is one backup set's OWN retention policy, exactly as its
 // configuration file carries it: unresolved, with every omitted
 // field still omitted. An override names the WHOLE chain (a tiers
@@ -1288,18 +1309,20 @@ type RetentionOverride struct {
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
 // id; it never proposes what to delete.
 type RetentionPlan struct {
-	BackupSetID         string             `json:"backup_set_id"`
-	ConfigRevision      string             `json:"config_revision"`
-	DeleteCount         int                `json:"delete_count"`
-	ExpiresAt           string             `json:"expires_at"`
-	InventoryRevision   string             `json:"inventory_revision"`
-	KeepCount           int                `json:"keep_count"`
-	OperationID         string             `json:"operation_id,omitempty"`
-	PlanID              string             `json:"plan_id"`
-	ReclaimBytes        int64              `json:"reclaim_bytes"`
-	Retention           RetentionSettings  `json:"retention"`
-	RetentionIsOverride bool               `json:"retention_is_override"`
-	Verdicts            []RetentionVerdict `json:"verdicts"`
+	BackupSetID           string             `json:"backup_set_id"`
+	ConfigRevision        string             `json:"config_revision"`
+	DeleteCount           int                `json:"delete_count"`
+	ExpiresAt             string             `json:"expires_at"`
+	InventoryRevision     string             `json:"inventory_revision"`
+	KeepCount             int                `json:"keep_count"`
+	Moves                 []RetentionMove    `json:"moves,omitempty"`
+	OperationID           string             `json:"operation_id,omitempty"`
+	PlanID                string             `json:"plan_id"`
+	ReclaimBytes          int64              `json:"reclaim_bytes"`
+	Retention             RetentionSettings  `json:"retention"`
+	RetentionIsOverride   bool               `json:"retention_is_override"`
+	UnconfirmedPlacements []string           `json:"unconfirmed_placements,omitempty"`
+	Verdicts              []RetentionVerdict `json:"verdicts"`
 }
 
 // RetentionSchema is the closed value sets and bounds a retention chain is validated
@@ -1355,6 +1378,7 @@ type RetentionTierSelection struct {
 type RetentionVerdict struct {
 	Action         string                   `json:"action"`
 	Artifact       string                   `json:"artifact"`
+	Medium         string                   `json:"medium,omitempty"`
 	Reason         string                   `json:"reason"`
 	TierSelections []RetentionTierSelection `json:"tier_selections,omitempty"`
 	Tiers          []string                 `json:"tiers,omitempty"`
@@ -1623,6 +1647,7 @@ var SchemaTypes = map[string]any{
 	"OperationRestore":            OperationRestore{},
 	"Placement":                   Placement{},
 	"RestoreOperationRequest":     RestoreOperationRequest{},
+	"RetentionMove":               RetentionMove{},
 	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
