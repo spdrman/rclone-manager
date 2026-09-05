@@ -13,18 +13,18 @@ import (
 // rebuilding is the one this package exists for: an artifact whose journal
 // is entirely correct and entirely useless.
 //
-// Every case below starts from the same two copies and changes one field,
-// which is the discipline the interesting refusal needs. A refusal is only
-// evidence about the thing it names if nothing else in the world is also
-// wrong, so theArchivedDestination is built with every OTHER reason to
-// refuse deliberately removed, and the test after it flips the one
-// remaining field back and gets a different answer.
+// Nearly every case below is built from the same two copies with one
+// field changed, which is the discipline the interesting refusal needs. A
+// refusal is only evidence about the thing it names if nothing else in the
+// world is also wrong, so theArchivedDestination is built with every OTHER
+// reason to refuse deliberately removed, and the test after it flips the
+// one remaining field back and gets a different answer.
 //
-// It is a table over plain values rather than a move against a bucket
-// because the decision is a pure one, which is the whole reason it lives
-// here rather than inside the engine: the case that actually loses data
-// can be run in a millisecond, without a real endpoint and without a real
-// archive class. placement's archivedelete_test.go is where the same
+// It works over plain values rather than a move against a bucket because
+// the decision is a pure one, which is the whole reason it lives here
+// rather than inside the engine: the case that actually loses data can be
+// run in a millisecond, without a real endpoint and without a real archive
+// class. placement's archivedelete_test.go is where the same
 // worlds are driven through the real engine, and it is where the order
 // between this refusal and the engine's own read-back is settled.
 

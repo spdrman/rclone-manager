@@ -19,8 +19,8 @@ import (
 // is the disposability boundary so nothing is abandoned after it, and a
 // destination that fails at the last moment goes back to COPYING with the
 // source intact. A paragraph does not fail when somebody adds a row to the
-// table, and a diagram in a comment fails even less. So each of those
-// sentences is asserted below as a fact about the edges: which phases
+// table, and a diagram in a comment fails even less. So the argument is
+// asserted below as facts about the edges instead: which phases
 // precede SOURCE_DELETE_PENDING, which have an ABANDONED edge, that every
 // phase is both reachable and escapable, and that every pair NOT in the
 // table is refused.

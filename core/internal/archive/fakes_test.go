@@ -68,14 +68,15 @@ type fakeMedium struct {
 	initiatedWindows []int
 }
 
-// counts reports every call this double has taken, with restore statuses
-// counted apart from the other three on purpose.
+// counts reports every call this double has taken.
 //
-// Asking whether a restore is running is how an access state is derived
-// honestly, and it is not the expensive thing: it moves no bytes, it
-// starts nothing and it is the one request this package's refusals are
-// allowed to spend. Stats, opens and checksums are the ones a test means
-// when it asserts that nothing went to the medium about the object.
+// Only initiates is read today, and it is what "a read never starts a
+// restore" comes down to: an absence of error cannot say that and a
+// counter can. The five are separated rather than summed because they are
+// not equivalent. Asking whether a restore is running moves no bytes,
+// starts nothing and is the one call this package's own refusals are
+// allowed to spend, so folding it in with stats, opens and checksums
+// would make "nothing went to the medium about the object" unaskable.
 func (f *fakeMedium) counts() (stats, opens, checksums, restoreStatuses, initiates int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

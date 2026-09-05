@@ -22,11 +22,11 @@ import (
 // copy given what can be done with it right now, and what finding that out
 // is allowed to cost.
 //
-// Half the claims here are that a refusal is correct and the other half
-// are that it is FREE, which is why gateStore counts calls. The gate's
-// whole reason for sitting in front of Verify is that it answers from
-// facts already held, so a suite that only checked the refusal would pass
-// just as happily against a gate that spent a GET on being told
+// Most of the claims here are that a refusal is correct. Two of them are
+// that it is FREE, which is why gateStore counts calls: the gate's whole
+// reason for sitting in front of Verify is that it answers from facts
+// already held, so a suite that only checked the refusal would pass just
+// as happily against a gate that spent a GET on being told
 // InvalidObjectState first, and that gate would cost a request per
 // archived copy per cycle while looking identical from the outside.
 //

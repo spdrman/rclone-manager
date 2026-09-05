@@ -172,11 +172,11 @@ type TierGuard interface {
 // checking them, and a nil one is not a programming error to be caught at
 // startup. It is a refusal at the point of use, worded for whatever was
 // about to happen: no medium store is configured, no retention-tier guard
-// is configured, %q cannot be reached. Only Journal is checked up front,
-// because RunCycle cannot even list what is in flight without it. That is
-// the same direction every other uncertainty in this package falls, and
-// it is what lets a fixture hand over an engine that can read but not
-// delete and get the refusal rather than a panic mid-cycle.
+// is configured, that medium cannot be reached. Only Journal is checked
+// up front, because RunCycle cannot even list what is in flight without
+// it. That is the same direction every other uncertainty in this package
+// falls, and it is what lets a fixture hand over an engine that can read
+// but not delete and get the refusal rather than a panic mid-cycle.
 type Engine struct {
 	Journal MoveJournal
 	Store   MediumStore
@@ -622,8 +622,8 @@ func localArtifactPath(bs config.BackupSet, artifact model.ArtifactID) (string, 
 // The nil check is here rather than at each of the twelve call sites for
 // the obvious reason, and it refuses by naming the medium rather than
 // returning a bare error for a less obvious one: every caller is one step
-// from spending money or deleting something, and "%q cannot be reached"
-// is a sentence an operator can act on.
+// from spending money or from deleting something, and a refusal that says
+// which medium could not be reached is one an operator can act on.
 func (e *Engine) resolve(id string) (transport.Medium, Class, error) {
 	if e.Mediums == nil {
 		return transport.Medium{}, "", fmt.Errorf("placement: no medium resolver is configured, so %q cannot be reached", id)
@@ -1061,10 +1061,10 @@ func (e *Engine) verifyLocalCopy(ctx context.Context, p state.Placement) (Result
 // recorded size only when the copy phase recorded none. On every move that
 // worked the two agree; where they disagree the journal should describe
 // the object that is really at the key rather than the one that was
-// expected, because the guard before the source delete compares against
-// this row. Everything else comes from the source row, since a copy is the
-// same bytes under the same hash, and the class comes from the Result,
-// which carries the rung that RAN.
+// expected, and this row is what the guard before the source delete reads.
+// Everything else comes from the source row, since a copy is the same
+// bytes under the same hash, and the class comes from the Result, which
+// carries the rung that RAN.
 func (e *Engine) destinationPlacement(mv state.Move, src state.Placement, result Result) state.PlacementUpdate {
 	verified := result.At
 	size := src.Size
