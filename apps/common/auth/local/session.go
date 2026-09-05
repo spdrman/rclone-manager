@@ -1,3 +1,14 @@
+package local
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
 // Sessions: in memory, for the life of one process.
 //
 // A restart signs everybody out. That is a trade-off rather than a gap,
@@ -18,16 +29,6 @@
 // The cookie helpers live here rather than in handler.go because Secure,
 // HttpOnly and SameSite are session properties, and a route that sets the
 // cookie without them would be a security bug that reads like a typo.
-package local
-
-import (
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
-	"net/http"
-	"sync"
-	"time"
-)
 
 // SessionCookieName is the HTTP-only session cookie this package issues
 // on a successful login or enrollment, and reads on every subsequent

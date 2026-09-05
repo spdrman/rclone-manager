@@ -1,6 +1,3 @@
-// This file covers the capacity half of GET and PATCH /api/v1/settings,
-// added for issue #286: the route the Settings page's storage-cap field
-// reads and writes.
 package webhost
 
 import (
@@ -8,6 +5,10 @@ import (
 	"strings"
 	"testing"
 )
+
+// This file covers the capacity half of GET and PATCH /api/v1/settings,
+// added for issue #286: the route the Settings page's storage-cap field
+// reads and writes.
 
 // TestGetSettings_CarriesTheCapacityBlock is what lets a form render the
 // cap at all, and it has to arrive in bytes: the MB/GB picker is display

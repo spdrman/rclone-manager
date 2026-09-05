@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The edit hold, and mostly the null.
 //
 // Three of the cases here assert that nothing running is reported as an
@@ -11,17 +23,6 @@
 // warning has to say which artifact and which stage, because discarding a
 // partial transfer and cancelling a cycle that has not picked a file yet
 // cost very different amounts.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 func editHoldRequest(t *testing.T, router http.Handler, method, path string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()

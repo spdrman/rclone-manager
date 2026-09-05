@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // POST /api/v1/operations and its two reads.
 //
 // The submit route is the one thing in this package that starts work, and
@@ -16,19 +30,6 @@
 // fields it did not expect teaches clients those fields are optional, and
 // the next reader of that client cannot tell which of the two operations
 // was meant.
-package webhost
-
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxSubmitOperationBodyBytes bounds POST /api/v1/operations' request
 // body (docs/EPIC-B-multi-nas.md §17: "enforce request-size limits").

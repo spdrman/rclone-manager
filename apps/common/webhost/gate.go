@@ -1,3 +1,5 @@
+package webhost
+
 // The refusal that every deployment of this product is currently living
 // under, and the reason it is not a bug.
 //
@@ -22,7 +24,6 @@
 // once for the whole deployment, and it must never grow a request
 // argument: per-request trust belongs on capabilities.Authenticator, which
 // is already given the headers and the peer address it would need.
-package webhost
 
 // DestructiveGate reports whether the trusted-proxy identity verification
 // required before any destructive/mutating operation may run has actually

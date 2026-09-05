@@ -1,3 +1,13 @@
+package spk
+
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+)
+
 // The launcher icon, drawn in code rather than checked in as PNG files.
 //
 // Three things follow from generating it. A reviewer can read what ships
@@ -13,15 +23,6 @@
 //
 // The mark is deliberately plain. It is a placeholder, and nothing about
 // it imitates a Synology icon.
-package spk
-
-import (
-	"bytes"
-	"fmt"
-	"image"
-	"image/color"
-	"image/png"
-)
 
 // LauncherIconSizes are the pixel sizes shipped under the DSM UI
 // directory's images/ folder.

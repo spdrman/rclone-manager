@@ -1,6 +1,3 @@
-// This file covers the manager-wide half of GET /api/v1/system/storage,
-// added for issue #286. The per-set list beside it is unchanged and is
-// covered in handlers_storage_test.go.
 package webhost
 
 import (
@@ -13,6 +10,10 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// This file covers the manager-wide half of GET /api/v1/system/storage,
+// added for issue #286. The per-set list beside it is unchanged and is
+// covered in handlers_storage_test.go.
 
 func (f *storageFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
 	if f.errOnManager != nil {

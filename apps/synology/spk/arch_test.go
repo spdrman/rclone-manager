@@ -1,3 +1,7 @@
+package spk
+
+import "testing"
+
 // The architecture table, checked in both directions.
 //
 // Every family this package claims has to map to a target the canonical
@@ -7,9 +11,6 @@
 // unbuildable GOARCH would produce a package referencing a binary nobody
 // ever produced, and the failure would surface as a missing file at build
 // time with no explanation of why that architecture was ever attempted.
-package spk
-
-import "testing"
 
 // TestArchMapping pins this project's claimed architectures to Synology's
 // own Appendix A platform/arch mapping table. §68's Provider Test Matrix

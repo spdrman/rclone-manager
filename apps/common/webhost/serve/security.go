@@ -1,6 +1,3 @@
-// security.go holds the two hop-level protections issue #87 (B5.1) added
-// to this package: the identity-header boundary, and the browser response
-// headers the admin console is served with.
 package serve
 
 import (
@@ -8,6 +5,10 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 )
+
+// security.go holds the two hop-level protections issue #87 (B5.1) added
+// to this package: the identity-header boundary, and the browser response
+// headers the admin console is served with.
 
 // StripUntrustedIdentity removes provider-native identity headers from a
 // request whose own direct peer has not been proven to be a trusted

@@ -1,17 +1,3 @@
-// The conformance check: open a finished `.spk` and re-derive every claim
-// the build made about it.
-//
-// It reads the package rather than the build's own bookkeeping, and that
-// separation is the entire value. A verifier that trusted anything Build
-// recorded would be checking Build against itself, and the specific claim
-// at stake here, that this package carries the exact release binaries, is
-// one an operator has to be able to re-derive from the artifact alone.
-//
-// The checks are named as exported constants so the CLI's output, the
-// tests and this file all use the same strings rather than three copies
-// that drift. Each check appends its own result rather than returning
-// early, so one failure never hides the others: an operator debugging a
-// bad package wants the whole list, not the first thing that went wrong.
 package spk
 
 import (
@@ -26,6 +12,21 @@ import (
 	"slices"
 	"strings"
 )
+
+// The conformance check: open a finished `.spk` and re-derive every claim
+// the build made about it.
+//
+// It reads the package rather than the build's own bookkeeping, and that
+// separation is the entire value. A verifier that trusted anything Build
+// recorded would be checking Build against itself, and the specific claim
+// at stake here, that this package carries the exact release binaries, is
+// one an operator has to be able to re-derive from the artifact alone.
+//
+// The checks are named as exported constants so the CLI's output, the
+// tests and this file all use the same strings rather than three copies
+// that drift. Each check appends its own result rather than returning
+// early, so one failure never hides the others: an operator debugging a
+// bad package wants the whole list, not the first thing that went wrong.
 
 // Check names. Exported so tests, and the spkctl CLI's output, name the
 // same checks rather than drifting apart through string literals.

@@ -1,3 +1,12 @@
+package local
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // The read half of a session: given a request, is somebody signed in, and
 // who.
 //
@@ -13,14 +22,6 @@
 // Nothing in this file can create or extend a session, only recognise one.
 // That is what lets webhost consult it on every single /api/v1 request
 // without any risk of a read silently refreshing a credential.
-package local
-
-import (
-	"context"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 // sessionAuthenticator adapts sessionManager's cookie-based session
 // lookup to capabilities.Authenticator, the seam apps/common/webhost's

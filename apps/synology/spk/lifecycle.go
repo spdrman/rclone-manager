@@ -1,3 +1,12 @@
+package spk
+
+import (
+	"fmt"
+	"path"
+	"regexp"
+	"strings"
+)
+
 // Proving that no shipped lifecycle script can delete anything outside the
 // package's own footprint.
 //
@@ -20,14 +29,6 @@
 // variable Synology does not document expands to empty on a build that
 // does not export it, and a delete rooted at an empty string is a delete
 // rooted at /.
-package spk
-
-import (
-	"fmt"
-	"path"
-	"regexp"
-	"strings"
-)
 
 // footprintPrefixes are the only path roots a shipped script may delete
 // inside: the directories DSM replaces on upgrade or removes on

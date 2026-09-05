@@ -1,3 +1,16 @@
+package webhost
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The capacity assessment, which is a read that must stay a read.
 //
 // One case asserts the response carries no delete affordance of any kind.
@@ -11,18 +24,6 @@
 // is reported as unavailable with a reason rather than as an error for the
 // whole request. One unreachable volume must not blank the page for every
 // other one.
-package webhost
-
-import (
-	"context"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // storageFakeBackend is a BackupServiceClient double dedicated to this
 // file's tests: it delegates every operations-surface method to an

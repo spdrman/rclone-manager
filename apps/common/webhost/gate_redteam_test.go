@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
+)
+
 // gate_redteam_test.go is issue #87 (B5.1)'s attack on the destructive
 // gate's own regression test rather than on the gate.
 //
@@ -17,19 +31,6 @@
 // CSRF pair and asserts the gate's own typed code, and one is the
 // positive control proving the walk request really does get past the gate
 // when the gate passes.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-)
 
 // csrfPaired attaches a matching double-submit cookie/header pair, so a
 // request under test is refused by whatever comes AFTER requireCSRF

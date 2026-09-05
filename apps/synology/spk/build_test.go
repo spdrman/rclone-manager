@@ -1,3 +1,12 @@
+package spk
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // What a built package must be, with determinism at the centre.
 //
 // The determinism test is the load-bearing one, because the whole "this
@@ -15,14 +24,6 @@
 // The start/stop/status test runs the shipped script rather than reading
 // it: what matters is that it serves the bundle the package carries, and
 // only executing it can show that.
-package spk
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestBuild_NamesTheArtifactTheWayTheToolkitDoes pins the filename
 // pkg_make_spk produces: "<package>-<arch>-<version>.spk".

@@ -1,3 +1,5 @@
+package spk
+
 // This file is the documented Synology package layout, transcribed once
 // so every other file in the package (and every test) reads it from one
 // place rather than repeating string literals.
@@ -7,7 +9,6 @@
 // .tgz, the conf directory, and the DSM desktop-application config file.
 // The outer archive's own format is taken from pkgscripts-ng's
 // include/pkg_util.sh (`pkg_make_spk` runs `tar cf`, uncompressed).
-package spk
 
 const (
 	// PackageName is INFO's `package` key: the package identity DSM keys

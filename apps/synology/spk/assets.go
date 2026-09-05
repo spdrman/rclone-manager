@@ -1,3 +1,13 @@
+package spk
+
+import (
+	"embed"
+	"fmt"
+	"io/fs"
+	"path"
+	"strings"
+)
+
 // Everything the package ships verbatim: the lifecycle scripts, the DSM
 // privilege and resource declarations, the desktop UI directory and the
 // starter configuration.
@@ -15,15 +25,6 @@
 // counting it as a stage would make "does this package implement every
 // stage" unanswerable, and skipping it during the safety scan would leave
 // the shared code unscanned.
-package spk
-
-import (
-	"embed"
-	"fmt"
-	"io/fs"
-	"path"
-	"strings"
-)
 
 // assetFS holds every file this package ships verbatim inside the `.spk`:
 // the lifecycle scripts, conf/privilege and conf/resource, the DSM

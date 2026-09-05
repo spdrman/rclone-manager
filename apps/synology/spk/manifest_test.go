@@ -1,3 +1,12 @@
+package spk
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // Loading the release manifest, including the real one in this
 // repository.
 //
@@ -11,14 +20,6 @@
 // because every value in this file is a digest somebody later compares
 // bytes against, and a digest that was silently truncated or defaulted
 // turns a parity check into a check that cannot fail.
-package spk
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestLoadReleaseManifest reads the shape 4.1's
 // scripts/release/record-release-hashes.sh actually writes, since that

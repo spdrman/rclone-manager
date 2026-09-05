@@ -1,3 +1,12 @@
+package webhost
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // The two middlewares every mutating route in this package passes through,
 // and the order they run in.
 //
@@ -20,14 +29,6 @@
 // so that nothing outside this package can plant one. The handlers that
 // record who did something read it from there, and a forged actor would
 // end up in an audit field an operator later trusts.
-package webhost
-
-import (
-	"context"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 // actorContextKey is an unexported type so this package's context value
 // can never collide with, or be set by, any other package's key.

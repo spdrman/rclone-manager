@@ -1,3 +1,15 @@
+package local
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+)
+
 // The command-line path has to produce a record indistinguishable from the
 // one the browser flow writes, because everything downstream reads only
 // the file and has no idea which route created it.
@@ -11,17 +23,6 @@
 // The two refusals pin that this path enforces the same input rules the
 // HTTP route does. A shorter password accepted here would be a way to
 // bypass a check that exists in one place and is skipped in the other.
-package local
-
-import (
-	"encoding/json"
-	"errors"
-	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
-	"path/filepath"
-	"testing"
-)
 
 // TestCreateAdmin_ProvisionsAnAdminRecordWithNoHTTPInvolvedAtAll is issue
 // #322's RED case made concrete: before this package had a CreateAdmin

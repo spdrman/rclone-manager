@@ -1,3 +1,13 @@
+package local
+
+import (
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // The composition root: everything this package's doc comment lays out,
 // assembled into the two things a provider host actually wires up.
 //
@@ -19,15 +29,6 @@
 // Config.TrustForwardedHeaders is the one setting here with a real blast
 // radius, and its own doc carries the topology argument rather than this
 // opener, because that is where somebody about to set it will be looking.
-package local
-
-import (
-	"fmt"
-	"io"
-	"time"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 // Config is everything New needs to build a Service.
 type Config struct {

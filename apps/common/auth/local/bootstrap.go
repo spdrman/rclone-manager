@@ -1,3 +1,14 @@
+package local
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"fmt"
+	"sync"
+	"time"
+)
+
 // The single-use secret that stands between an unclaimed deployment and
 // whoever reaches its port first.
 //
@@ -15,16 +26,6 @@
 // It is printed to the process's own stdout and nowhere else. That is not
 // a limitation to work around later: any channel that could deliver it
 // elsewhere would be a channel an attacker could try to reach.
-package local
-
-import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
-	"fmt"
-	"sync"
-	"time"
-)
 
 // bootstrapTokenTTL bounds how long a printed enrollment token remains
 // valid (§49.1: "SHALL be single-use and SHALL expire"). 30 minutes is

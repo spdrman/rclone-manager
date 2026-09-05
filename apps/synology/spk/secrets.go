@@ -1,11 +1,3 @@
-// §72's Phase 4 TDD Gate lists "no bundled secrets" as one of the
-// properties provider conformance tests SHALL verify. This file is that
-// check for the Synology package.
-//
-// It looks at two things: what a file is called, and what is written in
-// it. Neither on its own is enough - a private key named notes.txt is
-// still a private key, and an empty file called id_rsa is still a
-// mistake worth refusing.
 package spk
 
 import (
@@ -14,6 +6,15 @@ import (
 	"regexp"
 	"strings"
 )
+
+// §72's Phase 4 TDD Gate lists "no bundled secrets" as one of the
+// properties provider conformance tests SHALL verify. This file is that
+// check for the Synology package.
+//
+// It looks at two things: what a file is called, and what is written in
+// it. Neither on its own is enough - a private key named notes.txt is
+// still a private key, and an empty file called id_rsa is still a
+// mistake worth refusing.
 
 // secretFileNames are basenames that should never appear in a package,
 // whatever is in them.

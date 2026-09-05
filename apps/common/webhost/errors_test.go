@@ -1,3 +1,10 @@
+package webhost
+
+import (
+	"net/http/httptest"
+	"testing"
+)
+
 // The correlation-id header, which is the one property of an error
 // response that nothing else would notice was missing.
 //
@@ -8,12 +15,6 @@
 // because they are two separate paths, and the second one exists precisely
 // so a stale-revision error can carry an extra field; a header set on one
 // and forgotten on the other would be invisible.
-package webhost
-
-import (
-	"net/http/httptest"
-	"testing"
-)
 
 // TestWriteError_SetsCorrelationIdHeader is issue #119's review finding
 // that ui/shared/src/api/client.ts already reads X-Correlation-Id off

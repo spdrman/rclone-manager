@@ -1,5 +1,13 @@
 //go:build !unix
 
+package local
+
+import (
+	"errors"
+	"fmt"
+	"runtime"
+)
+
 // The non-unix half of the store lock, which is a refusal rather than an
 // implementation.
 //
@@ -13,13 +21,6 @@
 // linux/amd64, linux/arm64 and darwin, all of which are unix, so this file
 // is compiled by nobody in practice and exists to keep the tree building
 // for anyone who tries a fourth platform, loudly.
-package local
-
-import (
-	"errors"
-	"fmt"
-	"runtime"
-)
 
 // ErrStoreLocked mirrors lock_unix.go's sentinel of the same name so
 // callers on any GOOS can compare against one identifier; it is never

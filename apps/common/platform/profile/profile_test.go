@@ -1,3 +1,17 @@
+package profile_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+)
+
 // These tests hold the line that makes runtime profiles an adapter
 // mechanism rather than a fork mechanism, and they are grouped by which
 // half of that they defend.
@@ -22,19 +36,6 @@
 // The package is profile_test on purpose. Everything here is reachable
 // from outside, and a test with access to the unexported adapter struct
 // could assert on a shape the callers who actually matter never see.
-package profile_test
-
-import (
-	"context"
-	"errors"
-	"net/http"
-	"reflect"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-)
 
 // ---------------------------------------------------------------------
 // Selection

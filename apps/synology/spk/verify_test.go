@@ -1,3 +1,14 @@
+package spk
+
+import (
+	"debug/elf"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // Every conformance check, exercised in both directions.
 //
 // The pattern throughout is a good package that must pass and a
@@ -13,16 +24,6 @@
 // so a manifest that recorded the wrong binary under an architecture key
 // produces a package that passes parity and cannot run. Both the verifier
 // and the builder are held to that here.
-package spk
-
-import (
-	"debug/elf"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // mustCheck returns the named check from a report, failing the test if
 // the report does not contain it at all — a check that silently stopped

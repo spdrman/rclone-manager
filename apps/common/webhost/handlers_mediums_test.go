@@ -1,3 +1,14 @@
+package webhost
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The medium preflight, whose most important test is about what the
 // response does not contain.
 //
@@ -12,16 +23,6 @@
 // a successful request. The route's job is to report what happened, and
 // answering 500 would conflate "this medium is misconfigured", which the
 // operator can fix, with "this endpoint is broken", which they cannot.
-package webhost
-
-import (
-	"fmt"
-	"net/http"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // mediumPreflightCanary is a value that exists nowhere else in this
 // repository, so finding it in a response is proof of where it came from.

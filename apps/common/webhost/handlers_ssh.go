@@ -1,3 +1,13 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The wizard's three SSH steps: import a key, probe a host key, test a
 // connection.
 //
@@ -17,15 +27,6 @@
 // The body limits differ per route on purpose: a private key is the only
 // thing here that legitimately runs to kilobytes, so the probe routes get
 // much tighter ceilings rather than inheriting one generous number.
-package webhost
-
-import (
-	"encoding/json"
-	"errors"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxImportSSHKeyBodyBytes bounds POST /api/v1/ssh-keys' request body.
 // The largest private key this project has any real reason to see (an

@@ -1,3 +1,12 @@
+package webhost
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
+)
+
 // This package verifies CSRF tokens and never issues them.
 //
 // That split is the thing to know before reading the function below. The
@@ -15,14 +24,6 @@
 // the drift this arrangement exists to make impossible. What stays here is
 // only the translation into this package's error envelope, which is not
 // the same as that package's.
-package webhost
-
-import (
-	"errors"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-)
 
 // requireCSRF refuses a mutating request unless it carries a valid
 // double-submit CSRF token (apps/common/csrf.Verify) - the same

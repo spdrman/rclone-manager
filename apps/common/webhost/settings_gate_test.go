@@ -1,3 +1,22 @@
+package webhost
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // settings_gate_test.go is issue #87 (B5.1)'s adversarial reading of
 // issue #171's decision that PATCH /api/v1/settings is deliberately NOT
 // behind the destructive gate.
@@ -73,24 +92,6 @@
 // are read at plan time. If that ever stops being true, a settings write
 // becomes a way to cause an unattended deletion and the gate tier of this
 // route becomes the wrong question rather than a settled one.
-package webhost
-
-import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"reflect"
-	"slices"
-	"sort"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 func gatedBoundaryRouter(t *testing.T, configPath string) (http.Handler, func()) {
 	t.Helper()

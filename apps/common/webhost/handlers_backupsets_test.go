@@ -1,3 +1,16 @@
+package webhost
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // Creating a backup set, including the branch where creating it also
 // starts work.
 //
@@ -12,18 +25,6 @@
 // succeeds followed by a run that fails is still a successful create, and
 // answering it as an error would leave an operator with a set they were
 // told did not exist.
-package webhost
-
-import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 type backupSetsTestRouter struct {
 	router  http.Handler

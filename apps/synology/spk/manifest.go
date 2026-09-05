@@ -1,3 +1,13 @@
+package spk
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"slices"
+)
+
 // Reading container/release-manifest.json, which is the only place the
 // release binary digests exist.
 //
@@ -10,15 +20,6 @@
 // verification report can name the input its parity verdict was decided
 // against, because a green line about an unnamed file is a green line
 // nobody can act on when it turns red.
-package spk
-
-import (
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"os"
-	"slices"
-)
 
 // ReleaseManifest is container/release-manifest.json, the file
 // scripts/release/record-release-hashes.sh writes (issue #82/B4.1). §3.7

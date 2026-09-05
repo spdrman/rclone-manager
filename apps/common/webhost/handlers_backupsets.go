@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // Backup-set CRUD: create, list, read, update, remove, and the two
 // per-set toggles.
 //
@@ -20,19 +34,6 @@
 // backupSetSpec is shared with the first-run route rather than duplicated,
 // because those two write the same shape into two different situations and
 // the published contract shares it too.
-package webhost
-
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxCreateBackupSetBodyBytes bounds POST /api/v1/backup-sets' request
 // body, the same rationale as maxSubmitOperationBodyBytes

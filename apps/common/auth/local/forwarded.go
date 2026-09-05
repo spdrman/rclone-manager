@@ -1,3 +1,10 @@
+package local
+
+import (
+	"net/http"
+	"strings"
+)
+
 // Reading a forwarded header without being fooled by one.
 //
 // Both helpers here are about the same trap from two angles. An
@@ -13,12 +20,6 @@
 // added, so a rate limiter keyed on it buckets every request in the world
 // together, and a security check reading it learns nothing about who
 // actually called.
-package local
-
-import (
-	"net/http"
-	"strings"
-)
 
 // firstForwardedValue returns the first comma-separated entry of an
 // X-Forwarded-* header value, trimmed of surrounding whitespace - the

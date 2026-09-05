@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The three SSH steps, and the one rule they share: key material goes in
 // and never comes back out.
 //
@@ -11,17 +23,6 @@
 // The CSRF case is here rather than in the router tests because these
 // routes look like reads and are not: each opens a real outbound
 // connection to a host the caller named.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 func postSSHKeyImport(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()

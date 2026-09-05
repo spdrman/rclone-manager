@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // This file is issue #333's per-set retention routes:
 //
 //	GET    /api/v1/backup-sets/{source}/{set}/retention
@@ -39,17 +51,6 @@
 // plan time, and the surface in front of the human is what shows the two
 // chains before the change is made. BackupSetRetention.deployment is
 // served on every one of these responses so a client can do that.
-package webhost
-
-import (
-	"encoding/json"
-	"errors"
-	"net/http"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxSetBackupSetRetentionBodyBytes bounds PUT
 // .../retention's request body. A retention policy is a short list of

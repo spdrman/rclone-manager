@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // Issue #444's wire half. The verdict itself is internal/health's and is
 // driven end to end through a real move engine in core/internal/app; what
 // can still go wrong here is the projection.
@@ -10,17 +22,6 @@
 // zero is the resting value of every count in it. A UI would render "no
 // backups are out of place" for a deployment where relocations had been
 // failing for a month.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"reflect"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // placementWireNames maps each field of service.PlacementHealth onto the
 // response field that carries it.

@@ -1,3 +1,13 @@
+package spk
+
+import (
+	"debug/elf"
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
 // The fixtures every other test in this package is built on.
 //
 // The synthetic ELF is the one that needs explaining. Several checks read
@@ -12,15 +22,6 @@
 // The manifest fixture derives its digests from the staged binaries rather
 // than hardcoding them, so a parity test proves the verifier compares
 // correctly rather than proving two constants in this file agree.
-package spk
-
-import (
-	"debug/elf"
-	"encoding/binary"
-	"os"
-	"path/filepath"
-	"testing"
-)
 
 // fakeELF builds a minimal but genuinely parseable ELF64 little-endian
 // executable header for machine, followed by payload.

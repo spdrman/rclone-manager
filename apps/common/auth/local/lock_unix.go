@@ -1,5 +1,15 @@
 //go:build unix
 
+package local
+
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
 // The advisory lock that makes store.go's "a single process owns this
 // path" true rather than merely assumed.
 //
@@ -15,15 +25,6 @@
 // platform this project neither ships nor tests: a lock that silently does
 // nothing is worse than no lock, because the code above it goes on
 // believing it is safe.
-package local
-
-import (
-	"errors"
-	"fmt"
-	"os"
-
-	"golang.org/x/sys/unix"
-)
 
 // ErrStoreLocked is returned by acquireStoreLock (and, through it,
 // CreateAdmin and Service.New - provision.go/service.go) when another

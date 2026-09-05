@@ -1,3 +1,14 @@
+package serve
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
 // The process lifecycle: one HTTP server, optionally one scheduler, and
 // one shutdown that neither of them can subvert.
 //
@@ -21,16 +32,6 @@
 // trickles headers forever holds a goroutine indefinitely, and in a
 // process that also runs the scheduler the blast radius is wider than one
 // stuck request.
-package serve
-
-import (
-	"context"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
-)
 
 // HTTP server timeouts NewHTTPServer applies to every caller: issue
 // #119's review flagged that the generic Web host's own http.Server

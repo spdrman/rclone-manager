@@ -1,3 +1,16 @@
+package webhost
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // One backup set's retention override: reading it, replacing it, and
 // going back to inheriting.
 //
@@ -15,18 +28,6 @@
 // Refusals from the configuration layer are echoed rather than
 // reinterpreted, so an operator sees the same reason a hand-edited config
 // file would have given them.
-package webhost
-
-import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 const retentionRoute = "/api/v1/backup-sets/production/postgres-primary/retention"
 

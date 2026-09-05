@@ -1,3 +1,13 @@
+package capabilities_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // These tests are the contract's only executable specification: nothing
 // else in this repository can tell a provider author that returning a bare
 // nil from Authenticator() is legal but discouraged, or that embedding
@@ -15,15 +25,6 @@
 // is what a provider outside this package sees, so the tests are written
 // from outside it too, and cannot accidentally lean on an unexported
 // helper a provider would not have.
-package capabilities_test
-
-import (
-	"context"
-	"errors"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 // fakeAdapter is a minimal PlatformAdapter used only to prove the contract
 // is implementable without pulling in any real provider or core code. Every

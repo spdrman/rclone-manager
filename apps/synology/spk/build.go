@@ -1,23 +1,3 @@
-// Assembling the `.spk`, deterministically.
-//
-// Nothing here compiles anything, and that is the constraint everything
-// else follows from. §3.7 requires the package to carry the exact release
-// binary digest, so a rebuild would be the one thing this must never do:
-// Build takes a directory of already-built binaries and a already-built UI
-// bundle and wraps them.
-//
-// Determinism is the other constraint, and it is why every archive member
-// is stamped with a fixed epoch rather than the current time, and why INFO
-// carries no create_time line even though the Synology toolkit stamps one.
-// Two builds of the same inputs have to produce the same bytes, or "this
-// package carries the release digest" is a claim nobody downstream can
-// independently re-derive, which makes it a claim rather than a fact.
-//
-// The UI bundle is required rather than optional, and that was a
-// deliberate choice against convenience. An optional bundle produces a
-// package that installs, runs, and quietly serves the generic bridge,
-// which is exactly the defect this arrangement was introduced to fix, and
-// nothing about the finished package would say so.
 package spk
 
 import (
@@ -39,6 +19,27 @@ import (
 	"strings"
 	"time"
 )
+
+// Assembling the `.spk`, deterministically.
+//
+// Nothing here compiles anything, and that is the constraint everything
+// else follows from. §3.7 requires the package to carry the exact release
+// binary digest, so a rebuild would be the one thing this must never do:
+// Build takes a directory of already-built binaries and a already-built UI
+// bundle and wraps them.
+//
+// Determinism is the other constraint, and it is why every archive member
+// is stamped with a fixed epoch rather than the current time, and why INFO
+// carries no create_time line even though the Synology toolkit stamps one.
+// Two builds of the same inputs have to produce the same bytes, or "this
+// package carries the release digest" is a claim nobody downstream can
+// independently re-derive, which makes it a claim rather than a fact.
+//
+// The UI bundle is required rather than optional, and that was a
+// deliberate choice against convenience. An optional bundle produces a
+// package that installs, runs, and quietly serves the generic bridge,
+// which is exactly the defect this arrangement was introduced to fix, and
+// nothing about the finished package would say so.
 
 // BuildOptions is everything needed to wrap one architecture's release
 // binaries in a `.spk`.

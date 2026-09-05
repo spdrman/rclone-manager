@@ -1,12 +1,3 @@
-// The library under this CLI is thoroughly tested, which makes this seam
-// more dangerous rather than less. spk.Verify's contract is that it
-// returns a Report carrying failures rather than an error, so "exit
-// non-zero when the report is not OK" is a fail-closed behaviour only
-// this file implements: a cmdVerify that returned 0 on a failing report
-// would send an operator to real hardware with a package nobody checked
-// while every unit test in spk/ stayed green. Preconditions 4 and 5 of
-// the acceptance procedure make this CLI the mandatory first step of
-// that hardware run.
 package main
 
 import (
@@ -22,6 +13,16 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/synology/spk"
 )
+
+// The library under this CLI is thoroughly tested, which makes this seam
+// more dangerous rather than less. spk.Verify's contract is that it
+// returns a Report carrying failures rather than an error, so "exit
+// non-zero when the report is not OK" is a fail-closed behaviour only
+// this file implements: a cmdVerify that returned 0 on a failing report
+// would send an operator to real hardware with a package nobody checked
+// while every unit test in spk/ stayed green. Preconditions 4 and 5 of
+// the acceptance procedure make this CLI the mandatory first step of
+// that hardware run.
 
 // fakeELF builds a minimal but genuinely parseable ELF64 little-endian
 // executable header, which is all Build's architecture check reads. A

@@ -1,3 +1,14 @@
+package spk
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"io"
+	"os"
+	"testing"
+)
+
 // Archive surgery, so a test can produce a package that is wrong in one
 // specific way.
 //
@@ -12,16 +23,6 @@
 // the outer archive. Several checks look at one and not the other, and a
 // helper that could only touch the outer tar would leave the inner ones
 // untested while looking like it covered them.
-package spk
-
-import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
-	"io"
-	"os"
-	"testing"
-)
 
 // tarEntry is one member of an archive, read fully into memory. Every
 // archive this package builds is small (two binaries and a handful of

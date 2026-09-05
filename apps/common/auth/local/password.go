@@ -1,3 +1,16 @@
+package local
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strings"
+
+	"golang.org/x/crypto/argon2"
+)
+
 // Argon2id hashing, and the format that makes a stored hash
 // self-describing.
 //
@@ -13,18 +26,6 @@
 // The parameters themselves are sized for one administrator signing in a
 // handful of times a day, not for a login surface under load, so they sit
 // comfortably above OWASP's floor rather than at it.
-package local
-
-import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
-	"errors"
-	"fmt"
-	"strings"
-
-	"golang.org/x/crypto/argon2"
-)
 
 // Argon2id parameters for a single administrator account authenticating
 // at most a handful of times a day, not a high-QPS multi-tenant login

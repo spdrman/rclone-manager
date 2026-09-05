@@ -1,3 +1,12 @@
+package local
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
+)
+
 // This package's side of the shared CSRF primitive.
 //
 // The actual double-submit implementation lives in apps/common/csrf,
@@ -12,14 +21,6 @@
 // two packages settled on incompatible envelopes long before this one
 // existed. csrf.Verify deliberately refuses to referee that, so each side
 // translates.
-package local
-
-import (
-	"errors"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-)
 
 // CSRFCookieName and CSRFHeaderName implement the double-submit cookie
 // CSRF pattern (§3.6/§13A's "CSRF protection"): the cookie is set by

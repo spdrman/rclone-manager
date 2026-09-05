@@ -1,3 +1,11 @@
+package local
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
 // What is asserted here is mostly what must NOT be true of a hash.
 //
 // The plaintext must not appear in it, and two hashes of the same password
@@ -11,13 +19,6 @@
 // attacker-adjacent structure out of a string, and it has to refuse a
 // malformed one rather than fall through to a comparison against whatever
 // it managed to decode.
-package local
-
-import (
-	"errors"
-	"strings"
-	"testing"
-)
 
 func TestHashPassword_NeverContainsThePlaintext(t *testing.T) {
 	encoded, err := hashPassword("correct horse battery staple")

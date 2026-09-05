@@ -1,3 +1,12 @@
+package local
+
+import (
+	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
 // A truth table for one question: when may this process believe a header
 // that says the connection was secure?
 //
@@ -7,14 +16,6 @@
 // accident is plaintext-plus-forged-header-without-trust: that is a caller
 // who set X-Forwarded-Proto themselves, and a Secure cookie issued on the
 // strength of it would be a claim of protection nothing is providing.
-package local
-
-import (
-	"crypto/tls"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-)
 
 func TestRequestIsSecure_RealTLSIsAlwaysSecureRegardlessOfTrust(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

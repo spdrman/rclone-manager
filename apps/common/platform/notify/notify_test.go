@@ -1,3 +1,16 @@
+package notify_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // These tests cover the two things that make alerting a capability rather
 // than a feature: the refusal, and the pass-through.
 //
@@ -12,18 +25,6 @@
 // notifyingAdapter is what a provider with a native notification channel
 // looks like, and silentAdapter is what every profile in the table
 // actually is right now.
-package notify_test
-
-import (
-	"context"
-	"errors"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 type recordingNotifier struct {
 	titles   []string

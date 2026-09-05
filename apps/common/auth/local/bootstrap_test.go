@@ -1,3 +1,10 @@
+package local
+
+import (
+	"testing"
+	"time"
+)
+
 // The bootstrap token's three refusals, one per way it can stop being
 // valid: already used, expired, or not the one that was issued.
 //
@@ -10,12 +17,6 @@
 // Time is injected rather than waited on. A test that slept for the real
 // TTL would take half an hour, and one that shortened the TTL would be
 // testing a constant nothing ships with.
-package local
-
-import (
-	"testing"
-	"time"
-)
 
 func TestBootstrapIssuer_ConsumeAcceptsTheIssuedTokenOnce(t *testing.T) {
 	b := newBootstrapIssuer(time.Now)

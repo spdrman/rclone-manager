@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The preview and the apply, tested as the pair they are.
 //
 // The asymmetry between them is asserted directly: the preview is reached
@@ -13,19 +27,6 @@
 // through the real router, which is also what proves the preview route is
 // actually reached rather than swallowed by the backup-sets catch-all
 // registered near it.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"reflect"
-	"sort"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 func previewRetention(t *testing.T, router http.Handler, source, set string) *httptest.ResponseRecorder {
 	t.Helper()

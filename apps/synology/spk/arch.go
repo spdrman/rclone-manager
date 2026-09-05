@@ -1,3 +1,12 @@
+package spk
+
+import (
+	"debug/elf"
+	"fmt"
+	"slices"
+	"strings"
+)
+
 // The architecture table: one row per DSM arch family, tying it to the Go
 // build target the release produces and to the DSM platforms Synology's
 // own mapping table says the family covers.
@@ -14,14 +23,6 @@
 // supported-model matrix and the acceptance procedure are generated from
 // it. A list maintained in prose beside a list the code validates against
 // is two lists, and the prose one is the one that goes stale.
-package spk
-
-import (
-	"debug/elf"
-	"fmt"
-	"slices"
-	"strings"
-)
 
 // Arch ties one INFO `arch` family to the Go build target the canonical
 // release produces for it, and to the DSM platforms Synology's Appendix A

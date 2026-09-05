@@ -1,3 +1,17 @@
+package local
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // End-to-end tests over a real httptest server with a real cookie jar,
 // rather than direct handler calls.
 //
@@ -14,19 +28,6 @@
 // build and the one where the middleware ordering can go wrong. A test
 // harness that skipped it would 403 on every mutating route, which is the
 // tell that the wrapping is load-bearing rather than decorative.
-package local
-
-import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/cookiejar"
-	"net/http/httptest"
-	"net/url"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // testServer wires a fresh Service's Handler behind EnsureCSRFCookie,
 // exactly as apps/generic's own composed handler does, and returns an

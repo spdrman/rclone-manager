@@ -1,3 +1,10 @@
+package local
+
+import (
+	"fmt"
+	"time"
+)
+
 // Creating the administrator from the command line, without the browser
 // flow.
 //
@@ -16,12 +23,6 @@
 // What it does have to get right is the concurrency, because it writes
 // straight past Service's read-modify-write cycle. It takes the same
 // exclusive lock a running Service holds, and refuses rather than waits.
-package local
-
-import (
-	"fmt"
-	"time"
-)
 
 // CreateAdminConfig is the input to CreateAdmin.
 type CreateAdminConfig struct {

@@ -1,3 +1,13 @@
+package local
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
 // Two things are under test here and they fail in different directions.
 //
 // The limiter itself has to refuse the attempt after the budget is spent,
@@ -16,15 +26,6 @@
 // different forwarded addresses must be different clients, or every client
 // in the world shares one bucket, which is the collapse this whole branch
 // was added to fix.
-package local
-
-import (
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
-)
 
 func TestRateLimiter_AllowsUpToMaxAttempts(t *testing.T) {
 	r := NewRateLimiter(3, time.Minute)

@@ -1,3 +1,11 @@
+package local
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
 // Session lifetime, exercised through the manager rather than over HTTP,
 // so that expiry can be tested by moving an injected clock instead of
 // waiting a day.
@@ -8,13 +16,6 @@
 // would authenticate anybody who sent a plausible-looking string. Both are
 // the kind of thing an optimisation can introduce without touching any
 // route.
-package local
-
-import (
-	"sync"
-	"testing"
-	"time"
-)
 
 func TestSessionManager_LookupFindsAFreshlyCreatedSession(t *testing.T) {
 	m := newSessionManager(time.Now)

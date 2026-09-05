@@ -1,3 +1,14 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+)
+
 // The create-admin subcommand, and mostly its stdin handling.
 //
 // Reading a password from stdin sounds trivial and has three cases that a
@@ -15,16 +26,6 @@
 // withStdin swaps the package-level os.Stdin, which is safe only because
 // nothing in this package runs in parallel. That is a real constraint on
 // anybody adding a t.Parallel() here.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-)
 
 // withStdin temporarily redirects the package-level os.Stdin to a pipe
 // fed with content, restoring the original *os.File on cleanup. Safe

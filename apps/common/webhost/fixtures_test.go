@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The doubles every handler test in this package is built on.
 //
 // They exist because standing up a real BackupService means a state
@@ -14,19 +28,6 @@
 // machinery: it starts work on a goroutine gated by a channel the test
 // controls, which is what turns "the operation outlives the request" from
 // a timing-dependent hope into a deterministic assertion.
-package webhost
-
-import (
-	"context"
-	"errors"
-	"fmt"
-	"strconv"
-	"sync"
-	"time"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // fakeAuthenticator is a minimal, always-succeeding or always-failing
 // capabilities.Authenticator, standing in for whatever real local-auth

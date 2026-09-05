@@ -1,5 +1,13 @@
 //go:build unix
 
+package local
+
+import (
+	"errors"
+	"path/filepath"
+	"testing"
+)
+
 // The lock's three behaviours, and the middle one is the point.
 //
 // A second acquire on a held lock must fail with ErrStoreLocked, and that
@@ -10,13 +18,6 @@
 //
 // The build tag matches lock_unix.go's, so this file compiles exactly
 // where the implementation it tests does.
-package local
-
-import (
-	"errors"
-	"path/filepath"
-	"testing"
-)
 
 // TestAcquireStoreLock_SecondAcquireOnSameFileFails is issue #322's
 // concurrency-safety requirement made concrete at the primitive level: a

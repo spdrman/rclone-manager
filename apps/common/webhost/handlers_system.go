@@ -1,3 +1,11 @@
+package webhost
+
+import (
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The three system reads a client makes before it does anything else:
 // version, capabilities, and readiness.
 //
@@ -18,13 +26,6 @@
 // Capabilities is served straight from the platform adapter rather than
 // assembled here, so there is exactly one place a capability is declared
 // and no way for this surface to report something the adapter would deny.
-package webhost
-
-import (
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // versionResponse is GET /api/v1/system/version's response shape
 // (docs/EPIC-B-multi-nas.md §15.1). Field names are chosen so nothing here

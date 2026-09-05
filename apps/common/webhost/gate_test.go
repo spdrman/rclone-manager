@@ -1,3 +1,7 @@
+package webhost
+
+import "testing"
+
 // One test, and its value is in what it forbids rather than what it
 // checks.
 //
@@ -8,9 +12,6 @@
 // gate.go as the record that "always false" is the specified behaviour and
 // not an unfinished branch, so a reviewer reading a PR that adds a switch
 // has something to point at.
-package webhost
-
-import "testing"
 
 // TestNotYetImplementedGate_AlwaysReportsNotPassed pins down the
 // INTEGRATION requirement from issue #94: until #92 (B1.3) lands and

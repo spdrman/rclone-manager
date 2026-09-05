@@ -1,3 +1,14 @@
+package serve
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost"
+)
+
 // The engine half of the two-container split: the process that holds the
 // API, the backend and the scheduler, and has no published port.
 //
@@ -20,16 +31,6 @@
 // before editing this file: an adapter that declares native auth but whose
 // trust boundary does not resolve strips every identity header, so nobody
 // can sign in, and it refuses at startup rather than serving that.
-package serve
-
-import (
-	"context"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
-)
 
 // EngineConfig is everything NewEngine needs to build one provider's
 // engine-container HTTP surface.

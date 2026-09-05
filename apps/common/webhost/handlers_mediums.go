@@ -1,3 +1,14 @@
+package webhost
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // Prove a declared storage medium works, before a cycle carrying a real
 // backup finds out for the operator.
 //
@@ -13,16 +24,6 @@
 // listing or an account identifier, so the checks here carry a step, an
 // outcome and a category, and the raw sentence goes to the manager's log
 // where the operator already has the trust to read it.
-package webhost
-
-import (
-	"errors"
-	"net/http"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // mediumPreflightResponse is POST
 // /api/v1/storage-mediums/{id}/preflight's body.

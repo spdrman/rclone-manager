@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The retention preview and its apply, which are the two halves of the
 // only operation in this package that deletes local restore points.
 //
@@ -15,19 +29,6 @@
 // route can widen a deletion an operator already approved. router.go's
 // comment on that route has the full chain and names the tests that pin
 // it.
-package webhost
-
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxApplyRetentionBodyBytes bounds POST .../retention/apply's request
 // body (docs/EPIC-B-multi-nas.md §17's request-size limit), mirroring

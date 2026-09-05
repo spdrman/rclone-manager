@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // The three system reads, plus one standing constraint on all of them.
 //
 // That constraint is the leak test: nothing these endpoints serve may
@@ -10,17 +22,6 @@
 // previous version derived it from a value that was non-empty for every
 // backend that could be constructed at all, which made it a flag that
 // could not report false.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 func newTestRouterForSystem(t *testing.T, caps capabilities.PlatformCapabilities) http.Handler {
 	t.Helper()

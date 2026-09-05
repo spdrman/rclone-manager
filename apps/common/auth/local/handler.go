@@ -1,3 +1,17 @@
+package local
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"sync"
+
+	"github.com/go-chi/chi/v5"
+)
+
 // The five HTTP routes this package serves, and the two conventions that
 // hold them together.
 //
@@ -18,19 +32,6 @@
 // inconsistency already happened: BOOTSTRAP_TOKEN_INVALID drifted to 403
 // while the published contract still said 401 (#289), and nothing noticed
 // until somebody read both files side by side.
-package local
-
-import (
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-	"sync"
-
-	"github.com/go-chi/chi/v5"
-)
 
 // BootstrapTokenHeader carries the single-use enrollment secret §49.1
 // requires (bootstrap.go). ui/shared's enrollment page reads it from the

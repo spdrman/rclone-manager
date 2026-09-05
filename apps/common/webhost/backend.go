@@ -1,3 +1,11 @@
+package webhost
+
+import (
+	"context"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The seam between this package and core/.
 //
 // It is an interface rather than a direct dependency on
@@ -18,13 +26,6 @@
 // The interface is deliberately not the whole of BackupService. Only what
 // the handlers here call is listed, so an addition to core's public
 // surface does not silently become part of the HTTP API's reach.
-package webhost
-
-import (
-	"context"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // BackupServiceClient is the seam this package talks to core/ through:
 // exactly the subset of core/service.BackupService's method set the HTTP

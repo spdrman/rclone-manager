@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // Profile selection at startup, where every case is a refusal.
 //
 // The reason they are all refusals is that the safe-looking alternative is
@@ -15,14 +24,6 @@
 // Both serve and serve-ui are driven through every case, because they are
 // two entry points onto the same table and a check present on one and
 // missing on the other is exactly the gap this would otherwise leave.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestCmdServe_RejectsAnUnknownProfile: profile selection is a startup-time
 // decision, and an unrecognised one has to stop the process rather than

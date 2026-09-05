@@ -1,3 +1,15 @@
+package serve
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
 // Choosing which UI bundle to serve, at run time rather than at build
 // time.
 //
@@ -19,17 +31,6 @@
 // to see what it actually loaded rather than what it was configured to
 // load. Those differ exactly when something is wrong, which is the only
 // time anybody looks.
-package serve
-
-import (
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path"
-	"path/filepath"
-	"strings"
-)
 
 // UIBundleOrigin records which of the three sources a served bundle came
 // from. It exists so a deployment can log what it actually loaded rather

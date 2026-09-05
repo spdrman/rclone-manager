@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // One route for every administrable setting, and one line about where
 // that generality stops.
 //
@@ -19,17 +31,6 @@
 // router.go on the route itself, along with the tests that hold it,
 // because that is where somebody deciding the tier of the NEXT mutating
 // route will be reading.
-package webhost
-
-import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // maxSettingsBodyBytes bounds PATCH /api/v1/settings' request body, the
 // same rationale as maxCreateBackupSetBodyBytes

@@ -1,3 +1,20 @@
+package serve_test
+
+import (
+	"errors"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+
+	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
+)
+
 // Bundle resolution, tested mostly through its refusals.
 //
 // The rule this file defends is that a resolution which cannot honour what
@@ -15,22 +32,6 @@
 //
 // The package is serve_test because bundle selection is entirely an
 // external contract, decided by what a caller passes in.
-package serve_test
-
-import (
-	"errors"
-	"io/fs"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-	"testing/fstest"
-
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-)
 
 // embedded stands in for the compile-time go:embed bundle every build of
 // the canonical binary carries. The point of the whole mechanism is that

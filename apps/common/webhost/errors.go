@@ -1,3 +1,12 @@
+package webhost
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+)
+
 // One error shape for every failure this package can return, so a client
 // writes one parser.
 //
@@ -18,14 +27,6 @@
 // Correlation IDs are minted per response and carry nothing derived from a
 // session, a credential or a request body, so quoting one in a bug report
 // is safe.
-package webhost
-
-import (
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
-	"net/http"
-)
 
 // errorResponse is the one error shape every handler in this package
 // returns, so a client only ever has to parse one thing regardless of

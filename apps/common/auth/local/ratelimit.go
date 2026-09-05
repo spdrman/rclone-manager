@@ -1,3 +1,12 @@
+package local
+
+import (
+	"net"
+	"net/http"
+	"sync"
+	"time"
+)
+
 // Fixed-window brute-force protection, and the housekeeping that keeps it
 // from being a memory leak.
 //
@@ -19,14 +28,6 @@
 // branches are not symmetric: RemoteAddr cannot be forged and is always
 // safe, while the header is only safe under the topology
 // Config.TrustForwardedHeaders describes.
-package local
-
-import (
-	"net"
-	"net/http"
-	"sync"
-	"time"
-)
 
 // RateLimiter is a simple fixed-window limiter keyed by an arbitrary
 // string (this package always keys it by remote IP, see remoteIP below):

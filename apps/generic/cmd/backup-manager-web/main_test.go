@@ -1,3 +1,17 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The command dispatch and the flag surface, tested through run() rather
 // than through the process.
 //
@@ -15,19 +29,6 @@
 // that does not exist, and why it also redirects the auth store: with the
 // store opened before the configuration, leaving it at the container
 // default would make a failure ambiguous between the two.
-package main
-
-import (
-	"context"
-	"errors"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // invalidConfigArgs is the "serve refuses and exits" fixture every test
 // below that drives cmdServe needs, and it changed shape with issue #176.

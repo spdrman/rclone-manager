@@ -1,3 +1,17 @@
+package webhost
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // POST /api/v1/operations and the reads beside it.
 //
 // The idempotency cases are the ones carrying real weight. A duplicate key
@@ -12,19 +26,6 @@
 // Every case goes through the real router rather than calling the handler
 // directly, so the CSRF and gate middleware in front of the route are part
 // of what is being tested.
-package webhost
-
-import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // testCSRFToken is an arbitrary, fixed value every test in this file uses
 // for both the CSRF cookie and header on a submitted request: requireCSRF

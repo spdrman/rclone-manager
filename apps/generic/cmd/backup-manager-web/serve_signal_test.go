@@ -1,3 +1,18 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
 // What the process actually exits with when it is signalled, which no
 // in-process test can observe.
 //
@@ -15,20 +30,6 @@
 // under test is the text an operator finds in the container log, so an
 // assertion that imported the constant would keep passing through a
 // rewording that breaks whoever is grepping for it.
-package main
-
-import (
-	"bufio"
-	"bytes"
-	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"syscall"
-	"testing"
-	"time"
-)
 
 // `serve`'s exit status after a signal is a property of the process, not
 // of a function call, so it can only be observed from outside one. These

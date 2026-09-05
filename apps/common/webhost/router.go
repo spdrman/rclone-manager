@@ -1,3 +1,14 @@
+package webhost
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // The route table, which is where this package's security tiering
 // actually lives.
 //
@@ -23,16 +34,6 @@
 // install gets a different, much smaller table rather than this one with
 // guards sprinkled through it, so a route added below is unreachable
 // before setup by construction instead of by somebody remembering.
-package webhost
-
-import (
-	"context"
-	"net/http"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 // RouterConfig is everything NewRouter needs to build the /api/v1 surface.
 type RouterConfig struct {

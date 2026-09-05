@@ -1,6 +1,3 @@
-// Issue #419's route out of FAILED. The quarantine retry beside it has
-// been tested since #211; this is the same shape one state along, and the
-// cases that differ are the note and the 409.
 package webhost
 
 import (
@@ -12,6 +9,10 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// Issue #419's route out of FAILED. The quarantine retry beside it has
+// been tested since #211; this is the same shape one state along, and the
+// cases that differ are the note and the 409.
 
 func TestRetryFailedIngestion_Returns204AndNamesTheArtifact(t *testing.T) {
 	rt := newReadSurfaceRouter(t)

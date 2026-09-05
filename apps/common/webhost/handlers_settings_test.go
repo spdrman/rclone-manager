@@ -1,14 +1,3 @@
-// The read and the partial write of the settings surface.
-//
-// The sparse-update cases are the point of the file. An absent key means
-// leave this alone and a zero means set it to zero, and those are opposite
-// instructions on a retention tier: one preserves a policy, the other
-// deletes everything it governs. A test suite that only sent full bodies
-// would never distinguish them.
-//
-// The read is asserted to return both the policy in force and the schema
-// it was validated against, because a form that renders bounds it invented
-// locally will eventually disagree with the server that enforces them.
 package webhost
 
 import (
@@ -20,6 +9,18 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// The read and the partial write of the settings surface.
+//
+// The sparse-update cases are the point of the file. An absent key means
+// leave this alone and a zero means set it to zero, and those are opposite
+// instructions on a retention tier: one preserves a policy, the other
+// deletes everything it governs. A test suite that only sent full bodies
+// would never distinguish them.
+//
+// The read is asserted to return both the policy in force and the schema
+// it was validated against, because a form that renders bounds it invented
+// locally will eventually disagree with the server that enforces them.
 
 type settingsTestRouter struct {
 	router  http.Handler

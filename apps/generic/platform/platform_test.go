@@ -1,3 +1,14 @@
+package platform
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // These tests are about the wiring, not about generic's answers. What ID()
 // and Capabilities() return is asserted in the profile package's own
 // tests, against the table row that defines them; repeating those
@@ -14,16 +25,6 @@
 // The package is platform rather than platform_test because New panics
 // instead of returning an error, so there is nothing an external test
 // could observe that an internal one cannot.
-package platform
-
-import (
-	"context"
-	"path/filepath"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 func TestAdapter_ReportsGenericIdentityAndNoCapabilities(t *testing.T) {
 	auth, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})

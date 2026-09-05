@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
 // The proof that a submitted operation outlives the request that
 // submitted it.
 //
@@ -12,17 +24,6 @@
 // The asynchronous double's channel gate is what keeps it deterministic:
 // the background work is held open until the test decides, instead of the
 // assertion racing a delay somebody tuned.
-package webhost
-
-import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
-)
 
 // TestSubmitOperation_SurvivesClientDisconnect is issue #94's INTEGRATION
 // requirement: "Run the disconnect test against a real HTTP server

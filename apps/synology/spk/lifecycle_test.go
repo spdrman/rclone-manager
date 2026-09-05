@@ -1,3 +1,10 @@
+package spk
+
+import (
+	"strings"
+	"testing"
+)
+
 // The shell scanner, tested against the scripts that ship and against
 // invented ones.
 //
@@ -16,12 +23,6 @@
 // from disk. A scanner that checked the working tree's copy would approve
 // a package whose embedded copy differs, and the embedded copy is the one
 // that runs as root on somebody's NAS.
-package spk
-
-import (
-	"strings"
-	"testing"
-)
 
 // TestLifecycleScripts_DeleteNothingOutsideThePackageFootprint is the
 // static half of issue #85's uninstall/retained-data safety criterion.

@@ -1,8 +1,3 @@
-// This file is issue #162's contract suite for GET /api/v1/validators,
-// the read-only route that turns the wizard's decorative step 5 picklist
-// into a real one. Contract tests come before the handler exists
-// (docs/EPIC-B-multi-nas.md §4C): request shape, response shape, error
-// behaviour and auth.
 package webhost
 
 import (
@@ -14,6 +9,12 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// This file is issue #162's contract suite for GET /api/v1/validators,
+// the read-only route that turns the wizard's decorative step 5 picklist
+// into a real one. Contract tests come before the handler exists
+// (docs/EPIC-B-multi-nas.md §4C): request shape, response shape, error
+// behaviour and auth.
 
 func getValidators(t *testing.T, router http.Handler) *httptest.ResponseRecorder {
 	t.Helper()

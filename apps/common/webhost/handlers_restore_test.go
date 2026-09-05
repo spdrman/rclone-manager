@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // Asking for a restore over HTTP, and the matcher that keeps the refusals
 // honest.
 //
@@ -11,17 +23,6 @@
 // The gate case pins that a restore is behind the destructive gate, which
 // is the tier this route belongs in: it is the one read-shaped operation
 // here that spends real money and moves real objects.
-package webhost
-
-import (
-	"encoding/json"
-	"net/http"
-	"regexp"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // TestARestoreCanActuallyBeAskedForOverHTTP is the route-level half of
 // #241's honesty problem.

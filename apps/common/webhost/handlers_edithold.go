@@ -1,3 +1,15 @@
+package webhost
+
+import (
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // The edit hold: a short lease that stops a run cycle from working on a
 // backup set while somebody is changing it.
 //
@@ -14,17 +26,6 @@
 // mid-transfer from a cycle that has only reached discovery, because those
 // two cost an operator very different amounts to discard and only the
 // specific message lets them choose.
-package webhost
-
-import (
-	"errors"
-	"net/http"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // runningWorkResponse names what a run cycle is doing for one backup set
 // right now. It is the content of the warning an operator sees before

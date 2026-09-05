@@ -1,16 +1,3 @@
-// How live progress is serialised, including the two shapes that are easy
-// to conflate.
-//
-// A measured zero and no measurement at all are different facts, and they
-// have to reach a client differently: zero bytes transferred is
-// information, and an absent progress object means nobody has looked yet.
-// A serialiser that emitted a zero-valued object for both would make a UI
-// render a progress bar at zero for an operation that has not started
-// reporting, which reads as stalled.
-//
-// The stage enum is pinned against the published contract rather than
-// against a list in this file, because a stage the server emits and the
-// contract does not name is a value no client is obliged to handle.
 package webhost
 
 import (
@@ -24,6 +11,20 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// How live progress is serialised, including the two shapes that are easy
+// to conflate.
+//
+// A measured zero and no measurement at all are different facts, and they
+// have to reach a client differently: zero bytes transferred is
+// information, and an absent progress object means nobody has looked yet.
+// A serialiser that emitted a zero-valued object for both would make a UI
+// render a progress bar at zero for an operation that has not started
+// reporting, which reads as stalled.
+//
+// The stage enum is pinned against the published contract rather than
+// against a list in this file, because a stage the server emits and the
+// contract does not name is a value no client is obliged to handle.
 
 func int64p(v int64) *int64 { return &v }
 

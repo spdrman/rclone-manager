@@ -1,3 +1,14 @@
+package webhost
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+)
+
 // The structural proofs about the route table, as distinct from tests of
 // what any individual route does.
 //
@@ -16,16 +27,6 @@
 // with no authenticator wired, and every route failing closed against it
 // is the whole fail-closed-by-construction argument rather than a
 // contrivance.
-package webhost
-
-import (
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
-	"github.com/go-chi/chi/v5"
-)
 
 // TestNoAPIRouteBypassesAuthentication is issue #94's REGRESSION
 // requirement made concrete: "no route bypasses the auth abstraction

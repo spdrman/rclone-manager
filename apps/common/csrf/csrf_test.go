@@ -1,3 +1,12 @@
+package csrf
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
 // These tests cover the two exported entry points, which is the whole view
 // every consumer has: apps/common/auth/local and apps/common/webhost both
 // reach for EnsureCookie and Verify and nothing else.
@@ -16,14 +25,6 @@
 // only the caller knows; the test pins that the callback is actually
 // consulted, since a hardcoded false here would silently downgrade every
 // deployment that does terminate TLS.
-package csrf
-
-import (
-	"errors"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-)
 
 func TestEnsureCookie_IssuesACookieWhenNoneIsPresent(t *testing.T) {
 	handler := EnsureCookie(func(*http.Request) bool { return false })(http.NotFoundHandler())

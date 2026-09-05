@@ -1,3 +1,13 @@
+package local
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+)
+
 // Three cases, and only the first one is about success.
 //
 // The read side of a session is where a bug is silent: an authenticator
@@ -8,15 +18,6 @@
 // returned AuthContext is empty rather than only that Authenticated is
 // false: a handler that reads Username without checking the flag must not
 // find a name in there.
-package local
-
-import (
-	"context"
-	"path/filepath"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-)
 
 func TestAuthenticator_AuthenticatesARequestCarryingALiveSessionCookie(t *testing.T) {
 	svc, err := New(Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})

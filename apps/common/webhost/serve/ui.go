@@ -1,3 +1,17 @@
+package serve
+
+import (
+	"io/fs"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+)
+
 // The UI half of the two-container split: the only process with a
 // published port, and therefore the only hop that can tell a real client
 // from a forged one.
@@ -23,19 +37,6 @@
 // The static handler falls back to the app shell for anything that is not
 // a real file, which is what a client-side router needs for a hard refresh
 // on a deep link to reach the app instead of a 404.
-package serve
-
-import (
-	"io/fs"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strings"
-	"time"
-
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-)
 
 // UIConfig is everything NewUI needs to build the UI-host container's
 // handler.

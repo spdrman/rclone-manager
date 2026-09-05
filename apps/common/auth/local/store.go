@@ -1,3 +1,15 @@
+package local
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
 // The one thing this package persists: a username and a password hash.
 //
 // Everything else it holds (sessions, bootstrap tokens, rate-limit
@@ -16,17 +28,6 @@
 // Store takes no OS-level lock of its own. It is the path-only primitive,
 // and both callers that own a store for longer than one call (Service.New,
 // CreateAdmin) take the lock in lock_unix.go around it.
-package local
-
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
-)
 
 // AdminRecord is the one persisted local-auth identity this package
 // supports today (docs/EPIC-B-multi-nas.md §13.4's admin-only initial
