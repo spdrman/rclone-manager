@@ -161,6 +161,13 @@ func ageOrUnknown(age *time.Duration) string {
 	return age.Round(time.Minute).String()
 }
 
+// ageOrNever renders an age whose absence means the thing never happened,
+// which is a different absence from ageOrUnknown's above.
+//
+// Nil here is a fact about the deployment and not about the read: nothing has
+// ever been verified, or nothing has ever been backed up. Rendering it as
+// "age unknown" would tell an operator the number could not be obtained when
+// what is true is that there is no number to obtain.
 func ageOrNever(age *time.Duration) string {
 	if age == nil {
 		return "never"

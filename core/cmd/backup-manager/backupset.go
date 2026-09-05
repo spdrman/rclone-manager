@@ -16,6 +16,46 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// backupSetVerbs is every verb that brings its OWN flag set, dispatched
+// before this command parses anything (issue #333).
+//
+// create and patch share one flag set and one operand shape, so they keep
+// the switch below. retention cannot: its flags are --daily-days,
+// --policy-file and friends, which declareBackupSetFlags has never heard
+// of, so parsing them against that set would fail before any dispatcher
+// ran. Finding the verb first is what lets the three coexist, and adding
+// a fourth one that owns its flags is a map entry rather than a fourth
+// argument convention.
+//
+// The handler is given the WHOLE argument list, its own verb included,
+// and finds that verb as its first operand. That is what lets a flag
+// appear on either side of it, so `backup-set --config X retention a/b`
+// runs against X exactly as `settings --config X patch` already does. A
+// dispatcher that sliced the verb off would silently drop every flag
+// written before it, which reads as a command that ran against the wrong
+// configuration file rather than as an error.
+var backupSetVerbs = map[string]func([]string) int{
+	"retention": cmdBackupSetRetention,
+}
+
+// backupSetSharedFlagVerbs are the verbs that share declareBackupSetFlags
+// and go through the switch in cmdBackupSet, in the order usage() lists
+// them. The switch dispatches on these literals; this list exists so the
+// usage messages and the test that checks usage() against the verbs read
+// them from one place rather than three.
+var backupSetSharedFlagVerbs = []string{"create", "patch", "remove"}
+
+// backupSetVerbNames is every verb `backup-set` dispatches, sorted: the
+// shared-flag ones above and the ones with a flag set of their own.
+func backupSetVerbNames() []string {
+	names := append([]string{}, backupSetSharedFlagVerbs...)
+	for verb := range backupSetVerbs {
+		names = append(names, verb)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // cmdBackupSet is `backup-manager backup-set <verb> <source/backup-set>
 // [flags]`, the CLI's own half of the backup-set write surface. Three
 // verbs share this command's flag set, and they arrived from three
@@ -89,46 +129,6 @@ import (
 // What patch deliberately cannot change: the set's identity, its SSH key
 // reference and its trusted host-key line. See
 // core/service/backupsetupdate.go's own package doc for each.
-// backupSetVerbs is every verb that brings its OWN flag set, dispatched
-// before this command parses anything (issue #333).
-//
-// create and patch share one flag set and one operand shape, so they keep
-// the switch below. retention cannot: its flags are --daily-days,
-// --policy-file and friends, which declareBackupSetFlags has never heard
-// of, so parsing them against that set would fail before any dispatcher
-// ran. Finding the verb first is what lets the three coexist, and adding
-// a fourth one that owns its flags is a map entry rather than a fourth
-// argument convention.
-//
-// The handler is given the WHOLE argument list, its own verb included,
-// and finds that verb as its first operand. That is what lets a flag
-// appear on either side of it, so `backup-set --config X retention a/b`
-// runs against X exactly as `settings --config X patch` already does. A
-// dispatcher that sliced the verb off would silently drop every flag
-// written before it, which reads as a command that ran against the wrong
-// configuration file rather than as an error.
-var backupSetVerbs = map[string]func([]string) int{
-	"retention": cmdBackupSetRetention,
-}
-
-// backupSetSharedFlagVerbs are the verbs that share declareBackupSetFlags
-// and go through the switch in cmdBackupSet, in the order usage() lists
-// them. The switch dispatches on these literals; this list exists so the
-// usage messages and the test that checks usage() against the verbs read
-// them from one place rather than three.
-var backupSetSharedFlagVerbs = []string{"create", "patch", "remove"}
-
-// backupSetVerbNames is every verb `backup-set` dispatches, sorted: the
-// shared-flag ones above and the ones with a flag set of their own.
-func backupSetVerbNames() []string {
-	names := append([]string{}, backupSetSharedFlagVerbs...)
-	for verb := range backupSetVerbs {
-		names = append(names, verb)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func cmdBackupSet(args []string) int {
 	for _, a := range args {
 		if verb, ok := backupSetVerbs[a]; ok {

@@ -239,8 +239,6 @@ func (f *Medium) NewBucket(t *testing.T) transport.Medium {
 	return f.MediumForBucket(bucket)
 }
 
-// ContainerID is the exact id this fixture created, for a test that needs
-// to address the container itself.
 // HasBucket reports whether the medium's drive holds this bucket.
 //
 // MinIO in single-drive mode keeps one directory per bucket under /data, so
@@ -260,6 +258,8 @@ func (f *Medium) HasBucket(t *testing.T, bucket string) bool {
 	return err == nil
 }
 
+// ContainerID is the exact id this fixture created, for a test that needs
+// to address the container itself.
 func (f *Medium) ContainerID() string { return f.containerID }
 
 func waitUntilLive(t *testing.T, f *Medium) {

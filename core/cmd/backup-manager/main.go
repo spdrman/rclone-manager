@@ -43,6 +43,15 @@ func run(args []string) int {
 	return cmd(rest)
 }
 
+// commands is every verb this binary dispatches.
+//
+// A map rather than a switch because it is read as data as well as walked:
+// the discoverability tests ask it whether a verb exists at all, which is
+// half of the check that a verb an operator cannot find has not shipped.
+// The other half is usage below, and the two are separate lists on purpose.
+// A verb here and not there is dispatchable and undiscoverable, which is how
+// `backup-set remove` went out, so the gap between them is something a test
+// can see rather than something only a reader would notice.
 var commands = map[string]func([]string) int{
 	"run":          cmdRun,
 	"daemon":       cmdDaemon,
@@ -65,6 +74,22 @@ var commands = map[string]func([]string) int{
 	"version":      cmdVersion,
 }
 
+// usage is the text an operator reads when they type nothing, type
+// something wrong, or ask for help, and it is the only place most of these
+// verbs are described at all.
+//
+// Every line of it is pinned. core/tests/compat captures this block and
+// compares it against a checked-in corpus under FR-35's fourth clause, so a
+// line that is reworded, reflowed or re-indented here is a compatibility
+// break somebody has to justify, not a tidy-up. The one thing that is
+// allowed is growth: that cell is compared additive-only, because a new
+// subcommand adds lines and changes nothing an operator was already reading.
+//
+// So a new verb is two edits, here and in commands above, and the usage half
+// is the one that is easy to skip and impossible to notice missing from the
+// inside. The flags are spelled out per verb rather than summarised because
+// this is the only reference an operator on a terminal has; the trailing
+// paragraph carries the one flag they all share.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
 
