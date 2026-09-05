@@ -986,6 +986,29 @@ export interface BackupManagerApi {
   retryIngestion(artifactId: string): Promise<void>;
 
   /**
+   * Put one FAILED backup back into the pipeline so it is attempted again
+   * (issue #419).
+   *
+   * FAILED is not quarantine and this is not `retryIngestion` with a wider
+   * mouth. Quarantine means somebody has to decide whether a backup is
+   * trustworthy; FAILED means an attempt did not finish, and until this
+   * existed a backup that reached it stopped being worked on permanently,
+   * because nothing in the product ever took either of the exits the
+   * lifecycle graph declares for it.
+   *
+   * Nothing does this automatically and that is deliberate: a blind
+   * re-transfer of gigabytes for a cause nothing has classified is a cost
+   * the backend refuses to take on its own, so an operator asking IS the
+   * eligibility rule.
+   *
+   * `note` is recorded alongside the transition so a later failure of the
+   * same backup carries what was tried last time. Rejects with
+   * ARTIFACT_NOT_FAILED when the backup is not stuck, which is what a
+   * stale screen produces.
+   */
+  retryFailedIngestion(artifactId: string, note?: string): Promise<void>;
+
+  /**
    * Re-check a quarantined backup's durable local copy and, when what is
    * found is enough, trust it again (issue #220).
    *

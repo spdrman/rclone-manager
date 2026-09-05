@@ -1210,6 +1210,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
+    retryFailedIngestion: () => delay(undefined),
     reinstate: () =>
       delay({
         reinstated: true,

@@ -95,6 +95,16 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/ssh-keys":                    true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 
+	// Issue #419: the operator route out of FAILED. Same tier as the
+	// quarantine retry it sits beside, and for the same reason: it moves
+	// a journal row back into the pipeline and touches no backup datum at
+	// all. It is structurally incapable of reaching a remote delete,
+	// because FAILED is only ever reached before COMMITTED and COMMITTED
+	// is the only state a delete can be reached from
+	// (internal/lifecycle's Transitions table, and
+	// TestOnlyCommittedPrecedesRemoteDeletePending).
+	"POST /api/v1/backups/{source}/{set}/{name}/retry": true,
+
 	// Issue #443: the storage medium's equivalent of test-connection,
 	// and exempt for the same reason with one extra sentence, because
 	// unlike test-connection this one WRITES.

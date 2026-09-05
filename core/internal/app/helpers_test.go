@@ -95,6 +95,18 @@ type fakeTransport struct {
 	// a post-hoc deleteCallCount() check.
 	poison *testing.T
 
+	// copyToLocalErr, when non-nil, is what CopyToLocal returns instead of
+	// writing the bytes, for every remote path.
+	//
+	// It is its own field rather than a use of failForSourceID above,
+	// which reads as though it covers this and does not: that field is
+	// consulted by List and Stat only, so a test setting it and expecting
+	// a failed COPY gets a perfectly successful cycle. This is the same
+	// narrow, one-method shape remoteHashErr already has, for the same
+	// reason: a test that wants a transfer to fail wants discovery to have
+	// worked.
+	copyToLocalErr error
+
 	// remoteHashErr, when non-nil, is what RemoteHash returns instead of
 	// a computed hash, for every remote path. Unlike failForSourceID
 	// above (which fails every method, breaking transfer along with
@@ -164,6 +176,9 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 	atomic.AddInt32(&f.copyToLocalCallsCount, 1)
 	if f.beforeCopy != nil {
 		f.beforeCopy()
+	}
+	if f.copyToLocalErr != nil {
+		return transport.TransferResult{}, f.copyToLocalErr
 	}
 	obj, ok := f.objects[remotePath]
 	if !ok {

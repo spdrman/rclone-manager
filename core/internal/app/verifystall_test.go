@@ -232,3 +232,109 @@ func TestVerificationStall_SurvivesACrashWithoutSpendingTwoAttempts(t *testing.T
 		t.Fatalf("RetryCount = %d after replaying one attempt, want 1: one outage must not cost two attempts", replayed.RetryCount)
 	}
 }
+
+// --- issue #419's other half: the operator route out of FAILED ---
+
+// TestRetryFailedIngestion_PutsAStrandedArtifactBackIntoThePipeline is the
+// end-to-end shape of the recovery, driven through processArtifact and a
+// real journal: an artifact whose copy could not be made is FAILED and
+// stays FAILED cycle after cycle, and one operator action puts it back
+// where the pipeline picks it up.
+func TestRetryFailedIngestion_PutsAStrandedArtifactBackIntoThePipeline(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	source := transport.Source{ID: "production"}
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload bytes", epoch.Unix())
+
+	journal := openJournal(t)
+	rec := discoverOneRecord(t, ctx, journal, tr, source, bs)
+
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 2}
+
+	// The source goes quiet for the copy, which is the most common way an
+	// artifact reaches FAILED and the one #419 does not otherwise touch.
+	tr.copyToLocalErr = transport.NewError(transport.Transient, "copy_to_local", errors.New("connection reset"))
+
+	if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+		t.Fatalf("cycle 1 left the artifact at %s, want %s", got, lifecycle.Failed)
+	}
+
+	// And it stays there. This is the strand: nothing in a cycle takes
+	// either of FAILED's declared exits, so the row stops being worked on
+	// however many times the pipeline walks past it.
+	tr.copyToLocalErr = nil
+	for cycle := 2; cycle <= 3; cycle++ {
+		if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+			t.Fatalf("cycle %d left the artifact at %s, want it still %s", cycle, got, lifecycle.Failed)
+		}
+	}
+
+	// The operator asks. Nothing else does, deliberately.
+	if err := svc.RetryFailedIngestion(ctx, rec.Artifact, "the NAS came back"); err != nil {
+		t.Fatalf("RetryFailedIngestion: %v", err)
+	}
+	back := mustGet(t, journal, rec.Artifact)
+	if back.State != string(lifecycle.Discovered) {
+		t.Fatalf("after the retry the artifact is %s, want %s", back.State, lifecycle.Discovered)
+	}
+	if back.RetryCount != 1 {
+		t.Fatalf("RetryCount = %d, want 1: the attempt has to be counted on the same budget everything else spends", back.RetryCount)
+	}
+	if back.LastError == "" {
+		t.Fatal("LastError is empty, want the recorded failure this attempt is recovering from")
+	}
+
+	// And the pipeline carries it the whole way, which is the proof that
+	// nothing along the failed path left the row in a shape it cannot use.
+	if got := svc.processArtifact(ctx, source, bs, back); got != lifecycle.Complete {
+		t.Fatalf("the cycle after the retry left the artifact at %s, want %s", got, lifecycle.Complete)
+	}
+}
+
+// TestRetryFailedIngestion_RefusesWhatItMustRefuse. Two refusals, and
+// neither is about whether the retry would be useful: an artifact that is
+// not stuck, and a backup set the configuration no longer names, which is
+// the same refusal RetryQuarantinedIngestion makes for the same reason
+// (issue #391).
+func TestRetryFailedIngestion_RefusesWhatItMustRefuse(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	source := transport.Source{ID: "production"}
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload bytes", epoch.Unix())
+	journal := openJournal(t)
+	rec := discoverOneRecord(t, ctx, journal, tr, source, bs)
+
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	// Not stuck: the artifact is DISCOVERED and making progress.
+	if err := svc.RetryFailedIngestion(ctx, rec.Artifact, ""); !errors.Is(err, ErrNotFailed) {
+		t.Fatalf("retrying a DISCOVERED artifact gave %v, want ErrNotFailed", err)
+	}
+
+	// Now strand it, and take its backup set out of the configuration.
+	tr.copyToLocalErr = transport.NewError(transport.Transient, "copy_to_local", errors.New("connection reset"))
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 2}
+	if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+		t.Fatalf("the artifact is at %s, want %s (test setup did not reach the state under test)", got, lifecycle.Failed)
+	}
+
+	unconfigured := New(testConfig(t), journal, tr, nil)
+	unconfigured.Now = fixedNow(epoch)
+	err := unconfigured.RetryFailedIngestion(ctx, rec.Artifact, "")
+	var notFound *NotFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("retrying under a removed backup set gave %v, want a named not-found refusal", err)
+	}
+	if got := mustGet(t, journal, rec.Artifact); got.State != string(lifecycle.Failed) {
+		t.Fatalf("the refused retry moved the artifact to %s", got.State)
+	}
+}

@@ -1363,6 +1363,14 @@ export const httpApi: BackupManagerApi = {
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
   retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
+  // Issue #419. A different path and a different refusal from the one
+  // above, because FAILED and QUARANTINED are different facts about a
+  // backup: one is not finished, the other is not trusted.
+  retryFailedIngestion: (id, note) =>
+    request<void>("/backups/" + id + "/retry", {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {})
+    }).then(() => undefined),
   // Unlike its two siblings this one reads its response. A reinstate that
   // reaches the backend and comes back saying the copy is bad is a 200,
   // not a rejection, so a caller that ignored the body could not tell that

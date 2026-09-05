@@ -61,7 +61,8 @@ What `core/internal/health` would tell you if it were wired to anything (see the
 - If any row is `QUARANTINED_LOST`, that's an unconditional alarm regardless of anything
   else in the set, because it means an irrecoverable loss happened. See Step 3.
 - If the newest row is `FAILED` with no `next_retry_at`, the retry budget for that attempt
-  is exhausted and it needs a human, not another automatic pass.
+  is exhausted and it needs a human, not another automatic pass. See Step 7 for what that
+  human actually does, which until recently was nothing this product offered.
 
 ## Step 2: finding a restore point
 
@@ -240,13 +241,68 @@ So if a file survives a `Keep: false` verdict, the question is who was supposed 
 plan, not whether deletion works. The verdicts above are the source of truth for "what would
 be safe to remove"; applying them is somebody's deliberate act through the API.
 
+## Step 7: the newest row is `FAILED` and nothing is happening
+
+`FAILED` means an attempt did not finish. It does **not** mean the backup is bad, and it is
+not the same thing as quarantine: quarantine is where a backup waits for somebody to decide
+whether it can be trusted, and `FAILED` is where one stopped part-way.
+
+Nothing moves it on its own, and that is deliberate rather than an oversight. Re-running the
+attempt means re-running the transfer, which for most backups means downloading the whole
+thing again, and there is nothing recorded on a failed row that says whether the cause has
+cleared. A manager that guessed would spend that download on a coin flip. So it waits for
+you.
+
+First, read why:
+
+```
+backup-manager artifacts production/postgres/dump-2026-09-04.zst
+```
+
+The `reason` line is the literal sentence the manager recorded at the moment it gave up.
+Three shapes come up most:
+
+- **A transient failure that ran out of attempts** ("copy failed: transient: ..."). The
+  source was unreachable or the link dropped. If it is back, there is nothing else to fix.
+- **A final-name collision.** A file is already sitting where this backup's final copy
+  belongs. Move or remove it first; a retry re-checks before it copies a byte, so retrying
+  without dealing with it costs nothing and changes nothing.
+- **A hash policy the backend cannot serve** ("hash verification required (sha256) but the
+  backend could not supply a comparable remote hash"). This one will not clear on its own,
+  and a retry against an unchanged configuration will download the whole backup again and
+  reach the identical verdict. Change `validation.hash`, or configure an application
+  validator, *before* you retry. See `docs/ssh-setup.md`: a hardened SFTP account cannot
+  compute a remote hash at all, by design.
+
+Then put it back into the pipeline:
+
+```
+backup-manager retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
+```
+
+That moves the row from `FAILED` to `DISCOVERED` and the next cycle picks it up like any
+other new backup. The note is recorded with the transition, so if the same backup fails
+again, whoever looks next can see what was tried. The count of attempts spent on the backup
+goes up by one, which is the same counter a release from quarantine moves, so a backup that
+keeps coming back here is visible as one rather than looking like a fresh failure every
+time.
+
+It is safe from every way a backup can reach `FAILED`, and the reason is worth knowing:
+`FAILED` is only reachable *before* the local copy is committed, so the remote source has
+never been deleted and is presumptively still there to fetch again. The retry touches no
+remote object and removes no durable copy.
+
+The one thing it refuses is a backup whose backup set is no longer in the configuration.
+Sending it back to a set no cycle walks would leave it somewhere nothing picks up and no
+recovery path reaches. Create a backup set with the same source and name first.
+
 ## Quick reference
 
 | Symptom in the journal | Meaning | What to do |
 |---|---|---|
 | Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`, recent | Healthy | Nothing |
 | No good row inside `stale_after` | Stale | Investigate why new backups aren't landing |
-| `FAILED`, no `next_retry_at` | Retry budget exhausted | Human intervention needed |
+| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backup-manager retry <id>` (Step 7) |
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |
 | Newest good row is `QUARANTINED` | Content suspect, source may still exist | Manual re-fetch or re-run reconciliation yourself |
 | `REMOTE_DELETE_PENDING` stuck, `remote_delete_error` set | Expected refusal under a hardened SFTP account | Monitor remote disk directly; this is not corrupting anything |

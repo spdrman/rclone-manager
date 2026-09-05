@@ -321,6 +321,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// having to interpret one.
 		r.Get("/backups", h.listArtifacts)
 		r.Get("/backups/{source}/{set}/{name}", h.getArtifact)
+
+		// Issue #419: the operator route out of FAILED. It carries
+		// requireCSRF and not requireDestructiveGate, exactly like the
+		// quarantine retry below and for the same reason one state along:
+		// it moves a journal row back into the pipeline and cannot reach
+		// a remote delete at all, because FAILED is only ever reached
+		// before COMMITTED.
+		r.With(requireCSRF).Post("/backups/{source}/{set}/{name}/retry", h.retryFailedIngestion)
 		r.Get("/activity", h.listActivity)
 		r.Get("/quarantine", h.listQuarantine)
 

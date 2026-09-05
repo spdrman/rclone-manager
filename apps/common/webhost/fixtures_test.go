@@ -170,6 +170,7 @@ type syncFakeBackend struct {
 	errOnCatalog         error
 	errOnRevalidate      error
 	errOnRetry           error
+	errOnRetryFailed     error
 	errOnMediumPreflight error
 	mediumPreflight      service.MediumPreflight
 	errOnReinstate       error
@@ -184,6 +185,8 @@ type syncFakeBackend struct {
 	lastOperationsLimit   int
 	lastRevalidated       string
 	lastRetried           string
+	lastRetriedFailed     string
+	lastRetryFailedNote   string
 	lastPreflightedMedium string
 	lastReinstated        string
 	lastRemoved           string
@@ -643,6 +646,17 @@ func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) e
 	return nil
 }
 
+func (f *syncFakeBackend) RetryFailedArtifact(_ context.Context, id, note string) error {
+	if f.errOnRetryFailed != nil {
+		return f.errOnRetryFailed
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRetriedFailed = id
+	f.lastRetryFailedNote = note
+	return nil
+}
+
 func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (service.MediumPreflight, error) {
 	if f.errOnMediumPreflight != nil {
 		return service.MediumPreflight{}, f.errOnMediumPreflight
@@ -916,6 +930,8 @@ func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.
 }
 
 func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) RetryFailedArtifact(context.Context, string, string) error { return nil }
 
 func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
 	return service.MediumPreflight{}, nil

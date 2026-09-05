@@ -59,6 +59,7 @@ var commands = map[string]func([]string) int{
 	"quarantine":   cmdQuarantine,
 	"unconfigured": cmdUnconfigured,
 	"medium":       cmdMedium,
+	"retry":        cmdRetry,
 	"restore":      cmdRestore,
 	"settings":     cmdSettings,
 	"version":      cmdVersion,
@@ -127,6 +128,12 @@ commands:
                                                   asks whether the medium's declared upload_verification can
                                                   actually be achieved there, and deletes the probe. Exits non-zero
                                                   when any check fails (#443)
+  retry <source/backup-set/artifact> [--note T]   put one FAILED backup back into the pipeline so it is attempted
+                                                  again. FAILED means an attempt did not finish, which is not the
+                                                  same thing as quarantine, so this is its own command and not a
+                                                  fourth quarantine verb. Nothing does this automatically: a blind
+                                                  re-transfer for a cause nothing has classified is a cost this
+                                                  manager does not take on its own (#419)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force

@@ -950,6 +950,32 @@ describe("httpApi requests the paths the contract declares", () => {
     return JSON.parse(init.body as string) as Record<string, unknown>;
   }
 
+  it("retryFailedIngestion posts to the backups path, not the quarantine one", async () => {
+    // The two are different facts about a backup and different refusals,
+    // so a client that sent a failed backup to the quarantine route would
+    // get ARTIFACT_NOT_QUARANTINED back and leave an operator reading a
+    // sentence about trust for a backup that is merely stuck.
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.retryFailedIngestion("production/postgres/bad.dump", "the NAS came back");
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/backups/production/postgres/bad.dump/retry");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toEqual({ note: "the NAS came back" });
+  });
+
+  it("retryFailedIngestion omits an absent note rather than sending an empty one", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.retryFailedIngestion("production/postgres/bad.dump");
+
+    expect(bodyOf(fetchMock)).toEqual({});
+  });
+
+
   it("reads the version from /system/version, not /version", async () => {
     const fetchMock = mockFetchOk({
       api_version: "v1", core_version: "1.4.0", commit: "abc1234",

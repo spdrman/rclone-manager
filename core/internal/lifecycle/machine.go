@@ -34,6 +34,18 @@ type Transition struct {
 // before COMMITTED, which means the remote delete has never been issued and
 // the source is presumptively still there to recover from.
 //
+// The first of those two is taken now (issue #419: retryfailed.go), and
+// what took it so long is worth recording, because for a long time this
+// paragraph described exits nothing in the product ever used, so an
+// artifact that reached FAILED simply stopped being worked on. It is an
+// OPERATOR who takes it, not a cycle, and that half is deliberate rather
+// than unfinished: a retry re-runs the transfer, and there is nothing
+// durable on a FAILED row that says whether the cause has cleared, so
+// spending a re-download on a guess is a cost this product refuses to take
+// on its own. Every lineage into FAILED is offered it, on exactly the
+// safety argument the sentence above already makes. The second exit,
+// FAILED -> QUARANTINED, is still unused.
+//
 // # QUARANTINED vs. QUARANTINED_LOST: does a source still exist to recover from
 //
 // QUARANTINED covers content that's suspect while a remote copy still
