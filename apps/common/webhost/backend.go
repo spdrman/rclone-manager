@@ -257,6 +257,14 @@ type BackupServiceClient interface {
 	// core/internal/lifecycle.
 	RevalidateArtifact(ctx context.Context, id string) (service.ArtifactCheck, error)
 	RetryArtifactIngestion(ctx context.Context, id string) error
+
+	// RetryFailedArtifact backs POST /api/v1/backups/{id}/retry (issue
+	// #419): the same re-entry into the pipeline RetryArtifactIngestion
+	// performs, one state along, for a backup that is FAILED rather than
+	// quarantined. FAILED declares that exit and nothing in this product
+	// had ever taken it, so a backup that reached it stopped being worked
+	// on permanently.
+	RetryFailedArtifact(ctx context.Context, id, note string) error
 	ReinstateArtifact(ctx context.Context, id, note string) (service.ArtifactReinstatement, error)
 
 	// PreflightStorageMedium backs POST

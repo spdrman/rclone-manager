@@ -22,6 +22,15 @@ var ErrArtifactNotFound = errors.New("service: artifact not found")
 // 500 for what is an ordinary, expected refusal.
 var ErrArtifactNotQuarantined = errors.New("service: artifact is not quarantined")
 
+// ErrArtifactNotFailed is returned when an artifact named for
+// RetryFailedArtifact is not in FAILED.
+//
+// Its own sentinel rather than a reuse of ErrArtifactNotQuarantined,
+// because the two say different things and the API layer gives them
+// different codes: one is "this backup is not waiting for your judgement",
+// the other is "this backup is not stuck".
+var ErrArtifactNotFailed = errors.New("service: artifact is not failed")
+
 // ErrArtifactIrrecoverable is returned by RetryArtifactIngestion for an
 // artifact whose remote source is already confirmed deleted, so nothing
 // remains anywhere to re-ingest.
@@ -299,6 +308,39 @@ func (b *BackupService) RevalidateArtifact(ctx context.Context, id string) (Arti
 		return ArtifactCheck{}, fmt.Errorf("service: revalidating %s: %w", id, err)
 	}
 	return ArtifactCheck{Checked: result.Checked, Passed: result.Passed, Reason: result.Reason}, nil
+}
+
+// RetryFailedArtifact puts one FAILED artifact back into DISCOVERED so the
+// ordinary pipeline attempts it again (issue #419).
+//
+// FAILED declares two exits and nothing in this product had ever taken
+// either, so an artifact that reached it stopped being worked on
+// permanently. This is the first of the two, and it is deliberately
+// operator-triggered: see internal/lifecycle/retryfailed.go for why no
+// cycle takes it on its own.
+//
+// It touches no remote object and removes no durable copy. FAILED is
+// reachable only before COMMITTED, so the remote delete has never been
+// issued and the source is presumptively still there to re-fetch from,
+// which is what makes the edge safe from every lineage that reaches it.
+func (b *BackupService) RetryFailedArtifact(ctx context.Context, id, note string) error {
+	artifactID, err := app.ParseArtifactID(id)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	}
+
+	err = b.state.Load().inner.RetryFailedIngestion(ctx, artifactID, note)
+	switch {
+	case errors.Is(err, state.ErrArtifactNotFound):
+		return fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	case errors.Is(err, app.ErrNotFailed):
+		return fmt.Errorf("%w: %s", ErrArtifactNotFailed, id)
+	case isUnconfiguredSet(err):
+		return fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
+	case err != nil:
+		return fmt.Errorf("service: retrying %s: %w", id, err)
+	}
+	return nil
 }
 
 // ArtifactCheck is RevalidateArtifact's verdict. Checked is false when

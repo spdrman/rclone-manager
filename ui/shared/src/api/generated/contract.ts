@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "1fbcd53bbb39d7f231ce77c6a2105b352481b2eeb4958137dd6434f248dd1657";
+export const CONTRACT_SHA256 = "a1a02952cffb6675abb1242a84979e6bebf1e3cc29a768618e71864219c45e94";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -52,6 +52,7 @@ export const WIRE_ERROR_CODES = [
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
+  "ARTIFACT_NOT_FAILED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -116,6 +117,7 @@ export const API_ERROR_CODES = [
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
+  "ARTIFACT_NOT_FAILED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -125,7 +127,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -623,6 +625,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       404: ["ARTIFACT_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "retryFailedIngestion",
+    method: "POST",
+    path: "/backups/{id}/retry",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "RetryFailedRequest",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["ARTIFACT_NOT_FOUND", "BACKUP_SET_NOT_FOUND"],
+      409: ["ARTIFACT_NOT_FAILED"],
       500: ["INTERNAL"],
     }
   },
@@ -1699,6 +1721,16 @@ export interface WireRetentionVerdict {
   reason: string;
   tier_selections?: WireRetentionTierSelection[];
   tiers?: string[];
+}
+
+/** POST /backups/{id}/retry's optional body. Everything about the
+ *  retry is decided by the backup's own recorded state, so there is
+ *  nothing here that changes what happens: the note is recorded
+ *  alongside the transition so a later failure of the same backup
+ *  carries the context of what was tried last time, rather than only
+ *  that something was. */
+export interface WireRetryFailedRequest {
+  note?: string;
 }
 
 /** POST /auth/password. Requires an already-authenticated session AND

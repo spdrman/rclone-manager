@@ -11,6 +11,7 @@
 package webhost
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -304,6 +305,62 @@ func (h *handlers) reinstateArtifact(w http.ResponseWriter, r *http.Request) {
 // livelocks instead of recovering.
 func (h *handlers) retryArtifactIngestion(w http.ResponseWriter, r *http.Request) {
 	if err := h.backend.RetryArtifactIngestion(r.Context(), artifactIDFrom(r)); err != nil {
+		writeArtifactActionError(w, err, "failed to return the backup to the pipeline")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxRetryFailedBodyBytes bounds POST /api/v1/backups/{id}/retry's body.
+// The only field is an operator's own sentence, so this is orders of
+// magnitude more headroom than any legitimate request needs while still
+// bounding how much of a malformed or hostile body is read before giving
+// up.
+const maxRetryFailedBodyBytes = 8 << 10 // 8 KiB
+
+// retryFailedIngestionRequest is POST /api/v1/backups/{id}/retry's
+// optional body. Nothing in it changes what the retry does: the note is
+// recorded alongside the transition so a later failure of the same backup
+// carries the context of what was tried last time.
+type retryFailedIngestionRequest struct {
+	Note string `json:"note,omitempty"`
+}
+
+// retryFailedIngestion is POST /api/v1/backups/{id}/retry: put one failed
+// backup back into the pipeline so it is attempted again (issue #419).
+//
+// FAILED declares two exits in the lifecycle graph and nothing in this
+// product had ever taken either, so a backup that reached it stopped being
+// worked on permanently. This is the first of the two, and it is
+// deliberately something an operator asks for rather than something a
+// cycle does: see core/internal/lifecycle/retryfailed.go for why a blind
+// re-transfer is a cost this product does not take on its own.
+//
+// It carries requireCSRF and NOT requireDestructiveGate, for
+// retryArtifactIngestion's reason one state along: it moves a journal row
+// from FAILED back to DISCOVERED and touches no backup data, no local file
+// and no remote object. It cannot reach a remote delete at all, because
+// FAILED is only reachable before COMMITTED and COMMITTED is the only
+// state a delete can be reached from.
+//
+// An empty body is legitimate and is what a client with no note to add
+// sends, so a missing body is not a 400.
+func (h *handlers) retryFailedIngestion(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRetryFailedBodyBytes)
+
+	var req retryFailedIngestionRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeDecodeError(w, err, maxRetryFailedBodyBytes)
+			return
+		}
+	}
+	if err := h.backend.RetryFailedArtifact(r.Context(), artifactIDFrom(r), req.Note); err != nil {
+		if errors.Is(err, service.ErrArtifactNotFailed) {
+			writeError(w, http.StatusConflict, "ARTIFACT_NOT_FAILED",
+				"this backup is not stuck: it is making progress, already finished, or quarantined and waiting for a judgement")
+			return
+		}
 		writeArtifactActionError(w, err, "failed to return the backup to the pipeline")
 		return
 	}

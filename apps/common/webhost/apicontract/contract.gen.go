@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "1fbcd53bbb39d7f231ce77c6a2105b352481b2eeb4958137dd6434f248dd1657"
+const ContractSHA256 = "a1a02952cffb6675abb1242a84979e6bebf1e3cc29a768618e71864219c45e94"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -78,6 +78,7 @@ const (
 	ErrorCodeRestoreUnavailable              ErrorCode = "RESTORE_UNAVAILABLE"
 	ErrorCodeCopyNotFound                    ErrorCode = "COPY_NOT_FOUND"
 	ErrorCodeMediumNotFound                  ErrorCode = "MEDIUM_NOT_FOUND"
+	ErrorCodeArtifactNotFailed               ErrorCode = "ARTIFACT_NOT_FAILED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -114,6 +115,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeRestoreUnavailable,
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
+	ErrorCodeArtifactNotFailed,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -174,6 +176,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeRestoreUnavailable,
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
+	ErrorCodeArtifactNotFailed,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -181,7 +184,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeArtifactNotFailed},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -478,6 +481,18 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			404: {ErrorCodeArtifactNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "retryFailedIngestion", Method: "POST", Path: "/backups/{id}/retry",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "RetryFailedRequest", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
+			409: {ErrorCodeArtifactNotFailed},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1401,6 +1416,16 @@ type RetentionVerdict struct {
 	Tiers          []string                 `json:"tiers,omitempty"`
 }
 
+// RetryFailedRequest is POST /backups/{id}/retry's optional body. Everything about the
+// retry is decided by the backup's own recorded state, so there is
+// nothing here that changes what happens: the note is recorded
+// alongside the transition so a later failure of the same backup
+// carries the context of what was tried last time, rather than only
+// that something was.
+type RetryFailedRequest struct {
+	Note string `json:"note,omitempty"`
+}
+
 // RotatePasswordRequest is POST /auth/password. Requires an already-authenticated session AND
 // the current password: holding a cookie is not enough.
 type RotatePasswordRequest struct {
@@ -1673,6 +1698,7 @@ var SchemaTypes = map[string]any{
 	"RetentionTier":               RetentionTier{},
 	"RetentionTierSelection":      RetentionTierSelection{},
 	"RetentionVerdict":            RetentionVerdict{},
+	"RetryFailedRequest":          RetryFailedRequest{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
 	"RunningWork":                 RunningWork{},
 	"SessionResponse":             SessionResponse{},

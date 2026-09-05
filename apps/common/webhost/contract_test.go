@@ -102,7 +102,11 @@ var contractBindings = map[string]contractBinding{
 	"listQuarantine":         {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
 	"revalidateArtifact":     {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
 	"retryArtifactIngestion": {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
-	"reinstateArtifact":      {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
+	// Issue #419's route out of FAILED. It binds a request type and no
+	// response type: the note is the only thing a caller can send, and a
+	// 204 leaves no resource to describe.
+	"retryFailedIngestion": {"/api/v1/backups/{source}/{set}/{name}/retry", retryFailedIngestionRequest{}, nil, "/api/v1/backups/src/set-1/backup.dump/retry"},
+	"reinstateArtifact":    {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
 	// Issue #443's medium preflight. Its path parameter is a single
 	// segment, unlike the artifact routes above, because a medium id is a
 	// single segment: config refuses one carrying a separator.

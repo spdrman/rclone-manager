@@ -90,7 +90,8 @@
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
           "COPY_NOT_FOUND",
-          "MEDIUM_NOT_FOUND"
+          "MEDIUM_NOT_FOUND",
+          "ARTIFACT_NOT_FAILED"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -134,7 +135,8 @@
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
           "COPY_NOT_FOUND": "wire",
-          "MEDIUM_NOT_FOUND": "wire"
+          "MEDIUM_NOT_FOUND": "wire",
+          "ARTIFACT_NOT_FAILED": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -163,7 +165,8 @@
             "ARTIFACT_NOT_QUARANTINED",
             "ARTIFACT_IRRECOVERABLE",
             "REINSTATEMENT_REFUSED",
-            "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+            "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+            "ARTIFACT_NOT_FAILED"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -2740,6 +2743,18 @@
           "ok",
           "checks"
         ]
+      },
+      "RetryFailedRequest": {
+        "type": "object",
+        "description": "POST /backups/{id}/retry's optional body. Everything about the retry is decided by the backup's own recorded state, so there is nothing here that changes what happens: the note is recorded alongside the transition so a later failure of the same backup carries the context of what was tried last time, rather than only that something was.",
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "An operator's own explanation for why this retry is worth making (\"replaced the failing credential\", \"the NAS came back\")."
+          }
+        }
       }
     },
     "responses": {}
@@ -6843,6 +6858,118 @@
             },
             "x-error-codes": [
               "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backups/{id}/retry": {
+      "post": {
+        "operationId": "retryFailedIngestion",
+        "summary": "Put one failed backup back into the pipeline so it is attempted again.",
+        "tags": [
+          "backups"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part source/set/name identity."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryFailedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success. No content."
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND, BACKUP_SET_NOT_FOUND. The second is a backup that exists under a backup set whose configuration has since been removed (issue #391): sending it back to the pipeline under a set no cycle walks would leave it somewhere nothing picks up and no recovery path reaches, so it is refused by name. Create a backup set with the same source and name to act on it again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND",
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: ARTIFACT_NOT_FAILED. The backup is not stuck: it is either making progress, already finished, or quarantined and waiting for a judgement, which is a different action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FAILED"
             ]
           },
           "500": {
