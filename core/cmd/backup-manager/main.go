@@ -96,11 +96,13 @@ commands:
                                                   preview GFS/last-known-good retention decisions; each retention flag
                                                   overrides the loaded config's own resolved value for this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
+  validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   validate <source/backup-set/artifact> [--content]
-                                                  re-check one artifact's durable copy, wherever it is. A copy on a
-                                                  storage medium is checked at the strongest class that costs nothing
-                                                  (#435); --content downloads the object and re-hashes it, which costs
-                                                  egress, so FR-31 makes it something an operator asks for
+                                                  where that copy is on a storage medium instead, check it there: the
+                                                  strongest class that costs nothing, by default, and with --content a
+                                                  full download and re-hash, which costs egress, so FR-31 makes it
+                                                  something an operator asks for rather than something that happens
+                                                  (#435)
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
                                                   act on one quarantined artifact: revalidate re-checks it and moves
