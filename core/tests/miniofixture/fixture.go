@@ -88,13 +88,60 @@ type Options struct {
 	InNetwork bool
 }
 
+// infraMarker is the fixed, greppable string every infrastructure refusal
+// in this fixture carries. It is the same literal in sftpfixture and in
+// tests/dockerlease on purpose: a gate log sorts into "the machine broke"
+// and "the product broke" with one grep, and a marker that varied by
+// package would not.
+const infraMarker = "INFRA:"
+
+// dockerUnavailable ends the calling test for a docker that is not there to
+// be used, and decides whether that is a skip or a failure.
+//
+// On a machine that simply has no docker, skipping is honest: this fixture
+// is evidence for the gate, not a requirement on every developer's laptop.
+// Inside the gate it is the opposite. Docker is a declared prerequisite
+// there, so the same condition means the gate's own machine is broken, and
+// a skip quietly deletes this suite from the run while the run goes on
+// printing ok.
+//
+// That is not hypothetical (#456). Start used to fail a WEDGED daemon,
+// three lines above a skip for an UNREACHABLE one, and a Docker VM that
+// dies mid-run is unreachable rather than wedged. In one stored gate log it
+// did exactly that: 13 of the 14 conformance mutation cells printed
+// `ok ... 0.08s` against a dead daemon, and one cell happened to refuse,
+// which is the only reason anybody noticed.
+//
+// So under the gate this is a failure carrying infraMarker. The one way
+// past it is CI_LOCAL_SKIP_DOCKER=1, the gate's own documented opt-out for
+// a run with the daemon down, which already ledgers that run as INCOMPLETE.
+func dockerUnavailable(t *testing.T, reason string, args ...any) {
+	t.Helper()
+	detail := fmt.Sprintf(reason, args...)
+	if gateRequiresDocker() {
+		t.Fatalf("%s miniofixture: %s\nDocker is a declared prerequisite of this gate (CI_LOCAL=1), so this is an INFRASTRUCTURE failure and not a product one: the machine could not offer a docker daemon. Skipping here would take the MinIO suite out of the run while the gate still printed ok, which is #456.", infraMarker, detail)
+	}
+	t.Skipf("miniofixture: SKIPPING (missing capability: %s)", detail)
+}
+
+// gateRequiresDocker reports whether this process is inside the local gate,
+// which declares docker a prerequisite. scripts/ci-local.sh exports
+// CI_LOCAL=1. CI_LOCAL_SKIP_DOCKER=1 is that same gate's documented opt-out
+// for a run with the daemon down, and it already ends the run INCOMPLETE,
+// so it is honoured here rather than overruled: a fixture that refused
+// anyway would make that flag a lie.
+func gateRequiresDocker() bool {
+	return os.Getenv("CI_LOCAL") == "1" && os.Getenv("CI_LOCAL_SKIP_DOCKER") != "1"
+}
+
 // Start brings up a MinIO server with one empty bucket and returns once it
 // answers its own liveness endpoint.
 //
-// It SKIPS when docker is genuinely absent, and FAILS when the daemon is
-// present but not answering, which is sftpfixture's distinction and it is
-// the one that matters: skipping a wedged daemon would quietly delete this
-// suite from the gate, which is the exact failure #160 exists to stop.
+// It SKIPS when docker is genuinely absent from a developer's machine, and
+// FAILS when it is absent from the gate's, where docker is a declared
+// prerequisite. A wedged daemon fails either way. Both refusals carry
+// infraMarker. Skipping any of them would quietly delete this suite from
+// the gate, which is the failure #160 exists to stop and #456 reopened.
 func Start(t *testing.T) *Fixture {
 	t.Helper()
 	return StartWith(t, Options{})
@@ -109,13 +156,13 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 	}
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("miniofixture: SKIPPING (missing capability: %q not found on PATH): %v", "docker", err)
+		dockerUnavailable(t, "%q not found on PATH: %v", "docker", err)
 	}
 	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
 		if strings.Contains(err.Error(), "did not answer") {
-			t.Fatalf("miniofixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", dockerInfoTimeout, err, errOut)
+			t.Fatalf("%s miniofixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
 		}
-		t.Skipf("miniofixture: SKIPPING (missing capability: docker daemon not reachable): %v\n%s", err, errOut)
+		dockerUnavailable(t, "docker daemon not reachable: %v\n%s", err, errOut)
 	}
 
 	// Reclaim anything a previously KILLED run left behind (#150) before
