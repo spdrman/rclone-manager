@@ -1,6 +1,8 @@
 package retention
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,6 +289,21 @@ func scanStateRuns(t *testing.T) []stateRun {
 			continue
 		}
 		blob, err := os.ReadFile(filepath.Join(root, rel))
+		if errors.Is(err, fs.ErrNotExist) {
+			// The core dependency proof (§7.1) deletes apps/ outright
+			// and re-runs this module's tests, to show core stands up
+			// with nothing above it. git still lists those paths, so a
+			// tracked file can be legitimately absent. Skipping keeps
+			// this a core-only test; failing here would make core
+			// depend on apps/ existing, which is the rule the proof
+			// exists to enforce.
+			//
+			// The scan cannot quietly become empty this way:
+			// TestTheProseScanFindsSomethingToCheck requires it to
+			// find runs, and every file that carries one lives in
+			// core/ or docs/.
+			continue
+		}
 		if err != nil {
 			t.Fatalf("reading %s: %v", rel, err)
 		}
