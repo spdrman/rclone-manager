@@ -31,10 +31,10 @@ func unreachableSource() error {
 		fmt.Errorf(`source "production": NewFs: couldn't connect SSH: dial tcp 192.0.2.1:22: %w`, context.DeadlineExceeded))
 }
 
-// mustGet reads the artifact's current journal row, which is what a cycle
+// mustGetRow reads the artifact's current journal row, which is what a cycle
 // starts from: every assertion here is against what was durably recorded,
 // never against what a call happened to return.
-func mustGet(t *testing.T, j Journal, id model.ArtifactID) state.Record {
+func mustGetRow(t *testing.T, j Journal, id model.ArtifactID) state.Record {
 	t.Helper()
 	rec, err := j.Get(context.Background(), id)
 	if err != nil {
@@ -71,12 +71,12 @@ func TestVerificationAgainstAnUnreachableSource_StallsThenReachesAnOperator(t *t
 	// --- cycles 1 and 2: the copy lands, the hash call cannot be made,
 	// and the artifact stays exactly where it honestly is.
 	for cycle := 1; cycle <= 2; cycle++ {
-		got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact))
+		got := svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact))
 		if got != lifecycle.Verifying {
 			t.Fatalf("cycle %d left the artifact at %s, want %s: an unreachable source is not evidence about the artifact",
 				cycle, got, lifecycle.Verifying)
 		}
-		cur := mustGet(t, journal, rec.Artifact)
+		cur := mustGetRow(t, journal, rec.Artifact)
 		if cur.RetryCount != cycle {
 			t.Fatalf("cycle %d: RetryCount = %d, want %d: the stall has to be counted or nothing bounds it", cycle, cur.RetryCount, cycle)
 		}
@@ -94,11 +94,11 @@ func TestVerificationAgainstAnUnreachableSource_StallsThenReachesAnOperator(t *t
 	// --- cycle 3: the budget is spent. The artifact is handed to an
 	// operator rather than left in progress forever or stranded in FAILED,
 	// which has no route back.
-	if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Quarantined {
+	if got := svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact)); got != lifecycle.Quarantined {
 		t.Fatalf("cycle 3 left the artifact at %s, want %s", got, lifecycle.Quarantined)
 	}
 
-	held := mustGet(t, journal, rec.Artifact)
+	held := mustGetRow(t, journal, rec.Artifact)
 	if held.RetryCount != 3 {
 		t.Fatalf("RetryCount = %d, want 3", held.RetryCount)
 	}
@@ -118,7 +118,7 @@ func TestVerificationAgainstAnUnreachableSource_StallsThenReachesAnOperator(t *t
 	if err := svc.RetryQuarantinedIngestion(ctx, rec.Artifact); err != nil {
 		t.Fatalf("RetryQuarantinedIngestion: %v", err)
 	}
-	back := mustGet(t, journal, rec.Artifact)
+	back := mustGetRow(t, journal, rec.Artifact)
 	if back.State != string(lifecycle.Discovered) {
 		t.Fatalf("after the retry the artifact is %s, want %s", back.State, lifecycle.Discovered)
 	}
@@ -207,8 +207,8 @@ func TestVerificationStall_SurvivesACrashWithoutSpendingTwoAttempts(t *testing.T
 	tr.remoteHashErr = unreachableSource()
 
 	// The first cycle records the stall.
-	svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact))
-	after := mustGet(t, journal, rec.Artifact)
+	svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact))
+	after := mustGetRow(t, journal, rec.Artifact)
 	if after.RetryCount != 1 {
 		t.Fatalf("RetryCount = %d after one cycle, want 1", after.RetryCount)
 	}
@@ -228,7 +228,7 @@ func TestVerificationStall_SurvivesACrashWithoutSpendingTwoAttempts(t *testing.T
 	} else if !errors.As(err, &stall) {
 		t.Fatalf("the replay returned %v, want a stall", err)
 	}
-	if replayed := mustGet(t, journal, rec.Artifact); replayed.RetryCount != 1 {
+	if replayed := mustGetRow(t, journal, rec.Artifact); replayed.RetryCount != 1 {
 		t.Fatalf("RetryCount = %d after replaying one attempt, want 1: one outage must not cost two attempts", replayed.RetryCount)
 	}
 }
