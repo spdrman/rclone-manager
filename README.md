@@ -60,6 +60,7 @@ the way its predecessor did.
 | `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
+| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because a 180-day minimum billing period is not a thing to discover empirically (issue #443) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
 
@@ -1257,7 +1258,7 @@ Formatting was only the half of that blind spot that happened to be visible. Thi
 and lints per module too, so those same two files had never been vetted or linted by anything
 either, in a repository whose gate otherwise vets and lints everything.
 `scripts/architecture/check-unowned-go.sh` closes that, in a few seconds and without a
-`scripts/go.mod`: `go vet` needs no module at all when it is handed file paths, and
+a `go.mod` of its own under `scripts/`: `go vet` needs no module at all when it is handed file paths, and
 `golangci-lint` gets a throwaway module per unowned directory, which resolves offline because
 every unowned file here is standard-library only. Both files pass today, so nothing had to be
 fixed, only looked at. Its controls live with the other architecture controls in
@@ -1391,6 +1392,7 @@ core/internal/
   discovery/     turns a raw remote listing into artifacts proven complete
   health/        process and backup-set health computation
   lifecycle/     the state machine plus every step: transfer, verify, commit, delete
+  mediumcheck/   proves a declared storage medium can actually take and return a backup, before a real one arrives
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging
