@@ -19,7 +19,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
-// TestTheArchiveClassSetAgreesWithInternalArchive is #442's third
+// TestTheArchiveClassSetMatchesInternalArchive is #442's third
 // acceptance line, and both directions cost something different when they
 // break.
 //
@@ -32,7 +32,7 @@ import (
 // their tier cannot deliver to a class that reads on demand perfectly
 // well. GLACIER_IR is the row that makes that a real risk rather than a
 // theoretical one.
-func TestTheArchiveClassSetAgreesWithInternalArchive(t *testing.T) {
+func TestTheArchiveClassSetMatchesInternalArchive(t *testing.T) {
 	fromConfig := config.ArchiveStorageClasses()
 	sort.Strings(fromConfig)
 

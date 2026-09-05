@@ -1560,7 +1560,9 @@ func (v *validator) validateTierMedium(path string, t *RetentionTier) {
 // it would report one dangling global medium once per backup set, turning
 // a single mistake into as many messages as the deployment has sets.
 func (v *validator) validateMediumReferences(c *Config, declared map[string]bool) {
-	v.validateTierMediumReferences("retention", &c.Retention, declared)
+	archived := archiveClassMediums(c.StorageMediums)
+
+	v.validateTierMediumReferences("retention", &c.Retention, declared, archived)
 
 	for i := range c.Sources {
 		for j := range c.Sources[i].BackupSets {
@@ -1573,9 +1575,33 @@ func (v *validator) validateMediumReferences(c *Config, declared map[string]bool
 			// the operator's own key: an override that spells its chain
 			// with a tiers list resolves index for index.
 			path := fmt.Sprintf("sources[%d].backup_sets[%d].retention", i, j)
-			v.validateTierMediumReferences(path, &bs.Retention, declared)
+			v.validateTierMediumReferences(path, &bs.Retention, declared, archived)
 		}
 	}
+}
+
+// archiveClassMediums maps each declared medium that writes with an
+// archive storage class onto the class it writes with.
+//
+// A class this build does not recognise is left out entirely, and that is
+// about the message rather than about safety. validateStorageMediums has
+// already refused it at storage_mediums[i].storage_class, which is the key
+// the operator has to edit; reporting it a second time as "this tier
+// delivers to an archive class" would send them to the retention chain to
+// fix a typo somewhere else, and the config fails to load either way.
+func archiveClassMediums(mediums []StorageMedium) map[string]string {
+	out := map[string]string{}
+	for i := range mediums {
+		m := &mediums[i]
+		class := m.EffectiveStorageClass()
+		if !validStorageClasses[class] {
+			continue
+		}
+		if isArchiveStorageClass(class) {
+			out[m.ID] = class
+		}
+	}
+	return out
 }
 
 // validateTierMediumReferences resolves each tier's medium against the
@@ -1595,8 +1621,10 @@ func (v *validator) validateMediumReferences(c *Config, declared map[string]bool
 // A declared medium that no tier references is deliberately NOT reported.
 // FR-27 calls it legal: an operator staging a destination before pointing
 // a tier at it has written a valid config, and refusing it would mean the
-// only way to add a medium is to adopt it in the same edit.
-func (v *validator) validateTierMediumReferences(path string, r *Retention, declared map[string]bool) {
+// only way to add a medium is to adopt it in the same edit. An
+// archive-class one is the case that makes it more than a convenience;
+// see validateTierIsNotBoundToAnArchiveClass.
+func (v *validator) validateTierMediumReferences(path string, r *Retention, declared map[string]bool, archived map[string]string) {
 	for i := range r.Tiers {
 		t := &r.Tiers[i]
 		if t.Medium == "" || t.Medium == MediumLocal {
@@ -1604,8 +1632,65 @@ func (v *validator) validateTierMediumReferences(path string, r *Retention, decl
 		}
 		if !declared[t.Medium] {
 			v.addf("%s.tiers[%d]: medium %q is not declared by any storage_mediums entry; a tier's medium must name one, and there is no fall-back to local for a name that does not resolve", path, i, t.Medium)
+			continue
 		}
+		v.validateTierIsNotBoundToAnArchiveClass(fmt.Sprintf("%s.tiers[%d]", path, i), t, archived)
 	}
+}
+
+// validateTierIsNotBoundToAnArchiveClass refuses a retention tier that
+// delivers to a medium writing with an archive storage class (#442).
+//
+// # Why a schema check knows what a move does
+//
+// This is validateUploadVerificationIsAchievable's argument again, over a
+// different impossible pairing, and it is here for the same reason: the
+// value is spelled perfectly and describes something that can never
+// happen, and the place the product would otherwise say so is the middle
+// of a move, once per artifact per cycle, in a log line, for ever, while
+// `backup-manager check` said "config OK" on the way in.
+//
+// What cannot happen is #428's chain of four facts, and every link is
+// read from the code that defines it. A source copy is deleted only after
+// the destination reaches VERIFIED; VERIFIED means the destination
+// achieved the class its medium requires; upload_verification has exactly
+// two spellings and both map to a class that needs to READ the object; an
+// object written to GLACIER or DEEP_ARCHIVE is archived the instant it
+// lands, so nothing can read it until a restore has been asked for and has
+// finished. And even supposing the move were allowed to land, FR-30's
+// standing invariant needs an ACTIVE placement at content class, which an
+// archive-class copy cannot hold either.
+//
+// # It is not free while it sits there
+//
+// #437 made the engine refuse this pairing at plan time, so the loop it
+// used to drive (two uploads and three deletes per cycle, for ever, each
+// discarded DEEP_ARCHIVE copy billed for a 180-day minimum) has stopped.
+// This moves the same refusal one layer earlier, to the place an operator
+// finds out before the deployment starts rather than after it has run a
+// cycle, and the message deliberately reuses the engine's own words for
+// the mechanism so the two refusals cannot come to disagree.
+//
+// # The scope is the PAIRING, never the declaration
+//
+// A declared archive-class medium that no tier names stays valid, and
+// that is not leniency. An operator with objects already on DEEP_ARCHIVE
+// declares the medium so this product can see them and restore them, and
+// points no tier at it because nothing is going to be delivered there.
+// Refusing the declaration would make the one configuration the restore
+// operation exists for unwritable.
+func (v *validator) validateTierIsNotBoundToAnArchiveClass(path string, t *RetentionTier, archived map[string]string) {
+	class, ok := archived[t.Medium]
+	if !ok {
+		return
+	}
+	v.addf("%s: tier %q delivers to medium %q, which writes with storage_class %s; a copy written to %s is "+
+		"archived the instant it lands, so this product can never read it back to verify the copy, no move to "+
+		"this tier can reach VERIFIED, and FR-30's standing invariant has no readable ACTIVE copy to rest on. "+
+		"Point this tier at a medium whose storage_class is one of: %s. Leave the %s medium declared if you have "+
+		"objects on it already: a declared archive-class medium that no tier delivers to is legal, and restoring "+
+		"from one is what it is for",
+		path, t.Name, t.Medium, class, class, nonArchiveStorageClassList, class)
 }
 
 // validStorageMediumTypes is the closed set StorageMedium.Type accepts.
@@ -1647,6 +1732,25 @@ var storageClasses = []string{
 }
 
 var storageClassList = strings.Join(storageClasses, ", ")
+
+// nonArchiveStorageClassList is every class a retention tier's medium may
+// write with, for the refusal that names the ones it may not.
+//
+// It is derived from the two lists rather than typed out a third time, so
+// a class added to either one cannot leave this message stale. A refusal
+// that says "use one of these instead" and omits a class an operator could
+// have used is a worse answer than no suggestion at all.
+var nonArchiveStorageClassList = strings.Join(nonArchiveStorageClasses(), ", ")
+
+func nonArchiveStorageClasses() []string {
+	out := make([]string, 0, len(storageClasses))
+	for _, c := range storageClasses {
+		if !isArchiveStorageClass(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 // StorageClasses returns every value StorageMedium.StorageClass accepts,
 // in the fixed order above, as a fresh slice the caller may keep or sort

@@ -79,6 +79,34 @@ func (m twoMediums) Resolve(id string) (transport.Medium, placement.Class, error
 	return transport.Medium{}, "", fmt.Errorf("no medium %q is configured", id)
 }
 
+// recordingStore counts OpenObject per key.
+//
+// The fixture's own openCount cannot answer the question these cells ask.
+// A completed move opens the DESTINATION twice, once to verify it and
+// once to re-verify it immediately before the source delete, so a
+// whole-store counter cannot tell "the source was downloaded to stage it"
+// from "the destination was read back to verify it", and a cell asserting
+// no download would pass or fail on which phase the move reached.
+type recordingStore struct {
+	placement.MediumStore
+
+	mu    sync.Mutex
+	opens map[string]int
+}
+
+func (s *recordingStore) OpenObject(ctx context.Context, medium transport.Medium, key string) (io.ReadCloser, error) {
+	s.mu.Lock()
+	s.opens[key]++
+	s.mu.Unlock()
+	return s.MediumStore.OpenObject(ctx, medium, key)
+}
+
+func (s *recordingStore) opensOf(key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opens[key]
+}
+
 // recordingLocal remembers every locator the engine wrote to or removed
 // from local disk, which is how the cells below assert that the staging
 // copy never touched the artifact's own path.
@@ -109,6 +137,7 @@ type twoMediumFixture struct {
 	a, b  *transport.Medium
 	keyB  string
 	local *recordingLocal
+	store *recordingStore
 }
 
 // newTwoMediumFixture builds the world every cell here runs in: an
@@ -135,13 +164,15 @@ func newTwoMediumFixture(t *testing.T, opts fixtureOpts) *twoMediumFixture {
 
 	local := &recordingLocal{LocalStore: f.engine.Local}
 	f.engine.Local = local
+	store := &recordingStore{MediumStore: f.engine.Store, opens: map[string]int{}}
+	f.engine.Store = store
 
 	keyB, err := transport.MediumKey(b.Prefix, f.artifact)
 	if err != nil {
 		t.Fatalf("computing the second medium's key: %v", err)
 	}
 
-	tf := &twoMediumFixture{fixture: f, a: a, b: b, keyB: keyB, local: local}
+	tf := &twoMediumFixture{fixture: f, a: a, b: b, keyB: keyB, local: local, store: store}
 
 	// The first hop, run for real. Everything below is about what happens
 	// to an artifact whose one ACTIVE copy is on a medium, and seeding
@@ -340,16 +371,15 @@ func TestTheStagingCopyIsNeverTheCopyTheInvariantRestsOn(t *testing.T) {
 func TestAMediumToMediumMoveWithNoRoomToStageIsRefused(t *testing.T) {
 	f := newTwoMediumFixture(t, fixtureOpts{})
 
-	opensBefore := f.medium.openCount()
+	opensBefore := f.store.opensOf(f.key)
 	uploadsBefore := f.medium.uploadCount()
 	f.engine.StagingFreeBytes = func(string) (int64, error) { return int64(len(f.content)) - 1, nil }
 
 	f.moveToB()
 	f.guard.fail()
 
-	if f.medium.openCount() != opensBefore {
-		t.Errorf("the engine read the source object %d time(s) after deciding it had nowhere to put it",
-			f.medium.openCount()-opensBefore)
+	if got := f.store.opensOf(f.key) - opensBefore; got != 0 {
+		t.Errorf("the engine read the source object %d time(s) after deciding it had nowhere to put it", got)
 	}
 	if f.medium.uploadCount() != uploadsBefore {
 		t.Errorf("the engine uploaded %d time(s) with no room to stage", f.medium.uploadCount()-uploadsBefore)
@@ -398,11 +428,11 @@ func TestAnUnreadableArchiveSourceIsRefusedWithoutSpendingAGet(t *testing.T) {
 	f.medium.archiveRefusesReads = true
 	f.a.StorageClass = config.StorageClassDeepArchive
 
-	opensBefore := f.medium.openCount()
+	opensBefore := f.store.opensOf(f.key)
 	f.moveToB()
 	f.guard.fail()
 
-	if got := f.medium.openCount() - opensBefore; got != 0 {
+	if got := f.store.opensOf(f.key) - opensBefore; got != 0 {
 		t.Errorf("the engine spent %d GET(s) on an object its own class table says cannot be read", got)
 	}
 	if f.medium.has(f.keyB) {
@@ -473,11 +503,11 @@ func TestAGoodStagingCopyIsReusedRatherThanDownloadedAgain(t *testing.T) {
 		t.Fatalf("planting a good staging copy: %v", err)
 	}
 
-	opensBefore := f.medium.openCount()
+	opensBefore := f.store.opensOf(f.key)
 	f.moveToB()
 	f.guard.fail()
 
-	if got := f.medium.openCount() - opensBefore; got != 0 {
+	if got := f.store.opensOf(f.key) - opensBefore; got != 0 {
 		t.Errorf("the engine downloaded the source %d time(s) over a staging copy that already hashed correctly", got)
 	}
 	if got := string(f.medium.bytesAt(f.keyB)); got != string(f.content) {
@@ -489,9 +519,49 @@ func TestAGoodStagingCopyIsReusedRatherThanDownloadedAgain(t *testing.T) {
 // claim on the path nobody looks at.
 //
 // A staging area that only empties on the happy path fills up with one
-// artifact-sized file per failed move, on the backup set's own disk,
+// artifact-sized file per abandoned move, on the backup set's own disk,
 // which is the disk the next move's size check is about.
+//
+// The world is the one where a leftover can actually exist. In a single
+// process the copy phase removes its staging file on every exit, so the
+// only way one survives is a crash between the download and the upload:
+// the file is here, the move row still says COPYING, and the process that
+// wrote both is gone. This plants exactly that, and then makes the resumed
+// attempt abandon rather than finish, by taking the source out of reach
+// the way a bucket lifecycle rule would.
 func TestAnAbandonedStagedMoveLeavesNothingInTheStagingArea(t *testing.T) {
+	f := newTwoMediumFixture(t, fixtureOpts{})
+
+	if err := os.MkdirAll(f.stagingDir(), 0o750); err != nil {
+		t.Fatalf("creating the staging area: %v", err)
+	}
+	if err := os.WriteFile(f.stagingPath(), f.content, 0o600); err != nil {
+		t.Fatalf("planting the staging copy a crash would leave: %v", err)
+	}
+	f.medium.archiveRefusesReads = true
+	f.a.StorageClass = config.StorageClassGlacier
+
+	f.moveToB()
+	f.guard.fail()
+
+	mv := f.moves()[len(f.moves())-1]
+	if placement.Phase(mv.Phase) != placement.Abandoned {
+		t.Fatalf("the move is at %s, want ABANDONED once the source stopped being readable", mv.Phase)
+	}
+	if leftovers := f.stagingLeftovers(); len(leftovers) != 0 {
+		t.Errorf("the staging area holds %v after an abandoned move", leftovers)
+	}
+	if !f.medium.has(f.key) {
+		t.Error("THE SOURCE OBJECT WAS DELETED for a move that never landed")
+	}
+}
+
+// TestAFailedUploadKeepsNothingStagedAndKeepsTheSource is the ordinary
+// failure, which is not abandoned and must not be: the reason a copy fails
+// is usually transient and the next cycle should try again.
+//
+// What it must not do is leave the staging copy behind while it waits.
+func TestAFailedUploadKeepsNothingStagedAndKeepsTheSource(t *testing.T) {
 	f := newTwoMediumFixture(t, fixtureOpts{})
 	f.medium.uploadErr = errors.New("the endpoint refused the upload")
 
@@ -499,14 +569,17 @@ func TestAnAbandonedStagedMoveLeavesNothingInTheStagingArea(t *testing.T) {
 	f.guard.fail()
 
 	mv := f.moves()[len(f.moves())-1]
-	if placement.Phase(mv.Phase) != placement.Abandoned {
-		t.Fatalf("the move is at %s, want ABANDONED after every copy attempt failed", mv.Phase)
+	if placement.Phase(mv.Phase) != placement.Copying {
+		t.Fatalf("the move is at %s; a failed copy stays at %s so the next cycle retries it", mv.Phase, placement.Copying)
+	}
+	if mv.Error == "" {
+		t.Error("the move row carries no reason, so an operator reading the move journal has no account of why nothing moved")
 	}
 	if leftovers := f.stagingLeftovers(); len(leftovers) != 0 {
-		t.Errorf("the staging area holds %v after an abandoned move", leftovers)
+		t.Errorf("the staging area holds %v after a failed upload; a move waiting to be retried must not hold the artifact's whole size on the backup set's disk while it waits", leftovers)
 	}
 	if !f.medium.has(f.key) {
-		t.Error("THE SOURCE OBJECT WAS DELETED for a move that never landed")
+		t.Error("THE SOURCE OBJECT WAS DELETED for a move whose upload never landed")
 	}
 }
 
