@@ -1,3 +1,27 @@
+// These tests hold the line that makes runtime profiles an adapter
+// mechanism rather than a fork mechanism, and they are grouped by which
+// half of that they defend.
+//
+// Selection covers the refusals: an unknown or empty selector must not
+// fall back to generic, because a deployment that asked for a gateway
+// profile and silently got local authentication is a security regression
+// nobody would see. Inertness is the structural half, and it is a
+// reflect-based allow-list rather than a marker scan because the scanner
+// in scripts/architecture never visits this package: layers.conf files
+// apps/common/platform under the core layer, and that scanner only reads
+// the platform and distribution layers. Fail-closed wiring and the
+// trusted-gateway boundary cover the two ways a wrong answer here becomes
+// an unauthenticated or misattributed destructive API.
+//
+// Three of the assertions here carry an explicit positive control, and
+// they are the three whose natural failure mode is passing. A checker that
+// returns nil, an Adapter that refuses everything and a Sanitize that
+// deletes every header would all satisfy their own tests; the controls are
+// what make the green mean something.
+//
+// The package is profile_test on purpose. Everything here is reachable
+// from outside, and a test with access to the unexported adapter struct
+// could assert on a shape the callers who actually matter never see.
 package profile_test
 
 import (
@@ -122,6 +146,17 @@ var allowedProfileFields = map[string]string{
 // whose whole job is to describe host-dependent behaviour.
 var corePolicyMarkers = []string{"retention", "lifecycle", "validat", "catalog", "backupset", "backuppolicy", "schedule", "prune", "quarantine"}
 
+// policyFields reports every field of typ that a runtime profile has no
+// business carrying, checked two ways because the two catch different
+// mistakes. The allow-list catches a field nobody has thought about, which
+// is the common case; the marker scan catches a field somebody added to
+// the allow-list without noticing it names something core owns, which is
+// the case where the reviewer was the problem.
+//
+// It takes the type as a parameter rather than reading profile.Profile
+// directly so the same code can be pointed at a deliberately forked struct
+// and shown to fail. A checker only used against the thing it is meant to
+// approve of has no way to demonstrate it can disapprove.
 func policyFields(typ reflect.Type, allowed map[string]string) []string {
 	var found []string
 	for i := range typ.NumField() {

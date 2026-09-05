@@ -1,3 +1,19 @@
+// These tests are about the wiring, not about generic's answers. What ID()
+// and Capabilities() return is asserted in the profile package's own
+// tests, against the table row that defines them; repeating those
+// assertions here would only pin the same constant twice.
+//
+// What is unique to this package is that Adapter is a forwarder, and a
+// forwarder's characteristic failure is being wired to the wrong thing (or
+// to nothing) while still answering plausibly. So the authenticator test
+// deliberately drives a real local.Service through a real request rather
+// than checking the returned interface is non-nil: a stand-in would also
+// be non-nil, and would also refuse a caller with no cookie, but it would
+// not be the same service the process later logs people in against.
+//
+// The package is platform rather than platform_test because New panics
+// instead of returning an error, so there is nothing an external test
+// could observe that an internal one cannot.
 package platform
 
 import (

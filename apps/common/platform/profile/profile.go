@@ -355,6 +355,19 @@ func (p Profile) Adapter(cfg AdapterConfig) (capabilities.PlatformAdapter, error
 	return a, nil
 }
 
+// adapter is one wired profile, presented as the capabilities.PlatformAdapter
+// the rest of the product consumes. It is unexported and reachable only
+// through Profile.Adapter, which is the point: every field below is either
+// copied from a table row that has already been reviewed or supplied by a
+// wiring call that Adapter has already refused if it was incomplete. A
+// caller that could build this struct literally could build one with a nil
+// authenticator and a NativeAuth capability, which is precisely the
+// combination Adapter exists to reject.
+//
+// BasePlatformAdapter is embedded rather than relied on: every method it
+// provides is overridden below. It stays because it is what keeps a future
+// method added to capabilities.PlatformAdapter from breaking this type on
+// the day it is added rather than on the day somebody gets to it.
 type adapter struct {
 	capabilities.BasePlatformAdapter
 	profile       Profile
@@ -362,12 +375,30 @@ type adapter struct {
 	notifier      capabilities.Notifier
 }
 
+// ID reports the wire-level platform identity, which is PlatformID and not
+// the profile selector. See Profile.PlatformID for why those are two
+// fields.
 func (a *adapter) ID() capabilities.PlatformID { return a.profile.PlatformID }
 
+// Capabilities returns the table row's declaration verbatim. There is no
+// runtime narrowing here on purpose: Adapter already refused any row whose
+// declaration this wiring could not deliver, so a capability that reaches
+// this method is one somebody has proven, and quietly downgrading it later
+// would hide a wiring bug rather than fix one.
 func (a *adapter) Capabilities() capabilities.PlatformCapabilities { return a.profile.Capabilities }
 
+// Authenticator returns whichever authenticator the wiring settled on: a
+// compiled gateway for a profile that has one, otherwise the local-account
+// service. It is never nil, because Adapter refuses to return an adapter
+// for which it would be.
 func (a *adapter) Authenticator() capabilities.Authenticator { return a.authenticator }
 
+// Notifier returns the configured platform notification bridge, falling
+// back to the null object that refuses. The fallback is not a
+// convenience: a profile that declares NativeNotifications and was wired
+// without a bridge never gets here, because UndeliverableCapabilities
+// probes exactly this method during Adapter and turns the null object into
+// a startup refusal.
 func (a *adapter) Notifier() capabilities.Notifier {
 	if a.notifier != nil {
 		return a.notifier
@@ -375,6 +406,11 @@ func (a *adapter) Notifier() capabilities.Notifier {
 	return a.BasePlatformAdapter.Notifier()
 }
 
+// PlatformInfo answers from the table row alone and cannot fail. It takes
+// a context and returns an error because the interface does, for the
+// benefit of a future adapter that has to ask the host something; there is
+// nothing to ask here, and inventing a failure mode to justify the
+// signature would only give callers a branch they can never exercise.
 func (a *adapter) PlatformInfo(context.Context) (capabilities.PlatformInfo, error) {
 	return capabilities.PlatformInfo{
 		ID:         a.profile.PlatformID,
@@ -562,6 +598,11 @@ func (c *CompiledGateway) Trusts(remoteAddr string) bool {
 	return false
 }
 
+// parseAddr turns an http.Request RemoteAddr into a comparable address,
+// reporting false for anything it cannot make sense of. Every caller treats
+// false as untrusted, so this deliberately has no partial-success path: a
+// half-parsed peer address is the input a trust decision must never be made
+// on.
 func parseAddr(remoteAddr string) (netip.Addr, bool) {
 	host := remoteAddr
 	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
