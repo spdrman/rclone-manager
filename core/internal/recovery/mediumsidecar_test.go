@@ -1,3 +1,14 @@
+// These cover the sidecar as it exists ON A MEDIUM rather than on a local
+// filesystem: where its key goes (FR-28), that it is the same format as
+// the local one rather than a second format that resembles it, and that
+// nothing in it tells a reader how to reach the medium it names.
+//
+// The last of those is the reason this file is separate from
+// manifest_test.go. A local sidecar sits in the operator's own backup
+// root; an object sidecar sits inside a bucket, where the audience is
+// everybody who can read the bucket. That is a different threat model
+// applied to the same struct, so it gets its own tests rather than a
+// couple of extra cases hidden among the round-trip ones.
 package recovery
 
 import (
@@ -63,6 +74,16 @@ func TestManifestObjectKeyMirrorsTheArtifactKey(t *testing.T) {
 	}
 }
 
+// TestManifestObjectKeyRefusesWhatItCannotDeriveFrom pins that a key it
+// cannot derive from produces a refusal and an EMPTY string, never a
+// best-effort key.
+//
+// The inputs are the shapes that would otherwise silently produce a
+// sidecar somewhere wrong: a directory-shaped key, "." and ".." as the
+// final segment, and the bucket root itself. Returning "" alongside the
+// error is asserted explicitly because a caller that ignores the error and
+// uses the key is a bug that wants to fail immediately rather than write
+// an object at a plausible-looking wrong place.
 func TestManifestObjectKeyRefusesWhatItCannotDeriveFrom(t *testing.T) {
 	for _, artifactKey := range []string{"", "production/pg/", "production/pg/.", "production/pg/..", "/"} {
 		t.Run(artifactKey, func(t *testing.T) {
