@@ -24,13 +24,13 @@
 //
 // The verification step is the one worth reading twice. FR-31's `attested`
 // class asks the endpoint for its own full-object digest, and measured
-// against rclone v1.75.0 an s3 medium can never produce one:
-// backend/s3.Fs.Hashes() returns exactly hash.MD5, that MD5 is the ETag,
-// and FR-32 says an ETag is never a content hash. So a medium declared
-// `upload_verification: attested` cannot serve one move, ever, on this
-// build, and a preflight that reported it green would be lying about the
-// only thing it exists to establish. This one asks, and reports the
-// refusal.
+// against rclone v1.75.0 an s3 medium can never produce one: the only
+// digest that backend serves is not a whole-object content hash, and
+// transport.MediumStore.ObjectChecksum's own doc has the measurement and
+// the FR-32 rule behind it. So a medium declared `upload_verification:
+// attested` cannot serve one move, ever, on this build, and a preflight
+// that reported it green would be lying about the only thing it exists to
+// establish. This one asks, and reports the refusal.
 //
 // # What it never says
 //
@@ -584,13 +584,14 @@ func (r *run) observedClass(ctx context.Context) {
 //
 // This is the step that exists because of what would otherwise be a lie.
 // FR-31's `attested` class means the endpoint's own full-object digest,
-// and against rclone v1.75.0 an s3 medium cannot produce one at all
-// (backend/s3.Fs.Hashes() returns exactly hash.MD5, and that MD5 is the
-// ETag, which FR-32 says is never a content hash). A medium declared
-// `upload_verification: attested` therefore cannot serve a single move on
-// this build, and the move engine refuses it at the point a local copy
-// would otherwise have been deleted. The whole purpose of a preflight is
-// that an operator learns that here instead.
+// and against rclone v1.75.0 an s3 medium cannot produce one at all: the
+// only digest that backend serves is not a whole-object content hash, and
+// transport.MediumStore.ObjectChecksum carries the measurement and the
+// FR-32 rule that forbids comparing it to a recorded hash. A medium
+// declared `upload_verification: attested` therefore cannot serve a single
+// move on this build, and the move engine refuses it at the point a local
+// copy would otherwise have been deleted. The whole purpose of a preflight
+// is that an operator learns that here instead.
 //
 // The capability is asked LIVE, not looked up, so a future rclone that
 // surfaces x-amz-checksum-sha256 turns this green with no edit.
@@ -621,7 +622,7 @@ func (r *run) verification(ctx context.Context) {
 		if classified && category == transport.UnsupportedCapability {
 			r.fail(StepVerification, err, fmt.Sprintf(
 				"this medium declares upload_verification: attested, and this endpoint cannot produce a full-object %s digest, so that class can never be achieved here and every move to this medium will refuse rather than fall back to a weaker check. "+
-					"Measured against the rclone this build embeds, no s3 endpoint can: the only digest it serves is the ETag, and an ETag is not a content hash. Declare readback instead",
+					"Measured against the rclone this build embeds, no s3 endpoint can: the only digest it serves is not a hash of the whole stored object, so comparing it to the hash recorded at ingestion would prove nothing. Declare readback instead",
 				transport.SHA256))
 			return
 		}
