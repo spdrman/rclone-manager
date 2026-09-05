@@ -163,25 +163,28 @@ type syncFakeBackend struct {
 	reinstateResult           service.ArtifactReinstatement
 	persistedConnectionResult service.ConnectionTestResult
 
-	errOnArtifacts      error
-	errOnActivity       error
-	errOnListOperations error
-	errOnHealth         error
-	errOnCatalog        error
-	errOnRevalidate     error
-	errOnRetry          error
-	errOnReinstate      error
-	errOnSetEnabled     error
-	errOnSetReadOnly    error
-	errOnRemove         error
-	errOnSetRetention   error
-	errOnTestPersisted  error
+	errOnArtifacts       error
+	errOnActivity        error
+	errOnListOperations  error
+	errOnHealth          error
+	errOnCatalog         error
+	errOnRevalidate      error
+	errOnRetry           error
+	errOnMediumPreflight error
+	mediumPreflight      service.MediumPreflight
+	errOnReinstate       error
+	errOnSetEnabled      error
+	errOnSetReadOnly     error
+	errOnRemove          error
+	errOnSetRetention    error
+	errOnTestPersisted   error
 
 	lastArtifactFilter    service.ArtifactFilter
 	lastActivityLimit     int
 	lastOperationsLimit   int
 	lastRevalidated       string
 	lastRetried           string
+	lastPreflightedMedium string
 	lastReinstated        string
 	lastRemoved           string
 	lastSetEnabled        setEnabledCall
@@ -640,6 +643,16 @@ func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) e
 	return nil
 }
 
+func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (service.MediumPreflight, error) {
+	if f.errOnMediumPreflight != nil {
+		return service.MediumPreflight{}, f.errOnMediumPreflight
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastPreflightedMedium = id
+	return f.mediumPreflight, nil
+}
+
 func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
 	if f.errOnReinstate != nil {
 		return service.ArtifactReinstatement{}, f.errOnReinstate
@@ -903,6 +916,10 @@ func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.
 }
 
 func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
 
 func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
 	return service.ArtifactReinstatement{}, nil

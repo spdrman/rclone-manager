@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "aeb4ffd8674dd0e6a0d67b3ed1c98c38e99163767d70027f412715ea197840bc";
+export const CONTRACT_SHA256 = "1fbcd53bbb39d7f231ce77c6a2105b352481b2eeb4958137dd6434f248dd1657";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -47,11 +47,11 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
+  "MEDIUM_NOT_FOUND",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -111,11 +111,11 @@ export const API_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
+  "MEDIUM_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -127,7 +127,7 @@ export const API_ERROR_CLASSES = {
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
   "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
-  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
+  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
   "unavailable": ["NOT_CONFIGURED"],
   "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED", "MEDIUM_DISCLOSURE_REQUIRED"],
@@ -308,7 +308,6 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
     }
@@ -875,6 +874,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "preflightStorageMedium",
+    method: "POST",
+    path: "/storage-mediums/{id}/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "getSystemCapabilities",
     method: "GET",
     path: "/system/capabilities",
@@ -1120,30 +1138,18 @@ export interface WireBackupSetEditHoldState {
   running?: WireRunningWork;
 }
 
-/** One backup set's health verdict: whether its backups are fresh and
- *  trustworthy, and whether they are on the storage medium its
- *  retention policy says they belong on. This is the backup half of
+/** One backup set's freshness verdict. This is the backup half of
  *  health, and it deliberately carries no process or build fact: a
- *  running service is not evidence that backups are landing. The
- *  placement figures come from durable state rather than from the
- *  last pass, so a deployment nobody has run a cycle in front of
- *  still reports relocations that have been failing for weeks. */
+ *  running service is not evidence that backups are landing. */
 export interface WireBackupSetHealth {
-  away_from_home: number;
-  away_from_home_oldest_age_seconds?: number;
   backup_set_id: string;
   current_transfers: number;
-  failed_move_oldest_age_seconds?: number;
-  failed_move_reason?: string;
-  failed_moves: number;
   failures: number;
   free_bytes?: number;
   free_bytes_known: boolean;
   halt_reason?: "HOST_KEY_CHANGED" | "AUTHENTICATION_FAILED" | "KEY_PERMISSIONS";
   last_completed_backup_at?: string;
   newest_good_backup_at?: string;
-  open_move_oldest_age_seconds?: number;
-  open_moves: number;
   pending_deletes: number;
   quarantined_count: number;
   quarantined_lost_count: number;
@@ -1156,7 +1162,6 @@ export interface WireBackupSetHealth {
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
   storage_level?: "OK" | "WARNING" | "CRITICAL";
   total_bytes?: number;
-  unconfirmed_location: number;
 }
 
 /** Which retention policy one backup set is retained under, and where
@@ -1271,11 +1276,9 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
-/** POST /backup-sets. The backup-set spec, plus the two things only a
- *  create can ask for: that the new set also runs at once, and that
- *  it may take over history already on its id. */
+/** POST /backup-sets. The backup-set spec, plus the one thing only a
+ *  create can ask for: that the new set also runs at once. */
 export interface WireCreateBackupSetRequest extends WireBackupSetSpec {
-  acknowledge_repoint?: boolean;
   run_immediately?: boolean;
 }
 
@@ -1455,6 +1458,46 @@ export interface WireManagerStorage {
   warning_free_bytes: number;
 }
 
+/** One step of a storage-medium preflight. There is deliberately no
+ *  field here for key material of any kind, and there never will be
+ *  (FR-33): `detail` is one of the engine's own sentences, never the
+ *  text of what actually came back, because that names a path on the
+ *  host or the name of an environment variable. The classified cause
+ *  goes to this manager's log instead. */
+export interface WireMediumPreflightCheck {
+  category?: string;
+  detail: string;
+  outcome: "passed" | "failed" | "skipped";
+  step: "credentials" | "reach" | "deliverable" | "write" | "read_back" | "storage_class" | "verification" | "delete";
+}
+
+/** The result of proving one storage medium works. The preflight
+ *  writes a small probe object to the medium, reads it back byte for
+ *  byte, checks the storage class it landed in against the one the
+ *  configuration claims, asks whether the verification class the
+ *  medium declares can actually be achieved there, and deletes the
+ *  probe. That is deliberately more than a reachability ping: a wrong
+ *  region, a policy that denies PutObject and an endpoint that
+ *  silently ignores storage_class all answer a ping perfectly well
+ *  and then fail a move, in the middle of a cycle, after an artifact
+ *  has already been chosen to leave local disk. A medium that does
+ *  not work is a 200 with `ok` false, not an error: a bucket that is
+ *  not there is what an operator did, not what broke, exactly as a
+ *  failed backup-set connection test reports itself. The operation
+ *  takes an id and never a candidate medium, unlike that connection
+ *  test: a medium is declared in the configuration file and nowhere
+ *  else, and the only fields that would make a candidate one
+ *  meaningful are the three credential references, so a request body
+ *  for one would make a path on this host into something an API
+ *  caller sends (FR-33). Nothing schedules this; it is a real side
+ *  effect on somebody's bucket and it runs only because a person
+ *  asked. */
+export interface WireMediumPreflightResponse {
+  checks: WireMediumPreflightCheck[];
+  medium: string;
+  ok: boolean;
+}
+
 /** One durable operation record. Timestamp fields are omitted, not
  *  zero-valued, until the event they name has happened. progress is
  *  the separate, ephemeral thing: see OperationProgress for why it is
@@ -1561,21 +1604,6 @@ export interface WireRestoreOperationRequest {
   window_days: number;
 }
 
-/** One backup this plan would relocate, and both ends of the move
- *  (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
- *  else: planning one never adds a backup to the keep set and never
- *  removes one, which is why moves travel beside the verdicts rather
- *  than inside them. There is deliberately no field here for what a
- *  provider would charge to run this, how long a provider might take,
- *  or the key material that reaches either end, and there never will
- *  be: this product holds none of those three, so a field for one
- *  could only be filled with a guess. */
-export interface WireRetentionMove {
-  artifact: string;
-  from_medium: string;
-  to_medium: string;
-}
-
 /** One backup set's OWN retention policy, exactly as its
  *  configuration file carries it: unresolved, with every omitted
  *  field still omitted. An override names the WHOLE chain (a tiers
@@ -1607,13 +1635,11 @@ export interface WireRetentionPlan {
   expires_at: string;
   inventory_revision: string;
   keep_count: number;
-  moves?: WireRetentionMove[];
   operation_id?: string;
   plan_id: string;
   reclaim_bytes: number;
   retention: WireRetentionSettings;
   retention_is_override: boolean;
-  unconfirmed_placements?: string[];
   verdicts: WireRetentionVerdict[];
 }
 
@@ -1670,7 +1696,6 @@ export interface WireRetentionTierSelection {
 export interface WireRetentionVerdict {
   action: string;
   artifact: string;
-  medium?: string;
   reason: string;
   tier_selections?: WireRetentionTierSelection[];
   tiers?: string[];

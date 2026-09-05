@@ -28,6 +28,9 @@ than no reference at all.
 | The API and the UI show placements, access states and the disclosure | Landed |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
+| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
+| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
+
 One limit is worth knowing before you write a chain, and it is the manager
 refusing to do something rather than doing it badly:
 
@@ -144,6 +147,67 @@ under the backup root. Nothing that leaves this process carries key material:
 not a log line at any level, not an error message, not an API response, not the
 redacted config export, not a recovery manifest, and not object metadata in your
 bucket.
+
+### Checking a medium before anything depends on it
+
+Nothing in this product touched a bucket until a cycle carrying a real backup
+did, which meant the first thing to discover a wrong region, a bucket that is
+not there, a credentials file the daemon cannot read, or a policy that denies
+`PutObject` was a move, in the middle of a cycle, after an artifact had already
+been chosen to leave local disk. There is a preflight now:
+
+```
+backup-manager medium preflight offsite_s3
+```
+
+and the same check sits behind a button on the settings form, offered at the
+moment you point a tier at a medium and before the save that starts sending
+backups there. It exits non-zero when any check fails, so it composes into a
+deployment script.
+
+It writes. That is the point, and it is worth knowing before you run it against
+production: a reachability ping is answered perfectly well by a wrong region, by
+a policy that denies writes, and by an endpoint that accepts `storage_class` and
+silently ignores it. So the preflight writes a small probe object with the
+medium's own storage class, reads it back byte for byte, checks the class the
+object actually landed in against the class the configuration claims, asks the
+endpoint whether the medium's declared `upload_verification` can actually be
+achieved there, and deletes the probe. The probe lives at a randomly named key
+under a reserved `.rclone-manager-preflight/` segment inside the medium's own
+prefix, which no configured artifact can produce.
+
+Eight checks, and each one names which of them failed and whose problem it is.
+The two worth calling out:
+
+- **`credentials` and `reach` are separate answers.** A credential this manager
+  could not obtain is a question for this host: a file it cannot read, a variable
+  that is not set, a command that did not run. A credential the endpoint rejected
+  is a question for your provider. They used to be indistinguishable.
+- **`verification` asks the endpoint rather than a table.** A medium declared
+  `upload_verification: attested` cannot be served by any s3 endpoint this build
+  talks to (see the section on that below), so the preflight reports the refusal
+  and tells you to declare `readback`. A preflight that reported attested green
+  would be lying about the one thing it exists to establish.
+
+A medium on an archive storage class is refused at the `deliverable` check and
+nothing is written at all, because a probe object on `DEEP_ARCHIVE` is billed for
+a 180-day minimum for an answer this product already holds. That refusal is about
+DELIVERY: declaring an archive-class medium to restore objects that are already
+there stays legal.
+
+Nothing in the report ever carries a credential, a path on this host, or the name
+of an environment variable. The classified cause goes to the manager's log, where
+your diagnostics already are.
+
+Two things it does not prove, which are worth knowing before you read a green
+result as a guarantee. The probe lives at its own key under the medium's prefix,
+so a bucket policy scoped to the whole prefix is covered and one scoped per
+backup set is not. And a bucket **lifecycle rule** can transition objects to an
+archive class days after they are written, whichever class you declared and
+whichever class the endpoint reported at the moment of the write; nothing
+observable at write time tells those buckets apart, so a medium that passes here
+can still end up holding objects that need a restore. The manager catches that
+when a read is attempted rather than assuming it away.
 
 ## The disclosure, and what you are agreeing to
 

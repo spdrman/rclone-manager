@@ -229,6 +229,7 @@ describe("every request the shared client makes is a declared operation", () => 
       ["clearBackupSetRetention", () => httpApi.clearBackupSetRetention("src", "set-1")],
       ["getSettings", () => httpApi.getSettings()],
       ["updateSettings", () => httpApi.updateSettings({ retention: { timezone: "UTC" } })],
+      ["preflightStorageMedium", () => httpApi.preflightStorageMedium("offsite_s3")],
       ["getStorage", () => httpApi.getStorage()],
       ["scanCatalog", () => httpApi.scanCatalog()],
       ["rebuildCatalog", () => httpApi.rebuildCatalog()],

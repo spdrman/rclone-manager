@@ -64,6 +64,26 @@ func TestOnlyTheMoveEngineDeletesFromAMedium(t *testing.T) {
 		// it holds a MediumPruner interface and never a transport type,
 		// which is FR-32 held structurally rather than by this list.
 		filepath.Join("internal", "placement", "reclaim.go"): true,
+		// The medium preflight (#443). It is a third production caller and
+		// it is deliberately NOT a third place "the ordering that protects
+		// a backup gets decided", because it never touches a backup: the
+		// only key it can ever pass to DeleteObject is one it generated
+		// itself, from crypto/rand, under a reserved
+		// .rclone-manager-preflight/ segment that transport.MediumKey
+		// cannot produce for any configured artifact (a source, a backup
+		// set and an artifact name each refuse a separator, so none of
+		// them can spell that segment).
+		//
+		// So the invariant this test states is unchanged in substance and
+		// wider in words: internal/placement remains the only production
+		// code that removes a COPY OF A BACKUP from a medium, and this
+		// file removes only the probe object it just wrote. Its own
+		// package test pins the containment directly
+		// (TestProbeKey_LivesUnderASegmentNoArtifactCanReach), and the
+		// happy path asserts exactly one upload and exactly one delete, so
+		// a preflight that grew a second deletion is a failure there
+		// before it is one here.
+		filepath.Join("internal", "mediumcheck", "mediumcheck.go"): true,
 		// The move-crash harness is test support that does not carry a
 		// _test.go suffix, for the contract suite's reason: it has to be
 		// a separate main package so the suite can kill it. It only

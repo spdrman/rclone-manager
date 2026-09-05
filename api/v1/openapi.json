@@ -90,7 +90,8 @@
           "MEDIUM_DISCLOSURE_REQUIRED",
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
-          "COPY_NOT_FOUND"
+          "COPY_NOT_FOUND",
+          "MEDIUM_NOT_FOUND"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -134,7 +135,8 @@
           "MEDIUM_DISCLOSURE_REQUIRED": "wire",
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
-          "COPY_NOT_FOUND": "wire"
+          "COPY_NOT_FOUND": "wire",
+          "MEDIUM_NOT_FOUND": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -169,7 +171,8 @@
             "BACKUP_SET_NOT_FOUND",
             "OPERATION_NOT_FOUND",
             "RETENTION_PLAN_NOT_FOUND",
-            "ARTIFACT_NOT_FOUND"
+            "ARTIFACT_NOT_FOUND",
+            "MEDIUM_NOT_FOUND"
           ],
           "throttling": [
             "RATE_LIMITED"
@@ -2764,6 +2767,77 @@
             "x-go-omitempty": true
           }
         }
+      },
+      "MediumPreflightCheck": {
+        "type": "object",
+        "description": "One step of a storage-medium preflight. There is deliberately no field here for key material of any kind, and there never will be (FR-33): `detail` is one of the engine's own sentences, never the text of what actually came back, because that names a path on the host or the name of an environment variable. The classified cause goes to this manager's log instead.",
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "reach",
+              "deliverable",
+              "write",
+              "read_back",
+              "storage_class",
+              "verification",
+              "delete"
+            ],
+            "description": "What this step proves. `credentials` is whether the credential the medium declares can be obtained at all, which is a question for the host; `reach` is whether the endpoint answers and holds the bucket with that credential, which is a question for the provider. `deliverable` is whether an artifact can be delivered to this medium's storage class at all: an archive class cannot take delivery, and is refused without writing anything, because a probe object there is billed for a minimum duration measured in months. `write`, `read_back` and `delete` are a real object written, read back byte for byte and removed again, because read access is not what a move needs and a write nobody can read is not a backup. `storage_class` is whether the object came back in the class the configuration asked for. `verification` is whether the class this medium's upload_verification declares can actually be achieved here, asked of the endpoint rather than looked up."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ],
+            "description": "`skipped` is a real answer and not a quiet pass: it means an earlier step failed in a way that makes this one meaningless. A surface that renders a skipped write as anything but \"this was never tried\" has told an operator their bucket is writable on the strength of a credential that was never obtained."
+          },
+          "category": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "The transport category a failure classified as, absent when the step did not fail. It is the machine-readable half: a client branches on this and never on `detail`."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What this step found, in words, for a person to act on."
+          }
+        },
+        "required": [
+          "step",
+          "outcome",
+          "detail"
+        ]
+      },
+      "MediumPreflightResponse": {
+        "type": "object",
+        "description": "The result of proving one storage medium works. The preflight writes a small probe object to the medium, reads it back byte for byte, checks the storage class it landed in against the one the configuration claims, asks whether the verification class the medium declares can actually be achieved there, and deletes the probe. That is deliberately more than a reachability ping: a wrong region, a policy that denies PutObject and an endpoint that silently ignores storage_class all answer a ping perfectly well and then fail a move, in the middle of a cycle, after an artifact has already been chosen to leave local disk. A medium that does not work is a 200 with `ok` false, not an error: a bucket that is not there is what an operator did, not what broke, exactly as a failed backup-set connection test reports itself. The operation takes an id and never a candidate medium, unlike that connection test: a medium is declared in the configuration file and nowhere else, and the only fields that would make a candidate one meaningful are the three credential references, so a request body for one would make a path on this host into something an API caller sends (FR-33). Nothing schedules this; it is a real side effect on somebody's bucket and it runs only because a person asked.",
+        "additionalProperties": false,
+        "properties": {
+          "medium": {
+            "type": "string",
+            "description": "The medium id this ran against."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when no step failed."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediumPreflightCheck"
+            },
+            "description": "One entry per step, in the order the engine performs them. Always the full list, so a surface renders a fixed set of rows rather than discovering which steps happened to run."
+          }
+        },
+        "required": [
+          "medium",
+          "ok",
+          "checks"
+        ]
       }
     },
     "responses": {}
@@ -6798,6 +6872,101 @@
             },
             "x-error-codes": [
               "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/preflight": {
+      "post": {
+        "operationId": "preflightStorageMedium",
+        "summary": "Prove one declared storage medium actually works, before a cycle carrying a real backup does.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The medium may or may not have passed: read `ok`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumPreflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This configuration declares no storage medium with that id. Mediums are declared in the configuration file and nowhere else, so a name that worked before is a name somebody removed; GET /settings lists the ones that are there.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
             ]
           }
         },

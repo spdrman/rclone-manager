@@ -19,17 +19,17 @@
 // indistinguishable from a first-time failure.
 //
 // RetryCount already exists in the FR-9 schema for exactly this shape of
-// bookkeeping ("how many times has this artifact been sent back for a
-// fresh attempt"; see state.RetryUpdate's doc), and nothing in this
-// codebase writes to it yet: FR-22's own bounded-backoff retry loop, for
-// the FAILED -> DISCOVERED exit, has not been built. That is a deliberate
-// reuse, not a coincidence: releasing from QUARANTINED and retrying out of
-// FAILED are the same underlying question, "how many times has this
-// artifact been sent back to try again from an exceptional state",
-// answered from two different starting states. When FR-22 lands, its
-// FAILED -> DISCOVERED exit is expected to increment this same counter
-// rather than invent a second one; internal/quarantine's repeat-visibility
-// report reads it with that combined meaning already in mind.
+// bookkeeping ("how many attempts has this artifact already spent from an
+// exceptional state"; see state.RetryUpdate's doc). That is a deliberate
+// reuse, not a coincidence, and part of FR-22 has since landed on it:
+// issue #419's stalled verification (verify.go's recordStall) counts each
+// attempt it could not complete against the same counter and against a
+// budget derived from the operator's own retry policy. So there are two
+// writers now, releasing from QUARANTINED and stalling at VERIFYING, and
+// they are the same underlying question asked from two different states.
+// internal/quarantine's repeat-visibility report reads the counter with
+// that combined meaning, which is what its own doc anticipated and what
+// its field names now say.
 //
 // # QUARANTINED_LOST has no release
 //
@@ -228,6 +228,27 @@ func QuarantineReason(rec state.Record) string {
 		return fmt.Sprintf(
 			"the durable local copy failed a content check (recorded %s hash: %s); see the journal's transition log for exactly which check caught it and why",
 			orUnknownAlg(rec.LocalHashAlg), rec.LocalHash,
+		)
+	}
+	// Issue #419: an artifact held because its verification could never be
+	// COMPLETED, not because anything was found wrong with it. It is the
+	// one shape here that does have its reason durably on the row, in the
+	// FR-22 retry bookkeeping the stall itself wrote, so this reports that
+	// rather than inventing a content verdict nobody reached.
+	//
+	// It is last, and that ordering is what keeps it from masking a real
+	// finding. Every path that quarantines an artifact for something it
+	// actually measured leaves that measurement on the row: a validator's
+	// rejection sets ValidationPassed, and every content check
+	// (verify.go's hash comparison, internal/reconcile's and
+	// internal/revalidate's re-reads) works against a recorded LocalHash
+	// and therefore has one. A row with neither cannot have been
+	// quarantined by any of them, so LastError here is this quarantine's
+	// own reason and not a stale one left by an earlier release.
+	if rec.LastError != "" {
+		return fmt.Sprintf(
+			"%s (this is not a finding about the backup's contents: %d attempt(s) were spent and none of them completed, so nothing has been proved about these bytes either way)",
+			rec.LastError, rec.RetryCount,
 		)
 	}
 	return "content found invalid; no further detail is persisted on this record (see the journal's transition log for the transition that caused it)"

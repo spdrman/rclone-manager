@@ -10,6 +10,7 @@ import type {
   FirstRunResult,
   HostKeyProbeResult,
   ManagerStorage,
+  MediumPreflightCheck,
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
@@ -1405,6 +1406,57 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       }
 
       return delay(structuredClone(settings));
+    },
+
+    // Issue #443. The fixture answers about a medium the fixture's own
+    // settings declare and rejects anything else with the same named
+    // refusal the backend gives, so a settings form that renders a
+    // preflight is exercised against both outcomes rather than against a
+    // fixture that says yes to every id.
+    preflightStorageMedium: (mediumId: string) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      if (!medium)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_NOT_FOUND",
+          message: "this configuration declares no storage medium with that id",
+          correlationId: "cid_mockpreflight404"
+        }));
+      // An archive-class medium cannot take delivery, and the fixture
+      // says so at the same step the engine does rather than reporting a
+      // uniform green: a form built against an always-passing fixture
+      // never renders the one answer an operator has to act on.
+      const deliverable = !medium.readsRequireRestore;
+      const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+        ({ step, outcome: "skipped", category: "", detail });
+      const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+        ({ step, outcome: "passed", category: "", detail });
+      const checks: MediumPreflightCheck[] = [
+        passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
+        passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
+        deliverable
+          ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
+          : {
+              step: "deliverable",
+              outcome: "failed",
+              category: "",
+              detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+            }
+      ];
+      const rest: [MediumPreflightCheck["step"], string][] = [
+        ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
+        ["read_back", "the object was read back and is byte for byte what was written"],
+        ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
+        ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
+        ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
+      ];
+      for (const [step, detail] of rest) {
+        checks.push(
+          deliverable
+            ? passed(step, detail)
+            : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
+        );
+      }
+      return delay({ medium: medium.id, ok: deliverable, checks }, 700);
     },
 
     scanCatalog: () =>

@@ -58,6 +58,7 @@ var commands = map[string]func([]string) int{
 	"catalog":      cmdCatalog,
 	"quarantine":   cmdQuarantine,
 	"unconfigured": cmdUnconfigured,
+	"medium":       cmdMedium,
 	"restore":      cmdRestore,
 	"settings":     cmdSettings,
 	"version":      cmdVersion,
@@ -119,6 +120,13 @@ commands:
                                                   clear the .partial residue a removal stranded mid-transfer, and end
                                                   the journal rows nothing will ever advance. It never touches a
                                                   retained backup; without --acknowledge it only prints what it would do
+  medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
+                                                  carrying a real backup does: it writes a probe object with the
+                                                  medium's own storage class, reads it back byte for byte, checks
+                                                  the class it landed in against the one the configuration claims,
+                                                  asks whether the medium's declared upload_verification can
+                                                  actually be achieved there, and deletes the probe. Exits non-zero
+                                                  when any check fails (#443)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force
