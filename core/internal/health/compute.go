@@ -8,6 +8,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This file is where FR-24's verdict is actually reached, and its shape is
+// a deliberate narrowing rather than a convenience.
+//
+// decideState takes one parameter, and that parameter is evidence: a struct
+// with no field for process liveness, no field for free space, no field for
+// a version string. Invariant 14 says process liveness is not evidence of
+// backup freshness, and this is how that is held. Not by decideState
+// choosing not to look at those facts, but by there being no argument
+// through which one could arrive. An edit that wanted to consult uptime
+// would have to widen the struct first, which is a line somebody has to
+// read and agree to.
+//
+// Everything else here feeds that one function. buildAggregate is the only
+// place records are walked, and it produces two separate things: the
+// evidence decideState is handed, and the display fields it is not. Counts,
+// timestamps and in-flight transfers are reported to an operator and never
+// fed back into the state, so a change to what gets rendered cannot turn
+// into a change of verdict.
+
 // knownGood is FR-19's definition of a valid restore point. There are four
 // of them, and the fourth is the one that keeps getting dropped: COMMITTED,
 // REMOTE_DELETE_PENDING, COMPLETE and REMOTE_RETAINED.
