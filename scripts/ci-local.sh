@@ -72,6 +72,22 @@
 # exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
 # is the out-loud opt-out.
 #
+# Every `go test` in this script carries -race (#417). It is a flag on the
+# steps that already exist rather than a step of its own, for two reasons.
+# A separate step would run the same suites twice, and -race replaces
+# nothing: everything the plain run asserted, the instrumented run asserts
+# too, plus the detector. And a separate step is one more thing that can be
+# commented out, skipped or quietly reordered, which is the failure this
+# gate is built around (#160); a flag on the step that has to run anyway
+# cannot be left out without deleting the step.
+#
+# Measured on this machine rather than estimated, warm cache, twice each:
+# core/ minus the four Docker-backed suites went 131s -> 176s, those four
+# suites under gotestwatch went 143s -> 147s (they wait on containers, so
+# the instrumentation is nearly free), apps/common 6s -> 12s,
+# apps/synology 9s -> 12s, distribution and apps/generic are in the PR for
+# #417. Nothing is excluded, so nothing needs a reason.
+#
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
 # failed for "ci-local: FAILED".
@@ -187,7 +203,7 @@ fi
 # other step here has for #160's reason (a step that quietly skips itself
 # when its own file is missing is a silent skip wearing a different hat).
 if [ -f scripts/selftest/check-anchors.sh ]; then
-  gate_step "mutation anchors in the compat and conformance selftests still match the tree (#458)"
+  gate_step "mutation anchors in the compat, conformance and race selftests still match the tree (#458)"
   bash scripts/selftest/check-anchors.sh
 else
   echo "==> mutation anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run (#458)"
@@ -203,8 +219,8 @@ gate_step "core/ golangci-lint"
 (cd core && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ "$FAST" = "1" ]; then
-  gate_docker_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
-  (cd core && GOWORK=off go test ./internal/...)
+  gate_docker_step "core/ go test -race ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
+  (cd core && GOWORK=off go test -race ./internal/...)
 else
   # tests/crashmatrix, tests/sftpintegration and tests/miniointegration
   # run separately, under cmd/gotestwatch instead of `go test`'s own
@@ -219,44 +235,44 @@ else
   # derived from this run's own measured pace instead (issue #247's
   # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
   # is no fixed number to outgrow.
-  gate_docker_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
-  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
+  gate_docker_step "core/ go test -race ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
+  (cd core && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
 
-  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch (issue #256: no fixed go test -timeout)"
-  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
+  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch, -race (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -race -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
 fi
 
-gate_step "apps/common go build, vet, test"
-(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_step "apps/common go build, vet, test -race"
+(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-gate_docker_step "distribution go build, vet, test"
-(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_docker_step "distribution go build, vet, test -race"
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
 gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ -f apps/generic/go.mod ]; then
-  gate_docker_step "apps/generic go build, vet, test"
-  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_docker_step "apps/generic go build, vet, test -race"
+  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/generic golangci-lint"
   (cd apps/generic && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/synology/go.mod ]; then
-  gate_step "apps/synology go build, vet, test"
-  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/synology go build, vet, test -race"
+  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/synology golangci-lint"
   (cd apps/synology && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/ugos/backend/go.mod ]; then
-  gate_step "apps/ugos/backend go build, vet, test"
-  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/ugos/backend go build, vet, test -race"
+  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/ugos/backend golangci-lint"
   (cd apps/ugos/backend && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
@@ -485,6 +501,18 @@ if [ "$FAST" != "1" ]; then
 
   gate_step "architecture rules can actually fail (mutation self-test)"
   bash scripts/architecture/selftest.sh
+
+  # The detector itself, shown to fire (#417). Every `go test` above now
+  # carries -race, and -race is the kind of check this repository has
+  # learnt to distrust on sight: it exits 0 whether it looked or not, so a
+  # tree with no race and a detector that was never asked produce the same
+  # output. This plants a real data race in real product source, in a copy
+  # of the tree, and requires the detector to catch it AND to name the
+  # write that planted it AND to be the reason it was caught, by showing
+  # the same mutant going green with the flag off. One package, one test,
+  # three runs, about a minute.
+  gate_step "the race detector can actually catch a race (mutation self-test, #417)"
+  bash scripts/race/selftest.sh
 
   # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
   # is a wall of "nothing about a medium-free deployment moved" assertions,

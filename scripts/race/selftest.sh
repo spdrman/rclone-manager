@@ -26,9 +26,12 @@
 #       makes the other two mean something: it proves the detector is
 #       what caught the race, not an assertion that would have caught it
 #       anyway, which is the whole claim #417 is buying.
-#   R4  scripts/ci-local.sh actually passes -race. R1-R3 prove the
-#       detector works; this is the one that proves the gate uses it, and
-#       it is the cheapest of the four to get wrong in a refactor.
+#
+# Whether the gate still ASKS for the detector is a different question and
+# is answered somewhere cheaper: Group K of scripts/tests/ci-local-gate.test.sh
+# scans scripts/ci-local.sh for a Go suite that runs without -race, and
+# proves that scan can fail. This file is about whether the detector has
+# teeth once it is asked.
 #
 # The plant is anchored to a verbatim copy of product source, tabs and
 # all, in the shared way scripts/compat/selftest.sh and
@@ -205,23 +208,6 @@ echo "==> R3 the same mutant is invisible without the detector"
 d=$(mutant configstate-written-in-place-no-race)
 plant_configstate_race "$d"
 expect_race_missed "the same tree, the same test, -race off" "$d"
-
-echo
-echo "==> R4 the gate itself passes -race"
-if [ "$selftest_dry_run" = 1 ]; then
-  echo "  (no anchors):   scripts/ci-local.sh runs go test -race"
-else
-  race_steps=$(grep -cE '^\s*\(cd core && GOWORK=off go test -race' scripts/ci-local.sh | tr -d '[:space:]')
-  if [ "$race_steps" -ge 2 ]; then
-    echo "  ok (wired):     scripts/ci-local.sh runs go test -race in both the FAST and full core steps"
-    pass=$((pass + 1))
-  else
-    echo "SELFTEST FAIL: scripts/ci-local.sh has $race_steps core steps carrying -race, want at least 2 (the FAST one and the full one)." >&2
-    echo "    R1-R3 prove the detector catches this repository's races. This cell is the one" >&2
-    echo "    that proves the gate still asks it to." >&2
-    fail=$((fail + 1))
-  fi
-fi
 
 echo
 selftest_stale_summary

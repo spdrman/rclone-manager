@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Are the mutation anchors in the selftests still anchored to real code?
 #
-# scripts/compat/selftest.sh and scripts/conformance/selftest.sh plant
-# deliberate violations to prove each cell of their gate can go red. Every
-# plant is anchored to a verbatim copy of product source living in a script
-# the author of the product change never opens, so a refactor drifts the
-# anchor and the mutation stops planting anything. That is caught, loudly,
-# but until #458 it was only caught at the end of a 25-minute gate run, one
-# stale anchor at a time.
+# scripts/compat/selftest.sh, scripts/conformance/selftest.sh and
+# scripts/race/selftest.sh plant deliberate violations to prove each cell of
+# their gate can go red. Every plant is anchored to a verbatim copy of
+# product source living in a script the author of the product change never
+# opens, so a refactor drifts the anchor and the mutation stops planting
+# anything. That is caught, loudly, but until #458 it was only caught at the
+# end of a 25-minute gate run, one stale anchor at a time.
 #
-# This is that same check with nothing else attached: every anchor in both
-# selftests, dry-run against the real tree, building nothing, in about a
+# This is that same check with nothing else attached: every anchor in every
+# one of them, dry-run against the real tree, building nothing, in about a
 # second. Belongs at the top of the gate, so drift costs seconds.
 #
 # Exit code contract, which is all a gate step needs from it:
@@ -26,7 +26,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 status=0
 
-for selftest in scripts/compat/selftest.sh scripts/conformance/selftest.sh; do
+for selftest in scripts/compat/selftest.sh scripts/conformance/selftest.sh scripts/race/selftest.sh; do
   echo "==> $selftest --check-anchors"
   if ! bash "$selftest" --check-anchors; then
     status=1
@@ -41,4 +41,4 @@ if [ "$status" -ne 0 ]; then
   exit 1
 fi
 
-echo "OK: every mutation anchor in the compat and conformance selftests still matches the real tree."
+echo "OK: every mutation anchor in the compat, conformance and race selftests still matches the real tree."
