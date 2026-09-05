@@ -189,6 +189,16 @@ func (e *Engine) guardSourceDelete(ctx context.Context, mv state.Move, rec state
 	// answer about a restore. This is the call
 	// archive.TestNothingDeletesACopyWithoutAskingWhetherAnotherOneIsReadable
 	// fails the build without.
+	//
+	// It is not the first refusal an unrestored archive copy meets, and
+	// it was written as though it were. deleteSource re-reads the
+	// destination before it gets here, and a real endpoint answers
+	// InvalidObjectState to that GET, so the capability branch there
+	// stands pat and this clause never speaks (#440). What only this
+	// clause can catch is the copy that WAS readable at the read and is
+	// not readable now: a restore window lapsing in between, or a
+	// restore-status call that fails after a read that worked. That gap
+	// is why the states are gathered here rather than inherited.
 	copies, err := e.copiesOf(ctx, rec)
 	if err != nil {
 		return refuse("%v", err)

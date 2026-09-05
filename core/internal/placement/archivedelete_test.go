@@ -247,6 +247,13 @@ func TestAnArchivedCopyNobodyRestoredIsRefusedBeforeTheGuardEverSpeaks(t *testin
 // answer no longer shows the copy readable. That gap is the clause's whole
 // reason for being asked from freshly gathered facts, and it is the only
 // world in which it can speak.
+//
+// The gap is not a millisecond, either, which is what makes this worth a
+// test rather than a curiosity. deleteSource's re-verification is a FULL
+// download of the object (TestACompletedMoveReadsTheObjectBackTwice pins
+// that it is the second of two), so on a large artifact the read runs for
+// minutes or hours, and the restore window it started inside can perfectly
+// ordinarily end before it finishes.
 func TestTheEighthClauseIsReachedByAWindowThatLapsesMidMove(t *testing.T) {
 	for _, w := range archiveWorlds {
 		if !w.reachesTheGuard {

@@ -986,6 +986,14 @@ func (e *Engine) intendSourceDelete(ctx context.Context, mv state.Move) (state.M
 // answer, and it restores the source BEFORE it touches the destination, so
 // there is no instant at which the journal says both copies are
 // disposable.
+//
+// A re-verification that could not RUN is the one outcome that does not
+// decide anything here, and it still goes on to consult the guard. It has
+// to: "the source is already gone" is the only answer that changes what
+// happens on that path, only the guard can give it, and without asking,
+// a crash between the source delete and the DONE write left an
+// archive-class move stuck at SOURCE_DELETE_PENDING for ever. Consulting
+// the guard never authorises a delete there; see the case below.
 func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, error) {
 	rec, err := e.Journal.Get(ctx, mv.Artifact)
 	if err != nil {
