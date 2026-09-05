@@ -253,10 +253,59 @@ type Options struct {
 	RunArgs []string
 }
 
+// infraMarker is the fixed, greppable string every infrastructure refusal
+// in this fixture carries. It is the same literal in miniofixture and in
+// tests/dockerlease on purpose: a gate log sorts into "the machine broke"
+// and "the product broke" with one grep, and a marker that varied by
+// package would not.
+const infraMarker = "INFRA:"
+
+// dockerUnavailable ends the calling test for a docker that is not there to
+// be used, and decides whether that is a skip or a failure.
+//
+// On a machine that simply has no docker, skipping is honest: this fixture
+// is evidence for the gate, not a requirement on every developer's laptop.
+// Inside the gate it is the opposite. Docker is a declared prerequisite
+// there, so the same condition means the gate's own machine is broken, and
+// a skip quietly deletes this suite from the run while the run goes on
+// printing ok.
+//
+// That is not hypothetical (#456). Start used to fail a WEDGED daemon,
+// three lines above a skip for an UNREACHABLE one, and a Docker VM that
+// dies mid-run is unreachable rather than wedged. In one stored gate log it
+// did exactly that: 13 of the 14 conformance mutation cells printed
+// `ok ... 0.08s` against a dead daemon, and one cell happened to refuse,
+// which is the only reason anybody noticed.
+//
+// So under the gate this is a failure carrying infraMarker. The one way
+// past it is CI_LOCAL_SKIP_DOCKER=1, the gate's own documented opt-out for
+// a run with the daemon down, which already ledgers that run as INCOMPLETE.
+func dockerUnavailable(t *testing.T, reason string, args ...any) {
+	t.Helper()
+	detail := fmt.Sprintf(reason, args...)
+	if gateRequiresDocker() {
+		t.Fatalf("%s sftpfixture: %s\nDocker is a declared prerequisite of this gate (CI_LOCAL=1), so this is an INFRASTRUCTURE failure and not a product one: the machine could not offer a docker daemon. Skipping here would take the SFTP suite out of the run while the gate still printed ok, which is #456.", infraMarker, detail)
+	}
+	t.Skipf("sftpfixture: SKIPPING (missing capability: %s)", detail)
+}
+
+// gateRequiresDocker reports whether this process is inside the local gate,
+// which declares docker a prerequisite. scripts/ci-local.sh exports
+// CI_LOCAL=1. CI_LOCAL_SKIP_DOCKER=1 is that same gate's documented opt-out
+// for a run with the daemon down, and it already ends the run INCOMPLETE,
+// so it is honoured here rather than overruled: a fixture that refused
+// anyway would make that flag a lie.
+func gateRequiresDocker() bool {
+	return os.Getenv("CI_LOCAL") == "1" && os.Getenv("CI_LOCAL_SKIP_DOCKER") != "1"
+}
+
 // Start launches a disposable SFTP server for the duration of the calling
-// test and registers cleanup. It skips (rather than fails) the test when the
-// required external tools are unavailable, since this fixture is evidence
-// for the embedding gate, not a requirement on every developer machine.
+// test and registers cleanup. On a developer machine it SKIPS when the
+// external tools it needs are unavailable, since this fixture is evidence
+// for the embedding gate rather than a requirement on every machine. Inside
+// the gate, where docker is a declared prerequisite, the same condition
+// FAILS instead and says INFRA:, because skipping there deletes the suite
+// from a run that goes on reporting ok (#456).
 func Start(t *testing.T) *Fixture {
 	t.Helper()
 	return StartWith(t, Options{})
@@ -291,20 +340,23 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 
 	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("sftpfixture: SKIPPING (missing capability: %q not found on PATH): %v", tool, err)
+			dockerUnavailable(t, "%q not found on PATH: %v", tool, err)
 		}
 	}
 	f.setStage("docker info")
 	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
-		// A daemon that is absent is a capability this machine does not
-		// have, and skipping is honest. A daemon that is present but not
-		// answering is not: skipping there would quietly delete the whole
-		// SFTP suite from the gate, which is the failure mode #160 is
-		// about. So the two get different verdicts.
+		// A daemon that is absent from a developer's machine is a
+		// capability that machine does not have, and skipping is honest.
+		// A daemon that is present but not answering is not, and neither
+		// is one absent from the gate's own machine, where docker is a
+		// declared prerequisite: skipping either would quietly delete the
+		// whole SFTP suite from the gate, which is the failure mode #160
+		// is about and the one #456 reopened. dockerUnavailable is where
+		// that verdict is made.
 		if errors.Is(err, errDockerTimedOut) {
-			t.Fatalf("sftpfixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", dockerInfoTimeout, err, errOut)
+			t.Fatalf("%s sftpfixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
 		}
-		t.Skipf("sftpfixture: SKIPPING (missing capability: docker daemon not reachable, Docker itself appears absent or not running here): %v\n%s", err, errOut)
+		dockerUnavailable(t, "docker daemon not reachable, Docker itself appears absent or not running here: %v\n%s", err, errOut)
 	}
 
 	f.setStage("creating the run directory")
