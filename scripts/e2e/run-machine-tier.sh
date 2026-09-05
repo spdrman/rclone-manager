@@ -21,9 +21,16 @@
 #   * the SOURCE machines, created by the harness inside the manager, one
 #     per test, from scripts/e2e/source-machine.Dockerfile.
 #
-# Then it runs `go test` for the machine-tier packages inside the manager
-# with RCLONE_MANAGER_MACHINES_NETWORK set, so nothing publishes a port and
-# every address a test uses is the address a real manager would use.
+# Then it runs the machine-tier packages inside the manager with
+# RCLONE_MANAGER_MACHINES_NETWORK set, so nothing publishes a port and every
+# address a test uses is the address a real manager would use.
+#
+# It runs them under core/cmd/gotestwatch rather than under a bare
+# `go test`, which is the same wrapper scripts/ci-local.sh puts them under
+# and for the same reason (#256): a machine-tier package's wall clock tracks
+# real machine load, and a fixed -timeout chosen on a quiet machine kills a
+# run that is still making progress. Being a drop-in for that step is the
+# point, so it takes --race too.
 #
 # # The docker socket question, answered
 #
@@ -128,6 +135,7 @@ packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/.
 keep=0
 run_filter=""
 verbose=""
+race=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --packages) packages="${2:-}"; shift 2 ;;
@@ -139,13 +147,18 @@ while [ $# -gt 0 ]; do
     # test is invisible without it: reading a measurement out of this
     # placement is otherwise only possible by making it fail.
     -v|--verbose) verbose="-v"; shift ;;
+    # `go test -race`, which is what the gate runs the machine tier with.
+    # Off by default here because a race build costs compile time and the
+    # cost figures in this header were measured without it; on when this
+    # driver is standing in for the gate's own step.
+    --race) race="-race"; shift ;;
     # Leaves the manager container and the network up after a FAILING run,
     # for reading. Never the default.
     --keep-on-failure) keep=1; shift ;;
     -h|--help)
       sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--race] [--keep-on-failure]" ;;
   esac
 done
 
@@ -319,7 +332,28 @@ note "manager: $manager (uid $uid, on $net, socket reachable)"
 
 # ---------------------------------------------------------------- the run
 
-step "running the machine tier inside the manager machine"
+step "compiling the tier inside the manager machine"
+# Before the watched run, not inside it.
+#
+# gotestwatch bounds a run by the pace of its own test events, and its
+# unmeasured floor is 45 seconds: nothing has been observed yet, so that is
+# all it has to go on. A cold compile inside this container takes longer
+# than that and emits no test event while it works, so the first thing the
+# watchdog sees is 45 seconds of silence and it kills a run that was
+# building normally. That is not a gotestwatch bug. In scripts/ci-local.sh
+# the gotestwatch step is preceded by a whole `go test ./...` step, so the
+# build cache is warm by the time anything is watched; this driver had no
+# such step, and this is it.
+#
+# `-run ^$` compiles and links every test binary and runs no test in it, so
+# nothing here starts a container.
+compile_started="$(date +%s)"
+docker exec "$manager" go test $race -count=1 -run '^$' $packages >/dev/null \
+  || die "the machine-tier packages do not compile inside the manager machine." \
+         "Nothing below can run, and this is a build failure rather than a test one."
+note "compiled in $(( $(date +%s) - compile_started ))s"
+
+step "running the machine tier inside the manager machine, under gotestwatch"
 note "packages: $packages"
 [ -n "$run_filter" ] && note "filter:   -run $run_filter"
 note "no port is published by any source or medium: RCLONE_MANAGER_MACHINES_NETWORK=$net"
@@ -327,7 +361,7 @@ note "no port is published by any source or medium: RCLONE_MANAGER_MACHINES_NETW
 started="$(date +%s)"
 set +e
 # shellcheck disable=SC2086
-docker exec "$manager" go test -count=1 $verbose ${run_filter:+-run "$run_filter"} $packages
+docker exec "$manager" go run ./cmd/gotestwatch $race -count=1 $verbose ${run_filter:+-run "$run_filter"} $packages
 status=$?
 set -e
 elapsed=$(( $(date +%s) - started ))
