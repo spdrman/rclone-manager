@@ -79,7 +79,12 @@
 # too, plus the detector. And a separate step is one more thing that can be
 # commented out, skipped or quietly reordered, which is the failure this
 # gate is built around (#160); a flag on the step that has to run anyway
-# cannot be left out without deleting the step.
+# cannot be left out without deleting the step. It also settles what a
+# detected race does: the step it is on is the step this gate already had
+# to run, so a race is a red suite and a red suite is a FAILED verdict
+# naming it. There is no opt-out variable, and no ledger entry, because a
+# ledgered race would be this gate reporting on a defect it decided not to
+# act on.
 #
 # Measured on this machine rather than estimated, warm cache, twice each:
 # core/ minus the four Docker-backed suites went 131s -> 176s, those four
@@ -248,8 +253,31 @@ gate_step "apps/common go build, vet, test -race"
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-gate_docker_step "distribution go build, vet, test -race"
-(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
+gate_docker_step "distribution go build, vet, test -race (every package but packaging, which runs next)"
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -v '/packaging$'))
+
+# The one Go suite in this gate that does NOT run under the detector, and
+# the only one, which is why it gets a paragraph rather than a flag.
+#
+# distribution/packaging is a static-analysis suite: it reads this
+# repository's own manifests, matrices, READMEs and release records and
+# asserts they agree with each other. It contains no `go` statement, in
+# product code or in tests, no t.Parallel anywhere, and one sync.Once used
+# to memoise a fixture. There is no second goroutine for the detector to
+# find a race between, so -race there cannot report anything, ever.
+#
+# What it can do is cost. This is also the most CPU-bound package in the
+# repository (four of its epic-matrix cases alone are 14.5s, 7.4s, 7.1s and
+# 6.9s of pure graph and text analysis), which is exactly the shape race
+# instrumentation multiplies: PACKAGING_NUMBERS
+#
+# So it is left out on purpose, marked on the command line so the gate's
+# own self-test can see it, and Group K of that self-test asserts this is
+# the ONLY line carrying that marker. A second one appearing without
+# somebody deciding to add it is the thing that would make this exclusion
+# rot.
+gate_step "distribution/packaging (the static-analysis suite, no -race: see above)"
+(cd distribution && GOWORK=off go test ./packaging/) # no -race: no goroutine anywhere in the package, so nothing to detect, at PACKAGING_COST
 
 gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)

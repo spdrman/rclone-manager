@@ -1184,7 +1184,7 @@ echo "==> K. the race detector is on, and on everything"
 # which is a rule a new module cannot be added around by accident.
 
 # race_flag_problems <path to a ci-local.sh> -> one line per invocation
-# that runs a Go suite without the detector.
+# that runs a Go suite without the detector and without saying why.
 #
 # It reads command lines only: `GOWORK=off go test` is how every suite in
 # this gate is actually invoked, and `cmd/gotestwatch` is the one that runs
@@ -1192,14 +1192,30 @@ echo "==> K. the race detector is on, and on everything"
 # are prose about those commands and are skipped, which matters because at
 # least one heading says "go test -timeout" while describing the flag it
 # does NOT pass.
+#
+# A trailing `# no -race: <reason>` on the command line itself is the one
+# way out, and it is not a loophole because it is counted: K4 below asserts
+# how many lines carry it and which. An exclusion nobody can enumerate is
+# how a gate ends up not running the thing it says it runs.
 race_flag_problems() {
   awk '
     /^[[:space:]]*#/ { next }
     /GOWORK=off go test/ && !/GOWORK=off go test -race/ {
-      printf "  a Go suite runs without -race, line %d: %s\n", NR, $0
+      if ($0 ~ /# no -race: [^ ]/) { next }
+      printf "  a Go suite runs without -race and without a reason, line %d: %s\n", NR, $0
     }
     /cmd\/gotestwatch/ && !/gotestwatch -race/ {
       printf "  the gotestwatch suites run without -race, line %d: %s\n", NR, $0
+    }
+  ' "$1"
+}
+
+# race_flag_exceptions <path> -> one line per deliberate exclusion.
+race_flag_exceptions() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /GOWORK=off go test/ && !/GOWORK=off go test -race/ && /# no -race: [^ ]/ {
+      printf "%d: %s\n", NR, $0
     }
   ' "$1"
 }
@@ -1258,6 +1274,36 @@ assert_contains "K3 the gotestwatch step announces the detector" \
   'under gotestwatch, -race' "$out"
 assert_contains "K3 the other Go modules announce it too" \
   'apps/common go build, vet, test -race' "$out"
+
+# K4: the exclusions, enumerated. One suite is deliberately out
+# (distribution/packaging: no goroutine anywhere in it, so nothing to
+# detect, and it is the most CPU-bound package here). That is a decision
+# somebody made with a number in hand, and this is what keeps the next one
+# from being made by accident: the count is pinned, so a second exclusion
+# fails here until it is added on purpose.
+k4_exceptions="$(race_flag_exceptions "$real_gate")"
+k4_count="$(printf '%s' "$k4_exceptions" | grep -c . | tr -d '[:space:]')"
+assert_eq "K4 exactly one Go suite in the gate is excluded from -race" 1 "$k4_count"
+assert_contains "K4 the exclusion is distribution/packaging" './packaging/' "$k4_exceptions"
+assert_contains "K4 the exclusion says why on the line itself" \
+  'no goroutine anywhere in the package' "$k4_exceptions"
+
+# K4's control: the enumeration notices a new one. Without this, K4's count
+# assertion would also pass against a scan that can no longer see any
+# exclusion at all.
+tree="$(make_full_tree)"
+script="$tree/scripts/ci-local.sh"
+sed -i.bak 's|^(cd apps/common && \(.*\)go test -race \./\.\.\.)$|(cd apps/common \&\& \1go test ./...) # no -race: a second exclusion nobody decided on|' "$script"
+rm -f "$script.bak"
+k4_mutant="$(race_flag_exceptions "$script")"
+k4_mutant_count="$(printf '%s' "$k4_mutant" | grep -c . | tr -d '[:space:]')"
+if [ "$k4_mutant_count" -eq 2 ]; then
+  pass "K4 a second exclusion is counted, so the count assertion has teeth"
+else
+  fail "K4 a second exclusion is counted, so the count assertion has teeth" \
+    "the mutation should have produced 2 exclusions, the scan found $k4_mutant_count:
+$k4_mutant"
+fi
 
 # ------------------------------------------------------------------ result
 

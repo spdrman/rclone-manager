@@ -209,13 +209,19 @@ const (
 	// elapsed-time precondition checks against.
 	contimeoutForTest = 500 * time.Millisecond
 	// connectTimeoutSamples is how many times row 1 dials. One dial samples
-	// one side of the race described above, and the side it draws decides
-	// whether the row is discriminating at all, so it dials several times
-	// and demands the same category from every one of them. Measured through
-	// this exact path (rclone's sftp backend at 192.0.2.1, 40 dials), 33 of
-	// 40 carried context.DeadlineExceeded, which puts the odds of six
-	// samples all drawing the other shape at roughly three in a hundred
-	// thousand.
+	// one side of the race described above, so it dials several times and
+	// demands the same category from every one of them, which is the part
+	// of the claim that holds whichever side each dial draws.
+	//
+	// It used to carry a second job: at least one dial had to draw the
+	// shape that used to be misclassified, or the row proved nothing. That
+	// worked out at three in a hundred thousand on the machine it was
+	// written on (33 of 40 dials there) and nothing like it on a busy one,
+	// where the same measurement fell to roughly two in five, and it failed
+	// twice running once the gate's Go suites moved under -race (#417). So
+	// that job moved to connectTimeoutShapeThatUsedToBeCancelled, which
+	// makes the same claim with no dial in it, and this number is back to
+	// being only about sampling both sides of a real dial.
 	connectTimeoutSamples = 6
 )
 

@@ -1164,7 +1164,15 @@ still run and still report `ok`. So Group K of the gate's own self-test pins the
 follows: not "there is a race step" but "no `go test` in this gate runs without the
 detector", which is a rule a new module cannot be added around by accident.
 
+A detected race fails the run rather than joining the skip ledger, and there is no opt-out
+variable for it. That falls out of it being a flag: the step it is on is the step the gate
+already had to run, so a race is a red suite and a red suite is `==> ci-local: FAILED`
+naming it. A ledgered race would be a check reporting on a defect it decided not to act on,
+which is the one thing this gate is not allowed to do.
+
 RACE_COST_TABLE_PLACEHOLDER
+
+DISTRIBUTION_EXCLUSION_PLACEHOLDER
 
 Turning it on found two things in `core/internal/transport/rclone` on the first run, and
 neither was a flake. One is a real data race, in rclone v1.75.0's `lib/atexit` rather than
