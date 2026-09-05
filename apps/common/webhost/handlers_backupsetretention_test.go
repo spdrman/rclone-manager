@@ -11,6 +11,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// One backup set's retention override: reading it, replacing it, and
+// going back to inheriting.
+//
+// The pairing test is the important one. Set and clear are the two
+// directions of a single piece of state, and testing either alone leaves
+// the obvious bug uncovered: a clear that does not actually clear looks
+// identical to a set that was never applied.
+//
+// The empty-versus-absent case is this file's version of the sparse-update
+// distinction. A tier list that is present and empty says keep nothing,
+// and an absent one says inherit; collapsing them would silently turn an
+// override into an inheritance or the reverse, and only one of those
+// deletes backups.
+//
+// Refusals from the configuration layer are echoed rather than
+// reinterpreted, so an operator sees the same reason a hand-edited config
+// file would have given them.
+
 const retentionRoute = "/api/v1/backup-sets/production/postgres-primary/retention"
 
 func retentionRouterWith(t *testing.T, backend BackupServiceClient) http.Handler {

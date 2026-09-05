@@ -8,6 +8,21 @@ import (
 	"testing"
 )
 
+// The fixtures every other test in this package is built on.
+//
+// The synthetic ELF is the one that needs explaining. Several checks read
+// a binary's ELF header to confirm the architecture matches what INFO
+// declares, so the fixture has to be a file with a real, controllable ELF
+// machine field; checking in seven prebuilt binaries would make the test
+// suite carry megabytes of opaque blobs, and cross-compiling during the
+// test would need a toolchain the test host may not have. A handcrafted
+// header with an arbitrary payload behind it is exactly as much file as
+// the checks actually read.
+//
+// The manifest fixture derives its digests from the staged binaries rather
+// than hardcoding them, so a parity test proves the verifier compares
+// correctly rather than proving two constants in this file agree.
+
 // fakeELF builds a minimal but genuinely parseable ELF64 little-endian
 // executable header for machine, followed by payload.
 //

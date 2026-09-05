@@ -7,6 +7,24 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/csrf"
 )
 
+// This package verifies CSRF tokens and never issues them.
+//
+// That split is the thing to know before reading the function below. The
+// cookie has to exist before any request can echo it, and the response
+// that seeds it is usually the very first page load, which this package
+// does not serve; whichever caller composes the outer handler is
+// responsible for wrapping EnsureCSRFCookie around everything, and
+// apps/common/webhost/serve does exactly that for both of its handlers.
+// The failure mode when somebody forgets is a uniform 403 on every
+// mutating route, which reads like a bug in this file and is not.
+//
+// The check itself lives in apps/common/csrf because
+// apps/common/auth/local needs the identical one, and one of the two
+// packages having a slightly different idea of what counts as a match is
+// the drift this arrangement exists to make impossible. What stays here is
+// only the translation into this package's error envelope, which is not
+// the same as that package's.
+
 // requireCSRF refuses a mutating request unless it carries a valid
 // double-submit CSRF token (apps/common/csrf.Verify) - the same
 // primitive apps/common/auth/local applies to its own login/enroll/logout

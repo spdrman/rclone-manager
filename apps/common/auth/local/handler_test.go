@@ -12,6 +12,23 @@ import (
 	"testing"
 )
 
+// End-to-end tests over a real httptest server with a real cookie jar,
+// rather than direct handler calls.
+//
+// The jar is the reason. Almost everything this package gets right depends
+// on cookies moving the way a browser moves them: the CSRF cookie has to
+// be seeded by an earlier response before any POST can echo it, the
+// session cookie has to survive between requests, and logout has to
+// actually clear it. Calling handlers directly with hand-built requests
+// would let a broken cookie path pass, because the test would be supplying
+// by hand exactly what the browser is supposed to supply on its own.
+//
+// testServer also wraps the mux in EnsureCSRFCookie rather than mounting
+// Handler bare, because that is the composition a caller is required to
+// build and the one where the middleware ordering can go wrong. A test
+// harness that skipped it would 403 on every mutating route, which is the
+// tell that the wrapping is load-bearing rather than decorative.
+
 // testServer wires a fresh Service's Handler behind EnsureCSRFCookie,
 // exactly as apps/generic's own composed handler does, and returns an
 // httptest.Server plus a *http.Client carrying a cookie jar (so the

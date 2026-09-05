@@ -10,14 +10,6 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// maxSetBackupSetRetentionBodyBytes bounds PUT
-// .../retention's request body. A retention policy is a short list of
-// small objects, so this is the same generous headroom every other write
-// route in this package uses rather than a number tuned to a chain length
-// that would then be a second, undocumented limit on how many tiers a
-// deployment may have.
-const maxSetBackupSetRetentionBodyBytes = 1 << 20 // 1 MiB
-
 // This file is issue #333's per-set retention routes:
 //
 //	GET    /api/v1/backup-sets/{source}/{set}/retention
@@ -59,6 +51,14 @@ const maxSetBackupSetRetentionBodyBytes = 1 << 20 // 1 MiB
 // plan time, and the surface in front of the human is what shows the two
 // chains before the change is made. BackupSetRetention.deployment is
 // served on every one of these responses so a client can do that.
+
+// maxSetBackupSetRetentionBodyBytes bounds PUT
+// .../retention's request body. A retention policy is a short list of
+// small objects, so this is the same generous headroom every other write
+// route in this package uses rather than a number tuned to a chain length
+// that would then be a second, undocumented limit on how many tiers a
+// deployment may have.
+const maxSetBackupSetRetentionBodyBytes = 1 << 20 // 1 MiB
 
 // backupSetRetentionResponse is the wire shape of
 // service.BackupSetRetention: which policy is deciding for this set,

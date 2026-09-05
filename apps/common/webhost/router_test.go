@@ -9,6 +9,25 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// The structural proofs about the route table, as distinct from tests of
+// what any individual route does.
+//
+// Both of the important ones are written so that they cannot go stale.
+// The authentication test walks the router's own registered routes with
+// chi.Walk and fires an unauthenticated request at every one of them,
+// rather than checking a hand-maintained list, because a list stops
+// proving anything the day somebody adds a route and does not update it.
+// The destructive-gate test works from an explicit exemption list, which
+// is the opposite arrangement on purpose: there the safe default is to
+// require a decision, so a new route is exempt only if somebody named it
+// and wrote down why.
+//
+// The adapter these run against is not a deny-everything stub built to
+// make the test green. It is what a provider genuinely looks like today,
+// with no authenticator wired, and every route failing closed against it
+// is the whole fail-closed-by-construction argument rather than a
+// contrivance.
+
 // TestNoAPIRouteBypassesAuthentication is issue #94's REGRESSION
 // requirement made concrete: "no route bypasses the auth abstraction
 // (write a test proving this, not just an assertion in prose)". Rather

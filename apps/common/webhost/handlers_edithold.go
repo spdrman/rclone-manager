@@ -10,6 +10,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The edit hold: a short lease that stops a run cycle from working on a
+// backup set while somebody is changing it.
+//
+// The interesting design decision here is the null. The state response
+// carries what taking a hold WOULD interrupt as a pointer, so "nothing is
+// running" is a null rather than a zero-valued object, and a client that
+// gets null opens edit mode with no prompt at all. A zero object would
+// render as a warning about a risk that does not exist, and an operator
+// who is warned about nothing stops reading warnings.
+//
+// The same reasoning runs through the take response: it reports what it
+// actually interrupted, so a client never claims to have stopped something
+// that was not happening. And the warning distinguishes a named artifact
+// mid-transfer from a cycle that has only reached discovery, because those
+// two cost an operator very different amounts to discard and only the
+// specific message lets them choose.
+
 // runningWorkResponse names what a run cycle is doing for one backup set
 // right now. It is the content of the warning an operator sees before
 // entering edit mode, and the reason that warning is worth showing at

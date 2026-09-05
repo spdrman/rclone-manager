@@ -9,6 +9,20 @@ import (
 	"time"
 )
 
+// The persistence rules, including the two the rest of this package leans
+// on without re-checking.
+//
+// Enroll being single-shot is one: every caller assumes an existing
+// administrator cannot be overwritten, and this is the only place that is
+// actually proved. SetPassword preserving the username and creation time
+// is the other, because it does a read-modify-write and the easy mistake is
+// to write a fresh record with only the field that changed.
+//
+// The plaintext test reads the raw file rather than the parsed struct, on
+// purpose. A struct-level assertion would pass even if the plaintext were
+// sitting in a field nothing maps back, and what actually matters is what
+// somebody who cats the file can see.
+
 func TestStore_AdminIsNilBeforeAnyEnrollment(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
 	admin, err := store.Admin()

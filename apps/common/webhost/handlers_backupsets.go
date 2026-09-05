@@ -12,6 +12,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// Backup-set CRUD: create, list, read, update, remove, and the two
+// per-set toggles.
+//
+// Creation is the route with the conditional gate, and it is the only
+// place in this package where the destructive gate is consulted from
+// inside a handler rather than from the route table. Persisting a backup
+// set touches no backup data, so the route is not gated; but the same call
+// with run_immediately set also starts a run cycle, which is precisely
+// what the gate exists to block. Gating the route would make it impossible
+// to configure anything before #92; not checking at all would make
+// run_immediately an ungated way to start work. So the check is on the
+// branch.
+//
+// Removal is the other one worth reading before changing. It writes
+// configuration and deletes nothing: every artifact the set produced stays
+// on storage and stays listed. The button says Remove and the dialog is
+// styled destructive, which is why the tier is easy to get wrong, and §50
+// decides by what is touched rather than by how it reads.
+//
+// backupSetSpec is shared with the first-run route rather than duplicated,
+// because those two write the same shape into two different situations and
+// the published contract shares it too.
+
 // maxCreateBackupSetBodyBytes bounds POST /api/v1/backup-sets' request
 // body, the same rationale as maxSubmitOperationBodyBytes
 // (handlers_operations.go): generous headroom over any legitimate

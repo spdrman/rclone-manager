@@ -11,6 +11,22 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
+// Argon2id hashing, and the format that makes a stored hash
+// self-describing.
+//
+// The encoded string carries its own version and cost parameters rather
+// than relying on the constants above, and verifyPassword reads them back
+// out of the string instead of assuming today's values. That is what makes
+// raising the cost parameters a one-line change: every hash already
+// written stays verifiable at the cost it was created with, and only a
+// later rotation moves it up. A verifier that used the current constants
+// would silently reject every existing password the day somebody tuned
+// them.
+//
+// The parameters themselves are sized for one administrator signing in a
+// handful of times a day, not for a login surface under load, so they sit
+// comfortably above OWASP's floor rather than at it.
+
 // Argon2id parameters for a single administrator account authenticating
 // at most a handful of times a day, not a high-QPS multi-tenant login
 // surface: comfortably above OWASP's minimum (m=19MiB, t=2, p=1) without

@@ -5,6 +5,25 @@ import (
 	"time"
 )
 
+// Creating the administrator from the command line, without the browser
+// flow.
+//
+// This exists because the bootstrap-token flow assumes somebody can watch
+// the process's log and then reach its port, and an automated deployment
+// can do neither. #322 is the issue; the interesting part is why adding it
+// does not weaken §49.1.
+//
+// §49.1 protects against an untrusted network peer claiming an unclaimed
+// instance. CreateAdmin is not reachable from the network at all: it needs
+// write access to the store path, which is a trust boundary this product
+// already hands everything else to, the config file and the state database
+// and the SSH keys included. Somebody who has that does not need to steal
+// the account, they already own everything the account could reach.
+//
+// What it does have to get right is the concurrency, because it writes
+// straight past Service's read-modify-write cycle. It takes the same
+// exclusive lock a running Service holds, and refuses rather than waits.
+
 // CreateAdminConfig is the input to CreateAdmin.
 type CreateAdminConfig struct {
 	// StorePath is where the administrator record is persisted - the

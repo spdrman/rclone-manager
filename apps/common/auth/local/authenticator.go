@@ -7,6 +7,22 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
 
+// The read half of a session: given a request, is somebody signed in, and
+// who.
+//
+// It is separate from session.go because the two answer to different
+// callers with different shapes. session.go serves this package's own HTTP
+// handlers, which hold a *http.Request; this file serves
+// apps/common/webhost's authMiddleware through capabilities.Authenticator,
+// which was deliberately given only headers and a remote address so that
+// the contract does not drag net/http's whole request type across the
+// provider seam. The cost of that narrowing is paid here, once, in
+// cookieValue.
+//
+// Nothing in this file can create or extend a session, only recognise one.
+// That is what lets webhost consult it on every single /api/v1 request
+// without any risk of a read silently refreshing a credential.
+
 // sessionAuthenticator adapts sessionManager's cookie-based session
 // lookup to capabilities.Authenticator, the seam apps/common/webhost's
 // authMiddleware consults for every /api/v1 request (see that package's

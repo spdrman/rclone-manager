@@ -13,6 +13,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The artifact reads, where the interesting cases are about telling
+// "nothing matched" apart from "you asked for something that does not
+// exist".
+//
+// A filter naming an unknown backup set is refused rather than answered
+// with an empty list, and a known set with no backups is an empty array.
+// Those two look the same to a client that only checks the length, and
+// they mean opposite things: one is a typo in a request and the other is a
+// deployment that has not run yet.
+//
+// The every-field case exists because this is a projection, and a
+// projection silently stops carrying a field the day somebody adds one to
+// the source type without touching the mapper.
+
 // readSurfaceRouter is issue #211's routes over the plain syncFakeBackend,
 // whose fields a test arranges directly. One helper rather than one per
 // file: every route below is exercised the same way, and a second copy of

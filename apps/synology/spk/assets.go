@@ -8,6 +8,24 @@ import (
 	"strings"
 )
 
+// Everything the package ships verbatim: the lifecycle scripts, the DSM
+// privilege and resource declarations, the desktop UI directory and the
+// starter configuration.
+//
+// They are files on disk embedded into the binary rather than string
+// literals in Go, and that is the decision worth recording. A reviewer
+// reading conf/privilege is then reading the exact bytes DSM will read,
+// with shell syntax highlighting and no escaping between them and it; a
+// privilege declaration hidden inside a quoted Go string is a privilege
+// declaration nobody reviews properly.
+//
+// The distinction between a shipped script and a lifecycle script matters
+// here. scripts/ also carries common.sh, which three stages source and
+// which is not itself a stage, so the accessors keep those two sets apart:
+// counting it as a stage would make "does this package implement every
+// stage" unanswerable, and skipping it during the safety scan would leave
+// the shared code unscanned.
+
 // assetFS holds every file this package ships verbatim inside the `.spk`:
 // the lifecycle scripts, conf/privilege and conf/resource, the DSM
 // desktop UI directory, and the starter configuration.

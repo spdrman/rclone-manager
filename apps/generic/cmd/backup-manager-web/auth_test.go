@@ -9,6 +9,24 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 )
 
+// The create-admin subcommand, and mostly its stdin handling.
+//
+// Reading a password from stdin sounds trivial and has three cases that a
+// naive read gets wrong, all of which end with an operator unable to log
+// in with the password they thought they set: a trailing newline that must
+// come off, a CRLF that must come off as a unit rather than leaving a
+// stray carriage return in the password, and input with no trailing
+// newline at all that must be left alone. None of those produce an error;
+// they produce a password that is one byte different from the one that was
+// typed.
+//
+// Empty input is refused rather than accepted as an empty password, which
+// is the one case where doing nothing would be actively dangerous.
+//
+// withStdin swaps the package-level os.Stdin, which is safe only because
+// nothing in this package runs in parallel. That is a real constraint on
+// anybody adding a t.Parallel() here.
+
 // withStdin temporarily redirects the package-level os.Stdin to a pipe
 // fed with content, restoring the original *os.File on cleanup. Safe
 // because this package's tests never run in parallel (none call

@@ -9,6 +9,32 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
 
+// The route table, which is where this package's security tiering
+// actually lives.
+//
+// Every route is one of three tiers, and the tier is decided by what the
+// route touches rather than by how the button reads. Read-only routes
+// carry neither CSRF nor the destructive gate. State-changing but
+// non-destructive routes carry CSRF: they write configuration, move a
+// journal row, or open an outbound connection, none of which touches
+// backup data. The two routes that can delete backup data carry both.
+// docs/EPIC-B-multi-nas.md §50 is the source of those buckets, and the
+// long comments below are the per-route argument for which one applies,
+// several of which were argued out in review and would otherwise be
+// re-litigated by the next person adding a route.
+//
+// Two structural decisions make the tiering hold rather than merely
+// describe it. Authentication is applied once through r.Use on the whole
+// /api/v1 group, so there is no way to add a route inside this function
+// that skips it. And the return type is http.Handler rather than *chi.Mux,
+// so a caller cannot register further routes onto the value this returns,
+// outside the reach of the test that proves no route bypasses auth.
+//
+// The unconfigured branch near the top is the same idea again: a fresh
+// install gets a different, much smaller table rather than this one with
+// guards sprinkled through it, so a route added below is unreachable
+// before setup by construction instead of by somebody remembering.
+
 // RouterConfig is everything NewRouter needs to build the /api/v1 surface.
 type RouterConfig struct {
 	// Platform supplies both the Authenticator every /api/v1 request is

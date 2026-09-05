@@ -9,6 +9,29 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 )
 
+// The engine half of the two-container split: the process that holds the
+// API, the backend and the scheduler, and has no published port.
+//
+// Everything a provider varies is a field on EngineConfig rather than a
+// type this file knows about, which is what lets a provider with no local
+// authentication at all reuse this composition without ever importing
+// apps/common/auth/local. AuthRoutes being nil is a supported shape, not a
+// degraded one: a platform that authenticates purely off a gateway header
+// has no login page to serve, and this registers no /api/v1/auth route
+// rather than mounting a nil handler.
+//
+// TrustForwardedHeaders is its own field rather than something read back
+// off the adapter, and that redundancy is deliberate. It decides the CSRF
+// cookie's Secure flag, while the auth service decides the session
+// cookie's, and two settings derived from different places is exactly how
+// a deployment ends up with one of the two cookies Secure and the other
+// not. A caller passes the same value to both.
+//
+// The construction-time identity-boundary check is the other thing to know
+// before editing this file: an adapter that declares native auth but whose
+// trust boundary does not resolve strips every identity header, so nobody
+// can sign in, and it refuses at startup rather than serving that.
+
 // EngineConfig is everything NewEngine needs to build one provider's
 // engine-container HTTP surface.
 type EngineConfig struct {

@@ -103,6 +103,16 @@ func Verify(r *http.Request) error {
 	return nil
 }
 
+// randomToken returns n bytes of crypto/rand, base64url encoded. Callers
+// pass 32, which is well past what an attacker could reach by guessing;
+// the parameter exists so the size is visible at the call site rather than
+// buried here.
+//
+// The error is returned rather than panicked on, and EnsureCookie's caller
+// simply issues no cookie when it fires. A process whose randomness source
+// has failed cannot issue a safe token at all, and serving a predictable
+// one would be worse than serving none: without a cookie the check refuses
+// every request, which is the direction to fail in.
 func randomToken(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {

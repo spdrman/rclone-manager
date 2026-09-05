@@ -8,6 +8,26 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The wizard's three SSH steps: import a key, probe a host key, test a
+// connection.
+//
+// What they have in common is that none of them ever puts key material
+// back on the wire. An import answers with a reference; the server-side
+// path the reference resolves to does not appear in the response either,
+// because a path is a hint about the host's filesystem that a browser has
+// no use for.
+//
+// The two probes look like reads and are not treated as reads. Each opens
+// a real outbound TCP or SSH connection to a host and port the caller
+// chose, which makes this server into a network-probing instrument aimed
+// at whatever is reachable from it, and that is a side effect worth a CSRF
+// token even though nothing is persisted. They used to be listed as
+// CSRF-exempt, and that was the gap.
+//
+// The body limits differ per route on purpose: a private key is the only
+// thing here that legitimately runs to kilobytes, so the probe routes get
+// much tighter ceilings rather than inheriting one generous number.
+
 // maxImportSSHKeyBodyBytes bounds POST /api/v1/ssh-keys' request body.
 // The largest private key this project has any real reason to see (an
 // RSA-4096 PEM) is a few kilobytes (core/internal/transport/rclone/

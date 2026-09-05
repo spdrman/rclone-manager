@@ -10,6 +10,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// One route for every administrable setting, and one line about where
+// that generality stops.
+//
+// The temptation with a settings API is a passthrough: accept a config key
+// and a value, and never touch this file again. This is the opposite. Every
+// field is enumerated, so there is no spelling in this type for the state
+// database path, a backup set's remote, or a validator command, and a
+// caller cannot reach them by naming them. Whatever does get through is
+// still handed to the same config.Validate a hand-edited YAML file goes
+// through at boot, and is refused whole rather than applied partially.
+//
+// Every field is a pointer because PATCH means "change what I named". A
+// plain value cannot tell a zero somebody sent from a key they omitted,
+// and on a retention policy those two mean opposite things: one says keep
+// nothing, the other says leave the tier alone.
+//
+// This route is not behind the destructive gate, and that was
+// deliberately re-argued under red-team review. The argument is in
+// router.go on the route itself, along with the tests that hold it,
+// because that is where somebody deciding the tier of the NEXT mutating
+// route will be reading.
+
 // maxSettingsBodyBytes bounds PATCH /api/v1/settings' request body, the
 // same rationale as maxCreateBackupSetBodyBytes
 // (handlers_backupsets.go). A retention chain is a short list of small
@@ -240,6 +262,15 @@ type retentionSettingsBody struct {
 	ProtectLastKnownGood bool                `json:"protect_last_known_good"`
 }
 
+// settingsSchemaBody is the validation the server will actually apply,
+// served alongside the settings themselves.
+//
+// It exists so a form does not have to invent its own bounds. A frontend
+// that hardcoded the allowed granularities, the tier-name pattern or the
+// maximum keep count would be a second copy of a rule that lives in
+// core/internal/config, and the day the two disagree the user gets a
+// client-side error for a value the server would have accepted, or,
+// worse, a client-side pass for one it will not.
 type settingsSchemaBody struct {
 	Retention retentionSchemaBody `json:"retention"`
 	Storage   storageSchemaBody   `json:"storage"`

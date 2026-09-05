@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+// The shell scanner, tested against the scripts that ship and against
+// invented ones.
+//
+// Both are needed and neither substitutes for the other. Running it over
+// the real scripts proves what ships is safe today; running it over
+// deliberately unsafe snippets proves the scanner can say no at all, which
+// is the assertion that stops it decaying into a function that returns an
+// empty list.
+//
+// The determinism case exists because this scanner resolves variables by
+// walking assignments, and a resolution that depended on map ordering
+// would produce a check that passes on one run and fails on the next,
+// which is worse than a check that always fails.
+//
+// The common.sh case reads the shared file out of the archive rather than
+// from disk. A scanner that checked the working tree's copy would approve
+// a package whose embedded copy differs, and the embedded copy is the one
+// that runs as root on somebody's NAS.
+
 // TestLifecycleScripts_DeleteNothingOutsideThePackageFootprint is the
 // static half of issue #85's uninstall/retained-data safety criterion.
 // The hardware half (docs/acceptance/synology-dsm-package-lifecycle.md

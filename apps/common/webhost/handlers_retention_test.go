@@ -12,6 +12,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The preview and the apply, tested as the pair they are.
+//
+// The asymmetry between them is asserted directly: the preview is reached
+// without a CSRF token and without the destructive gate, and the apply is
+// not. That pairing is what makes the tiering real rather than a comment
+// on the route table.
+//
+// The stale-plan case is the one that carries the safety argument several
+// other routes in this package lean on. An apply names a plan by id, and a
+// plan that no longer matches the configuration or the inventory it was
+// computed against is refused by name, so an operator can never approve
+// one deletion set and have a different one happen. Every case runs
+// through the real router, which is also what proves the preview route is
+// actually reached rather than swallowed by the backup-sets catch-all
+// registered near it.
+
 func previewRetention(t *testing.T, router http.Handler, source, set string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets/"+source+"/"+set+"/retention/preview", nil)

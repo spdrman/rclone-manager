@@ -10,6 +10,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// Removing a backup set, which removes configuration and no data.
+//
+// The case that matters most is the one asserting a refusal is not
+// swallowed as success. This route answers with no content on the happy
+// path, so a handler that ignored an error from the service would return
+// exactly the same thing it returns when the removal really happened, and
+// the operator would be told the set is gone while it is still collecting.
+//
+// The whole-id case pins that the source and set segments are recombined
+// into the id the service expects, rather than one half being passed on
+// its own and matching the wrong set.
+
 // removeRouterWith builds a router over one sync fake, authenticated and
 // with the destructive gate open, so what a test observes is this route's
 // own behaviour and not a refusal from something in front of it.

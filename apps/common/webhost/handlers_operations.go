@@ -12,6 +12,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// POST /api/v1/operations and its two reads.
+//
+// The submit route is the one thing in this package that starts work, and
+// three of its properties are contracts a client depends on rather than
+// implementation details. The idempotency key travels as a header because
+// it describes the retry, not the operation, and its uniqueness namespace
+// is the entire deployment rather than this route (the package doc spells
+// out why that is easy to get wrong). The config revision in the body is
+// checked so that a client acting on a stale picture of the configuration
+// is refused rather than served. And the body is size-limited before it is
+// decoded, so a hostile request cannot be read into memory first and
+// rejected second.
+//
+// The restore parameters are a nested object that is refused outright when
+// the action is not a restore, rather than ignored. A server that ignores
+// fields it did not expect teaches clients those fields are optional, and
+// the next reader of that client cannot tell which of the two operations
+// was meant.
+
 // maxSubmitOperationBodyBytes bounds POST /api/v1/operations' request
 // body (docs/EPIC-B-multi-nas.md §17: "enforce request-size limits").
 // submitOperationRequest carries exactly two short strings, so 1 MiB is

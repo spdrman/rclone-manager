@@ -9,6 +9,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The medium preflight, whose most important test is about what the
+// response does not contain.
+//
+// A preflight talks to real storage with real credentials, and the natural
+// way to report a failure is to pass the provider's own error text
+// through. That text can carry a signed URL, a bucket listing or an
+// account identifier, so one case here reads the whole response body and
+// asserts no credential and no hint of where the credential came from
+// appears anywhere in it.
+//
+// The other shape worth stating is that a medium which fails its checks is
+// a successful request. The route's job is to report what happened, and
+// answering 500 would conflate "this medium is misconfigured", which the
+// operator can fix, with "this endpoint is broken", which they cannot.
+
 // mediumPreflightCanary is a value that exists nowhere else in this
 // repository, so finding it in a response is proof of where it came from.
 // The E1.3 shape, reused against the surface issue #443 adds.

@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+// What a built package must be, with determinism at the centre.
+//
+// The determinism test is the load-bearing one, because the whole "this
+// package carries the exact release binary" claim depends on somebody else
+// being able to build it again and get the same bytes. It fails on a
+// timestamp, on map iteration order leaking into an archive, on anything
+// that reads the clock.
+//
+// The refusal cases are the other half, and the UI-bundle one is worth
+// singling out. A missing bundle is refused rather than defaulted, because
+// the alternative produces a package that installs, runs and shows the
+// wrong provider's interface, and nothing about the finished artifact
+// would say so.
+//
+// The start/stop/status test runs the shipped script rather than reading
+// it: what matters is that it serves the bundle the package carries, and
+// only executing it can show that.
+
 // TestBuild_NamesTheArtifactTheWayTheToolkitDoes pins the filename
 // pkg_make_spk produces: "<package>-<arch>-<version>.spk".
 func TestBuild_NamesTheArtifactTheWayTheToolkitDoes(t *testing.T) {

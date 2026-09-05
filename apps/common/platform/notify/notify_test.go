@@ -11,6 +11,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// These tests cover the two things that make alerting a capability rather
+// than a feature: the refusal, and the pass-through.
+//
+// The refusal is the one worth protecting. A sink that accepts alerts from
+// a platform with no way to show them would pass every test anybody would
+// think to write, because the alerts go in and nothing errors; the only
+// observable difference is that the operator is never told. So the first
+// test asserts on the failure to build a sink at all, at wiring time,
+// which is the moment a person is still watching.
+//
+// The two adapters model the only two shapes that exist today:
+// notifyingAdapter is what a provider with a native notification channel
+// looks like, and silentAdapter is what every profile in the table
+// actually is right now.
+
 type recordingNotifier struct {
 	titles   []string
 	messages []string

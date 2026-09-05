@@ -7,6 +7,21 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/csrf"
 )
 
+// This package's side of the shared CSRF primitive.
+//
+// The actual double-submit implementation lives in apps/common/csrf,
+// because apps/common/webhost needs the identical check for its own
+// mutating routes and two copies of a security check are two copies that
+// drift. What is left here is the part that is genuinely this package's:
+// the middleware wiring, and the error bodies.
+//
+// The error bodies are why this is not just an alias. requireCSRF turns
+// csrf's two sentinel errors into this package's own JSON error shape and
+// its own codes, which are not webhost's; ui/shared reads these, and the
+// two packages settled on incompatible envelopes long before this one
+// existed. csrf.Verify deliberately refuses to referee that, so each side
+// translates.
+
 // CSRFCookieName and CSRFHeaderName implement the double-submit cookie
 // CSRF pattern (§3.6/§13A's "CSRF protection"): the cookie is set by
 // EnsureCSRFCookie on any response that doesn't already carry one, and a
