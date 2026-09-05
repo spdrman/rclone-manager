@@ -22,6 +22,11 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// a213Sha256Hex computes the hash a fixture records as its verification
+// baseline. It is a third copy of the same three lines that already exist in
+// verify_test.go and revalidate's tests, kept separate for the prefix reason
+// this file's header gives: these helpers must not collide with names the
+// rest of the package already owns.
 func a213Sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -264,6 +269,15 @@ func TestCommit_DanglingSymlinkAtFinalName_NeverFollowedNeverClobbered(t *testin
 	}
 }
 
+// isFinalPathCollision walks the wrap chain by hand rather than calling
+// errors.As.
+//
+// The distinction is the whole reason it exists. errors.As would report a
+// match for an error that merely wraps a collision anywhere, however deeply,
+// and the attacks in this file need to know that the collision is what came
+// back rather than something that happened to be mentioned on the way. This
+// walks Unwrap explicitly and stops at the first link that does not
+// implement it, so the answer is about the chain the test can actually see.
 func isFinalPathCollision(err error, target **FinalPathCollisionError) bool {
 	for e := err; e != nil; {
 		if c, ok := e.(*FinalPathCollisionError); ok {

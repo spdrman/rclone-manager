@@ -1,11 +1,29 @@
-package lifecycle
-
+// These cover FR-13's verification step, which is the largest suite in this
+// package because verification is three layers rather than one.
+//
+// Transfer verification always runs: the local file exists and its size
+// matches what was recorded. The hash tier runs when the backup set
+// configures one, and it has more branches than it looks like because a
+// producer-supplied checksum, a backend that can hash, and a backend that
+// cannot are three different situations. The application validator runs when
+// one is configured, as an untrusted subprocess.
+//
+// Two distinctions organise almost every test here. The first is the one
+// verification exists to make: a check that RAN and disagreed is a verdict
+// about the artifact and quarantines it, while a check that could not run at
+// all is a fact about the endpoint and must not. Issue #419's stall tests
+// live next door in stall_test.go for that reason. The second is which
+// requests are made: several tests assert on remoteHashCalls rather than on
+// the verdict, because "never asks the backend when a producer already
+// supplied a checksum" is not observable from the outcome.
+//
 // Fakes in this file are named verifyJournal/verifyTransport, deliberately
 // distinct from engine_test.go's fakeJournal (whose Get is unused there,
 // since Advance never calls it) and from transfer_test.go's
 // fakeTransferJournal/fakeTransport (owned by Transfer's own tests, and not
 // configurable the way Verify's RemoteHash-heavy tests need). testArtifact
 // is reused as-is from transfer_test.go rather than redeclared.
+package lifecycle
 
 import (
 	"context"
@@ -51,10 +69,18 @@ type verifyJournal struct {
 	enteredAt map[string]time.Time
 }
 
+// newVerifyJournal starts from a caller-supplied record, because these
+// tests vary the row far more than the transitions: what is recorded on it,
+// which hash baseline it carries, which state it claims to be in.
 func newVerifyJournal(rec state.Record) *verifyJournal {
 	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome), enteredAt: make(map[string]time.Time)}
 }
 
+// LastEnteredAt reads the map the fake maintains by hand rather than
+// deriving it from recorded writes. See the field comment: deriving it from
+// every write is exactly the mistake that would make the WP3.2 safety gate
+// untestable, because a same-state pass would appear to restart its
+// clock.
 func (j *verifyJournal) LastEnteredAt(_ context.Context, _ model.ArtifactID, st string) (time.Time, bool, error) {
 	at, ok := j.enteredAt[st]
 	return at, ok, nil
@@ -68,6 +94,9 @@ func (j *verifyJournal) LastTransition(context.Context, model.ArtifactID, string
 	return time.Time{}, false, nil
 }
 
+// Get returns the current row, or the configured failure. Verify reads the
+// record itself, unlike Advance, so this has to work and the getErr hook has
+// somewhere to be exercised.
 func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, error) {
 	if j.getErr != nil {
 		return state.Record{}, j.getErr
@@ -75,6 +104,9 @@ func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, er
 	return j.rec, nil
 }
 
+// RecordTransition reproduces key replay and the From check, and maintains
+// enteredAt only for a genuine state CHANGE, which is the behaviour the real
+// journal has and the one the stall and safety-gate tests depend on.
 func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
 	j.recorded = append(j.recorded, t)
 
@@ -112,8 +144,14 @@ func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) 
 	return out, nil
 }
 
+// currentState is where the artifact ended up, for tests asserting a
+// verdict routed somewhere specific.
 func (j *verifyJournal) currentState() string { return j.rec.State }
 
+// transitionsTo returns every write into one state, so a test can assert
+// there was exactly one and read the detail that was recorded with it. The
+// detail is often the real subject: it is what an operator sees when they
+// ask why an artifact was quarantined.
 func (j *verifyJournal) transitionsTo(to State) []state.Transition {
 	var out []state.Transition
 	for _, t := range j.recorded {
@@ -132,18 +170,27 @@ type verifyTransport struct {
 	remoteHashCalls int
 }
 
+// List fails: verification never enumerates.
 func (t *verifyTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	return nil, errors.New("verifyTransport: List not used")
 }
 
+// Stat fails: the expected size comes from the journal's recorded transfer
+// result, not from asking the remote again. A Stat here would be trusting
+// the remote to describe what was already copied.
 func (t *verifyTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 	return transport.RemoteArtifact{}, errors.New("verifyTransport: Stat not used")
 }
 
+// CopyToLocal fails: the bytes are already local by the time this runs.
 func (t *verifyTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
 	return transport.TransferResult{}, errors.New("verifyTransport: CopyToLocal not used")
 }
 
+// RemoteHash counts before it checks whether it is configured, which is
+// deliberate: several tests assert the count is ZERO, and a counter that
+// only incremented on the configured path would let an unexpected call slip
+// through as an error rather than as the extra request it is.
 func (t *verifyTransport) RemoteHash(ctx context.Context, source transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
 	t.remoteHashCalls++
 	if t.remoteHashFunc == nil {
@@ -152,12 +199,17 @@ func (t *verifyTransport) RemoteHash(ctx context.Context, source transport.Sourc
 	return t.remoteHashFunc(ctx, source, remotePath, alg)
 }
 
+// DeleteRemote fails. Nothing about verification touches the remote copy,
+// and a quiet success here would hide a serious ordering bug.
 func (t *verifyTransport) DeleteRemote(context.Context, transport.Source, string) error {
 	return errors.New("verifyTransport: DeleteRemote not used")
 }
 
 // --- helpers ---
 
+// verifyWriteLocalFile writes the artifact's local file for a test to
+// verify. A real file rather than a stub, because the checks under test read
+// it: they stat it for size and hash its contents.
 func verifyWriteLocalFile(t *testing.T, content []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "artifact.dump")
@@ -193,6 +245,10 @@ func mustScript(t *testing.T, body string) string {
 	return path
 }
 
+// sha256Hex computes what the code should compute, so a test can stage a
+// matching or a deliberately mismatching baseline. The mismatching cases
+// mutate the string rather than the content, which keeps the file and the
+// expectation independent.
 func sha256Hex(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
@@ -200,6 +256,10 @@ func sha256Hex(content []byte) string {
 
 // --- layer 1: transfer verification, always ---
 
+// TestVerify_TransferOnly_NoHashNoValidator_Verifies is the floor: with
+// nothing configured, transfer verification still runs and still has to
+// pass. There is no configuration in which an artifact reaches VERIFIED
+// without the local file existing at the recorded size.
 func TestVerify_TransferOnly_NoHashNoValidator_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -225,6 +285,9 @@ func TestVerify_TransferOnly_NoHashNoValidator_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_MissingLocalFile_Fails covers the file
+// having gone between the transfer and the check, which is a full disk being
+// cleaned up underneath the process or an operator tidying a directory.
 func TestVerify_TransferVerification_MissingLocalFile_Fails(t *testing.T) {
 	rec := verifyingRecord(t, filepath.Join(t.TempDir(), "does-not-exist"), 10)
 	j := newVerifyJournal(rec)
@@ -241,6 +304,9 @@ func TestVerify_TransferVerification_MissingLocalFile_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_SizeMismatch_Fails is the truncated-copy
+// case, and it is the cheapest check in the product: it needs no hash and no
+// remote request, and it catches the most common way a copy goes wrong.
 func TestVerify_TransferVerification_SizeMismatch_Fails(t *testing.T) {
 	path := verifyWriteLocalFile(t, []byte("short"))
 	rec := verifyingRecord(t, path, 999) // does not match what's actually on disk
@@ -262,6 +328,13 @@ func TestVerify_TransferVerification_SizeMismatch_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_NoExpectedSize_Fails refuses rather than
+// skipping when there is nothing to compare against.
+//
+// Skipping would be the tempting reading, and it is the dangerous one: with
+// no recorded size the size check silently stops being a check, so an
+// artifact with no configured hash and no validator would reach VERIFIED
+// having had nothing verified at all.
 func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
 	path := verifyWriteLocalFile(t, []byte("x"))
 	rec := verifyingRecord(t, path, 0)
@@ -283,6 +356,14 @@ func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
 
 // --- layer 2: hash verification ---
 
+// TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash asserts on
+// the REQUEST COUNT, not on the verdict.
+//
+// The verdict would be the same either way, so the only observable
+// difference between using the checksum the producer already supplied and
+// asking the backend for one is that the second costs a request per artifact
+// per cycle. That is the behaviour under test, and the count is the only
+// place it shows.
 func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -309,6 +390,10 @@ func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T
 	}
 }
 
+// TestVerify_Hash_MatchesRemoteHash_Verifies is the other branch: no
+// producer checksum, so the backend is asked. Together with the test above
+// it pins that the remote is consulted exactly when there is no cheaper
+// answer available.
 func TestVerify_Hash_MatchesRemoteHash_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -338,6 +423,13 @@ func TestVerify_Hash_MatchesRemoteHash_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_Hash_MismatchQuarantines is the verdict half of the file's
+// central distinction: a hash that was computed and disagrees is a statement
+// about the bytes, so the artifact is quarantined rather than failed.
+//
+// FAILED would be the wrong home. It is for a pipeline that could not
+// produce a backup; this is a backup that was produced and is wrong, which
+// needs a human rather than another attempt.
 func TestVerify_Hash_MismatchQuarantines(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -401,6 +493,13 @@ func TestVerify_Hash_RequiredButCapabilityAbsent_FailsExplicitly_NeverSilentlyVe
 	}
 }
 
+// TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksum
+// pins that an unconfigured hash tier costs nothing.
+//
+// Without it, an implementation that asked the backend for a hash and then
+// ignored the answer would pass every verdict test in this file while adding
+// a request per artifact per cycle against a backend that may be charged per
+// request or may not support hashing at all.
 func TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksum(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -424,6 +523,9 @@ func TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksu
 	}
 }
 
+// TestVerify_Hash_RetriesTransientFailureThenSucceeds pins that a
+// classified transient failure is retried within the call, so a blip while
+// asking for a hash does not become a verdict about the artifact.
 func TestVerify_Hash_RetriesTransientFailureThenSucceeds(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -455,6 +557,12 @@ func TestVerify_Hash_RetriesTransientFailureThenSucceeds(t *testing.T) {
 	}
 }
 
+// TestVerify_Hash_DoesNotRetryUnsupportedCapability is the companion, and
+// the case it covers is the recommended posture rather than a fault: the
+// hardened, shell-less SFTP account FR-6 suggests genuinely cannot compute a
+// hash, and retrying that on a schedule would spend the whole retry budget
+// every cycle, for every artifact, to learn what the first answer already
+// said.
 func TestVerify_Hash_DoesNotRetryUnsupportedCapability(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -480,6 +588,10 @@ func TestVerify_Hash_DoesNotRetryUnsupportedCapability(t *testing.T) {
 
 // --- hash lookup cancellation: a stop request, not a verdict ---
 
+// TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal
+// covers a shutdown reaching Verify before it starts. During a shutdown this
+// happens once per remaining artifact, so a journal write here would fill
+// the log with transitions recording nothing that happened.
 func TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -505,6 +617,12 @@ func TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal(t *test
 	}
 }
 
+// TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying
+// covers a shutdown landing in the sleep between hash attempts.
+//
+// VERIFYING is the honest answer: verification was underway and was
+// interrupted. Anything else would turn stopping the daemon into a verdict,
+// and a quarantine reached that way would need an operator to undo.
 func TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying(t *testing.T) {
 	orig := remoteHashRetryPolicy
 	remoteHashRetryPolicy = retry.Policy{BaseDelay: 200 * time.Millisecond, MaxDelay: 200 * time.Millisecond, Multiplier: 2}
@@ -550,6 +668,10 @@ func TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying(t
 
 // --- layer 3: application validation ---
 
+// TestVerify_Validator_Passes_Verifies is the positive control for the
+// validator tier. Every other validator test here expects a refusal, so
+// without one success they would all be satisfied by a Verify that never ran
+// the script.
 func TestVerify_Validator_Passes_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -574,6 +696,12 @@ func TestVerify_Validator_Passes_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_Fails_Quarantines pins that a validator which ran
+// and rejected the artifact is a verdict, so it quarantines.
+//
+// This is the case QuarantineReason has to be able to describe later, which
+// is why the recorded detail carries the validator's own output rather than
+// just the fact of the rejection.
 func TestVerify_Validator_Fails_Quarantines(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -601,6 +729,13 @@ func TestVerify_Validator_Fails_Quarantines(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_CannotStart_Fails is one character from the test
+// above it and lands somewhere different, which is the whole point.
+//
+// A validator that cannot be executed, a wrong path or a lost execute bit,
+// has said nothing about the artifact. Quarantining on it would mean one
+// typo in a config file quarantines every artifact in the backup set, each
+// of them needing an operator to release.
 func TestVerify_Validator_CannotStart_Fails(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -622,6 +757,12 @@ func TestVerify_Validator_CannotStart_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_DoesNotInheritAmbientEnvironment is the containment
+// property, and it matters here more than in restorecheck_test.go's twin:
+// this validator runs inside the process that holds the remote credentials,
+// during the pipeline rather than during a scheduled pass, so an inherited
+// environment would hand an operator-supplied executable everything the
+// daemon knows.
 func TestVerify_Validator_DoesNotInheritAmbientEnvironment(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -651,6 +792,10 @@ func TestVerify_Validator_DoesNotInheritAmbientEnvironment(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_OutputIsBounded covers a validator that dumps a log
+// or a diff. The bound protects two things at once: this process's memory
+// while capturing, and the journal row the detail is written into, which an
+// operator later has to read.
 func TestVerify_Validator_OutputIsBounded(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -960,6 +1105,14 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 	}
 }
 
+// TestVerify_SameAttemptKey_IsIdempotent is the one test in this file that
+// uses a REAL journal, because idempotency-key replay is the real journal's
+// behaviour and asserting it against the fake would be asserting the fake.
+//
+// It matters because the crash matrix kills the process after every state:
+// a retried Verify has to be recognised as the same attempt rather than
+// recorded as a second one, or the transition log would gain a row for every
+// crash and the stall counter would count attempts nobody made.
 func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	j, err := state.Open(ctx, filepath.Join(t.TempDir(), "journal.db"))
@@ -1017,6 +1170,12 @@ func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
 
 // --- input validation ---
 
+// TestVerify_RejectsMissingRequiredParams covers the three preconditions.
+//
+// The Transport one is worth noting: Verify requires it even when the
+// configuration enables no hash tier, so a caller cannot end up in a state
+// where enabling a hash in config silently produces a nil dereference at the
+// first artifact that needs one.
 func TestVerify_RejectsMissingRequiredParams(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
