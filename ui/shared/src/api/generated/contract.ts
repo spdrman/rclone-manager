@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "1b859acc2e66d4f42f1498c5c45c3ff00902503e2b26b01565b91d32209fc7d4";
+export const CONTRACT_SHA256 = "520d615adcae52dc6ab59d99605299a360b7ee937085fdc3b30a0e5e0ad8999f";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -47,7 +47,6 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -111,7 +110,6 @@ export const API_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-  "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -308,7 +306,6 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
     }
@@ -1120,18 +1117,30 @@ export interface WireBackupSetEditHoldState {
   running?: WireRunningWork;
 }
 
-/** One backup set's freshness verdict. This is the backup half of
+/** One backup set's health verdict: whether its backups are fresh and
+ *  trustworthy, and whether they are on the storage medium its
+ *  retention policy says they belong on. This is the backup half of
  *  health, and it deliberately carries no process or build fact: a
- *  running service is not evidence that backups are landing. */
+ *  running service is not evidence that backups are landing. The
+ *  placement figures come from durable state rather than from the
+ *  last pass, so a deployment nobody has run a cycle in front of
+ *  still reports relocations that have been failing for weeks. */
 export interface WireBackupSetHealth {
+  away_from_home: number;
+  away_from_home_oldest_age_seconds?: number;
   backup_set_id: string;
   current_transfers: number;
+  failed_move_oldest_age_seconds?: number;
+  failed_move_reason?: string;
+  failed_moves: number;
   failures: number;
   free_bytes?: number;
   free_bytes_known: boolean;
   halt_reason?: "HOST_KEY_CHANGED" | "AUTHENTICATION_FAILED" | "KEY_PERMISSIONS";
   last_completed_backup_at?: string;
   newest_good_backup_at?: string;
+  open_move_oldest_age_seconds?: number;
+  open_moves: number;
   pending_deletes: number;
   quarantined_count: number;
   quarantined_lost_count: number;
@@ -1144,6 +1153,7 @@ export interface WireBackupSetHealth {
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
   storage_level?: "OK" | "WARNING" | "CRITICAL";
   total_bytes?: number;
+  unconfirmed_location: number;
 }
 
 /** Which retention policy one backup set is retained under, and where
@@ -1258,11 +1268,9 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
-/** POST /backup-sets. The backup-set spec, plus the two things only a
- *  create can ask for: that the new set also runs at once, and that
- *  it may take over history already on its id. */
+/** POST /backup-sets. The backup-set spec, plus the one thing only a
+ *  create can ask for: that the new set also runs at once. */
 export interface WireCreateBackupSetRequest extends WireBackupSetSpec {
-  acknowledge_repoint?: boolean;
   run_immediately?: boolean;
 }
 
@@ -1548,21 +1556,6 @@ export interface WireRestoreOperationRequest {
   window_days: number;
 }
 
-/** One backup this plan would relocate, and both ends of the move
- *  (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
- *  else: planning one never adds a backup to the keep set and never
- *  removes one, which is why moves travel beside the verdicts rather
- *  than inside them. There is deliberately no field here for what a
- *  provider would charge to run this, how long a provider might take,
- *  or the key material that reaches either end, and there never will
- *  be: this product holds none of those three, so a field for one
- *  could only be filled with a guess. */
-export interface WireRetentionMove {
-  artifact: string;
-  from_medium: string;
-  to_medium: string;
-}
-
 /** One backup set's OWN retention policy, exactly as its
  *  configuration file carries it: unresolved, with every omitted
  *  field still omitted. An override names the WHOLE chain (a tiers
@@ -1594,13 +1587,11 @@ export interface WireRetentionPlan {
   expires_at: string;
   inventory_revision: string;
   keep_count: number;
-  moves?: WireRetentionMove[];
   operation_id?: string;
   plan_id: string;
   reclaim_bytes: number;
   retention: WireRetentionSettings;
   retention_is_override: boolean;
-  unconfirmed_placements?: string[];
   verdicts: WireRetentionVerdict[];
 }
 
@@ -1657,7 +1648,6 @@ export interface WireRetentionTierSelection {
 export interface WireRetentionVerdict {
   action: string;
   artifact: string;
-  medium?: string;
   reason: string;
   tier_selections?: WireRetentionTierSelection[];
   tiers?: string[];

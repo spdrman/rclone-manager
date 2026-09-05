@@ -229,8 +229,8 @@ func TestHaltReasonNeverDecidesTheHealthState(t *testing.T) {
 	base := health.BackupSetInputs{}
 	halted := health.BackupSetInputs{HaltReason: state.HaltHostKeyChanged}
 
-	without := health.ComputeBackupSetHealth(set, nil, nil, 24*time.Hour, base, epoch)
-	with := health.ComputeBackupSetHealth(set, nil, nil, 24*time.Hour, halted, epoch)
+	without := health.ComputeBackupSetHealth(set, nil, nil, health.PlacementEvidence{}, 24*time.Hour, base, epoch)
+	with := health.ComputeBackupSetHealth(set, nil, nil, health.PlacementEvidence{}, 24*time.Hour, halted, epoch)
 
 	if with.State != without.State || with.Reason != without.Reason {
 		t.Fatalf("a halt reason changed the verdict: (%s, %q) with, (%s, %q) without",

@@ -272,6 +272,16 @@ backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker hea
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
 (if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
+Since issue #444 that verdict also covers where the backups are, not only how fresh they
+are. A deployment that declares a storage medium (EPIC E, FR-27) and whose relocations to
+it keep failing now reports `DEGRADED`, with the age of the oldest failing move and the
+reason the engine recorded on it, and therefore reports Docker health `unhealthy`. The
+backups themselves are untouched in that state, which is exactly why it needed saying out
+loud: the copy the operator asked to be offsite is not offsite, the move engine has been
+retrying it every cycle, and every surface that carried that fact before was describing a
+single pass and was gone by the time anybody looked. A deployment that declares no
+storage medium reports nothing new at all.
+
 `container/compose.yaml` deliberately overrides that for the engine service, and asks
 `/health/live` instead. The reason is `web-ui`'s `depends_on: rclone-manager: condition:
 service_healthy`: whatever the engine's healthcheck asks is what stands between an operator

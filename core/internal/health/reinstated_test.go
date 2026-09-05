@@ -66,7 +66,7 @@ func TestReinstatedRemoteRetainedCountsOnlySourcesStillHeld(t *testing.T) {
 	in := BackupSetInputs{}
 	got := ComputeBackupSetHealth(testSet, records,
 		reinstatedIDs("reinstated-one.dump", "reinstated-two.dump", "reinstated-lost.dump"),
-		day, in, now)
+		PlacementEvidence{}, day, in, now)
 
 	if got.ReinstatedRemoteRetainedCount != 2 {
 		t.Fatalf("ReinstatedRemoteRetainedCount = %d, want 2 (two reinstated artifacts whose remote source this manager has not released; a third was reinstated but its remote is already gone)",
@@ -92,7 +92,7 @@ func TestReinstatedRemoteRetainedCountsEveryUnreleasedReinstatement(t *testing.T
 
 	got := ComputeBackupSetHealth(testSet, records,
 		reinstatedIDs("reinstated-one.dump", "reinstated-two.dump", "reinstated-lost.dump"),
-		day, BackupSetInputs{}, now)
+		PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.ReinstatedRemoteRetainedCount != 3 {
 		t.Fatalf("ReinstatedRemoteRetainedCount = %d, want 3: with no remote released, every reinstated artifact is still holding one",
@@ -115,7 +115,7 @@ func TestReinstatedRemoteRetainedIgnoresAnArtifactWithNoRecord(t *testing.T) {
 
 	got := ComputeBackupSetHealth(testSet, records,
 		reinstatedIDs("reinstated-one.dump", "vanished.dump"),
-		day, BackupSetInputs{}, now)
+		PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.ReinstatedRemoteRetainedCount != 1 {
 		t.Fatalf("ReinstatedRemoteRetainedCount = %d, want 1: an artifact with no journal row in this set cannot be described and must not be counted",
@@ -141,8 +141,8 @@ func TestReinstatedRemoteRetainedDoesNotChangeTheHealthState(t *testing.T) {
 	}
 	names := []string{"reinstated-one.dump", "reinstated-two.dump", "reinstated-three.dump"}
 
-	with := ComputeBackupSetHealth(testSet, records, reinstatedIDs(names...), day, BackupSetInputs{}, now)
-	without := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
+	with := ComputeBackupSetHealth(testSet, records, reinstatedIDs(names...), PlacementEvidence{}, day, BackupSetInputs{}, now)
+	without := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if with.ReinstatedRemoteRetainedCount != 3 {
 		t.Fatalf("ReinstatedRemoteRetainedCount = %d, want 3", with.ReinstatedRemoteRetainedCount)
