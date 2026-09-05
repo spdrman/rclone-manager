@@ -241,6 +241,21 @@ fi
 gate_step "every tracked Go file is gofmt-clean, including the ones outside every module (#417)"
 bash scripts/format/check-gofmt.sh
 
+# The same blind spot, for the checks that actually find bugs (#417). Being
+# outside every module does not only cost those two files their formatting:
+# this gate vets and lints per module too, so nothing has ever vetted or
+# linted them either. `go vet` needs no module when it is handed file
+# paths, and golangci-lint gets a throwaway module per unowned directory,
+# which resolves offline because every unowned file here is standard-library
+# only. A few seconds, and it belongs up here with the sweep for the same
+# reason.
+#
+# Deliberately NOT with the other scripts/architecture checks further down:
+# those run after the Go suites, and a Go file nobody checks is worth
+# hearing about before twenty minutes of Docker-backed tests, not after.
+gate_step "every Go file no module owns still passes go vet and golangci-lint (#417)"
+bash scripts/architecture/check-unowned-go.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 

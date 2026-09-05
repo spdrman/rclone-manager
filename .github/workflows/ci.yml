@@ -411,15 +411,17 @@ jobs:
       - name: gofmt sweep
         run: bash scripts/format/check-gofmt.sh
 
-      # The mutation self-test that proves both halves of the formatting
-      # gate can go red is NOT run here, and that is a statement about this
-      # workflow rather than about the check. Half of what it measures is
-      # .golangci.yml's gofmt formatter, and this workflow runs no
-      # golangci-lint at all, in any job: linting lives entirely in
-      # scripts/ci-local.sh, which is the gate that actually runs and which
-      # runs `bash scripts/format/selftest.sh` on every non-FAST run.
-      # Installing a linter here purely to test a config nothing here uses
-      # would be the wrong shape.
+      # Two things that belong with the sweep are deliberately NOT here,
+      # and both are statements about this workflow rather than about the
+      # checks. scripts/format/selftest.sh and
+      # scripts/architecture/check-unowned-go.sh (which vets and lints the
+      # two Go files that live outside every module) both need
+      # golangci-lint, and this workflow runs no golangci-lint at all, in
+      # any job: linting lives entirely in scripts/ci-local.sh, which is
+      # the gate that actually runs and which runs both on every non-FAST
+      # run. Installing a linter here purely to exercise a config nothing
+      # here uses would be the wrong shape, and pretending the gap is not
+      # there would be worse.
 
   api-contract:
     name: /api/v1 contract drift (#166)

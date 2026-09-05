@@ -120,6 +120,12 @@ TWO_MACHINE_STUB='TWO-MACHINE-STUB-RAN'
 # both directions.
 GOFMT_STUB='GOFMT-SWEEP-STUB-RAN'
 
+# The same, for the check that vets and lints the Go files no module owns
+# (#417). It lives in scripts/architecture/ but runs near the top of the
+# gate with the sweep rather than with the other architecture checks, and
+# Group L is where that placement is pinned.
+UNOWNED_STUB='UNOWNED-GO-STUB-RAN'
+
 make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   # mktemp, not a counter: this runs inside $( ), so a counter would increment
   # in the subshell and every caller would get the same directory back. That
@@ -244,9 +250,16 @@ make_full_tree() {
   for arch in check-layer-manifest check-core-dependency-rule \
               check-layer-ownership check-ui-shared-provider-imports \
               selftest verify-core-without-apps verify-core-without-distribution \
-              verify-ui-shared-without-provider-sdks verify-ugos-removable; do
+              verify-ui-shared-without-provider-sdks verify-ugos-removable \
+              check-unowned-go; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/architecture/$arch.sh"
   done
+  # check-unowned-go prints a marker on top of that, because Group L
+  # watches for it in both directions the way Group G watches the browser
+  # e2e stub. The real one vets and lints every Go file outside every
+  # module, through a throwaway module per directory.
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$UNOWNED_STUB" \
+    >"$tree/scripts/architecture/check-unowned-go.sh"
 
   # The performance baseline gate and its own self-test (#165), stubbed for
   # the same reason: this fixture measures which steps the gate chooses to
@@ -1366,6 +1379,29 @@ assert_contains "L2 the verdict names the formatting step" \
   'ci-local: FAILED (every tracked Go file is gofmt-clean' "$out"
 assert_not_contains "L2 the formatting sweep fails before the Go suites" \
   'core/ go test' "$out"
+
+# L4: the other half of the same blind spot. Being outside every module
+# does not only cost those two files their formatting: this gate vets and
+# lints per module too, so nothing had ever vetted or linted them either.
+# The check that does now lives in scripts/architecture/ but runs HERE,
+# near the top, and that placement is the thing this cell pins: the other
+# architecture checks run after the Go suites, and a Go file nobody checks
+# is worth hearing about before twenty minutes of Docker-backed tests.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "L4 the gate checks the Go files no module owns" "$UNOWNED_STUB" "$out"
+assert_contains "L4 the step says what it covers" \
+  'every Go file no module owns still passes go vet and golangci-lint' "$out"
+assert_eq "L4 a passing check leaves the run green" 0 "$status"
+
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "go vet found something" >&2\nexit 1\n' \
+  >"$tree/scripts/architecture/check-unowned-go.sh"
+run_gate "$tree"
+assert_nonzero "L4 an unvetted Go file fails the run" "$status"
+assert_contains "L4 the verdict names the step" \
+  'ci-local: FAILED (every Go file no module owns' "$out"
+assert_not_contains "L4 it fails before the Go suites" 'core/ go test' "$out"
 
 # L3: the other half. golangci-lint checks formatting only if the config
 # asks it to, and the config is a file anybody can trim.

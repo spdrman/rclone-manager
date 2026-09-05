@@ -1238,6 +1238,22 @@ every module, one staged but not committed because that is the state the pre-com
 runs in, and `.golangci.yml`'s own formatter turning red on unformatted code and green on the
 same file formatted.
 
+Formatting was only the half of that blind spot that happened to be visible. This gate vets
+and lints per module too, so those same two files had never been vetted or linted by anything
+either, in a repository whose gate otherwise vets and lints everything.
+`scripts/architecture/check-unowned-go.sh` closes that, in a few seconds and without a
+`scripts/go.mod`: `go vet` needs no module at all when it is handed file paths, and
+`golangci-lint` gets a throwaway module per unowned directory, which resolves offline because
+every unowned file here is standard-library only. Both files pass today, so nothing had to be
+fixed, only looked at. Its controls live with the other architecture controls in
+`scripts/architecture/selftest.sh`: one planted defect `go vet` catches, and one it does not
+and the linter does, which is what stops the lint half from being decoration on the vet half.
+
+Neither check needs `scripts/` to become a module, and neither touches `go.work`. That was
+the deciding constraint: a sixth module would add a row to the layer manifest and change what
+the core dependency proof deletes and re-runs, which is a much larger change than looking at
+two files.
+
 `scripts/race/selftest.sh` is the control for all of it, in the shape #242 established for
 the compatibility and conformance cells: it plants a real data race in real product source
 in a copy of the tree, requires the detector to catch it and to name the write that planted
