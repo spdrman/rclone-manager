@@ -179,6 +179,16 @@ type objectIdentity struct {
 // fail-safe direction: "I could not tell" and "it is the same" must never
 // collapse into one another, for internal/artifactstore's ErrNotPresent
 // reason.
+//
+// That first clause is a second guard on a rule record already enforces,
+// and removing either one alone changes no behaviour: record will not keep
+// a proof whose identity is unusable, and identifyDestination returns the
+// zero identity rather than a partial one, so a zero on this side never
+// equals a real one anyway. It is kept because the two say the rule about
+// different things. record's is about what may be REMEMBERED and this one
+// is about what may be COMPARED, and a change to either half should have
+// to argue with the other rather than inherit it. Removing both at once is
+// caught, which is the test that matters.
 func (id objectIdentity) matches(other objectIdentity) bool {
 	if !id.usable || !other.usable {
 		return false
@@ -286,6 +296,15 @@ func (p *readBackProof) isAbout(mv state.Move, src state.Placement, want Class) 
 // about the wrong number of things. Result.At keeps the time of the actual
 // read: a timestamp moved forward to the moment it was used would be the
 // exact lie this whole file is arranged to avoid.
+//
+// Spending it changes nothing observable today and that is deliberate
+// rather than an oversight. There is no way to reach deleteSource twice in
+// one walk without passing through verifyDestination, which clears and
+// rewrites the proof on the way; and the walk is the proof's whole
+// lifetime, so nothing later can find it. What this line is for is the
+// edit that widens the scope: the moment a proof lives anywhere longer
+// than one walk, single use is the difference between one read authorising
+// one delete and one read authorising every delete that finds it.
 func (p *readBackProof) take(now time.Time) Result {
 	res := p.result
 	res.Detail = fmt.Sprintf(
