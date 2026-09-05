@@ -394,16 +394,22 @@ Phase 1 builds every load-bearing wall: schema, transport, state, verification. 
 
 ### Phase 1 exit gate
 
-Checkable claims, not intentions:
+Checkable claims, not intentions. Every box below is held to the outcome
+`docs/conformance/epic-e-matrix.md` records for the matching row, in both
+directions, by `TestTheSpecsExitGateBoxesAgreeWithTheMatrix` in
+`core/tests/compat`: a `PASS` row's box has to be ticked, and a row that is
+anything else has to be left unticked. Ticking one by hand is a failing test,
+and so is leaving one unticked after its row earns its PASS, which is what
+happened here (#522).
 
-- [ ] A config declaring an `s3` medium and a tier `medium` reference validates, round-trips through a settings save without injecting fields into a legacy config, and a config naming neither behaves identically to today (the existing config test suite passes unmodified).
-- [ ] A config with an inline literal credential fails `Load` with an unknown-field error, proven by test.
-- [ ] The rclone backend set test passes with exactly `local`, `sftp`, `s3` required and `crypt` accepted; the binary-size delta is measured and recorded in the landing PR.
-- [ ] The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture in integration, including upload, stat, checksum attestation where supported, read-back, delete, and the explicit capability refusal where attestation is unsupported.
-- [ ] The credential canary test passes for all three sources, and its planted violation (verbatim config logging) demonstrably fails it.
-- [ ] Migration 0007 backfills a local placement for every pre-existing artifact row in a durable state and for no other, checked in both directions; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
-- [ ] Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve, proven by the class-string assertion test.
-- [ ] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path.
+- [x] A config declaring an `s3` medium and a tier `medium` reference validates, round-trips through a settings save without injecting fields into a legacy config, and a config naming neither behaves identically to today (the existing config test suite passes unmodified).
+- [x] A config with an inline literal credential fails `Load` with an unknown-field error, proven by test.
+- [x] The rclone backend set test passes with exactly `local`, `sftp`, `s3` required and `crypt` accepted; the binary-size delta is measured and recorded in the landing PR.
+- [x] The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture in integration, including upload, stat, checksum attestation where supported, read-back, delete, and the explicit capability refusal where attestation is unsupported.
+- [x] The credential canary test passes for all three sources, and its planted violation (verbatim config logging) demonstrably fails it.
+- [x] Migration 0007 backfills a local placement for every pre-existing artifact row in a durable state and for no other, checked in both directions; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
+- [x] Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve, proven by the class-string assertion test.
+- [x] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path. (`TestOnlyTheMoveEngineDeletesFromAMedium` is the whole-module scan that held this line; #238 moved it forward by exactly one package rather than taking an exemption, so it now reads "exactly one production package deletes from a medium, and it is the move engine". See matrix row P1.8.)
 
 ## Phase 2, movement, retention integration, and the operator surface
 
@@ -420,14 +426,14 @@ Checkable claims, not intentions:
 
 ### Phase 2 exit gate
 
-- [ ] A three-tier chain (daily local, monthly `s3`, annual `s3` cold) runs end to end against MinIO: ingest, age, move, verify, prune, with every move journaled and the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness, not sampled.
-- [ ] The crash matrix passes: a forced crash at every move phase boundary, followed by restart reconciliation, ends with the invariant intact and the move either completed or abandoned with the source intact; the planted violation (delete before durable `VERIFIED`) demonstrably fails the suite.
-- [ ] Moving an artifact does not change its retention bucketing: verdicts before and after a move are bit-identical, and the planted timestamp-rewrite violation demonstrably fails the test.
-- [ ] Prune against a medium refuses on identity mismatch (the swapped-object fixture) and the mandatory dry-run names the medium for every proposed deletion.
-- [ ] A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests (TDD invariant 4).
-- [ ] An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA (asserted by the contract tests on the response schemas: the fields do not exist).
-- [ ] FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral diff through config validation, retention verdicts, API responses (minus additive fields) and CLI output; the planted backfill violation demonstrably fails the golden suite.
-- [ ] `scripts/api/check-contract-drift.sh` and `check-client-paths.sh` pass with the new operations; the layer manifest classifies every new file; `verify-core-without-distribution.sh` still passes, since nothing here touches an adapter.
+- [x] A three-tier chain (daily local, monthly `s3`, annual `s3` cold) runs end to end against MinIO: ingest, age, move, verify, prune, with every move journaled and the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness, not sampled. **Except the word `cold`**, which cannot be run here and should not be: this MinIO answers `InvalidStorageClass` to six of the seven classes the config accepts, and since #442 a config pairing a retention tier with an archive-class medium does not load at all. Both facts are checks rather than caveats (`archiveboundary_test.go`, `TestAnArchiveClassTierIsRefusedAtLoad`), so the day either changes the suite says so. See matrix row P2.1.
+- [x] The crash matrix passes: a forced crash at every move phase boundary, followed by restart reconciliation, ends with the invariant intact and the move either completed or abandoned with the source intact; the planted violation (delete before durable `VERIFIED`) demonstrably fails the suite.
+- [x] Moving an artifact does not change its retention bucketing: verdicts before and after a move are bit-identical, and the planted timestamp-rewrite violation demonstrably fails the test.
+- [x] Prune against a medium refuses on identity mismatch (the swapped-object fixture) and the mandatory dry-run names the medium for every proposed deletion.
+- [x] A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests (TDD invariant 4).
+- [ ] An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA (asserted by the contract tests on the response schemas: the fields do not exist). PARTIAL, and deliberately not ticked: the no-cost half, the access-state derivation, the verification ceiling that follows from it and the load refusal are all asserted and all watched to fail. The END TO END archive half cannot be run here at all, because no archived object can be created against this fixture to observe or restore. See matrix row P2.6.
+- [x] FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral diff through config validation, retention verdicts, API responses (minus additive fields) and CLI output; the planted backfill violation demonstrably fails the golden suite.
+- [x] `scripts/api/check-contract-drift.sh` and `check-client-paths.sh` pass with the new operations; the layer manifest classifies every new file; `verify-core-without-distribution.sh` still passes, since nothing here touches an adapter.
 
 # 6. What I cut to fit two phases, and why
 

@@ -101,7 +101,13 @@ conformance_gate() {
 # second one quietly stops being run.
 unit_gate() {
   local pkg=$1 pattern=${2:-.}
-  (cd core && GOWORK=off go test -count=1 -run "$pattern" "$pkg")
+  # -timeout 30m rather than go test's default 10: one of the phase 1
+  # controls below runs ./tests/miniointegration/, which stands up a
+  # container before it asserts anything, and a control that died on a
+  # timeout would report "the suite failed but never named the promise",
+  # which is the same verdict as a broken anchor for a completely
+  # different reason.
+  (cd core && GOWORK=off go test -count=1 -timeout 30m -run "$pattern" "$pkg")
 }
 
 # expect_unit_check_fails <label> <dir> <expected substring> <package> <run pattern>
@@ -177,6 +183,30 @@ expect_gate_passes() {
   fi
 }
 
+# expect_unit_gate_passes <label> <dir> <packages> is expect_gate_passes for
+# the unit-level controls, and it exists for exactly the same reason: a
+# mutation that turns a suite red proves nothing about the mutation if the
+# suite was red already. <packages> is deliberately word-split, because it
+# names several.
+expect_unit_gate_passes() {
+  local label=$1 dir=$2 pkgs=$3
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  if (cd "$dir/core" && GOWORK=off go test -count=1 -timeout 30m $pkgs) >"$tmp/out" 2>&1; then
+    echo "  ok (clean):  $label"
+    pass=$((pass + 1))
+  else
+    echo "SELFTEST FAIL: $label. The suites FAILED against an unmutated tree, so their failures mean nothing." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  fi
+}
+
 # swap <file> <old> <new> replaces one exact string and REFUSES if the old
 # text is not there, which is the whole point: a planted violation that
 # silently planted nothing is the "green mutation" failure this file exists
@@ -187,6 +217,206 @@ expect_gate_passes() {
 
 echo "==> negative control: the composed suite is clean on the real tree"
 expect_gate_passes "core/tests/conformance on an unmutated tree" "$root"
+
+echo
+echo "==> EPIC E's phase 1 exit lines (P1.3, P1.4, P1.5, P1.7, P1.8, V4, V8)"
+
+# Seven rows of docs/conformance/epic-e-matrix.md sat BLOCKED long after the
+# code they certify had landed, and the reason was never missing product
+# code. Each of these violations was planted ONCE, by hand, in the PR that
+# landed it (#369 for the backend set, the MediumStore contract and the
+# credential canary; #383 for the verification-honesty half), and this
+# matrix's own definition of PASS asks for one that lives in a self-test and
+# runs every time instead. Nobody owned that, EPIC E was closed with the
+# rows still BLOCKED, and #522 is the repair.
+#
+# They live here rather than in scripts/compat/selftest.sh because that
+# script is the FR-35 corpus and none of these is a corpus cell. Six of the
+# seven are unit gates, so they cost a build each and no container at all;
+# the seventh is the half of P1.4 that only a real S3 endpoint can answer,
+# and it stands up MinIO the same way the composed cells above do.
+
+# The negative control for the six unit controls, and it is the same
+# argument the composed one at the top of this file makes: a mutation that
+# turns a suite red proves nothing if the suite was red already.
+expect_unit_gate_passes "the phase 1 exit-line suites on an unmutated tree" "$root" \
+  "./internal/transport/... ./internal/placement/ ./internal/revalidate/"
+
+# P1.3, FR-4's "each backend is an architecture decision, not an import
+# line". rclone registers backends through package-level init, so the set
+# this binary supports is decided by blank imports anywhere in the graph and
+# is written down in exactly one place. A fourth one arriving without that
+# line is the whole failure, and it is planted as a real blank import rather
+# than by editing the expectation, because editing the expectation is what
+# the check is FOR.
+d=$(mutant phase1-a-fourth-rclone-backend-registered)
+swap "$d/core/internal/transport/rclone/adapter.go" \
+  '	_ "github.com/rclone/rclone/backend/local"
+	_ "github.com/rclone/rclone/backend/s3"
+	_ "github.com/rclone/rclone/backend/sftp"' \
+  '	_ "github.com/rclone/rclone/backend/local"
+	_ "github.com/rclone/rclone/backend/s3"
+	_ "github.com/rclone/rclone/backend/sftp"
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): a fourth
+	// backend, registered with no line in backends.go admitting it.
+	_ "github.com/rclone/rclone/backend/memory"'
+expect_unit_check_fails "a fourth rclone backend registered with nothing in backends.go admitting it" "$d" \
+  "registered rclone backends changed" \
+  ./internal/transport/rclone/ 'TestRegisteredBackendsExactSet'
+
+# P1.4's literal falsification, at the ladder: an `attested` request
+# silently degrading to `existence`. placement.Verify runs exactly the class
+# it was asked for and returns exactly the class it ran, and the endpoint
+# this product actually ships against cannot attest at all, so a fallback
+# here would turn "we could not check" into "we checked" on every s3 medium
+# in existence.
+d=$(mutant phase1-attested-request-falls-back-to-existence)
+swap "$d/core/internal/placement/ladder.go" \
+  '	attestation, err := store.ObjectChecksum(ctx, medium, p.Location, transport.SHA256)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %q cannot attest a full-object %s for %q: %w",
+			ErrClassUnavailable, p.Medium, transport.SHA256, p.Location, err)
+	}' \
+  '	attestation, err := store.ObjectChecksum(ctx, medium, p.Location, transport.SHA256)
+	if err != nil {
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh): the
+		// endpoint cannot attest, so run the class it can and report
+		// that instead of refusing.
+		return verifyExistence(ctx, store, medium, p, now)
+	}'
+expect_unit_check_fails "an attested request that quietly runs an existence check instead" "$d" \
+  "Verify fell back and returned" \
+  ./internal/placement/ 'TestVerifyNeverFallsBack'
+
+# P1.4 at the boundary the row cites, in-tree against rclone's local
+# backend. This boundary attests SHA-256 and nothing else, so an md5 ask has
+# to be an explicit capability refusal; answering it with the digest the
+# backend happens to hold is the same silent degrade one rung lower, and it
+# is the shape FR-32 was written about, because the digest an S3 endpoint
+# hands back for free is an ETag's MD5.
+d=$(mutant phase1-medium-checksum-answers-an-algorithm-it-cannot-speak)
+swap "$d/core/internal/transport/rclone/medium.go" \
+  '	if alg != transport.SHA256 {
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", fmt.Errorf(
+			"%w: this boundary attests %s and nothing else, so an ETag'"'"'s MD5 can never be compared to a recorded hash: %q",
+			ErrUnsupportedHash, transport.SHA256, alg))
+	}' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): answer the ask
+	// with whatever digest this backend does have, rather than refusing
+	// the one it cannot serve.
+	_ = alg'
+expect_unit_check_fails "a checksum ask this boundary cannot serve, answered instead of refused" "$d" \
+  "an MD5 from an ETag is exactly what FR-32 forbids comparing to it" \
+  ./internal/transport/rclone/ 'TestRcloneAdapter_LocalBackend_MediumContractSuite'
+
+# P1.5 and V4, FR-33's own planted violation: a build that logs the resolved
+# medium config verbatim. The canary is a value that exists nowhere else in
+# this repository, so the scan that looks for it in every output FR-33 names
+# is a real scan; what it needed was a build that actually leaks, planted in
+# the product rather than inside the test that reads the log.
+d=$(mutant phase1-resolved-credentials-logged-verbatim)
+swap "$d/core/internal/transport/rclone/mediumcreds.go" \
+  '	if resolved.hasSessionToken {
+		cfg.Set("session_token", resolved.sessionToken.Reveal())
+	}' \
+  '	if resolved.hasSessionToken {
+		cfg.Set("session_token", resolved.sessionToken.Reveal())
+	}
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): FR-33'"'"'s own,
+	// a build that logs the resolved medium config verbatim.
+	slog.Info("resolved medium config", "medium", medium.ID, "options", fmt.Sprintf("%v", cfg))'
+expect_unit_check_fails "a build that logs the resolved medium config verbatim" "$d" \
+  "the canary reached an observable output" \
+  ./internal/transport/rclone/ 'TestMediumCredentialCanary$'
+
+# P1.7 and V8, FR-31's verification honesty. The pass HEADs the object,
+# which is placement.Existence and is the automatic ceiling; reporting that
+# run as content verification is a claim about bytes nobody read, and it is
+# the claim an operator six months later is reading out of the journal.
+d=$(mutant phase1-revalidation-claims-content-verification)
+swap "$d/core/internal/revalidate/checks.go" \
+  '	return true, anyPassed, automatic, detail, nil
+}' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): a HEAD,
+	// reported as content verification.
+	return true, anyPassed, placement.Content, detail, nil
+}'
+expect_unit_check_fails "an existence check reported as content verification" "$d" \
+  "must not be reported as anything stronger" \
+  ./internal/revalidate/ 'TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo'
+
+# P1.8, the no-new-deletion-path line. It was a whole-module source scan
+# through phase 1 and it still is one; what #238 changed is the claim, from
+# "no production file calls DeleteObject" to "exactly one package does, and
+# it is the move engine". The violation is a SECOND place the ordering that
+# protects a backup gets decided, so it is planted in the one pass whose own
+# comment says it has no business acquiring a MediumStore.
+d=$(mutant phase1-a-second-production-deletion-path)
+swap "$d/core/internal/reconcile/reconcile.go" \
+  'func leftOnMedium(rec state.Record, st lifecycle.State, local localValidity) Finding {
+	return noAction(rec.Artifact, st, local.Reason)
+}' \
+  'func leftOnMedium(rec state.Record, st lifecycle.State, local localValidity) Finding {
+	return noAction(rec.Artifact, st, local.Reason)
+}
+
+// PLANTED VIOLATION (scripts/conformance/selftest.sh): a second production
+// deletion path, in the pass whose own comment says it has no business
+// acquiring a MediumStore.
+func plantedMediumDeletion(ctx context.Context, store transport.MediumStore, medium transport.Medium, key string) error {
+	return store.DeleteObject(ctx, medium, key)
+}'
+expect_unit_check_fails "a second production deletion path outside the move engine" "$d" \
+  "these production files call DeleteObject" \
+  ./internal/transport/ 'TestOnlyTheMoveEngineDeletesFromAMedium'
+
+# The half of P1.4 no local backend can answer. rclone's local backend
+# hashes a file it can read, so the in-tree run exercises ObjectChecksum's
+# SUCCESS path and can say nothing at all about the refusal; rclone v1.75.0's
+# s3 backend exposes MD5 from the ETag and nothing else, so the refusal
+# branch exists only against a real endpoint. This is that branch, mutated
+# into the silent downgrade FR-31 forbids, and it is inert against the local
+# backend on purpose: it is planted behind the capability test the local
+# backend passes.
+d=$(mutant phase1-minio-attestation-degrades-instead-of-refusing)
+swap "$d/core/internal/transport/rclone/medium.go" \
+  '	if !f.Hashes().Contains(hash.SHA256) {
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", fmt.Errorf(
+			"%w: medium %q (type %s) cannot attest a full-object %s",
+			ErrUnsupportedHash, medium.ID, medium.Type, transport.SHA256))
+	}' \
+  '	if !f.Hashes().Contains(hash.SHA256) {
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh): this
+		// backend cannot attest, so hand back a nil error and let the
+		// caller record a verification nobody ran.
+		return transport.ChecksumAttestation{Algorithm: transport.SHA256, Value: "planted"}, nil
+	}'
+expect_unit_check_fails "an endpoint that cannot attest, silently downgraded instead of refused" "$d" \
+  "never a silent downgrade" \
+  ./tests/miniointegration/ 'TestMinioMediumContractSuite|TestMinioAttestationIsRefused'
+
+echo
+echo "==> the matrix's own BLOCKED citations"
+
+# core/tests/compat's citation guard used to accept any "#" in a BLOCKED
+# outcome, which is how three rows spent months citing #235, #236 and #237
+# after all three were closed: a reference nobody can act on, satisfying a
+# check nobody could fail. It resolves the issue against GitHub now, and
+# this is the control that says so. The plant makes one PASS row BLOCKED
+# citing #235, which is closed, and the guard has to say which row, which
+# issue, and that it is closed.
+#
+# The stub-resolver half of the same guard runs offline on every gate
+# (TestTheBlockedCitationGuardCanFail); this one is the wiring, and it needs
+# a working `gh`. A run without one fails here rather than passing, for the
+# reason every control in this file exists.
+d=$(mutant matrix-blocked-row-cites-a-closed-issue)
+swap "$d/docs/conformance/epic-e-matrix.md" \
+  '| P1.3 | PASS |' \
+  '| P1.3 | BLOCKED (#235) |'
+expect_unit_check_fails "a BLOCKED row citing an issue that is closed" "$d" \
+  "is CLOSED" \
+  ./tests/compat/ 'TestEveryBlockedRowCitesAnIssueThatIsStillOpen'
 
 echo
 echo "==> the matrix's own falsification for the phase 2 exit gate (P2.1, P2.2, V1)"

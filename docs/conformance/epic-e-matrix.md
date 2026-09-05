@@ -32,7 +32,7 @@ nobody has looked.
 
 | Outcome | Means |
 | --- | --- |
-| `PASS` | The check exists, runs in `scripts/ci-local.sh`, and has been shown to go red against a real planted violation. The falsification column names the mutation and it is automated in `scripts/compat/selftest.sh`. |
+| `PASS` | The check exists, runs in `scripts/ci-local.sh`, and has been shown to go red against a real planted violation. The falsification column names the mutation and it is automated in `scripts/compat/selftest.sh` or `scripts/conformance/selftest.sh`. |
 | `PARTIAL` | Part of the claim is checked and shown to fire; the rest waits on an unlanded issue. The row says which half is which. |
 | `BLOCKED` | The check is specified here and cannot conclude today, because the code it certifies is not merged. Not a pass, and not a fail. The row names the issue. |
 
@@ -47,9 +47,27 @@ family exists to catch, an additive column rendered where there is no non-local
 placement, lands in the artifact detail, which is compared exactly.
 
 `BLOCKED` is a declaration, and like the phase 4 matrix's declarations it is
-checked rather than trusted: `TestTheMatrixDoesNotCiteSuitesThatDoNotExist` in
+checked rather than trusted. `TestTheMatrixDoesNotCiteSuitesThatDoNotExist` in
 `core/tests/compat` reads this file and fails if a `PASS` or `PARTIAL` row cites
-a path the repository does not have, and fails if no row is BLOCKED at all. A row cannot be quietly upgraded by editing a word.
+a path the repository does not have, so a row cannot be quietly upgraded by
+editing a word. `TestEveryBlockedRowCitesAnIssueThatIsStillOpen` reads it too and
+resolves every issue a `BLOCKED` row names against GitHub, because the way this
+file went wrong was not a row claiming too much: it was seven rows claiming too
+little, citing #235, #236 and #237 long after all three were closed, which reads
+as "somebody is working on this" and points at work nobody can pick up. That
+check only asks the network when a row is actually blocked, and when one is and
+GitHub cannot be reached it fails rather than skipping, for the reason every
+control in this file exists.
+
+Two more checks hold the shape of the document itself.
+`TestTheMatrixHasARowPerGateLine` compares the row ids against the spec's own
+exit-gate checkbox lists, so a row cannot be dropped to tidy the table (the row
+nobody can make green is the row most worth deleting), and it replaced a floor
+that asserted some row was still BLOCKED, which was true when it was written and
+barred the finished state.
+`TestTheSpecsExitGateBoxesAgreeWithTheMatrix` holds the spec's checkboxes to
+these outcomes in both directions, because both gates sat entirely unticked long
+after phase 2 landed and nothing in the repository could tell.
 
 ## Where the checks live
 
@@ -178,16 +196,27 @@ mediums. The spec's own planted violation for V6, an object swapped behind
 its key, is run rather than described. Four falsifications are automated in
 `scripts/conformance/selftest.sh`, and every one has been watched to go red.
 
-Phase 1's rows have NOT been re-read, and that is deliberate rather than an
-oversight. #234, #235, #236 and #237 are all closed and their code is in the
-tree, so "BLOCKED (#235)" no longer describes why P1.3 to P1.5 are not PASS.
-What is missing is not the code, it is an automated falsification: each of
-those violations was planted once, by hand, in the landing PR (#369 records
-the credential canary and the backend set, #383 records the verification
-honesty half), and this file's own definition of PASS asks for one that
-lives in a self-test and runs every time. Whoever automates them owns
-re-reading the rows, and doing it from #242's lane would mean upgrading four
-cells on evidence read out of a pull request description.
+Phase 1's rows have now been re-read, and #522 is the issue that says why they
+had not been. #234, #235, #236 and #237 were all closed and their code was in
+the tree, so "BLOCKED (#235)" had stopped describing anything: what was missing
+was never the code, it was an automated falsification. Each of those violations
+was planted once, by hand, in the landing PR (#369 records the credential canary,
+the backend set and the no-deletion scan; #383 records the verification-honesty
+half), and this file's own definition of PASS asks for one that lives in a
+self-test and runs every time. Nobody owned that, EPIC E (#232) was closed with
+seven rows still BLOCKED, and the citation guard could not notice because it
+accepted any `#` at all.
+
+All seven are automated now, in `scripts/conformance/selftest.sh`, and every one
+has been watched to go red against its planted violation and to stay green on the
+real tree. Six of them are unit gates that cost a build and no container; the
+seventh is the half of P1.4 that only a real S3 endpoint can answer, because
+rclone's local backend attests a SHA-256 and therefore cannot exercise the
+refusal branch at all. Two of the rows moved their citation rather than only
+their word: P1.8's check is `core/internal/transport/mediumdeletion_test.go`,
+which #238 changed from "no production file calls `DeleteObject`" to "exactly one
+package does, and it is the move engine", and P1.4's evidence now spans the
+boundary, the endpoint and the rung that consumes the refusal.
 
 ## Phase 1 exit gate
 
@@ -195,12 +224,12 @@ cells on evidence read out of a pull request description.
 | --- | --- | --- | --- | --- |
 | P1.1 | PASS | A config declaring an `s3` medium and a tier `medium` reference validates, round-trips through a settings save without injecting fields into a legacy config, and a config naming neither behaves identically to today. | `core/internal/config/storage_mediums_test.go`, `core/service/settings_mediums_test.go`, cell `01-config-validation` in `core/tests/compat` | A tier with no `medium` key resolving to no medium instead of `local`. Run, caught. |
 | P1.2 | PASS | A config with an inline literal credential fails `Load` with an unknown-field error. | `core/tests/compat/testdata/configs/53-invalid-inline-medium-secret.yaml`, cell `01-config-validation` | The refusal text is pinned by the corpus; weakening `KnownFields(true)` or the message moves the cell. Run, caught (via the same cell's control). |
-| P1.3 | BLOCKED (#235) | The rclone backend set is exactly `local`, `sftp`, `s3` required and `crypt` accepted, and the binary-size delta is recorded in the landing PR. | `core/internal/transport/rclone/backends.go` and its set test, once #235 lands | Registering a fourth backend without updating the set test. |
-| P1.4 | BLOCKED (#235) | The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture, including the explicit capability refusal where attestation is unsupported. | `core/internal/transport/contract`, once #235 lands | An `attested` request silently degrading to `existence` instead of returning a capability result. |
-| P1.5 | BLOCKED (#235) | The credential canary passes for file, env and command sources, and its planted violation fails it. | #235's canary test | A build that logs the resolved medium config verbatim. |
+| P1.3 | PASS | The rclone backend set is exactly `local`, `sftp`, `s3` required and `crypt` accepted, and the binary-size delta is recorded. | `core/internal/transport/rclone/backends.go` and `core/internal/transport/rclone/backends_test.go`, where `TestRegisteredBackendsExactSet` compares the LIVE `fs.Registry` against the list, exactly rather than as a subset in either direction | The spec's own, automated in `scripts/conformance/selftest.sh` and watched red: a blank import of rclone's `backend/memory` in `adapter.go` turns the comparison red on `registered rclone backends changed`. The mutation is a real import rather than an edited expectation, because editing the expectation is the thing the check exists to catch. What is NOT a check is the size figure: the +9.00 MiB delta and the two builds that reproduce it are recorded in `backends.go`'s own comment, with the `container/Dockerfile` flags that make the number reproducible, and nothing asserts it. |
+| P1.4 | PASS | The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture, including the explicit capability refusal where attestation is unsupported. | `core/internal/transport/contract/medium.go` is the suite; `core/internal/transport/rclone/medium_test.go` runs it in-tree against the local backend, which attests, and `core/tests/miniointegration/minio_integration_test.go` runs it against MinIO, which cannot; `core/internal/placement/ladder.go` and `core/internal/placement/ladder_test.go` are the rung that has to consume the refusal without softening it | Three mutations, all automated in `scripts/conformance/selftest.sh` and all three watched red. The row's own, at the ladder: `verifyAttested` falling back to `verifyExistence` when the endpoint refuses turns `TestVerifyNeverFallsBack` red on `Verify fell back and returned`. The same degrade one rung lower, at the boundary: `ObjectChecksum` answering an `md5` ask with the SHA-256 it does have, instead of refusing the algorithm it cannot speak, turns the in-tree contract run red on `an MD5 from an ETag is exactly what FR-32 forbids comparing to it`. And the half no local backend can answer: rclone's local backend hashes a file it can read, so the in-tree run exercises `ObjectChecksum`'s SUCCESS path and cannot reach the refusal branch at all, so the capability refusal replaced by a nil-error answer is run against MinIO and turns that contract run red on `never a silent downgrade`. |
+| P1.5 | PASS | The credential canary passes for file, env and command sources, and its planted violation fails it. | `core/internal/transport/rclone/mediumcreds_test.go`: `TestMediumCredentialCanary` resolves a canary that exists nowhere else in this repository through all three sources and both failing shapes, and scans every output FR-33 names (the error, every `fmt` verb, the JSON, and everything written to the log while the resolve ran) | The spec's own, automated in `scripts/conformance/selftest.sh` and watched red: a `slog.Info` of the resolved medium config at the end of `mediumAuthOptions` turns the canary red on `the canary reached an observable output`. It is planted in the PRODUCT rather than inside the test that reads the log, which is the difference from the in-tree positive control (`TestMediumCredentialCanaryFindsAPlantedLeak`): that one proves the scan can see a leak, this one proves it sees THIS build's. |
 | P1.6 | PASS | Migration 0007 backfills a local placement for every pre-existing artifact row, and the golden retention tests and the full existing suite pass unmodified against the migrated schema. | `core/internal/state/placements_test.go` and `core/internal/state/placementcrash_test.go` for the backfill itself (#236, merged); cells `10-upgraded-artifact-rows` and `11-upgraded-retention-verdicts` plus `TestUpgradingAndInstallingFreshAgreeWithEachOther` in `core/tests/compat` for the "unmodified" half | The spec's own, and it fires: a planted migration that rewrites `retention_tier` during backfill turns cell 10 red, and one that rewrites `discovered_at` turns cell 11 red, both automated in `scripts/compat/selftest.sh` and both run against a tree that now carries the real `0007_placements.sql`. The upgrade this cell runs now copies the transition history alongside the artifact rows, which #396 had blocked and #381 fixed, see U1. |
-| P1.7 | BLOCKED (#237) | Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve. | #237's class-string assertion | A revalidation pass forced to `existence` reporting itself as content verification. |
-| P1.8 | BLOCKED (#235, #236, #237) | Nothing in phase 1 can delete an artifact copy anywhere; the destructive-safety suite diff shows no new deletion path. | `core/internal/app/destructive_b34_test.go`, once the phase 1 code exists to diff against | A `DeleteObject` call reachable from a phase 1 code path. Deliberately not attempted here as an inventory of every `os.Remove` in `core/`: most of them are temp-file cleanup, the list churns on every refactor across ten active lanes, and a cell people learn to regenerate is the thing this matrix exists to avoid. |
+| P1.7 | PASS | Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve. | `core/internal/revalidate/checks.go` runs the class; `core/internal/revalidate/medium_test.go`'s `TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo` pins the `Finding`, the request counts (zero opens, zero attestations, exactly one stat) and the durable journal detail, read out of the append-only transition log rather than through `LastEnteredDetail`; `core/internal/revalidate/automaticclass_test.go` pins the ceiling itself | The spec's own, automated in `scripts/conformance/selftest.sh` and watched red: `checkMediumPlacements` returning `placement.Content` for the HEAD it actually ran turns the class assertion red on `must not be reported as anything stronger`. Nothing about the run changes under the mutation, which is exactly the point: the pass is still forced to existence, still downloads nothing, and only the CLAIM moves, so the falsification is the dishonesty rather than the check. |
+| P1.8 | PASS | No production code outside the move engine removes a copy of a backup from a medium. Phase 1's wording was "nothing in this phase can delete an artifact copy anywhere"; #238 moved the line rather than taking an exemption from it, and the claim is still exhaustive. | `core/internal/transport/mediumdeletion_test.go`: `TestOnlyTheMoveEngineDeletesFromAMedium` is a whole-module source scan with an allow-list whose every entry carries the argument for why it is there, it fails on an entry that no longer deletes, and `TestTheDeletionScanCanActuallyFail` is its positive control against a walk that visits nothing | The spec's own, automated in `scripts/conformance/selftest.sh` and watched red: a `DeleteObject` call planted in `internal/reconcile`, the pass whose own comment says it has "no MediumStore in its Deps and no business acquiring one", turns the scan red on `these production files call DeleteObject`. Still deliberately not an inventory of every `os.Remove` in `core/`: most of them are temp-file cleanup, the list churns on every refactor across ten active lanes, and a cell people learn to regenerate is the thing this matrix exists to avoid. |
 
 ## Phase 2 exit gate
 
@@ -225,11 +254,11 @@ records its planted violation actually failing. This is that ledger.
 | V1 | Source survives every move uncertainty | A mutation that issues the source delete before `VERIFIED` is durably recorded | PASS, automated in `scripts/conformance/selftest.sh`. Caught by the continuous watcher at the instant, and by the crash matrix's byte assertion in the variant where the destination is trusted instead of re-read. |
 | V2 | Medium data only ever adds (FR-32) | A mutation that admits S3 `LastModified` as a producer timestamp | PARTIAL. The literal mutation is still unreachable, because nothing carries `LastModified` into a record at all; `transport.ObjectInfo.ModTime` exists and no retention path can see one. Two composed analogues are live and caught: a backfill that re-derives `discovered_at` (cell `11-upgraded-retention-verdicts`, `scripts/compat/selftest.sh`) and bucketing by a placement's `verified_at`, which is a medium-shaped timestamp a move genuinely writes (`scripts/conformance/selftest.sh`). |
 | V3 | Bucketing invariant under movement | A mutation that rewrites the journal's discovery timestamp | PASS, automated in `scripts/compat/selftest.sh` |
-| V4 | Credential canary (FR-33) | A build that logs the resolved medium config verbatim | BLOCKED (#235) |
+| V4 | Credential canary (FR-33) | A build that logs the resolved medium config verbatim | PASS, automated in `scripts/conformance/selftest.sh` as `phase1-resolved-credentials-logged-verbatim`, and watched red. The violation is the spec's literal one, planted in `mediumAuthOptions` rather than in the test that reads the log. See P1.5. |
 | V5 | Inline secret refusal (FR-33) | A config with a literal `secret_access_key:` | PASS, pinned by cell `01-config-validation` |
 | V6 | Prune identity re-check on mediums (FR-30) | A fixture that swaps the object behind a key before prune | PASS, automated in `scripts/conformance/selftest.sh` as `fr16-recheck-result-ignored`, and run composed rather than against a double: `TestPruneRefusesAnObjectThatIsNoLongerTheOneTheJournalRecorded` moves an artifact onto a real bucket, replaces the object behind its key, and the apply refuses with `... is 93 bytes, but 122 was recorded for this placement` while the local artifact in the same pass is still deleted. The size is the whole of the proof against this endpoint, because rclone's s3 backend attests no full-object checksum; the same-length swap, which size alone cannot see, is covered against an attesting double in `core/internal/placement/reclaim_test.go`. The local half is live too: prune mutated to delete what it could not stat is caught by cell `05-prune-verdicts`. |
 | V7 | Compatibility (FR-35) | A migration variant that rewrites `retention_tier` during backfill | PASS, automated in `scripts/compat/selftest.sh` |
-| V8 | Verification honesty (FR-31) | A revalidation run forced to `existence` class | BLOCKED (#237) |
+| V8 | Verification honesty (FR-31) | A revalidation run forced to `existence` class | PASS, automated in `scripts/conformance/selftest.sh` as `phase1-revalidation-claims-content-verification`, and watched red. Worth reading the violation carefully: the run being forced to `existence` is the automatic ceiling and is not the mutation, since anything stronger costs egress and FR-31 makes egress operator-initiated. The mutation is the class that forced run REPORTS, so the falsification is a pass claiming content verification for a HEAD. See P1.7. |
 
 ## Unexpected blockers found while building this
 
