@@ -15,14 +15,19 @@ import (
 // other's was an unknown flag and `flag` refused it. Together they share
 // one FlagSet, so every flag parses for every verb, and the failure
 // becomes silent: `backup-set patch --read-only` would have exited 0
-// having changed nothing about the posture the operator just asked for,
-// and `backup-set create --acknowledge-repoint` would have accepted an
-// acknowledgement of a repoint that cannot happen on a set being created.
+// having changed nothing about the posture the operator just asked for.
 //
-// Both directions, because a guard that only knows about one verb's flags
-// is half a guard, and both are checked against a control that the same
-// invocation without the wrong flag really does succeed. Without the
-// control this would also pass against a command that refused everything.
+// It used to run in both directions. Since issue #411 there is nothing to
+// check in the other one, because --acknowledge-repoint, the only flag
+// patch ever had to itself, means something on create too: removing a set
+// frees its id up, so a create over an id that already has artifacts on
+// record is the same repoint an edit makes. So the second subtest checks
+// the direction that is now true, that create ACCEPTS it, which is also
+// the assertion that fails if it is ever quietly parsed and dropped.
+//
+// The refusals are checked against a control that the same invocation
+// without the wrong flag really does succeed. Without the control this
+// would also pass against a command that refused everything.
 func TestRun_BackupSetVerbsRefuseEachOthersFlags(t *testing.T) {
 	t.Run("patch refuses create's flags", func(t *testing.T) {
 		configPath := writeTestConfig(t)
@@ -69,23 +74,19 @@ func TestRun_BackupSetVerbsRefuseEachOthersFlags(t *testing.T) {
 		}
 	})
 
-	t.Run("create refuses patch's flag", func(t *testing.T) {
+	t.Run("create takes the acknowledgement", func(t *testing.T) {
 		configPath := writeTestConfig(t)
 		keyPath := writeTestPrivateKey(t)
 		args := createArgs(configPath, keyPath, "api/acknowledged", "--acknowledge-repoint")
-		out := captureStderr(t, func() {
-			if got := run(args); got != 2 {
-				t.Errorf("run(%v) = %d, want 2 (a usage error): there is nothing to repoint on a set that does not exist yet", args, got)
-			}
-		})
-		if !strings.Contains(out, "acknowledge-repoint") {
-			t.Errorf("the refusal does not name the flag it refused: %q", out)
+		if got := run(args); got != 0 {
+			t.Errorf("run(%v) = %d, want 0: --acknowledge-repoint is a create flag since issue #411", args, got)
 		}
 
-		// The control, again: the same create without the patch flag is a
-		// real one, so the refusal above is about the flag.
-		if got := run(createArgs(configPath, keyPath, "api/acknowledged")); got != 0 {
-			t.Fatal("the same create without --acknowledge-repoint has to succeed, or the case above proves nothing")
+		// And it really reached the request rather than being parsed and
+		// dropped, which is what the shared FlagSet makes easy to do by
+		// accident. The set really is there afterwards.
+		if got := run([]string{"backup-set", "--config", configPath, "remove", "api/acknowledged"}); got != 0 {
+			t.Errorf("removing the set the create above made = %d, want 0: it was never created", got)
 		}
 	})
 }

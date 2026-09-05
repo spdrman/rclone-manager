@@ -311,6 +311,14 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // there is nothing left to retry here, and the operator has to be told
   // that no backup is running before they walk away believing one is.
   const [runNotStarted, setRunNotStarted] = useState<string | null>(null);
+  // The refusal a create over an id that already has artifacts on record
+  // gets when it points somewhere other than where they came from (issue
+  // #411). It carries the two Save arguments as well as the message,
+  // because the way out of it is to re-send THIS save with the
+  // acknowledgement, not some default one: "Save disabled" that came back
+  // refused has to stay a disabled save when it is confirmed.
+  const [repointRefusal, setRepointRefusal] =
+    useState<{ message: string; disabled: boolean; runImmediately: boolean } | null>(null);
 
   // handleSave is every one of the wizard's three Save buttons' onClick
   // (issue #146): "Save, enable & run" and "Save & enable" pass
@@ -321,7 +329,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // new set with no manual refetch of its own (appNodes.ts's setsNode +
   // resource.ts's fetchResource, exactly as that module's own doc
   // describes for a mutation elsewhere).
-  async function handleSave(disabled: boolean, runImmediately: boolean) {
+  async function handleSave(disabled: boolean, runImmediately: boolean, acknowledgeRepoint = false) {
     if (keySource !== "import" || !importedKeyId) {
       setSaveError(
         keySource === "generate"
@@ -337,6 +345,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
 
     setSaving(true);
     setSaveError(null);
+    setRepointRefusal(null);
     try {
       const request = {
         name: source.name,
@@ -359,7 +368,10 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
         stableForSeconds: completion === "stable-size" ? 3600 : undefined,
         disabled,
         readOnly: readOnlySource,
-        runImmediately: firstRun ? false : runImmediately
+        runImmediately: firstRun ? false : runImmediately,
+        // Sent only when the operator actually answered the refusal, so
+        // an ordinary save is never a pre-acknowledged one.
+        acknowledgeRepoint: acknowledgeRepoint || undefined
       };
       if (firstRun) {
         const result = await api.completeFirstRun(request);
@@ -379,9 +391,22 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
       }
       navigate("/sets");
     } catch (e) {
-      setSaveError(
-        errorMessage(e, firstRun ? "Could not save this configuration." : "Could not save this backup set.")
+      const message = errorMessage(
+        e,
+        firstRun ? "Could not save this configuration." : "Could not save this backup set."
       );
+      if (
+        e instanceof BackupManagerError &&
+        e.api.code === "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+      ) {
+        // Not a save error under the buttons. The service is not saying
+        // anything on this form is wrong: it is saying this id already
+        // has backups on record and this form would create the set
+        // somewhere else, which is a decision with its own two answers.
+        setRepointRefusal({ message, disabled, runImmediately });
+        return;
+      }
+      setSaveError(message);
     } finally {
       setSaving(false);
     }
@@ -1017,6 +1042,33 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                     The backup set was created and is enabled. The immediate run did not
                     start: {runNotStarted}. Nothing is backing up yet — start a run from
                     the backup sets list once that is resolved.
+                  </WarningBanner>
+                </div>
+              ) : null}
+
+              {repointRefusal ? (
+                <div style={{ marginTop: 18 }}>
+                  <WarningBanner
+                    tone="warn"
+                    eyebrow="This id already has backups on record"
+                    actions={
+                      <>
+                        <button
+                          className="btn btn--primary"
+                          disabled={saving}
+                          onClick={() =>
+                            void handleSave(repointRefusal.disabled, repointRefusal.runImmediately, true)
+                          }
+                        >
+                          Create anyway
+                        </button>
+                        <button className="btn" disabled={saving} onClick={() => setRepointRefusal(null)}>
+                          Go back and change it
+                        </button>
+                      </>
+                    }
+                  >
+                    {repointRefusal.message}
                   </WarningBanner>
                 </div>
               ) : null}

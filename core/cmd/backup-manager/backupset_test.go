@@ -240,6 +240,55 @@ func TestRun_BackupSetPatchRefusesToRepointASetWithHistoryUntilAcknowledged(t *t
 	}
 }
 
+// TestRun_BackupSetCreateRefusesToCreateOverHistoryUntilAcknowledged is
+// the CLI half of issue #411, and the same equivalence argument as the
+// patch case above: an operator at a terminal is asked exactly what an
+// operator in the browser is asked, and gets out of it with exactly one
+// flag.
+//
+// The `run` gives production/postgres-primary history and the `remove`
+// frees its id up, which is the whole route this refusal is about.
+func TestRun_BackupSetCreateRefusesToCreateOverHistoryUntilAcknowledged(t *testing.T) {
+	configPath := writeTestConfig(t)
+	keyPath := writeTestPrivateKey(t)
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf(`run(["run"]) = %d, want 0: the fixture has to actually back something up or this test proves nothing`, got)
+	}
+	if got := run([]string{"backup-set", "--config", configPath, "remove", "production/postgres-primary"}); got != 0 {
+		t.Fatalf("removing the fixture set = %d, want 0", got)
+	}
+
+	args := createArgs(configPath, keyPath, "production/postgres-primary")
+	var code int
+	stderr := captureStderr(t, func() { code = run(args) })
+	if code == 0 {
+		t.Fatalf("run(%v) = 0, want non-zero: creating a set over an id that already holds artifacts, somewhere else, must be refused until acknowledged", args)
+	}
+	for _, want := range []string{"local_path", "acknowledge_repoint"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, stderr)
+		}
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(raw), "/data/backups/api") {
+		t.Error("the config file carries the refused set's local_path even though the create was refused")
+	}
+
+	if got := run(createArgs(configPath, keyPath, "production/postgres-primary", "--acknowledge-repoint")); got != 0 {
+		t.Fatalf("run with --acknowledge-repoint = %d, want 0", got)
+	}
+	raw, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), "/data/backups/api") {
+		t.Errorf("the acknowledged create did not persist the set:\n%s", raw)
+	}
+}
+
 // TestRun_BackupSetPatchAcknowledgeAloneIsStillAUsageError: the
 // acknowledgement names no field to change, so a patch carrying only it
 // rewrites and reloads the configuration to no effect, which is exactly

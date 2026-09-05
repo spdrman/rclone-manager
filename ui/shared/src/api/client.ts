@@ -247,7 +247,16 @@ function wireBackupSetSpec(req: CreateBackupSetRequest): WireBackupSetSpec {
 }
 
 function wireCreateBackupSetRequest(req: CreateBackupSetRequest): WireCreateBackupSetRequest {
-  return { ...wireBackupSetSpec(req), run_immediately: req.runImmediately };
+  const body: WireCreateBackupSetRequest = {
+    ...wireBackupSetSpec(req),
+    run_immediately: req.runImmediately
+  };
+  // Only when the caller actually set it, exactly as wireBackupSetPatch
+  // does for the edit path's copy of this field: a create that carried it
+  // unconditionally would be pre-acknowledged, and the refusal it answers
+  // could then never fire at all.
+  if (req.acknowledgeRepoint !== undefined) body.acknowledge_repoint = req.acknowledgeRepoint;
+  return body;
 }
 
 function wireConnectionTestParams(params: ConnectionTestParams) {

@@ -95,6 +95,21 @@ var ErrSSHKeyNotFound = errors.New("service: imported SSH key not found")
 // argument.
 var ErrRepointNotAcknowledged = errors.New("service: this edit would point the backup set at different data")
 
+// ErrHistoryRepointNotAcknowledged is CreateBackupSet refusing the same
+// move on the way in: a backup set created over an id that already has
+// artifacts on record takes all of them, so creating it somewhere other
+// than where that history came from is the repoint above with no edit in
+// front of it (issue #411).
+//
+// Its own sentinel rather than ErrRepointNotAcknowledged, because the two
+// refusals are not interchangeable to a client. This one is about an id
+// rather than an existing resource, what it names is what the journal
+// remembers rather than what the configuration currently says, and the
+// way out of it is a different button: "create anyway", not "save
+// anyway". A client that could only see one code would have to guess
+// which of those it was looking at.
+var ErrHistoryRepointNotAcknowledged = errors.New("service: this would create the backup set somewhere other than where its history came from")
+
 // BackupSet is the plain, provider-agnostic shape of one configured
 // backup set (mirrors config.BackupSet the same way Operation mirrors
 // state.Operation): a caller outside core/ never sees a config.BackupSet
@@ -257,6 +272,20 @@ type CreateBackupSetRequest struct {
 	// run_cycle operation RunImmediately submits. Unused when
 	// RunImmediately is false or Disabled is true.
 	Actor string
+
+	// AcknowledgeRepoint confirms that the caller means to create this
+	// backup set somewhere other than where the history already on its id
+	// came from. It is not a field of the backup set and nothing persists
+	// it: it answers one refusal, for one request, exactly as
+	// UpdateBackupSetRequest.AcknowledgeRepoint does for an edit.
+	//
+	// It is required only when this id already has artifacts on record AND
+	// remote.host, remote_path or local_path differ from what is recorded
+	// for them, which after an ordinary removal-and-undo is nothing at
+	// all. backupsetrepoint.go carries the whole argument, including what
+	// "what is recorded" means on a path where there is no configuration
+	// entry left to compare against.
+	AcknowledgeRepoint bool
 }
 
 // CreateBackupSetResult is what CreateBackupSet returns: the persisted
@@ -417,6 +446,19 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	cfg, err := config.Load(b.configPath)
 	if err != nil {
 		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	// Asked before newBackupSetFor, because that function writes this
+	// set's known_hosts file, and a refusal must leave nothing behind. It
+	// is asked at all only for an id the configuration does not already
+	// hold: creating over a set that is still configured is a duplicate
+	// id, which cfg.Validate below refuses on its own terms, and telling
+	// that caller about history they never asked to adopt would send them
+	// looking in the wrong place.
+	if findBackupSetPointer(cfg, sourceName, req.Name) == nil {
+		if err := b.requireCreateRepointAcknowledgement(ctx, sourceName, req); err != nil {
+			return CreateBackupSetResult{}, err
+		}
 	}
 
 	newSet, err := newBackupSetFor(b.configPath, sourceName, keyFile, req)

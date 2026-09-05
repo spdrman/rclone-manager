@@ -86,6 +86,7 @@
           "ARTIFACT_IRRECOVERABLE",
           "REINSTATEMENT_REFUSED",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+          "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
           "MEDIUM_DISCLOSURE_REQUIRED",
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
@@ -129,6 +130,7 @@
           "ARTIFACT_IRRECOVERABLE": "wire",
           "REINSTATEMENT_REFUSED": "wire",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
+          "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED": "wire",
           "MEDIUM_DISCLOSURE_REQUIRED": "wire",
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
@@ -826,19 +828,23 @@
         ]
       },
       "CreateBackupSetRequest": {
-        "description": "POST /backup-sets. The backup-set spec, plus the one thing only a create can ask for: that the new set also runs at once.",
+        "description": "POST /backup-sets. The backup-set spec, plus the two things only a create can ask for: that the new set also runs at once, and that it may take over history already on its id.",
         "allOf": [
           {
             "$ref": "#/components/schemas/BackupSetSpec"
           },
           {
             "type": "object",
-            "description": "The create-only addition on top of the spec itself.",
+            "description": "The create-only additions on top of the spec itself.",
             "additionalProperties": false,
             "properties": {
               "run_immediately": {
                 "type": "boolean",
                 "description": "Also submit a run_cycle. This branch, and only this branch, is subject to the destructive gate."
+              },
+              "acknowledge_repoint": {
+                "type": "boolean",
+                "description": "Confirm creating this backup set somewhere other than where the history already on its id came from. Removing a backup set frees its id up, and a set created over an id that already has artifacts on record takes every one of them, so creating it at a different host, remote_path or local_path is the same move an edit makes. Needed only when this id has artifacts on record AND one of those three differs from what is recorded for them; re-creating a set exactly where it was removed from asks nothing. It is not a field of the backup set and nothing persists it: it answers one refusal, for one request."
               }
             },
             "required": []
@@ -3539,6 +3545,19 @@
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH",
               "DESTRUCTIVE_OPERATIONS_DISABLED"
+            ]
+          },
+          "409": {
+            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED. This id already has artifacts on record and the set would be created somewhere other than where they came from; re-send with acknowledge_repoint once the message has been read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
             ]
           },
           "500": {
