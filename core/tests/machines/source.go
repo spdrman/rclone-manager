@@ -103,6 +103,12 @@ const (
 	// dockerRemoveTimeout bounds teardown, which must not be the reason a
 	// suite hangs either.
 	dockerRemoveTimeout = 60 * time.Second
+	// probeHold is how long the connection-cap probe holds its connections
+	// open, and probeSettle how long the measurement waits for them to
+	// arrive. The hold has to outlast the settle comfortably, or the
+	// measurement races the probe's own teardown.
+	probeHold   = 30 * time.Second
+	probeSettle = 15 * time.Second
 	// keygenTimeout bounds one ssh-keygen, keyscanTimeout one ssh-keyscan
 	// attempt inside its retry loop.
 	keygenTimeout  = 60 * time.Second
@@ -1336,32 +1342,76 @@ func (f *Source) probeTarget() string {
 // Both numbers are measured rather than one being inferred from the other,
 // because "connection n+1 was refused" has two explanations: the cap bit,
 // or nothing could connect at all. The held count is the positive control
-// that separates them.
+// that separates them, and it is read off the server's own TCP table WHILE
+// the probe is still holding its connections open. A count taken after the
+// probe container exits is always zero, which reads exactly like "the rule
+// blocked everything" and would condemn a cap that was working.
 func (f *Source) probeCap(t *testing.T, n int) (held int, acceptedOneMore bool) {
 	t.Helper()
-	script := fmt.Sprintf(`
-for i in $(seq 1 %d); do (nc %s 22 >/dev/null 2>&1 & sleep 20) & done
-sleep 3
-if nc -w 3 %s 22 </dev/null 2>/dev/null | grep -q '^SSH-'; then
-  echo ACCEPTED
-else
-  echo REFUSED
-fi
-`, n, f.probeTarget(), f.probeTarget())
+
+	// The connections are held by `sleep | nc`, not by nc alone: nc with no
+	// stdin sees EOF immediately and closes, so a probe written the obvious
+	// way holds nothing and measures nothing.
+	script := fmt.Sprintf("for i in $(seq 1 %d); do (sleep %d | nc %s 22 >/dev/null 2>&1) & done; sleep %d",
+		n, int(probeHold/time.Second), f.probeTarget(), int(probeHold/time.Second))
 
 	// The probe container is on the source's network and shares one source
 	// address for all of its connections, which is what --connlimit-mask 32
 	// counts. It carries the same lease label as everything else here, so a
 	// killed run's probe is swept rather than left behind.
-	out, errOut, err := dockerRun(probeTimeout, "run", "--rm", "--network", f.network,
-		dockerlease.LabelFlag, dockerlease.LabelSpec, f.image, "sh", "-c", script)
+	baseline := f.EstablishedConnections(t)
+	id, errOut, err := dockerRun(dockerRunTimeout, "run", "-d",
+		"--network", f.network, dockerlease.LabelFlag, dockerlease.LabelSpec,
+		f.image, "sh", "-c", script)
 	if err != nil {
-		t.Fatalf("machines: the connection-cap probe could not run against %s: %v\n%s%s", f.probeTarget(), err, out, errOut)
+		t.Fatalf("machines: the connection-cap probe could not be started against %s: %v\n%s", f.probeTarget(), err, errOut)
 	}
-	// The server's own table is the count that matters: what the probe
-	// container thinks it opened is not evidence that sshd accepted it.
-	held = f.EstablishedConnections(t)
-	return held, strings.Contains(out, "ACCEPTED")
+	t.Cleanup(func() { _, _, _ = dockerRun(dockerRemoveTimeout, "rm", "-f", id) })
+
+	// Wait for the probe to get its connections up rather than sleeping a
+	// guessed interval: a fixed sleep is how this measurement becomes
+	// flaky on a loaded machine, and the deadline is what turns "they
+	// never arrived" into a stated number instead of a hang.
+	deadline := time.Now().Add(probeSettle)
+	for {
+		held = f.EstablishedConnections(t) - baseline
+		if held >= n || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// The (n+1)th connection comes from the SAME container, so it lands in
+	// the same --connlimit-mask 32 bucket as the n already held. Asking
+	// from anywhere else would be asking a different question.
+	out, _, _ := dockerRun(dockerExecTimeout, "exec", id, "sh", "-c",
+		"nc -w 3 "+f.probeTarget()+" 22 </dev/null 2>/dev/null | head -1")
+	acceptedOneMore = strings.HasPrefix(strings.TrimSpace(out), "SSH-")
+
+	// And then the probe gives the machine back, before this function
+	// returns, rather than at t.Cleanup.
+	//
+	// This is not tidiness either. The probe holds exactly n connections,
+	// which against a cap of n is the whole cap: a caller that got on with
+	// its work the moment LimitConnections returned would find a source
+	// with nothing left to give and would read that as the manager
+	// violating the rule. That is what the first run of the #463 test did,
+	// and it cost an hour of looking at the wrong thing.
+	if _, errOut, err := dockerRun(dockerRemoveTimeout, "rm", "-f", id); err != nil {
+		t.Fatalf("machines: could not remove the connection-cap probe %s: %v\n%s", id, err, errOut)
+	}
+	deadline = time.Now().Add(probeSettle)
+	for {
+		open := f.EstablishedConnections(t) - baseline
+		if open <= 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s machines: the connection-cap probe was removed and %s still shows %d connection(s) above the %d it started with, %s later. Anything the caller measures now is measuring the probe.", infraMarker, f.probeTarget(), open, baseline, probeSettle)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return held, acceptedOneMore
 }
 
 // --- key material a test can change --------------------------------------

@@ -101,7 +101,6 @@ const (
 	dockerBuildTimeout   = 5 * time.Minute
 	dockerNetworkTimeout = 30 * time.Second
 	dockerExecTimeout    = 30 * time.Second
-	probeTimeout         = 60 * time.Second
 )
 
 // Machines is what Start hands back: the network, and the machines on it
