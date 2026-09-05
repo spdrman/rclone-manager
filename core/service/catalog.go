@@ -96,6 +96,15 @@ func (b *BackupService) RebuildCatalog(ctx context.Context) (CatalogReport, erro
 	return b.catalogPass(ctx, false)
 }
 
+// catalogPass is the single implementation behind both entry points, with
+// dryRun deciding only whether anything is written.
+//
+// One function rather than two because the preview's whole job is to
+// predict the rebuild, and two implementations would eventually predict
+// each other rather than the tree. It also means the aggregation rule (a
+// failure anywhere is recorded and the walk continues) is decided once:
+// stopping at the first unreadable backup set would make a whole
+// deployment's recovery depend on its least healthy set.
 func (b *BackupService) catalogPass(ctx context.Context, dryRun bool) (CatalogReport, error) {
 	st := b.state.Load()
 	out := CatalogReport{DryRun: dryRun}

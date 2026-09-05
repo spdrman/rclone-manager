@@ -347,6 +347,14 @@ func appendProblem(problems []string, p string) []string {
 	return append(problems, p)
 }
 
+// joinProblems turns the collected field problems into one error, or nil
+// when there are none.
+//
+// One error rather than a typed list of them, because the only consumer
+// is a caller that renders a message, and a structure nobody destructures
+// is a shape to keep in step for nothing. Everything joined in here is a
+// string this package wrote, which is the property ErrInvalidRequest's
+// own doc leans on when it says the message is safe to echo back.
 func joinProblems(problems []string) error {
 	if len(problems) == 0 {
 		return nil

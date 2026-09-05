@@ -665,6 +665,15 @@ func validPathSegment(what, v string) error {
 	return nil
 }
 
+// validateCreateRequest checks the whole request and reports everything
+// wrong with it at once, rather than stopping at the first problem.
+//
+// This is a form with a dozen fields, filled in by a person, and a
+// validator that surfaces one problem per attempt turns one mistake into
+// one round trip each. The error it builds is a single sentence because
+// that is what the boundary's contract can carry safely: every string
+// joined into it is one of this package's own, which is what makes an
+// invalid-request message safe to hand back verbatim.
 func validateCreateRequest(req CreateBackupSetRequest) error {
 	var problems []string
 	if req.Name == "" {

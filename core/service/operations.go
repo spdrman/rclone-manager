@@ -638,6 +638,20 @@ type cycleSummary struct {
 	StartedAt           string `json:"started_at"`
 }
 
+// summarizeCycle renders what a finished cycle got done into the JSON
+// blob recorded on its operation row.
+//
+// This is the only durable account of a cycle's own outcome. The live
+// readings are gone the moment the goroutine producing them ends
+// (progress.go), so anything not written here is unanswerable afterwards,
+// which is why the counts are recorded even for the cycle that did
+// nothing: that is precisely the cycle somebody comes back asking about.
+//
+// What it deliberately leaves out is the move pass's refusal text. That
+// sentence is built by code that was never written to a redaction
+// contract and can name an endpoint, a bucket or a credential reference,
+// so FR-33 keeps it on the terminal and in the event stream while the
+// wire carries the arithmetic.
 func summarizeCycle(report app.CycleReport) string {
 	walked, through := 0, 0
 	for _, set := range report.Sets {
