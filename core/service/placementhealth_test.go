@@ -29,12 +29,14 @@ import (
 // quietly stopped reaching anybody.
 func fullPlacementHealth() health.PlacementHealth {
 	away := 40 * 24 * time.Hour
+	open := 9 * 24 * time.Hour
 	failed := 7 * 24 * time.Hour
 	return health.PlacementHealth{
 		AwayFromHome:          3,
 		OldestAwayFromHomeAge: &away,
 		UnconfirmedLocation:   2,
 		OpenMoves:             4,
+		OldestOpenMoveAge:     &open,
 		FailedMoves:           1,
 		OldestFailedMoveAge:   &failed,
 		FailedMoveReason:      "the bucket policy denies PutObject for this key prefix",

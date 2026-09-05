@@ -209,3 +209,45 @@ func TestUnconfirmedPlacementsAreReportedNotCountedAsHome(t *testing.T) {
 		t.Errorf("Placement.AwayFromHome = %d, want 0: an unconfirmed location is not an away-from-home artifact either", got.Placement.AwayFromHome)
 	}
 }
+
+// TestAMoveStuckWithNoReasonRecordedStillShowsItsAge pins the boundary of
+// what FailedMoves can see, so nobody reads its zero as "nothing is
+// wrong".
+//
+// The engine writes the reason onto the row when a copy fails, and that
+// is the shape this issue was reported for. Its standing refusal
+// immediately before a source delete is different: a destination that
+// cannot be re-verified at the class the medium requires leaves the
+// phase, the placements and the error text exactly as they were, on
+// purpose, and reports itself only to a cycle report nobody is reading. A
+// move parked there carries no error at all, so it is open and not
+// failed, and the age is the only thing about it that keeps growing.
+//
+// It deliberately does not change the verdict. "Open for a while" has no
+// honest threshold here: a single large copy can legitimately outlast a
+// poll interval, and picking a multiple of one would be inventing a
+// policy rather than reading a fact. Reported and exported is what this
+// package can say truthfully; the engine recording that refusal on the
+// row the way copy() already does is what would let FailedMoves cover it.
+func TestAMoveStuckWithNoReasonRecordedStillShowsItsAge(t *testing.T) {
+	now := time.Now().UTC()
+	got := ComputeBackupSetHealth(testSet, freshSet(now), nil, PlacementEvidence{
+		Moves: []state.Move{
+			openMove("nightly.dump", "cold_offsite", state.MoveSourceDeletePending, "", now.AddDate(0, 0, -9)),
+		},
+	}, day, BackupSetInputs{}, now)
+
+	if got.Placement.FailedMoves != 0 {
+		t.Errorf("Placement.FailedMoves = %d, want 0: nothing was recorded against this row, which is exactly the gap", got.Placement.FailedMoves)
+	}
+	if got.Placement.OpenMoves != 1 {
+		t.Errorf("Placement.OpenMoves = %d, want 1", got.Placement.OpenMoves)
+	}
+	if got.Placement.OldestOpenMoveAge == nil || *got.Placement.OldestOpenMoveAge < 9*day {
+		t.Fatalf("Placement.OldestOpenMoveAge = %v, want at least nine days: it is the only number that grows for a move stuck this way",
+			got.Placement.OldestOpenMoveAge)
+	}
+	if got.State != Healthy {
+		t.Errorf("State = %s (%s), want %s: this one is reported and exported, not ruled on", got.State, got.Reason, Healthy)
+	}
+}

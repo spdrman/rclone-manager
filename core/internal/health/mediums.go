@@ -114,11 +114,16 @@ type PlacementEvidence struct {
 	// answer.
 	Unconfirmed int
 
-	// Moves is every row placement_moves holds for this backup set,
-	// terminal ones included. The terminal ones are not noise: DONE and
-	// ABANDONED are what make an outstanding count able to fall back to
-	// zero, and a caller that pre-filtered to non-terminal rows would be
-	// handing this package a number it could not check.
+	// Moves is what placement_moves holds for this backup set. The
+	// caller normally passes the engine's own resume population, the
+	// non-terminal phases, because a move that is over is not an
+	// outstanding relocation and the alternative is reading every row a
+	// deployment has ever written on every status call.
+	//
+	// Terminal rows are still tolerated rather than rejected: everything
+	// below re-checks Terminal() instead of trusting the filter, so a
+	// caller that hands over the whole table gets the same answer and a
+	// filter that drifts from the phase machine cannot inflate a count.
 	Moves []state.Move
 }
 
@@ -169,6 +174,32 @@ type PlacementHealth struct {
 	// OpenMoves is how many relocations this set has that the move
 	// journal has not finished, in any non-terminal phase.
 	OpenMoves int
+
+	// OldestOpenMoveAge is how long the oldest of those has been open,
+	// from when this manager planned it, whether or not anything has been
+	// recorded against it.
+	//
+	// It exists because FailedMoves cannot see every way a move gets
+	// stuck. The engine writes the reason onto the row when a COPY fails,
+	// which is the common case and the one this issue was reported for,
+	// but its standing refusal immediately before a source delete (a
+	// destination that cannot be re-verified at the class the medium
+	// requires) deliberately changes nothing at all: it returns, leaves
+	// the phase and the placements exactly as they were, and reports the
+	// reason to a cycle report that nobody is reading. A move parked
+	// there carries no error, so it is open and not failed, and this is
+	// the number that still grows.
+	//
+	// It changes no verdict, because "open for a while" has no honest
+	// threshold here: a single copy can legitimately outlast a poll
+	// interval, and picking a multiple of one would be inventing a policy
+	// rather than reading a fact. It is reported and exported so an
+	// operator can alert on the shape their own deployment has. The
+	// engine recording that refusal on the row, the way copy() already
+	// records its own, would let FailedMoves cover it.
+	//
+	// Nil exactly when OpenMoves is zero.
+	OldestOpenMoveAge *time.Duration
 
 	// FailedMoves is the subset of OpenMoves whose last attempt failed
 	// and left the reason on the row. This is the one number here that
@@ -241,13 +272,16 @@ func buildPlacementHealth(ev PlacementEvidence, records []state.Record, now time
 		}
 	}
 
-	var oldestFailed *state.Move
+	var oldestOpen, oldestFailed *state.Move
 	for i := range ev.Moves {
 		mv := ev.Moves[i]
 		if mv.Terminal() {
 			continue
 		}
 		out.OpenMoves++
+		if oldestOpen == nil || mv.CreatedAt.Before(oldestOpen.CreatedAt) {
+			oldestOpen = &ev.Moves[i]
+		}
 		if mv.Error == "" {
 			continue
 		}
@@ -255,6 +289,10 @@ func buildPlacementHealth(ev PlacementEvidence, records []state.Record, now time
 		if oldestFailed == nil || mv.CreatedAt.Before(oldestFailed.CreatedAt) {
 			oldestFailed = &ev.Moves[i]
 		}
+	}
+	if oldestOpen != nil {
+		planned := oldestOpen.CreatedAt
+		out.OldestOpenMoveAge = ageOf(&planned, now)
 	}
 	if oldestFailed != nil {
 		planned := oldestFailed.CreatedAt

@@ -170,6 +170,15 @@ type PlacementHealth struct {
 	// finished, in any non-terminal phase.
 	OpenMoves int
 
+	// OldestOpenMoveAge is how long the oldest of those has been open,
+	// whether or not anything has been recorded against it. It changes no
+	// State, because "open for a while" has no honest threshold: a single
+	// large copy can legitimately outlast a poll interval. It is here
+	// because not every way a move gets stuck leaves a reason on the row,
+	// so this is the number that keeps growing when FailedMoves cannot
+	// see the problem. See internal/health's own field doc.
+	OldestOpenMoveAge time.Duration
+
 	// FailedMoves is the subset of OpenMoves whose last attempt failed.
 	// This is the one number here that changes State, and it is what
 	// makes a week of failing moves reach a status page at all.
@@ -277,6 +286,9 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 			FailedMoves:         bs.Placement.FailedMoves,
 			FailedMoveReason:    bs.Placement.FailedMoveReason,
 		},
+	}
+	if bs.Placement.OldestOpenMoveAge != nil {
+		out.Placement.OldestOpenMoveAge = *bs.Placement.OldestOpenMoveAge
 	}
 	if bs.Placement.OldestAwayFromHomeAge != nil {
 		out.Placement.OldestAwayFromHomeAge = *bs.Placement.OldestAwayFromHomeAge

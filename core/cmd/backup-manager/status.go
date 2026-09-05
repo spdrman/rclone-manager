@@ -96,8 +96,12 @@ func cmdStatus(args []string) int {
 			fmt.Printf("    the backups themselves are fine; they are not on the medium your retention chain asks for.\n")
 		}
 		if bs.Placement.AwayFromHome > 0 {
-			fmt.Printf("  away from home: %d (oldest copy %s), relocations open: %d\n",
-				bs.Placement.AwayFromHome, ageOrUnknown(bs.Placement.OldestAwayFromHomeAge), bs.Placement.OpenMoves)
+			fmt.Printf("  away from home: %d (oldest copy %s)\n",
+				bs.Placement.AwayFromHome, ageOrUnknown(bs.Placement.OldestAwayFromHomeAge))
+		}
+		if bs.Placement.OpenMoves > 0 {
+			fmt.Printf("  relocations open: %d, the oldest for %s\n",
+				bs.Placement.OpenMoves, ageOrUnknown(bs.Placement.OldestOpenMoveAge))
 		}
 		if bs.Placement.UnconfirmedLocation > 0 {
 			fmt.Printf("  location not confirmed: %d\n", bs.Placement.UnconfirmedLocation)

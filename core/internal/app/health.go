@@ -10,6 +10,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/health"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -205,7 +206,15 @@ func (s *Service) placementEvidence(ctx context.Context, bs config.BackupSet, re
 				"app: health: this deployment stores artifacts on a medium other than local, but its journal (%T) cannot read the move journal, "+
 					"so a relocation that has been failing for weeks would report as nothing at all", s.Journal)
 		}
-		all, err := reader.ListMoves(ctx)
+		// The engine's own resume population, asked for the same way it
+		// asks for it (placement.NonTerminalPhaseStrings, derived from
+		// the phase list rather than hand-written). A move that is over
+		// is not an outstanding relocation, the phase column is indexed
+		// for exactly this query, and the alternative is loading every
+		// move row this deployment has ever written on every dashboard
+		// poll. buildPlacementHealth still checks Terminal() on what
+		// comes back rather than trusting the filter.
+		all, err := reader.ListMoves(ctx, placement.NonTerminalPhaseStrings()...)
 		if err != nil {
 			return health.PlacementEvidence{}, fmt.Errorf("app: health: reading the move journal: %w", err)
 		}

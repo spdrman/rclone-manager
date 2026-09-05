@@ -202,6 +202,15 @@ func Render(report health.Report) string {
 			return float64(s.Placement.OpenMoves), true
 		})
 
+	writeGauge(&b, sets, "open_move_oldest_age_seconds",
+		"How long the oldest open relocation has been open, in seconds, whether or not anything has been recorded against it. Not every way a move gets stuck leaves a reason on the row, so this keeps growing where failed_moves cannot see the problem.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			if s.Placement.OldestOpenMoveAge == nil {
+				return 0, false
+			}
+			return s.Placement.OldestOpenMoveAge.Seconds(), true
+		})
+
 	writeGauge(&b, sets, "failed_moves",
 		"Open relocations whose last attempt failed. This is the number that turns an otherwise-healthy backup set DEGRADED.",
 		func(s health.BackupSetHealth) (float64, bool) {
