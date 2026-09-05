@@ -427,6 +427,22 @@ Two things a non-default port changes:
 - `POST /api/v1/ssh/host-key-probe` takes the port and opens a real connection, so it
   is the honest way to get the pinned line rather than typing one.
 
+The installer takes it as `--source-port`, or as `RCLONE_MANAGER_SOURCE_PORT` in the
+environment, which is the one to prefer: a port on the command line is in shell history
+and in this host's process listing for as long as the install runs, and one in the
+environment is not. There is no default and nothing infers one. Supply it and preflight
+checks that the pinned `known_hosts` actually carries an entry keyed to that port,
+which is the check that turns the field failure below into a refusal at the door.
+Supply it as an empty string, which is what `--source-port "$SSH_PORT"` does when
+`SSH_PORT` is not exported, and it refuses rather than read that as silence. The value
+is never printed, never written into `.env`, and never written into this repository.
+
+That preflight check exists because of a real failure. Pin a host key for a source on a
+non-default port using the line `ssh` showed you, without the port, and rclone reports
+`knownhosts: key mismatch`, which is the one SSH error nobody should wave through. It is
+not a man in the middle, it is an entry keyed wrong, and it arrives after the stack is
+up and the first backup has run.
+
 ## Known-good, and known-bad
 
 **Proven on**: UGREEN NAS, `x86_64`, `Linux 6.12.30+`, Docker 29.4.3, Compose v5.1.3,

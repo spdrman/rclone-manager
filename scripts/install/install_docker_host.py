@@ -113,6 +113,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -201,6 +202,29 @@ MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_PROJECT = "rclone-manager"
 DEFAULT_LISTEN_PORT = 8080
 
+# The SFTP source's SSH port, and the environment variable it is read from
+# when --source-port is not on the command line (issue #264).
+#
+# There is no default here, and that absence is the whole feature. The two
+# production sources this product exists to pull from listen on a port that
+# is deliberately unpublished, so the port is an input exactly the way the
+# key path is an input: supplied, never committed, never guessed. Every
+# other reading of "the port" in this file is a listen port on THIS host,
+# which is a different thing and does have a default.
+#
+# The environment route is not a convenience, it is the point. A value on
+# the command line lands in shell history and in every process listing on
+# the host for as long as the install runs; a value in the environment does
+# not. The Ansible configuration that manages these two hosts already reads
+# its port from an environment variable for that reason, and this follows
+# that convention rather than inventing a second one.
+#
+# The name is namespaced rather than the bare SSH_PORT that convention uses,
+# because a bare SSH_PORT is a name other tooling sets for its own reasons,
+# and reading a stray one would be inferring a port rather than being given
+# one, which is the single thing this must never do.
+SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
+
 # The release this installer carries, and the identity ghcr.io assigned
 # it. Both are copied from container/release-manifest.json (`version` and
 # `index_digest`), and TestTheCarriedReleasePinIsTheRecordedOne holds them
@@ -256,6 +280,13 @@ REGISTRY_TIMEOUT = 15
 # A private key readable by anyone but its owner is what OpenSSH's own
 # client refuses outright, so this refuses the same way, at the door.
 DISALLOWED_KEY_MODE_BITS = stat.S_IRWXG | stat.S_IRWXO
+
+# One known_hosts host pattern that carries a port. OpenSSH writes a
+# non-default port as [host]:port and a default one as bare host, which
+# is exactly the distinction check_source_port is reading: this matches
+# the first shape and nothing else, and it captures only the port because
+# the host is never wanted here (issue #264).
+KNOWN_HOSTS_BRACKETED = re.compile(r"^\[.+\]:([0-9]{1,5})$")
 
 
 class Refusal(Exception):
@@ -427,6 +458,7 @@ class Preflight:
         self.check_payload()
         self.check_paths()
         self.check_credentials()
+        self.check_source_port()
         self.check_port()
         self.check_space()
         # Before check_image, which is the step that PULLS. An operator
@@ -726,6 +758,133 @@ class Preflight:
                 f"rather than letting it surface later as an opaque authentication failure inside a container.",
             )
         self.note("ssh key and known_hosts are present, and the key is owner-only")
+
+    def check_source_port(self) -> None:
+        """The SOURCE's SSH port against the host keys pinned for it (issue #264).
+
+        Not a port on this host. check_port below is about the listen
+        port the Web UI is published on, which is a different thing with
+        a different default; this one is about the far end of an SFTP
+        connection, which has no default here at all.
+
+        What it is actually for. A source on a non-default port has its
+        host key pinned under `[host]:port`, not under `host`, and a pin
+        written without the port simply does not match. rclone reports
+        that as `knownhosts: key mismatch`, which is the one SSH error an
+        operator must never wave through, and it fires here for a pin
+        that is merely missing a port. That failure was met on a real
+        host, it took a positive control to explain, and it arrives after
+        the stack is up and the first backup has run, which is the worst
+        possible time to learn that a known_hosts line was keyed wrong.
+        So it is a preflight refusal instead.
+
+        This is the one credential-adjacent file the installer opens, and
+        the exception is narrow on purpose: known_hosts holds PUBLIC host
+        keys and the endpoints they are pinned for. The private key is
+        still never read, and nothing read out of this file is ever
+        printed, not a host, not a port, not a key. Every message below
+        is a count and a verdict.
+        """
+        port = getattr(self.args, "source_port", None)
+        pins = self._pinned_endpoints()
+
+        if pins is None:
+            # A hashed known_hosts (HashKnownHosts yes). The endpoint is
+            # the hashed part, so nothing can be told about which port an
+            # entry was pinned for without the host to hash against, and
+            # a check that cannot see is not allowed to refuse.
+            if port is not None:
+                self.note(f"a source port was supplied as {self.args.source_port_origin}; "
+                          "the pinned known_hosts is hashed, so it cannot be checked against one")
+            return
+
+        if not pins:
+            if port is not None:
+                self.note(f"a source port was supplied as {self.args.source_port_origin}; "
+                          "nothing is pinned yet, so there is nothing here to check it against")
+            return
+
+        bracketed = [p for p in pins if p is not None]
+        plain = [p for p in pins if p is None]
+
+        if port is None:
+            if plain:
+                # A deployment that pins at least one host with no port
+                # has a port-22 source in it, so there is no basis to
+                # demand a port for the others: it would refuse a working
+                # install over a flag nobody needed to type.
+                return
+            raise Refusal(
+                EXIT_PREREQ_CREDENTIALS,
+                f"every one of the {len(bracketed)} host key(s) pinned in --known-hosts is keyed to a "
+                f"non-default SSH port, and no source port was supplied.",
+                f"A known_hosts entry keyed [host]:port belongs to a source that is not on 22, so this "
+                f"deployment demonstrably has one and this run has not been told which port it is. This "
+                f"installer will not assume 22 for it: assuming is how a pin gets checked against the "
+                f"wrong endpoint and the mismatch surfaces later as an alarm that reads like a "
+                f"man-in-the-middle. Supply it with --source-port, or better as {SOURCE_PORT_ENV} in the "
+                f"environment so it stays out of shell history.",
+            )
+
+        if port in bracketed or (port == 22 and plain):
+            self.note(f"the source port supplied as {self.args.source_port_origin} has a pinned host key "
+                      "in --known-hosts")
+            return
+
+        raise Refusal(
+            EXIT_PREREQ_CREDENTIALS,
+            f"--known-hosts pins {len(pins)} host key(s), and none of them is pinned for the source port "
+            f"supplied as {self.args.source_port_origin}.",
+            "A host key pinned without the port does not match a source that is not on 22, and rclone "
+            "reports that as `knownhosts: key mismatch`, which reads as a man-in-the-middle alarm rather "
+            "than as a wrong line. Pin the host key for the port this source actually listens on: "
+            "`POST /api/v1/ssh/host-key-probe` takes the port, opens a real connection and hands back the "
+            "line, which is the honest way to get it rather than typing one. Neither the port nor the "
+            "pinned endpoints are repeated here: they are the part of this deployment that is not "
+            "published.",
+        )
+
+    def _pinned_endpoints(self):
+        """Every endpoint --known-hosts pins, as ports.
+
+        One entry per pattern, not per line: a single known_hosts line
+        may name several comma-separated patterns and they can be on
+        different ports. None in the list means an entry pinned with no
+        port, which is what an entry for a source on 22 looks like.
+
+        Returns None, distinct from an empty list, when the file is
+        hashed and the question cannot be answered at all.
+        """
+        path = getattr(self.args, "known_hosts", None)
+        if path is None or not path.is_file():
+            return []
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            # Unreadable is check_credentials' problem, not this one's.
+            return []
+
+        out = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split()
+            # @cert-authority and @revoked put a marker in front of the
+            # pattern list, so the pattern field is not always the first.
+            if fields[0].startswith("@"):
+                fields = fields[1:]
+            if not fields:
+                continue
+            for pattern in fields[0].split(","):
+                pattern = pattern.strip()
+                if not pattern:
+                    continue
+                if pattern.startswith("|"):
+                    return None
+                match = KNOWN_HOSTS_BRACKETED.match(pattern)
+                out.append(int(match.group(1)) if match else None)
+        return out
 
     def check_port(self) -> None:
         """Refuse a port something else already holds, but not our own.
@@ -4595,7 +4754,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     and network-undo never touch a credential path, an image reference or
     a listen port, so they no longer declare these flags at all.
     """
-    creds = sp.add_argument_group("credentials (paths only, never contents)")
+    creds = sp.add_argument_group("credentials (never read, never printed)")
     creds.add_argument("--ssh-key", type=Path, default=None,
                        help="Host path to the SFTP client private key. Never read and never printed; its "
                             "PUBLIC half is printed when one is generated. Defaults to "
@@ -4606,6 +4765,16 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                             "For a source on a non-default SSH port the entry is keyed [host]:port, and that "
                             "port is yours to supply: it is never defaulted here and never written into this "
                             "repository (issue #264).")
+    creds.add_argument("--source-port", default=None, metavar="PORT",
+                       help="The SSH port the SFTP SOURCE listens on, not a port on this host. There is no "
+                            "default and nothing infers one: supplied, this installer checks that the pinned "
+                            "known_hosts actually carries an entry for it; not supplied, this run simply "
+                            "knows nothing about a source port. Prefer supplying it as "
+                            f"{SOURCE_PORT_ENV} in the environment rather than on the command line, which is "
+                            "where these hosts' own configuration management already keeps it and which "
+                            "keeps it out of shell history and out of this host's process listing. It is "
+                            "never printed, never written into .env and never written into this repository "
+                            "(issue #264).")
 
     runtime = sp.add_argument_group("runtime")
     # Here rather than in a second group of its own titled "layout": argparse
@@ -4849,6 +5018,67 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_source_port(args) -> None:
+    """--source-port, settled here, and never invented (issue #264).
+
+    Three outcomes and no fourth. The operator named a port, on the
+    command line or in the environment, and it is a port: it is kept as
+    an int. They named something that is not a port, or named the flag
+    with nothing behind it: that is a refusal. They named nothing at all:
+    args.source_port stays None, and None means "this run was told
+    nothing about a source port", not 22 and not any other number.
+
+    The empty-value case is the one worth having a refusal for rather
+    than treating as absence, because it is not hypothetical. The way an
+    operator supplies this is `--source-port "$SSH_PORT"`, following the
+    same convention the Ansible configuration for these hosts uses, and
+    the way that goes wrong is the variable not being exported, at which
+    point the shell hands this flag an empty string. Reading that as "no
+    port was supplied" and carrying on is how a deployment ends up
+    pointed at port 22 by an accident nobody typed.
+
+    Nothing here ever prints the value. On these deployments the port is
+    the credential (the hosts are reachable, the port is what is not
+    published), so a refusal that helpfully echoed the number back would
+    put it in the operator's scrollback and in whatever captured that
+    run's output, which is the thing this issue exists to prevent. Every
+    message below says what is wrong with the value and never what it is.
+    """
+    if not hasattr(args, "source_port"):
+        # status, uninstall, network-doctor and network-undo do not
+        # declare the flag at all, the same way they no longer declare
+        # --ssh-key: none of them constructs a Preflight.
+        return
+
+    raw, origin = args.source_port, "--source-port"
+    if raw is None:
+        raw, origin = os.environ.get(SOURCE_PORT_ENV), SOURCE_PORT_ENV
+    if raw is None:
+        args.source_port, args.source_port_origin = None, None
+        return
+
+    text = raw.strip()
+    if not text:
+        raise Refusal(
+            EXIT_PREREQ_CREDENTIALS,
+            f"{origin} was supplied with no value.",
+            f"This is what `--source-port \"$SSH_PORT\"` does when SSH_PORT is not exported, so it is "
+            f"treated as the mistake it is rather than as silence. Nothing here falls back to 22: the "
+            f"port a source listens on is an input, and guessing one is how a deployment ends up "
+            f"pointed somewhere nobody named. Supply it, or drop the flag entirely if this deployment "
+            f"has no SFTP source on a non-default port.",
+        )
+    if not text.isdigit() or not 1 <= int(text) <= 65535:
+        raise Refusal(
+            EXIT_PREREQ_CREDENTIALS,
+            f"{origin} is not a whole number between 1 and 65535.",
+            f"The value is not repeated here on purpose: on this deployment the port is the part of the "
+            f"endpoint that is not published, so it is treated the way the key is treated and never "
+            f"printed. Check what {origin} actually holds.",
+        )
+    args.source_port, args.source_port_origin = int(text), origin
+
+
 def resolve_release(args) -> None:
     """--release, settled here, with no network and no registry at all
     (issue #484).
@@ -4977,6 +5207,7 @@ def resolve(args):
     if hasattr(args, "known_hosts"):
         args.known_hosts_supplied = args.known_hosts is not None
         args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
+    resolve_source_port(args)
     if hasattr(args, "compose_file") and args.compose_file is not None:
         args.compose_file = args.compose_file.expanduser()
     if hasattr(args, "image_archive") and args.image_archive is not None:
