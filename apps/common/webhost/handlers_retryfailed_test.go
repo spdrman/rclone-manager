@@ -3,6 +3,8 @@ package webhost
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/service"
@@ -63,5 +65,40 @@ func TestRetryFailedIngestion_AnUnconfiguredBackupSetIs404AndNamed(t *testing.T)
 	mustStatus(t, rec, http.StatusNotFound)
 	if got := responseErrorCode(rec.Body.String()); got != "BACKUP_SET_NOT_FOUND" {
 		t.Fatalf("error code = %q, want BACKUP_SET_NOT_FOUND", got)
+	}
+}
+
+// TestRetryFailedIngestion_HonoursANoteWhoseLengthIsNotDeclared. A
+// chunked request carries a body and a ContentLength of -1, so a handler
+// that decoded only when the length was positive would accept the request,
+// ignore what it said and report 204. The note is the only thing a caller
+// can send; dropping it silently is the worst of the three possible
+// behaviours.
+func TestRetryFailedIngestion_HonoursANoteWhoseLengthIsNotDeclared(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/production/postgres/bad.dump/retry",
+		strings.NewReader(`{"note":"chunked"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	rt.router.ServeHTTP(rec, csrfPaired(req))
+
+	mustStatus(t, rec, http.StatusNoContent)
+	if got := rt.backend.lastRetryFailedNote; got != "chunked" {
+		t.Fatalf("note reached the service as %q, want %q", got, "chunked")
+	}
+}
+
+// TestRetryFailedIngestion_AnEmptyBodyIsNotAnError is the other half:
+// sending no body at all is what a client with nothing to say does, and it
+// must not be a 400.
+func TestRetryFailedIngestion_AnEmptyBodyIsNotAnError(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/backups/production/postgres/bad.dump/retry", "")
+	mustStatus(t, rec, http.StatusNoContent)
+	if got := rt.backend.lastRetryFailedNote; got != "" {
+		t.Fatalf("note = %q for a request that sent none", got)
 	}
 }

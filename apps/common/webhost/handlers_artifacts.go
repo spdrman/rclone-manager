@@ -13,6 +13,7 @@ package webhost
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -348,12 +349,16 @@ type retryFailedIngestionRequest struct {
 func (h *handlers) retryFailedIngestion(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRetryFailedBodyBytes)
 
+	// An absent body is legitimate and is what a client with no note to
+	// add sends, so io.EOF is not an error here. Decoding unconditionally
+	// rather than gating on ContentLength is the difference between
+	// honouring a note and silently dropping it: a chunked request carries
+	// a body and a ContentLength of -1, and a gate on the length would
+	// have accepted that request, ignored what it said, and reported 204.
 	var req retryFailedIngestionRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeDecodeError(w, err, maxRetryFailedBodyBytes)
-			return
-		}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeDecodeError(w, err, maxRetryFailedBodyBytes)
+		return
 	}
 	if err := h.backend.RetryFailedArtifact(r.Context(), artifactIDFrom(r), req.Note); err != nil {
 		if errors.Is(err, service.ErrArtifactNotFailed) {
