@@ -484,6 +484,34 @@ capabilities dropped and `no-new-privileges`. The image has no shell and no init
 **the host paths have to exist and be owned by that uid/gid before the first start**;
 nothing in the container will chown them for you.
 
+### Or let the installer do it
+
+`scripts/install/install_docker_host.py` (#262) is that same topology brought up on a
+machine you have SSH on, or refused with the exact prerequisite that stopped it:
+
+```bash
+python3 scripts/install/install_docker_host.py install
+```
+
+That is the whole command on a bare host. It installs under `~/rclone-manager`, generates
+an SSH keypair and an empty `known_hosts` under `<prefix>/secrets` if they are not there,
+and prints the public half with a note that it belongs in the `authorized_keys` of the host
+being backed up. It is one file and needs no checkout beside it, nothing else from this
+project on disk, and nothing outside the Python standard library, because an operator
+installing onto a NAS does not have a git clone there. A **defaulted** credential path that
+does not exist is created; an **explicitly named** one that does not exist is still a
+refusal, because generating a different key under a path you typed would hand you one the
+far host has never seen while reporting success, and an existing key is never regenerated
+over whatever its age. Directories it creates are born `0700`, and ones that already exist
+only lose group and world write, because the engine refuses an SSH key whose whole ancestry
+is not tight, not just the key file.
+
+Six subcommands: `preflight` checks and creates nothing, `install` checks then installs,
+`status` reports, `uninstall` removes what the installer made, `network-doctor` diagnoses
+and optionally repairs Docker bridge networking, and `network-undo` removes exactly what a
+repair added. [`docs/install.md`](docs/install.md) is the whole of it, and this is the path
+#263 used on the UGREEN NAS.
+
 ### Which mount holds what, and why they are never the same directory
 
 Every platform mounts three separate places for three different jobs, and conflating any two
@@ -500,6 +528,14 @@ read-only, and it must **not** be inside the backup root: put it there and every
 that directory carries the key that can read and delete the source. The backup root on every
 platform below is a dedicated child directory rather than a share you already use, for the
 same reason.
+
+One sizing note for a deployment with a retention chain that puts two tiers on two
+different storage mediums. A hop from one medium to another stages through a `.moves`
+directory under the backup set's own `local_path`, so the backup mount needs room for the
+largest artifact that will ever hop, transiently, on top of whatever it retains
+permanently. A hop that will not fit is refused before anything is downloaded, and the copy
+it would have moved stays where it is. See
+[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e).
 
 `distribution/packaging/canonical.json` is the single source of truth for these paths, and
 this repository's own test suite fails the build if any platform's metadata disagrees with
@@ -718,13 +754,17 @@ described.
 
 ## The lifecycle
 
-An artifact moves through twelve states, defined in `core/internal/lifecycle/state.go` and
-`machine.go`, which are the single source of truth; the table below is a summary, not a
+An artifact moves through thirteen states, defined in `core/internal/lifecycle/state.go`
+and `machine.go`, which are the single source of truth; the table below is a summary, not a
 substitute.
 
 ```text
 DISCOVERED -> TRANSFERRING -> TRANSFERRED -> VERIFYING -> VERIFIED
     -> COMMITTING -> COMMITTED -> REMOTE_DELETE_PENDING -> COMPLETE
+
+REMOTE_RETAINED  the second happy-path terminal, reached from COMMITTED or
+                 REMOTE_DELETE_PENDING exactly where COMPLETE normally would
+                 be, for a backup set declared read-only (issue #282)
 
 FAILED         reachable from any state before COMMITTED; exits to
                DISCOVERED (retry) or QUARANTINED (retry budget spent)
@@ -735,19 +775,29 @@ QUARANTINED    reachable from VERIFYING, COMMITTED, REMOTE_DELETE_PENDING;
 QUARANTINED_LOST   reachable only from COMPLETE; TERMINAL, no exit at all
 ```
 
-`COMPLETE` and `QUARANTINED_LOST` are the two terminal states, and they mean opposite
-things. `COMPLETE` is the only state that confirms the remote source is already gone, which
+`REMOTE_RETAINED` is the thirteenth and it is a policy outcome, not a failure.
+`config.BackupSet.ReadOnly` means FR-15's delete step is never offered this artifact and
+`Transport.DeleteRemote` is never called for it, so the remote object is retained by policy
+rather than pending deletion. It exists so a read-only set's artifacts stop being re-offered
+to the delete gate every cycle and logging a refusal each time, which was the complaint
+#282 made about a configuration that could only delay consent to delete and never withhold
+it. Unlike `COMPLETE` it says nothing about whether the remote object still exists: this
+manager never checked, on purpose, because it was never going to touch it either way.
+
+`COMPLETE` and `QUARANTINED_LOST` are the two ends of the pipeline that mean opposite
+things (`REMOTE_RETAINED` is the third ending and the one that means nothing went wrong at
+all). `COMPLETE` is the only state that confirms the remote source is already gone, which
 is exactly why it's the only predecessor of `QUARANTINED_LOST`: if the durably committed
 local copy is later found corrupted and the remote copy is already deleted, there is no
 copy of that artifact left anywhere, and no automatic path recovers it. `QUARANTINED`, by
 contrast, means the content looked bad while a remote copy still exists or hasn't been
 confirmed gone, so retrying from `DISCOVERED` has a real chance of fixing it.
 
-This twelfth state isn't in the original FR-10 list; it was added because the eleven-state
-version had no way to represent "the source is confirmed gone and the only copy we have is
-bad," and sending that case back to `DISCOVERED` the way `QUARANTINED` does would just
-livelock against a source that no longer exists. I re-checked the transition table for this
-rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, pinned by
+`QUARANTINED_LOST` isn't in the original FR-10 list either; it was added because the
+eleven-state version had no way to represent "the source is confirmed gone and the only copy
+we have is bad," and sending that case back to `DISCOVERED` the way `QUARANTINED` does would
+just livelock against a source that no longer exists. I re-checked the transition table for
+this rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, pinned by
 `TestOnlyCompletePrecedesQuarantinedLost`, and it still has no edge back into the pipeline
 and no automatic exit of any kind. Issue #220 gave it exactly one operator-triggered exit,
 back to the `COMPLETE` it came from, for the case where the local copy turns out to be intact
