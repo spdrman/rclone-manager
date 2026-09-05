@@ -1,3 +1,35 @@
+// This file is where an operator's judgement enters a pipeline that
+// otherwise decides for itself: reading the journal's own rows, and the
+// four things a person is allowed to do to a backup the pipeline has
+// stopped trusting.
+//
+// None of those four lets anybody declare an artifact good. Revalidate
+// re-runs the checks and writes nothing at all, reinstate returns an
+// artifact to a state it already held and only on evidence, retrying
+// ingestion sends it back to the front of the ordinary pipeline, and
+// retrying a failure just unsticks it. Nothing here is a way to overrule
+// a verdict, because a manager whose quarantine can be argued away by
+// clicking is a manager whose quarantine means nothing, and the cost of
+// being wrong is a restore that fails on the day it matters.
+//
+// The reinstatement path is safe to offer for one reason worth keeping in
+// view from here: an artifact returned to service permanently forfeits
+// its authority to have the remote source deleted. That trade is the
+// whole design. Reinstating cannot lose data because it never authorises
+// deleting any, so the worst outcome is a source copy this manager keeps
+// its hands off for good.
+//
+// The refusals get a sentinel each rather than one shared "no". They read
+// almost alike from in here and they are opposite instructions to the
+// person holding the mouse: not quarantined, not failed, nothing left to
+// re-ingest, and the evidence was not enough are four different next
+// actions, and the API layer turns each into its own code.
+//
+// Every error crossing out of this file is translated. A caller outside
+// core/ cannot name internal/app's or internal/lifecycle's types, so
+// passing one through would hand it an error it can only match on by
+// reading the text, which is how a message becomes an interface nobody
+// meant to publish.
 package service
 
 import (

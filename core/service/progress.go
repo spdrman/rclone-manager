@@ -1,3 +1,26 @@
+// This file is the volatile half of the operation model, and everything
+// about it follows from that word.
+//
+// operations.go keeps the durable half: an operation was submitted,
+// started, finished or failed, and each of those has to survive the
+// process dying. Live progress is the opposite kind of fact. It changes
+// several times a second, it stops meaning anything the instant the cycle
+// producing it stops, and the last value it held is not merely stale
+// after a restart, it actively describes a transfer that no longer exists
+// as though it were still moving. So nothing in this file is written
+// anywhere, and an operation left running by a process that died reports
+// no progress at all rather than the last number it managed to take.
+//
+// That is also why the readings are separated from the operation record
+// by a registry rather than kept on it. An entry exists for exactly as
+// long as a goroutine in THIS process is executing that operation, which
+// makes "is this reading live" a structural question instead of a
+// judgement about timestamps.
+//
+// The other constraint is that the write side runs on the transport's own
+// sampling path, alongside the copy it is measuring. Every operation here
+// is a lock, a handful of field assignments and a return: observing a
+// transfer must never be a reason the transfer is slower.
 package service
 
 import (

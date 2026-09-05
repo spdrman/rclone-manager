@@ -1,3 +1,12 @@
+// This file holds the boundary's whole share of the catalog rebuild: one
+// test, about the one thing this layer decides for itself.
+//
+// internal/app does the recovering and the disagreeing, and it has its
+// own suite for that. What is only decidable here is the translation:
+// catalogPass switches over the verdicts it is handed, so a verdict this
+// build has not heard of is counted and then never mentioned. That gap is
+// invisible from either side on its own, which is why the coverage sits
+// at the seam rather than with the engine.
 package service
 
 import (

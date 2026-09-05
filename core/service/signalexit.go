@@ -1,3 +1,15 @@
+// This file is where a process decides who owns SIGINT and SIGTERM when
+// rclone is embedded in it, and it is two forwarding calls because the
+// decision is a pair rather than a switch: taking the signal back also
+// takes on running what rclone registered to happen at exit.
+//
+// Splitting them across a seam like this looks like ceremony until you
+// notice that nothing outside core/ can reach lib/atexit at all. FR-3
+// keeps rclone inside one containment package, Go's internal rule keeps
+// that package unreachable from apps/, and issue #212 is what the gap
+// cost: a routine `docker stop` of the web container exited 143, which is
+// the same defect issue #190 had already fixed for the CLI, reappearing
+// in the one process that had no way to apply the fix.
 package service
 
 import "github.com/spdrman/rclone-manager/core/internal/transport/rclone"

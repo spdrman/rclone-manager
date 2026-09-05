@@ -1,3 +1,30 @@
+// This file is the three per-set switches an operator flips from a
+// screen: run this set or leave it alone, delete its remote sources or
+// never touch them, and does the thing still answer.
+//
+// The two toggles look symmetric and are not, in the same direction.
+// Turning a set off stops new restore points being made and touches
+// nothing already made; turning read-only off stops future artifacts
+// being retained and reaches back to authorise nothing. Both are
+// deliberately one-way about artifacts that already exist, which is the
+// shape #227's reinstatement established for this codebase: a change of
+// mind may alter what happens next, never what was already promised about
+// a copy somebody else's system is still holding.
+//
+// That asymmetry is why neither is a destructive operation in §50's
+// terms, despite one of them being spelled "read-only" and the other
+// stopping backups. Neither can delete anything, and the cost of the
+// scary-sounding one, a set going stale because nobody turned it back on,
+// is reported by FR-24 rather than hidden.
+//
+// Every write here runs the same sequence, which is written out once in
+// SetBackupSetEnabled and referred to from the others rather than
+// re-argued: re-read the file from disk, edit, encode BEFORE validation
+// resolves defaults in place, then persist and adopt. The encode ordering
+// is the subtle one. Validate fills in this release's defaults, so
+// encoding after it would freeze today's values into an operator's file
+// as though they had chosen them, and a toggle of one set would silently
+// pin the defaults of every other.
 package service
 
 import (

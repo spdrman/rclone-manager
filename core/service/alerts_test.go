@@ -1,3 +1,21 @@
+// This file covers the one moment alerting can change its mind: a
+// configuration reload in a running process.
+//
+// Installing a sink is wiring and would barely need a test. What needed
+// one is that alerts.enabled is read at two different times, once when a
+// sink is installed and again on every configuration write, and the
+// dispatcher holding which conditions are currently firing has to survive
+// the second without either going silent or re-announcing everything. All
+// three directions are here (stays on, turns off, turns on) because the
+// bug this file was written after was directional: the opt-in was ignored
+// on reload while a sibling field from the same block hot-reloaded
+// correctly.
+//
+// The last test is the odd one out and the most important. It proves
+// alerting still reaches a person while a cycle is wedged, which is the
+// only situation where a stale-backup alert is the thing an operator
+// needs, and precisely the situation a design sharing one loop or one
+// lock would have silenced.
 package service
 
 import (

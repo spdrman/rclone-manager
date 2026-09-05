@@ -1,3 +1,25 @@
+// This file covers the deployment-wide settings write, which is the one
+// route that edits an operator's config.yaml wholesale rather than one
+// field of one set.
+//
+// That makes the file itself the thing under test as much as the values
+// in it. A save has to re-read from disk rather than serialise this
+// process's memory, so an out-of-band edit is not clobbered; it must not
+// write both spellings of a retention policy; it must keep a legacy
+// file's own spelling when the request says nothing about it; and it must
+// not freeze this release's resolved defaults into a file whose owner
+// never chose them. Every one of those is a way a save can succeed and
+// still leave an operator with a file they did not write.
+//
+// The refusals are proved to be all-or-nothing, each with a positive
+// control beside it. A test that asserts "the file is unchanged" passes
+// perfectly on a build where the write never happens at all, so the
+// control is what keeps the refusal cases honest.
+//
+// The two schema tests at the end guard the other direction: what this
+// boundary advertises as valid has to be what the config layer actually
+// enforces, and the advertised defaults have to be what an unconfigured
+// policy really resolves to rather than a copy that drifts.
 package service
 
 import (

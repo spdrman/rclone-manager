@@ -1,3 +1,30 @@
+// This file covers creating a backup set from a request instead of from a
+// text editor (#146), and the key import that has to happen first.
+//
+// It also holds openTestService and validCreateReq, which most of the
+// rest of this package builds on, so it is the file to read first for how
+// these tests are wired: a real config file, a real SQLite journal and
+// the local transport, never a mock service. A boundary whose tests
+// mocked the thing under it would prove the mock.
+//
+// Three groups of cases, and they fail in different ways. The persistence
+// ones are about a change being real: returned, visible through a read on
+// the same service with no restart, and actually on disk, because any two
+// of those three passing while the third does not is what "saved" looks
+// like right up until the container restarts.
+//
+// The refusals are mostly about identifiers that become paths. A backup
+// set's name and its source's name end up in file paths and in artifact
+// ids, and a key reference names a file this process will read, so each
+// gets a traversal case of its own rather than one shared proof that
+// validation exists somewhere.
+//
+// The key cases exist because a private key is the one input here that a
+// person can hand over in half a dozen shapes: encrypted, encrypted with
+// the wrong passphrase, encrypted with none, or not a key at all. All of
+// those are refused at import, while the operator is still holding the
+// file, rather than at the first cycle. The material in this file is
+// generated for it and authorises access to nothing.
 package service
 
 import (

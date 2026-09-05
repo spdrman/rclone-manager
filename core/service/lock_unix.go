@@ -1,5 +1,28 @@
 //go:build unix
 
+// This file is the two advisory locks §46.1's startup sequence runs on,
+// and the reason there are two of them rather than one.
+//
+// They answer different questions and are held for wildly different
+// lengths of time. The startup lock serialises processes that are both
+// inside runStartupSequence, and is dropped the moment that sequence
+// ends. The journal lock is held for as long as a process has the journal
+// open at all, shared by everyone who is merely reading it and taken
+// exclusively only by a process about to change the schema. Folding them
+// into one lock would force a choice between two wrong answers: hold it
+// for the process lifetime and a `backup-manager status` alongside a
+// running `serve` becomes an error, or hold it for the startup sequence
+// only and a migration can run underneath a process that finished
+// starting hours ago.
+//
+// flock(2) rather than a PID file, because the failure mode being
+// designed for is the process not getting to run its cleanup. A container
+// is expected to be killed (a restart policy, a rolling update, an
+// operator losing patience), and a lock the kernel drops when the holder
+// dies cannot leave a stale file that blocks every future start. That is
+// also why every acquisition here is non-blocking: a startup that queues
+// behind another process's lock is a container that hangs rather than one
+// that says what is in its way.
 package service
 
 import (

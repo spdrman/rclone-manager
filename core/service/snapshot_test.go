@@ -1,3 +1,21 @@
+// This file covers the pre-migration snapshot against real SQLite files,
+// which is the only way it can be covered: the whole design is about what
+// a WAL-mode database looks like on disk, and a fake would be a test of
+// the fake's idea of that.
+//
+// The cases are the four states the filesystem can be in, and each one is
+// a different meaning of "put it back". Bytes restored exactly. Sidecars
+// captured, because committed rows can be sitting in the -wal rather than
+// in the main file. A fresh deployment where restoring means removing
+// what migration created, since that is what "the previous data" means
+// when there was none. And the shared-memory file removed rather than
+// written back, because putting a captured one next to a restored -wal
+// asserts a correspondence the capture never had.
+//
+// The atomic write has its own case for the directory fsync specifically.
+// Every caller of it is already on a recovery path, so "the bytes landed
+// but the rename did not survive the reboot" would mean the recovery
+// silently did not happen on precisely the reboot that needed it.
 package service
 
 import (

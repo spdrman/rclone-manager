@@ -1,3 +1,17 @@
+// This file is the create path's half of the repoint acknowledgement
+// (issue #411); backupsetrepoint_test.go is the update path's half, and
+// backupsetrepoint.go is the reasoning both of them are about.
+//
+// Creating over an id that already has history is the case nobody
+// designs for and operators reach anyway: a set removed and added back, a
+// configuration rebuilt by hand, an id reused after a NAS was replaced.
+// The journal is keyed by the id rather than by the row, so the artifacts
+// are still there and still claimed by whatever is created next.
+//
+// Both halves have to refuse identically, which is why the cases here
+// deliberately mirror the update file's rather than exploring their own
+// shapes. A guard that fires on edit and not on create is not a weaker
+// guard, it is an invitation to remove and re-add instead of editing.
 package service
 
 import (

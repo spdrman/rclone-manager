@@ -1,3 +1,38 @@
+// This file is the envelope around the one routine in this product that
+// deletes an operator's backups: preview what retention would do, show
+// it, and delete only after somebody has confirmed that exact thing.
+//
+// The word doing the work there is "exact". An apply does not replay the
+// verdicts the preview computed, and that is not an optimisation, it is
+// the safety property. Replaying a cached decision would delete files
+// chosen against a picture of the world that has since moved on, which is
+// precisely what happens while a confirmation dialog sits open. So apply
+// re-derives the plan from scratch and refuses unless what it derives
+// still fingerprints identically to what was shown. The guarantee is then
+// asserted against the plan itself rather than argued from the handful of
+// inputs somebody remembered to compare.
+//
+// A plan therefore stops being applyable in three different ways, and
+// they get three sentinels because they are three different instructions
+// to the person holding the mouse: the world moved, so look again; the
+// plan is spent or expired, so start over; a cycle is running, so wait a
+// moment and send the same plan id again. Reporting the third as
+// staleness would send an operator round a preview loop they never needed
+// to run.
+//
+// Plans live in memory, are single-use, and are capped. There is no
+// durability requirement to meet: a plan lost to a restart is a plan
+// nobody applied, which is the outcome a lost plan should have. The cap
+// is there because previewing is a plain read the UI issues on every
+// dialog open, while only an apply ever consumes one, so without a
+// ceiling the ordinary case (previews nobody applies) grows without bound
+// inside the process that is also running the backups.
+//
+// Applying is serialised against a running cycle through the same
+// single-flight lock cycles take. Both move the very journal rows a
+// plan's staleness is computed over, and an apply that ran alongside one
+// would be deciding against a snapshot that is being rewritten underneath
+// it.
 package service
 
 import (

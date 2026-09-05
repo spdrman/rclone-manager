@@ -1,3 +1,25 @@
+// This file is the operator's activity feed: the read side of the
+// append-only transition log internal/state writes as artifacts move
+// through the pipeline, projected into types a package outside core/ can
+// name.
+//
+// The feed is deployment-wide and takes no filter beyond a count. That is
+// the shape its audience needs rather than an unfinished API: somebody
+// reading it has just been told something is wrong and does not yet know
+// where, so a list that made them name the backup set first would be
+// useless to exactly the person who opened it. Everything narrower is
+// already answered per set by the read models the same journal backs, and
+// a second filtered query shape here would only give the two answers a
+// way to disagree.
+//
+// The clamping in ListActivity is not defensive tidiness either.
+// Journal.RecentActivity refuses a non-positive limit outright, because
+// down there "no limit" has no honest meaning against a table nothing
+// prunes. This boundary is where an absent number becomes a real one, so
+// a caller that simply did not ask gets a feed instead of an error, and a
+// caller that asked for the whole deployment's history gets the newest
+// thousand instead of whatever the journal has accumulated since the day
+// it was created.
 package service
 
 import (

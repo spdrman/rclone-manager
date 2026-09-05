@@ -1,3 +1,22 @@
+// This file is the whole of proactive alerting as anything outside core/
+// can see it (docs/EPIC-B-multi-nas.md §71, issue #159): one plain Alert
+// shape, one sink interface, one way to install a sink, and the adapter
+// that carries internal/alert's own Alert across the boundary.
+//
+// Alerting is the one part of this product that reaches a person who is
+// not looking at it, so the design here is mostly about what it refuses
+// to become. There is one sink and no registry, no fan-out and no
+// per-condition routing, because §71 rules out a notification framework
+// in v1 and the cheapest way to keep a framework from growing is to give
+// it nowhere to start. Every field crossing the seam is a plain string or
+// a time, so a platform notifier can be written against this file alone
+// without ever naming a type from core/internal.
+//
+// The direction of the adapter at the bottom is forced rather than
+// chosen. internal/alert cannot import this package (that is the seam
+// running the wrong way), and nothing in apps/ can import internal/alert
+// at all, so the translation has to live on this side, once, in the one
+// package that is allowed to name both vocabularies.
 package service
 
 import (

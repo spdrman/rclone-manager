@@ -1,3 +1,14 @@
+// This file covers the two places a restore has to be treated unlike
+// every other operation, and both of them are places where the ordinary
+// treatment would be wrong rather than merely unhelpful.
+//
+// A progress reading attached to a restore could only be invented, and an
+// operation left running by a dead process is normally abandoned work to
+// fail, while a restore is a job the provider is still carrying out. Each
+// test carries its own control, a run cycle taking the ordinary path,
+// because both refusals are the kind that pass just as happily when
+// written too broadly and would then have quietly turned off progress and
+// the startup sweep for everything.
 package service
 
 import (

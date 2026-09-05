@@ -1,3 +1,18 @@
+// This file covers the unattended loop, and the cases split cleanly into
+// what it must do and what it must survive.
+//
+// Ticking and stopping on cancel are the easy half. The other half is
+// about a process that hosts an HTTP API alongside this loop: a cycle
+// that panics must not take the API down with it, must not walk away
+// still holding the single-flight lock, and must not stop the loop. That
+// last one is the case a naive recover passes and a wrongly placed one
+// fails silently, leaving a scheduler that is technically alive and has
+// run nothing since the first bad afternoon.
+//
+// The overlap case is the invariant the whole design rests on: an
+// operator-submitted run and a scheduled tick are two independent callers
+// of the same engine, and the engine's own contract is that two passes
+// never overlap on one backup set.
 package service
 
 import (

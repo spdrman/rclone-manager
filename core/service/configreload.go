@@ -1,3 +1,21 @@
+// This file is the shared tail of every configuration write: once the new
+// config.yaml is durably on disk, this is what makes the running process
+// agree with it.
+//
+// It is one function, and being one function is the whole point. Every
+// write path (create, update, remove, enable, retention, settings, medium
+// edits) has to rebuild the app.Service, carry alerting across, swap the
+// {inner, revision} pair atomically and reconcile the removal holds, in
+// that order. That sequence used to be typed out at each write site, with
+// a comment at each copy saying it followed one of the others exactly.
+// They did follow each other, which is exactly how the eighth copy came
+// to be the only one with a step the other seven also needed.
+//
+// Nothing in here returns an error, and nothing in here is allowed to
+// acquire one. By the time it runs, the file on disk has already changed,
+// so there is no failure this could report that would not leave the
+// process and its configuration disagreeing with each other and the
+// caller unable to do anything about either.
 package service
 
 import (

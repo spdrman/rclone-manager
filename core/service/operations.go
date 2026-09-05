@@ -1,3 +1,37 @@
+// This file is the durable half of the operation model (§14): a caller
+// asks for work, the request is written down before anything runs, and
+// the answer to "what happened to it" outlives the request, the
+// connection and the process.
+//
+// Four rules do most of the arguing below, and they are easier to see
+// together than one method at a time.
+//
+// The row is persisted and returned before execution starts, so nothing a
+// caller does next (closing the tab, a request timeout, a proxy giving
+// up) can un-ask for the work or lose the receipt for it.
+//
+// Execution runs on this service's own lifetime rather than the caller's.
+// An HTTP request's context must not own a backup cycle, and
+// context.Background() would go too far the other way and detach the
+// cycle from process shutdown as well, leaving Close with nothing to ask.
+//
+// A second concurrent run is refused outright, not queued. Queueing looks
+// friendlier and is worse: it accepts work whose configuration revision
+// was checked against a picture of the world that will have moved on by
+// the time it runs, and it hides a wedged cycle behind a growing backlog
+// that all still has to happen.
+//
+// Every optional here is a pointer, and none of them is ever rendered as
+// a zero. Absent and empty are different answers about somebody's backup:
+// a cycle that has not finished has not walked nothing, and an operation
+// this process cannot see inside is not an operation where nothing is
+// happening.
+//
+// Finally, errors from below are classified before they cross, never
+// forwarded. An unclassified failure could carry a state-layer sentence
+// naming SQLite internals, and this boundary's contract has to hold on
+// the failure paths too, which is where a leak is least likely to be
+// noticed and most likely to be logged.
 package service
 
 import (
@@ -604,6 +638,20 @@ type cycleSummary struct {
 	StartedAt           string `json:"started_at"`
 }
 
+// summarizeCycle renders what a finished cycle got done into the JSON
+// blob recorded on its operation row.
+//
+// This is the only durable account of a cycle's own outcome. The live
+// readings are gone the moment the goroutine producing them ends
+// (progress.go), so anything not written here is unanswerable afterwards,
+// which is why the counts are recorded even for the cycle that did
+// nothing: that is precisely the cycle somebody comes back asking about.
+//
+// What it deliberately leaves out is the move pass's refusal text. That
+// sentence is built by code that was never written to a redaction
+// contract and can name an endpoint, a bucket or a credential reference,
+// so FR-33 keeps it on the terminal and in the event stream while the
+// wire carries the arithmetic.
 func summarizeCycle(report app.CycleReport) string {
 	walked, through := 0, 0
 	for _, set := range report.Sets {

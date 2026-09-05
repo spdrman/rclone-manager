@@ -1,3 +1,26 @@
+// This file is issue #443's storage-medium preflight: prove a declared
+// medium actually works, at the moment an operator declares it, rather
+// than at the moment a cycle carrying a real backup finds out for them.
+//
+// Everything here is shaped by that timing. A medium is configuration, so
+// the ways it fails are the ways configuration fails (a typo in a bucket
+// name, a credential that expired, a region that does not host what the
+// endpoint claims), and every one of them is silent until something tries
+// to use it. The check makes them loud on the operator's own schedule.
+//
+// A medium that does not work is a successful call carrying a report that
+// says so, and the error return is kept for a medium this configuration
+// does not declare at all. The distinction is the same one this codebase
+// draws everywhere: what the operator did is a result, what broke is an
+// error, and collapsing the two would leave a client unable to tell "your
+// bucket is not there" from "this manager could not ask".
+//
+// The step-by-step shape matters more than the verdict. Knowing that a
+// write failed after credentials passed and reach passed is most of the
+// diagnosis, which is why a skipped step is reported as its own outcome:
+// rendering a skipped write as anything resembling a pass would tell
+// somebody their bucket is writable on the strength of a credential that
+// was never obtained.
 package service
 
 import (

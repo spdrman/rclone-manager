@@ -1,3 +1,21 @@
+// This file is the honesty check on restores: not that internal/archive
+// refuses what it should, which its own suite covers, but that the thing
+// this product actually ships can reach a provider at all.
+//
+// The distinction is worth the file. Every guarantee in the restore path
+// is built on an interface, and if the only implementation of it in this
+// repository were a test double, an operator would get "this deployment
+// has no way to reach a storage medium" no matter what they configured,
+// with every test still green. So the first case asserts the binding
+// itself, and the second asserts the honest answer when the binding is
+// genuinely absent.
+//
+// The rest is what a restore is at this boundary: a durable row that
+// records what was asked, a status re-derived from the provider rather
+// than trusted from the row, and a refusal that names the thing the
+// caller has to change. Re-derivation is the one that cannot be faked,
+// because it is what makes the answer survive a restart of the process
+// that submitted it.
 package service
 
 import (
