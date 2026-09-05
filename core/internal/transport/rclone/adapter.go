@@ -317,19 +317,26 @@ func shutdownFs(ctx context.Context, f fs.Fs) {
 // A backend that did fetch would need the operation's own context
 // threaded here.
 //
-// And this does not guard against a zero time the way medium.go's
-// toObjectInfo does, so a backend reporting no modification time would
-// produce time.Time{}.Unix(), a large negative number, where
-// RemoteArtifact.ModTime documents 0. Nothing hits it today for the same
-// reason as above (both backends always report one), and the comparison
-// that would read it, model.CompareIdentity, compares two captures of the
-// same object and so would see the same wrong number twice.
+// And the !IsZero guard is the same one medium.go's toObjectInfo makes,
+// for the same reason. RemoteArtifact.ModTime documents 0 as "the backend
+// did not report one", and time.Time{}.Unix() is -62135596800, not 0: a
+// backend that reports nothing would otherwise hand every consumer of the
+// field a timestamp in the year one rather than the absence the field's
+// own doc promises. No backend reachable through a Source does that today,
+// which is exactly why it went unwritten until #492, and the consumer that
+// would have absorbed it quietly is model.CompareIdentity, which compares
+// two captures of the same object and would see the same wrong number
+// twice. Retention is the one that would not: it reads the field as a
+// date.
 func toArtifact(o fs.Object) transport.RemoteArtifact {
-	return transport.RemoteArtifact{
-		Path:    o.Remote(),
-		Size:    o.Size(),
-		ModTime: o.ModTime(context.Background()).Unix(),
+	art := transport.RemoteArtifact{
+		Path: o.Remote(),
+		Size: o.Size(),
 	}
+	if t := o.ModTime(context.Background()); !t.IsZero() {
+		art.ModTime = t.Unix()
+	}
+	return art
 }
 
 // List recurses the whole tree beneath src's root, not just the top
