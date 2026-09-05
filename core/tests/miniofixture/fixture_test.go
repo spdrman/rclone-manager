@@ -50,10 +50,11 @@ const deadDockerHost = "tcp://127.0.0.1:1"
 // carried on would otherwise look like an ordinary failure.
 const startReturnedMarker = "START_RETURNED"
 
-// infraMarker is asserted as a literal rather than through the constant in
-// fixture.go on purpose. The marker is a contract with whoever reads a gate
-// log, so the test has to fail if the production side changes it.
-const infraMarker = "INFRA:"
+// wantInfraMarker is the marker a refusal has to carry, written out as its
+// own literal rather than read from fixture.go's constant on purpose. The
+// marker is a contract with whoever reads a gate log, so renaming it on the
+// production side has to turn this red rather than follow along quietly.
+const wantInfraMarker = "INFRA:"
 
 func skipUnlessHelper(t *testing.T) {
 	t.Helper()
@@ -108,8 +109,8 @@ func refusalVerdict(out string, code int) error {
 	if !strings.Contains(out, "--- FAIL") {
 		return fmt.Errorf("the run exited %d but never reported a test failure, so what stopped it is not the fixture refusing", code)
 	}
-	if !strings.Contains(out, infraMarker) {
-		return fmt.Errorf("the run failed but never said %q, so a reader sorting a gate log into a broken machine and a broken product cannot tell which this was", infraMarker)
+	if !strings.Contains(out, wantInfraMarker) {
+		return fmt.Errorf("the run failed but never said %q, so a reader sorting a gate log into a broken machine and a broken product cannot tell which this was", wantInfraMarker)
 	}
 	return nil
 }
@@ -123,8 +124,8 @@ func skipVerdict(out string, code int) error {
 	if !strings.Contains(out, "--- SKIP") {
 		return errors.New("the run exited 0 without skipping anything, so the fixture did not report the missing capability at all")
 	}
-	if strings.Contains(out, infraMarker) {
-		return fmt.Errorf("the run skipped but still printed %q, which reads in a log as an infrastructure failure that did not happen", infraMarker)
+	if strings.Contains(out, wantInfraMarker) {
+		return fmt.Errorf("the run skipped but still printed %q, which reads in a log as an infrastructure failure that did not happen", wantInfraMarker)
 	}
 	return nil
 }
@@ -136,7 +137,7 @@ func skipVerdict(out string, code int) error {
 func requireDockerBinary(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("miniofixture: SKIPPING (missing capability: %q not found on PATH, so there is no client to point at a dead endpoint): %v", "docker", err)
+		dockerUnavailable(t, "%q not found on PATH, so there is no client to point at a dead endpoint: %v", "docker", err)
 	}
 }
 
