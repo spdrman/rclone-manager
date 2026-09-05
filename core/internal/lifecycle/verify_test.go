@@ -101,6 +101,11 @@ func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) 
 		j.rec.ValidationPassed = &passed
 		j.rec.ValidationDetail = t.Validation.Detail
 	}
+	if t.Retry != nil {
+		j.rec.RetryCount = t.Retry.Count
+		j.rec.LastError = t.Retry.LastError
+		j.rec.NextRetryAt = t.Retry.NextAttempt
+	}
 
 	out := state.Outcome{Applied: true, Record: j.rec}
 	j.seen[t.Key] = out
@@ -1117,23 +1122,15 @@ func TestHookTimeoutBudgets_CanStillFail(t *testing.T) {
 	}
 }
 
-// TestVerify_RemoteHashConnectTimeout_FailsRatherThanReadingAsACancellation
-// is the lifecycle half of issue #388. Once transport/rclone stops calling
-// rclone's own connect timeout a cancellation, the error that arrives here
-// is classified transport.Transient, and its cause is still reachable as
-// context.DeadlineExceeded through transport.Error's Unwrap. So a
-// cancellation check that falls back to a raw errors.Is on an error that has
-// already been classified still calls this a stop request, and Verify walks
-// away leaving the journal at VERIFYING with no verdict at all.
-//
-// It is not a stop request. Nobody asked for anything: the network timed out
-// and rclone gave up, which is a verdict Verify is supposed to record.
-//
-// The error below stands in for what the rclone adapter now produces for
-// this condition; the real one is proved against a real blackholed address
-// in internal/transport/rclone's
-// TestClassify_ConnectTimeoutRcloneImposedIsTransient.
-func TestVerify_RemoteHashConnectTimeout_FailsRatherThanReadingAsACancellation(t *testing.T) {
+// TestVerify_RemoteHashConnectTimeout_IsNeverReadAsACancellation is #388's
+// half of the story, kept as its own control now that #419 changed what
+// happens NEXT. The classification is the thing under test here: a connect
+// timeout rclone imposed on itself must not read as a stop request just
+// because context.DeadlineExceeded is still reachable underneath it. What
+// the step then DOES with that transient failure is stall_test.go's
+// subject, so this one asserts only that Verify neither returned it as a
+// cancellation nor left the journal untouched and silent.
+func TestVerify_RemoteHashConnectTimeout_IsNeverReadAsACancellation(t *testing.T) {
 	orig := remoteHashRetryPolicy
 	remoteHashRetryPolicy = retry.Policy{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}
 	t.Cleanup(func() { remoteHashRetryPolicy = orig })
@@ -1163,14 +1160,14 @@ func TestVerify_RemoteHashConnectTimeout_FailsRatherThanReadingAsACancellation(t
 	if err != nil {
 		t.Fatalf("Verify returned an error, which is how it reports a cancellation, for a connect timeout nobody asked for: %v", err)
 	}
-	if out.Record.State != string(Failed) {
-		t.Fatalf("state = %q, want %q: a connect timeout that exhausted its retries is a verdict, not a stop request", out.Record.State, Failed)
+	if out.Record.State == string(Verifying) {
+		t.Fatal("the journal was left at VERIFYING with nothing recorded, which is how a cancellation is handled")
 	}
-	failed := j.transitionsTo(Failed)
-	if len(failed) != 1 {
-		t.Fatalf("recorded %d FAILED transitions, want 1", len(failed))
+	recorded := j.transitionsTo(State(out.Record.State))
+	if len(recorded) != 1 {
+		t.Fatalf("recorded %d transitions to %s, want 1", len(recorded), out.Record.State)
 	}
-	if !strings.Contains(failed[0].Detail, "transient") {
-		t.Fatalf("FAILED detail = %q, want it to name the transient category it actually got", failed[0].Detail)
+	if !strings.Contains(recorded[0].Detail, "transient") {
+		t.Fatalf("detail = %q, want it to name the transient category it actually got", recorded[0].Detail)
 	}
 }

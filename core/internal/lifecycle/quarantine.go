@@ -230,6 +230,27 @@ func QuarantineReason(rec state.Record) string {
 			orUnknownAlg(rec.LocalHashAlg), rec.LocalHash,
 		)
 	}
+	// Issue #419: an artifact held because its verification could never be
+	// COMPLETED, not because anything was found wrong with it. It is the
+	// one shape here that does have its reason durably on the row, in the
+	// FR-22 retry bookkeeping the stall itself wrote, so this reports that
+	// rather than inventing a content verdict nobody reached.
+	//
+	// It is last, and that ordering is what keeps it from masking a real
+	// finding. Every path that quarantines an artifact for something it
+	// actually measured leaves that measurement on the row: a validator's
+	// rejection sets ValidationPassed, and every content check
+	// (verify.go's hash comparison, internal/reconcile's and
+	// internal/revalidate's re-reads) works against a recorded LocalHash
+	// and therefore has one. A row with neither cannot have been
+	// quarantined by any of them, so LastError here is this quarantine's
+	// own reason and not a stale one left by an earlier release.
+	if rec.LastError != "" {
+		return fmt.Sprintf(
+			"%s (this is not a finding about the backup's contents: %d attempt(s) were spent and none of them completed, so nothing has been proved about these bytes either way)",
+			rec.LastError, rec.RetryCount,
+		)
+	}
 	return "content found invalid; no further detail is persisted on this record (see the journal's transition log for the transition that caused it)"
 }
 
