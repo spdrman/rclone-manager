@@ -1,3 +1,29 @@
+// The executable half of runtime-contract.json (issue #167, EPIC B #81
+// Phase 6). Four claims: every field the contract names is declared by
+// the canonical runtime definition and by every artifact derived from
+// it, no definition anywhere needs a prohibited host privilege, nothing
+// in the tree declares compose services without being registered, and
+// the two facts the contract is most likely to be wrong about (which
+// service holds which role, and where private state sits relative to
+// backup data) are read out of the document rather than out of a name.
+//
+// Nearly every rule here is run twice, once against the real tree and
+// once against the real tree deliberately broken. That is not symmetry
+// for its own sake. All of these are negative claims, and a negative
+// claim evaluated over a document that failed to parse, or over a
+// contract with an empty field list, passes: a CheckField that returned
+// nil would report a complete contract against a blank file, and a
+// prohibition list nobody has watched refuse anything is a list of
+// comments. Three preflight rules in this repository have already
+// failed open. That is also why several tests below abort when their
+// own mutation loop turns out to have run zero mutations, rather than
+// reporting the pass that a zero-iteration loop produces.
+//
+// This is an external test package, so the checks reach the contract
+// only through what it exports and cannot quietly depend on an
+// unexported shortcut a refactor would take away.
+// hostpath_internal_test.go is the one deliberate exception, and says
+// why in its own words.
 package compose_test
 
 import (
@@ -35,6 +61,12 @@ func env() map[string]string {
 	}
 }
 
+// canonical reads the definition the contract names as authoritative,
+// through the same path resolution and the same variable expansion an
+// operator's `docker compose` would use. Hand-building a Document here
+// would make every test below a test of the fixture: the interesting
+// failures are ones where the checked-in YAML says something nobody
+// meant, and a fixture cannot say that.
 func canonical(t *testing.T) compose.Document {
 	t.Helper()
 	c := compose.MustLoadContract()
@@ -49,6 +81,12 @@ func canonical(t *testing.T) compose.Document {
 // Every required field is declared
 // ---------------------------------------------------------------------
 
+// TestCanonicalDefinitionDeclaresEveryRequiredField runs one subtest per
+// contract field rather than one over all of them, so a failure names
+// the field instead of the count, and prints that field's own Why. The
+// contract records a reason per field precisely so a red build tells the
+// person reading it what the field was for, which is the difference
+// between fixing the definition and deleting the field.
 func TestCanonicalDefinitionDeclaresEveryRequiredField(t *testing.T) {
 	t.Parallel()
 
@@ -305,6 +343,10 @@ func TestWriteModeCheckFailsWhenAMountCarriesTheWrongOne(t *testing.T) {
 	}
 }
 
+// findingText keeps the rule ID attached to the detail, because the
+// mutation controls do not only assert that a check fired: they assert
+// it named itself. A finding that fires under the wrong rule ID sends
+// the next reader to the wrong part of the contract.
 func findingText(findings []compose.Finding) string {
 	parts := make([]string, 0, len(findings))
 	for _, f := range findings {
@@ -317,6 +359,12 @@ func findingText(findings []compose.Finding) string {
 // No prohibited host privilege, anywhere
 // ---------------------------------------------------------------------
 
+// TestNoDefinitionNeedsAProhibitedHostPrivilege runs the prohibition
+// list over the canonical definition AND everything derived from it.
+// The derived artifacts are the ones that matter: the canonical file is
+// reviewed by everyone, while a platform adapter is reviewed by whoever
+// added that platform, and `privileged: true` reads as a plausible fix
+// for a permissions problem on a NAS.
 func TestNoDefinitionNeedsAProhibitedHostPrivilege(t *testing.T) {
 	t.Parallel()
 
@@ -552,6 +600,13 @@ services:
 // Completeness: nothing derives from the canonical definition unchecked
 // ---------------------------------------------------------------------
 
+// TestEveryComposeArtifactInTheTreeIsRegistered closes the gap every
+// registry-driven check has: the rules above only run over what the
+// contract lists, so an unregistered compose file is not a failing
+// artifact, it is an invisible one. The walk finds compose artifacts by
+// their content rather than their filename, because the thing being
+// looked for is a file that declares services, and nothing makes an
+// adapter author call it compose.yaml.
 func TestEveryComposeArtifactInTheTreeIsRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -605,6 +660,13 @@ func TestEveryComposeArtifactInTheTreeIsRegistered(t *testing.T) {
 // Roles come from the command, never from the service name
 // ---------------------------------------------------------------------
 
+// TestServiceRolesAreDerivedFromTheCommand pins the one design decision
+// the rest of this package rests on. Every per-role rule (which mounts,
+// which ports, which health check) resolves a role first, and if that
+// resolution keyed on the service name then renaming a service in an
+// adapter would silently exempt it from all of them rather than fail.
+// So the rename is the control: the same two services under different
+// names have to come back with the same two roles.
 func TestServiceRolesAreDerivedFromTheCommand(t *testing.T) {
 	t.Parallel()
 
@@ -647,6 +709,14 @@ services:
 // Private state and backup data never contain one another
 // ---------------------------------------------------------------------
 
+// TestPrivateStateAndBackupDataAreSeparateMounts is issue #87 (B5.1)'s
+// rule at its source. The backup destination is the one host directory
+// an operator is expected to share with other people, so anything nested
+// inside it is published: here that would be the lifecycle journal and
+// the local-auth administrator record. Containment is checked both ways
+// round because either nesting is a layout somebody could write, and the
+// helper doing the checking gets its own control, since two assertions
+// built on a Contains that always answered false would both pass.
 func TestPrivateStateAndBackupDataAreSeparateMounts(t *testing.T) {
 	t.Parallel()
 
