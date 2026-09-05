@@ -175,6 +175,22 @@ func runDeleteAttempt(t *testing.T, f *fixture, a deleteAttempt) string {
 	if len(refusals) == 0 && mv.Error == "" {
 		t.Error("the engine declined to delete and said nothing about why")
 	}
+
+	// And the reason is on the DURABLE row, not only in the cycle report.
+	//
+	// This used to be an OR with the line above, which meant a refusal
+	// that only ever reached the in-memory report satisfied it. The
+	// report is gone by the time anybody looks, and FR-24's health reads
+	// the move row to tell a move that is stuck from a move that is
+	// young, so a refusal that lives only in the report is one nothing
+	// can see. Every path out of deleteSource that stops rather than
+	// finishes goes through noteOnRow now, so every cell that lands here
+	// has a row to read: the capability branch AND the guard's own
+	// clauses.
+	if mv.Error == "" {
+		t.Errorf("the move row carries no reason, so an operator reading the move journal has no account of why this move "+
+			"has not progressed, and a health surface reading the same column has none either. The cycle report said: %s", strings.Join(refusals, "\n"))
+	}
 	return joined
 }
 
@@ -466,13 +482,28 @@ func TestAStandingRefusalBeforeTheSourceDeleteIsRecordedOnTheMoveRow(t *testing.
 		Cause: errors.New("InvalidObjectState: the operation is not valid for the object's storage class"),
 	}
 
-	report, err := f.engine.RunCycle(f.ctx, nil)
-	if err != nil {
-		t.Fatalf("RunCycle: %v", err)
-	}
-	f.guard.fail()
-	if len(report.Outcomes) != 1 {
-		t.Fatalf("expected one outcome, got %+v", report.Outcomes)
+	// TWO cycles, because "the reason is reported every cycle until
+	// somebody acts on it" is the claim, and one cycle cannot tell that
+	// from a reason written once and then lost. The second cycle also
+	// re-drives a move that is deliberately going nowhere, which is the
+	// state a health surface is looking at when it reads the row.
+	var report placement.CycleReport
+	for cycle := 1; cycle <= 2; cycle++ {
+		var err error
+		report, err = f.engine.RunCycle(f.ctx, nil)
+		if err != nil {
+			t.Fatalf("cycle %d: RunCycle: %v", cycle, err)
+		}
+		f.guard.fail()
+		if len(report.Outcomes) != 1 {
+			t.Fatalf("cycle %d: expected one outcome, got %+v", cycle, report.Outcomes)
+		}
+		if report.Outcomes[0].Refused == "" {
+			t.Errorf("cycle %d: the cycle report says nothing about a move it refused", cycle)
+		}
+		if got := f.onlyMove(); got.Error == "" {
+			t.Fatalf("cycle %d: the move row carries no reason; a refusal reported once and then cleared is a refusal a health surface sees only if it was watching", cycle)
+		}
 	}
 
 	mv := f.onlyMove()

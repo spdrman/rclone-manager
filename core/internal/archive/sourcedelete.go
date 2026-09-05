@@ -122,6 +122,29 @@ func (c Copy) CanStandIn() bool {
 // verification gate as well, and an import that any use satisfies would
 // stay green with this call deleted.
 //
+// # Where it sits in the order, which is not first
+//
+// The move engine re-verifies the destination from scratch immediately
+// before it asks this, and against a real endpoint that read is what
+// refuses most of the worlds this function was written for. A GET of an
+// object on an archive class nobody has restored answers
+// InvalidObjectState, so the engine's own capability refusal fires and
+// this decision is never reached at all. #440 is that finding, and the
+// comment here used to read as though this were the first line of
+// defence.
+//
+// For an unrestored copy, then, this is defence in depth. What it is not
+// defence in depth for is the world it was really written for, and the
+// only one that can reach it: a copy that WAS readable when the bytes
+// were read and is not readable any more by the time this is asked. A
+// restore window lapsing mid-move does that, and so does a restore-status
+// call that fails after a read that worked. Nothing earlier in the order
+// can see either, because both are the endpoint's answer changing between
+// two calls, and that is exactly why this decision is made over access
+// states gathered AT the delete rather than inherited from the check that
+// just ran. placement's archivedelete_test.go drives all four worlds and
+// says which refusal each of them produces.
+//
 // # The data-loss path it closes
 //
 // A move to an archive class ends with a destination placement row that

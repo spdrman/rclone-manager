@@ -18,24 +18,31 @@ import (
 )
 
 // automaticMediumClass is the strongest verification class a scheduled,
-// unattended pass will ever run against a copy on a storage medium.
+// unattended pass will ever run against a copy on a storage medium, and it
+// is now the only statement of that rule in the product.
 //
 // It was a const inside checkMediumPlacements and it is here so a test can
-// read it, because placement.AutomaticClass is the same rule stated a
-// second time and the two had no way of being held together. That function
-// derives the ceiling from Class.CostsEgress rather than naming a rung, so
-// that raising the automatic ceiling means changing the class whose cost is
-// consulted rather than editing a constant and finding out from a bill.
-// This IS that constant, and nothing consulted that function.
+// read it. internal/placement carried a second statement of the same rule,
+// AutomaticClass, which nothing consulted. #438 deleted it: it answered
+// this same constant for every access state a copy this pass would look at
+// can be in, and reaching it would have cost a restore-status probe per
+// archive-class copy per cycle to learn nothing that could change what
+// runs, because an existence check is a HEAD and a HEAD works on an
+// archived object.
 //
-// It is not simply replaced by a call to it, because
-// placement.AutomaticClass takes an archive access state and this pass does
-// not have one: deriving it means a restore-status probe per archive-class
-// copy per cycle, which is a request this pass deliberately does not spend
-// on an answer that cannot change what it runs (a HEAD works on an
-// archived object). So the two are pinned together by a test instead, and
-// the delete-or-wire decision for AutomaticClass is filed rather than taken
-// here.
+// Existence rather than Attested, which also costs no egress and is the
+// rung between them. An attestation is the endpoint's own word about the
+// bytes, which is why it is opt-in per medium, and this function runs ONE
+// class against EVERY ACTIVE medium copy without ever reading that opt-in.
+// So an automatic pass that attested would be trusting an endpoint on
+// behalf of an operator who never said it could, which also means "the
+// strongest rung that does not download" is the wrong derivation of this
+// constant and always was.
+//
+// The properties, and their reasons, are asserted by
+// TestTheAutomaticCeilingIsAClassThisPassMayRunAgainstEveryMedium; the
+// behaviour they describe is asserted against a real pass, by request
+// count, in TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo.
 const automaticMediumClass = placement.Existence
 
 // runChecks runs whatever cfg enables against rec's durable copy and

@@ -33,6 +33,41 @@ import (
 // somebody can). This file holds the other refusal those facts imply,
 // which is stated in a verification class: a copy nobody can read cannot
 // earn a class that needs reading it.
+//
+// # There is no AutomaticClass here, and there should not be
+//
+// This file used to export one: the strongest class a scheduled,
+// unattended pass may run against a copy in access state s. #438 deleted
+// it, and the reason is worth keeping so it does not come back.
+//
+// It had no production caller and could not usefully get one. It answered
+// the constant Existence for Immediate, RequiresRestore and Restoring
+// alike, and the empty class only for Unreachable, which no automatic
+// pass holds before it asks: internal/revalidate learns a medium is
+// unreachable from the request failing, and routes that as a per-artifact
+// error rather than as a verdict. Wiring it up would have meant a
+// restore-status probe per archive-class copy per cycle to reach an answer
+// that could not change what the pass runs, because an existence check is
+// a HEAD and a HEAD works on an archived object.
+//
+// Its documented reason for existing was not what it did, either. It
+// claimed to DERIVE the automatic ceiling from Class.CostsEgress rather
+// than name a rung, so that raising the ceiling meant changing the class
+// whose cost is consulted rather than editing a constant. What it actually
+// did was read Ceiling, find that it costs egress, and then return the
+// literal Existence, skipping Attested entirely. Attested is the rung
+// between them and it costs no egress at all, so "the strongest class that
+// does not download" is Attested and not Existence; the real reason the
+// automatic pass stops at Existence is that Attested trusts the endpoint's
+// own checksum and is opt-in per medium, which is a per-medium
+// configuration fact this function was never given. A derivation that
+// cannot see the fact it turns on is a constant with extra steps.
+//
+// So the automatic ceiling lives where it is actually run, in
+// internal/revalidate, as a named constant with a refusal underneath it
+// that reads Class.CostsEgress at the moment the pass is about to spend
+// money. That refusal is the mechanism; this file only ever held a second
+// opinion nobody asked.
 
 // Ceiling is the strongest verification class that can honestly be
 // attempted against a copy in access state s.
@@ -191,48 +226,4 @@ func VerifyWithAccess(
 		return Result{}, err
 	}
 	return Verify(ctx, store, medium, p, want, now)
-}
-
-// AutomaticClass is the strongest class a scheduled, unattended pass may
-// run against a copy in access state s, and it is capped below Ceiling for
-// one reason: money.
-//
-// FR-31 makes anything that costs egress operator-initiated, and
-// Class.CostsEgress is the mechanism rather than the promise. This
-// function reads it rather than hard-coding "existence", so raising the
-// automatic ceiling means changing the class whose CostsEgress is
-// consulted, not editing a constant and finding out from a bill.
-//
-// # It lands two rungs down, not one, and that is not this rule's doing
-//
-// Ceiling(Immediate) is Content, which costs egress, so this answers
-// Existence and steps straight past Attested, which costs none. The cap
-// written here is not what skips that rung: nothing on the ladder sits
-// between "costs egress" and "does not", so a rule stated in CostsEgress
-// alone lands on the weakest free class rather than the strongest. FR-31
-// makes attested operator-initiated too, so the answer happens to be the
-// one FR-31 wants, and it is worth saying that it is a coincidence of
-// where the rungs fall rather than something this function decided.
-//
-// The operator-initiated door does make the distinction, in its own code
-// where the choice is visible: internal/app's checkMediumCopies (issue
-// #435) attempts Attested first and steps down to Existence explicitly,
-// naming the step-down, because measured against rclone v1.75.0 no s3
-// medium can attest at all.
-//
-// An archive class makes that worse and not better. A restore is billed
-// on top of the egress, and it is billed for a window measured in days, so
-// an automatic pass that could trigger one would keep triggering it. There
-// is no path here that can: Ceiling already refuses content for an
-// archived copy, and this refuses it again for every copy, and neither
-// refusal is reachable by configuration.
-func AutomaticClass(s archive.State) Class {
-	c := Ceiling(s)
-	if c == "" {
-		return ""
-	}
-	if c.CostsEgress() {
-		return Existence
-	}
-	return c
 }
