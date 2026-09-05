@@ -537,6 +537,30 @@ note "3 artifacts: payload.bin (3 MiB), schema.sql, notes.txt"
 
 # ================================================================= a case
 
+# run_case is one whole proof, from a machine with nothing on it to a
+# byte-for-byte comparison of what landed.
+#
+# Everything a case needs is created inside it and named with this run's
+# id, so two cases never share a network, a container or a directory, and
+# a case is released at the end rather than at the exit trap. That is not
+# tidiness: a manager machine is a Docker daemon with the image under test
+# loaded into it and two product containers running, and holding four of
+# those at once is how a run starts failing for reasons that are about the
+# host rather than about the product.
+#
+# The order of what it asserts is the argument. The machine is checked
+# empty before anything installs, because "installed on a fresh machine"
+# is the claim. The version the ENGINE reports is checked against the
+# version that was asked for, because a stale default once installed
+# something else and said "Installed." The bytes are compared against
+# digests read from the SOURCE rather than from what this script wrote,
+# because what has to match is what the machine being backed up is
+# actually serving. And the source is re-hashed afterwards, because the
+# set was created read-only and a backup that modifies what it pulls from
+# is the failure nobody would look for.
+#
+# The case name selects the variation rather than a separate function,
+# and each variation says in its own branch what it is for.
 run_case() {
   local case_name="$1"
   local net="rm-e2e-net-$run_id-$case_name"
@@ -993,6 +1017,9 @@ count_artifacts() {  # catalogued artifacts, through the engine's own read surfa
     | sed -n 's/^\([0-9][0-9]*\) artifact(s)$/\1/p' | tail -1
 }
 
+# engine_log is best-effort by design: it is only ever called to enrich a
+# failure message, so a compose invocation that cannot reach the stack
+# must not replace the real failure with its own.
 engine_log() {
   docker exec "$1" docker compose -p rclone-manager --env-file "$2/.env" \
     -f "$2/compose.yaml" -f "$2/compose.image.yaml" logs rclone-manager 2>/dev/null || true

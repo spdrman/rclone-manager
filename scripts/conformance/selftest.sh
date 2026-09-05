@@ -154,6 +154,11 @@ expect_check_fails() {
   fi
 }
 
+# The negative control, and the two early returns are the part that
+# matters. A control whose anchor no longer matches planted nothing, so
+# running the suite against it would report a clean pass for a mutation
+# that never happened; and under --check-anchors nothing is built at all,
+# so there is no verdict to give.
 expect_gate_passes() {
   local label=$1 dir=$2
   if selftest_stale_verdict "$label"; then

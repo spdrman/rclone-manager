@@ -152,6 +152,10 @@ if [ "${GUARDS_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+# sha256_of exists because the tool is not the same on both machines this
+# runs on: coreutils sha256sum on Linux, shasum on macOS. Same digest,
+# different program, and a release script that only worked on one of them
+# would be discovered on release day.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'

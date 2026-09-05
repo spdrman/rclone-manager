@@ -119,6 +119,11 @@ expect_cell_fails() {
   fi
 }
 
+# expect_gate_passes is the negative control, and the two early returns
+# are what stop it from lying. A control whose anchor went stale planted
+# nothing, so running the gate against that tree would report a clean pass
+# for a mutation that never happened; and --check-anchors is not a run at
+# all, so it must not report a verdict either.
 expect_gate_passes() {
   local label=$1 dir=$2
   if selftest_stale_verdict "$label"; then

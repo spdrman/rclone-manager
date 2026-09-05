@@ -66,6 +66,10 @@ fail=0
 # pinned list, so if gate.json has drifted from those lists the controls would
 # still all pass while testing something other than the gate that ships.
 
+# Unquoted on purpose: the argument is a space-separated list that has to
+# word-split before it can be sorted. Both sides of every comparison below
+# go through this, so the two are compared as sets rather than in whatever
+# order each source happened to list them.
 sorted() { printf '%s\n' $1 | sort | tr '\n' ' '; }
 
 want_gated=$(sorted "$PINNED_GATED")
