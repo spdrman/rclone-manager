@@ -15,12 +15,19 @@ import "context"
 type HashAlgorithm string
 
 // SHA256 is the only algorithm this boundary speaks, and the absence of a
-// second constant is the enforcement rather than an omission. FR-32's rule
-// that an ETag is never a content hash only holds if there is no way to
-// ASK a backend for the MD5 an ETag would hand back, and config.Validation
-// accepts "" or "sha256" and nothing else, so a second value here would be
-// a capability no configuration could reach and a comparison nothing
-// should make.
+// second constant is the enforcement rather than an omission. FR-32 holds
+// only if there is no way to ask a backend for the weaker checksum it
+// would otherwise hand back, and config.Validation accepts "" or "sha256"
+// and nothing else, so a second value here would be a capability no
+// configuration could reach and a comparison nothing should make.
+//
+// MediumStore.ObjectChecksum in medium.go names the weaker checksum FR-32
+// is about and explains why nothing here carries one. This file cannot
+// repeat that explanation and does not try: internal/placement has a guard
+// that keeps the word itself out of production code, precisely so there is
+// nothing anywhere to compare a content hash against, and it admits only
+// the four files that exist to say why they hold none. Writing this
+// paragraph the obvious way is what turned that guard red.
 const SHA256 HashAlgorithm = "sha256"
 
 // Source identifies one configured remote.

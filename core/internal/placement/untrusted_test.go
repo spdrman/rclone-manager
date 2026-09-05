@@ -87,8 +87,8 @@ func coreModuleRoot(t *testing.T) string {
 // nowhere in this repository's own code, which is the strongest form of
 // "nothing compares an ETag to a hash": there is nothing named to compare.
 //
-// Two files are allowed to say the word, and both of them say it to
-// explain why they do not carry one.
+// Four files are allowed to say the word, and every one of them says it
+// to explain why it does not carry one.
 func TestNoProductionCodeNamesAnETag(t *testing.T) {
 	// Four files are allowed to say the word, and every one of them says
 	// it to explain why it does not carry one.
