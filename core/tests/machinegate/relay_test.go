@@ -110,6 +110,24 @@ func TestHostKeyVerificationStaysRealThroughARelay(t *testing.T) {
 		}
 	})
 
+	// The stronger negative control: a real key, recorded at the RIGHT
+	// address, that is the wrong key. The subtest below it only proves the
+	// file is consulted at all; this one proves the key in it is checked.
+	// Between them they close both halves of "verification was quietly
+	// relaxed to get the detour working", which is how a relay test fails:
+	// silently, and still green.
+	t.Run("with the machine's decoy key at the relay's address, it is refused", func(t *testing.T) {
+		s := through
+		s.KnownHosts = src.DecoyKnownHostsFor(t, relayHost, relayPort)
+		_, err := adapter.List(ctx, s)
+		if err == nil {
+			t.Fatal("List through the relay succeeded against the machine's DECOY host key, recorded at the relay's own address. The address matched, so the entry was found; the key did not, so it should have been refused. Host-key verification is not being enforced on this path.")
+		}
+		if !strings.Contains(err.Error(), "knownhosts: key mismatch") {
+			t.Fatalf("the refusal is not a key MISMATCH, so it does not say the wrong key was the reason: %v", err)
+		}
+	})
+
 	t.Run("with the machine's own file, the relay's address is refused", func(t *testing.T) {
 		s := through
 		s.KnownHosts = src.KnownHostsFile // records the machine's OWN address, not the relay's

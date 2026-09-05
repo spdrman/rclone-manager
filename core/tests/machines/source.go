@@ -1598,10 +1598,35 @@ func (f *Source) probeCap(t *testing.T, n int) (held int, acceptedOneMore bool) 
 // inside a manager container, where this machine's address is an alias on
 // a bridge network (#451). Both failures are silent, which is why this is
 // a capability and not a comment.
+//
+// DecoyKnownHostsFor is its negative control, and a test that uses one
+// should use both.
 func (f *Source) KnownHostsFor(t *testing.T, host string, port int) string {
 	t.Helper()
-	recorded, err := os.ReadFile(f.KnownHostsFile)
-	must(t, err, "read this machine's known_hosts")
+	return f.repin(t, f.KnownHostsFile, host, port)
+}
+
+// DecoyKnownHostsFor is KnownHostsFor for the machine's DECOY key: a real
+// key this machine does not have, pinned at the given address.
+//
+// It is the negative control for anything KnownHostsFor makes possible. A
+// relay that re-pins the machine's real keys to its own port has to be shown
+// refusing a wrong key at that same port, or "it connected" is equally
+// consistent with verification having been quietly turned off for the sake
+// of the detour, which is the way that particular test fails: silently, and
+// still green.
+func (f *Source) DecoyKnownHostsFor(t *testing.T, host string, port int) string {
+	t.Helper()
+	return f.repin(t, f.BadKnownHostsFile, host, port)
+}
+
+// repin rewrites a known_hosts file so its keys are recorded against a
+// different address. The keys are copied through untouched: this is a
+// re-addressing, never a re-keying.
+func (f *Source) repin(t *testing.T, from, host string, port int) string {
+	t.Helper()
+	recorded, err := os.ReadFile(from)
+	must(t, err, "read "+from)
 
 	addr := knownhosts.Normalize(net.JoinHostPort(host, strconv.Itoa(port)))
 	var out strings.Builder
@@ -1622,8 +1647,7 @@ func (f *Source) KnownHostsFor(t *testing.T, host string, port int) string {
 		}
 		// Parsed rather than copied through, so anything that is not
 		// actually a key is dropped here rather than written into a file
-		// that then fails to load. The key itself is untouched: this is a
-		// re-addressing, never a re-keying.
+		// that then fails to load.
 		key, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(fields[1] + " " + fields[2]))
 		if parseErr != nil {
 			continue
@@ -1633,10 +1657,10 @@ func (f *Source) KnownHostsFor(t *testing.T, host string, port int) string {
 		kept++
 	}
 	if kept == 0 {
-		t.Fatalf("machines: %s held no usable host key line, so a known_hosts written from it would pin nothing and every verification against it would fail closed for the wrong reason", f.KnownHostsFile)
+		t.Fatalf("machines: %s held no usable host key line, so a known_hosts written from it would pin nothing and every verification against it would fail closed for the wrong reason", from)
 	}
 
-	path := filepath.Join(t.TempDir(), fmt.Sprintf("known_hosts_%s_%d", sanitize(host), port))
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("known_hosts_%s_%d_%s", sanitize(host), port, sanitize(filepath.Base(from))))
 	must(t, os.WriteFile(path, []byte(out.String()), 0o644), "write the re-addressed known_hosts")
 	return path
 }
