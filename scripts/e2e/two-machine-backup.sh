@@ -116,8 +116,8 @@
 # HELP-END
 set -euo pipefail
 
-# --help reads this file, and the line below this one leaves the directory
-# the script was invoked from, so a relative $0 would stop resolving. Both
+# --help reads this file, and the run cd's to the repository root two lines
+# below, so a $0 the shell left relative stops resolving once it does. Both
 # paths are settled here, from the same dirname, before that happens.
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
