@@ -1092,6 +1092,19 @@ from the previous version of this document, which said no code path deleted a lo
 one does now, and it is the second file in this repository whose doc comment calls itself
 the most dangerous line in the project.
 
+Since EPIC E it also has to answer "where is this artifact's durable copy" before it
+deletes anything, and there are three answers rather than two. Exactly one `ACTIVE`
+placement is `CONFIRMED` and names the medium. No placement row at all is `UNRECORDED`,
+which is every artifact written before the placement table existed, and it takes nothing
+away from FR-20, whose proof was never a placement row: it is a canonicalized path, proven
+beneath the configured root, re-derived at the moment of the delete. More than one `ACTIVE`
+placement is `CONTESTED`, which is a move's copy phase in flight, and it is a refusal:
+there are two answers to where the artifact is, and removing either copy is the race the
+move journal exists to make unrepresentable. Collapsing `UNRECORDED` and `CONTESTED` into
+one "we do not know" is a bug this shipped once. `core/internal/placement`'s own prune is
+the same rule applied where the copy is an object rather than a file, written the same way
+and for the same reason.
+
 ### A restore point written as several files
 
 GFS classifies one artifact at a time and selects at most one representative per bucket per
@@ -1841,9 +1854,9 @@ tested and linted on every run.
 
 The previous version of this README described a binary with one subcommand, eleven
 subcommands after that stopped being true. It listed eleven packages under `core/internal`
-when there were seventeen. Both survived because prose does not fail a build, so the claims in here
-that a machine can decide are now decided on every run, by
-`distribution/packaging/readme_claims_test.go`:
+when there were seventeen, and there are twenty-three now. Both survived because prose does
+not fail a build, so the claims in here that a machine can decide are now decided on every
+run, by `distribution/packaging/readme_claims_test.go`:
 
 - every markdown link and every backticked repository path in this file resolves, with the
   handful of paths this document names *because* they are absent kept in an explicit list
@@ -1859,7 +1872,9 @@ that a machine can decide are now decided on every run, by
   the repair either, which is how #211 found out this section needed rewriting);
 - the "build-supported and uncertified" statement holds for exactly as long as the generated
   conformance matrix still reports an unexecuted operator cell, in both directions;
-- the support tiers in the table above come from `distribution/packaging/canonical.json`.
+- the support tiers in the table above come from `distribution/packaging/canonical.json`
+  and `conformance.json`, and a target either file declares that the table has dropped is a
+  failure, the same as a row here that neither declares.
 
 Each of those carries its own positive control, because a check that cannot fail is
 decoration. What is deliberately *not* checked there, and why, is written at the top of that
@@ -1867,6 +1882,14 @@ test file: anything needing real hardware, and the measured binary size. The cli
 request paths used to be on that list as "not decidable by reading TypeScript string
 concatenation"; #166 landed the contract that made the question answerable and #211 answered
 it, in `scripts/api/check-client-paths.sh`.
+
+**Read what those checks are for, though, before trusting them further than they go. They
+check structure, not truth.** They can tell that every path this file names exists and that
+the command table matches the binary; they cannot tell that a paragraph about what is not
+built yet describes something that was built two epics ago. Every wrong sentence #478 found
+was in the half no check can reach, and several of them were wrong for months while the
+gate stayed green. So a green `distribution/packaging` says the scaffolding held, and the
+prose still has to be read against the tree by somebody.
 
 ## Layout
 
