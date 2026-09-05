@@ -36,7 +36,7 @@ machine can decide into tests rather than sentences (see
 ### The engine and the CLI are real
 
 `core/` is a working backup engine with a working command line. `backup-manager` registers
-fifteen commands, and the list below is checked against the dispatch table in
+nineteen commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
@@ -60,7 +60,7 @@ the way its predecessor did.
 | `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
-| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because a 180-day minimum billing period is not a thing to discover empirically (issue #443) |
+| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically (issue #443) |
 | `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
@@ -68,8 +68,11 @@ the way its predecessor did.
 <!-- END CLI-COMMANDS -->
 
 Every command except `version` takes `--config`, defaulting to
-`/etc/backup-manager/config.yaml`. `backup-manager` with no arguments prints that same list
-and exits 2.
+`/etc/backup-manager/config/config.yaml`. That default is a file inside the config
+DIRECTORY rather than a file mounted on its own, because #196 made the directory the
+writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
+pass the directory and it resolves `config.yaml` inside it. `backup-manager` with no
+arguments prints that same list and exits 2.
 
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, last-known-good protection, local prune,
@@ -79,6 +82,17 @@ real, implemented, unit- and integration-tested Go packages under `core/internal
 `core/service/`. Each of them is now reachable from the command line, from the web host, or
 from both, which is the gap the previous version of this section described honestly and
 which has since been filled.
+
+EPIC E closed on top of all of that, so a durable copy no longer has to be a file on the
+NAS. Storage mediums per retention tier, an S3 transport boundary, placement records, the
+verification ladder, a journaled three-phase move engine including a staged hop from one
+medium to another, retention planning that knows where an artifact lives, placements on the
+artifact surface and over HTTP, and archive storage classes with a restore an operator has
+to ask for are all merged and all in the gate.
+[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e) is the
+section on it, and the promise that matters most is the one FR-35 makes: a deployment that
+declares no medium is byte for byte the product it was before, which is a corpus in
+`core/tests/compat` rather than a sentence here.
 
 ### The API and the web UI meet in the middle
 
@@ -123,21 +137,47 @@ was green throughout. The suite is a real test of what the browser renders and o
 pages behave, and it is no evidence at all about the API. Do not read a green e2e run as an
 end-to-end proof.
 
-That is no longer only an argument. Suite C in `rclone-manager-tests` boots the real
-engine, serves the production bundle in front of it and drives the real pages, and four of
-the six pages cannot load: `ui/shared/src/api/client.ts` requests fourteen `/api/v1`
-operations that are in neither `api/v1/openapi.json` nor `apps/common/webhost/router.go`.
-Written up as #211. The contract gate does not catch it because it compares the generated
-bindings, and `client.ts` is hand-written on top of them.
+That was never only an argument, and Suite C in `rclone-manager-tests` is what proved it:
+it boots the real engine, serves the production bundle in front of it and drives the real
+pages, and when it was written four of the six pages could not load. The contract gate had
+not caught it because it compares the generated bindings and `client.ts` is hand-written on
+top of them. #211 closed the fourteen paths and `scripts/api/check-client-paths.sh` is what
+holds them closed; the suite is still the only thing here that watches a browser talk to a
+real backend, so it stays in the gate rather than being retired now that it is green.
+
+**Every destructive operation over HTTP is refused, by construction, in every deployment
+that exists today.** `apps/common/webhost/gate.go`'s `NotYetImplementedGate` is the only
+`DestructiveGate` this repository ships, its `Passed()` returns `false` unconditionally,
+and there is deliberately no flag, environment variable or config key that opens it: a
+production wiring that names no gate gets that one, so the failure is closed by
+construction rather than by a flag nobody remembered to leave off. Three things are behind
+it: `POST /operations`, `POST /backup-sets/{source}/{set}/retention/apply`, and
+`POST /backup-sets` on the one branch where `run_immediately` turns a plain persist into a
+run. All three answer 403 `DESTRUCTIVE_OPERATIONS_DISABLED` no matter how the deployment is
+configured, and opening them is #92's job and #92's alone.
+
+The consequence worth spelling out is that `POST /operations` is where a restore, a cycle
+and a retry are submitted, so **the HTTP restore is written and unreachable**, and the CLI
+is the only surface that can actually run one today. That asymmetry is worth reading twice
+before treating the two surfaces as equals: the CLI has no such gate, because it talks to
+`config.yaml` and the journal directly rather than to a server.
 
 ### What is built but not exposed
 
 - `core/internal/metrics` renders an already-computed health report as Prometheus text
   exposition format, and nothing imports it. There is no `/metrics` endpoint on any
   listener. `docs/adr/0002-phase-5-scope.md` is the reasoning for stopping there.
-- Restore execution is out of scope by design, not by omission: there is no `restore`
-  command and no restore endpoint. [Recovery](#recovery-when-a-backup-did-not-arrive) below
-  is the manual procedure, and it is the whole of it.
+- Restore EXECUTION is still out of scope by design, not by omission: nothing here copies a
+  backup back onto the machine it came from.
+  [Recovery](#recovery-when-a-backup-did-not-arrive) below is the manual procedure, and it
+  is the whole of it. This bullet used to say there is no `restore` command and no restore
+  endpoint, and that has been wrong since #241: `backup-manager restore` and
+  `POST /api/v1/operations` with `action: restore_placement` both exist, and both mean
+  something narrower than the sentence above. They ask a storage provider to make an
+  ARCHIVED copy readable again, which is a precondition for the manual procedure rather
+  than a replacement for it. The HTTP one is behind the destructive gate and therefore
+  unreachable today, so the CLI is the only surface that can run it. See
+  [Archive classes, and asking for a copy back](#archive-classes-and-asking-for-a-copy-back).
 - A release build does select a provider frontend, since #167 and #169. `serve-ui`
   resolves its bundle at run time (`--ui-dir`, then `--ui-root/<profile>`, then the
   compiled-in one) and fails to start rather than falling back to the generic bridge, and
@@ -268,6 +308,17 @@ pointing at when it was removed, which the removal records for exactly this; for
 configuration went away some other way, what is left to compare is where its artifacts
 actually landed, and that is what gets checked.
 
+**What a removal leaves behind has its own command (issue #418).** A removed set's backups
+stay on storage and stay in the journal, which is exactly right for undoing a removal and
+exactly wrong for pretending nothing happened: those artifacts are now governed by no
+retention policy at all, because the configuration that carried one no longer names them.
+`backup-manager unconfigured` lists the sets the journal remembers and the configuration no
+longer names, what they still hold on storage, and the policy governing them, which is
+none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a
+removal stranded mid-transfer and ends the journal rows nothing will ever advance; without
+`--acknowledge` it prints what it would do. It never touches a retained backup, so it is
+not a way to delete anything you would want back.
+
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
 produce its first one; `core/service.FirstRun.CreateInitialConfig`'s own doc says plainly
@@ -330,48 +381,129 @@ operations `GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` exp
 same three the Web UI draws, all through one method in `core/service`. See [One backup set
 on its own retention policy](#one-backup-set-on-its-own-retention-policy).
 
-**What is not covered here: authentication and account management.** `/auth/enroll`,
-`/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
-undocumented. They are `apps/common/auth/local`'s session/cookie/CSRF/rate-limit subsystem,
-constructed fresh inside the running web server process (the single-use enrollment token
-itself lives in that process's memory, not on disk), so there is no config file or
-already-open state database a separate `backup-manager` invocation could act on the way
-every command above does. An operator who never intends to use the Web UI never needs any of
-this, since the CLI talks to `config.yaml` and the state database directly and never makes
-an HTTP request at all. An operator who does want the Web UI available later still has no
-way to provision that first administrator account without opening a browser at least once
-today; that is real, and it is #322 rather than something built here.
+**What is not covered by `backup-manager`: authentication and account management.**
+`/auth/enroll`, `/auth/login` and `/auth/password` are genuinely out of scope for the engine
+CLI, not merely undocumented. They are `apps/common/auth/local`'s
+session/cookie/CSRF/rate-limit subsystem, constructed fresh inside the running web server
+process (the single-use enrollment token itself lives in that process's memory, not on
+disk), so there is no config file or already-open state database a separate
+`backup-manager` invocation could act on the way every command above does. An operator who
+never intends to use the Web UI never needs any of this, since the CLI talks to
+`config.yaml` and the state database directly and never makes an HTTP request at all.
+
+The one piece of it that used to need a browser no longer does. This paragraph said, for a
+long time, that provisioning the first administrator meant opening a browser at least once
+and that #322 was the gap. #322 landed, and it landed on the web binary rather than on this
+one, which is why it is easy to miss:
+
+```bash
+printf '%s' "$PASS" | backup-manager-web auth create-admin --username admin --password-stdin
+```
+
+It calls `local.CreateAdmin` and writes the record straight to the auth store, with no HTTP
+request and no bootstrap token; the password comes from stdin only, never from a flag,
+because a flag's value is in this process's argument list for anyone who can run `ps`. The
+server started afterwards sees the account already exists and neither prints nor accepts an
+enrollment token. A store the running server holds open is refused with `ErrStoreLocked`
+rather than raced.
 
 ### What has actually been exercised on real hardware
 
-Nothing. Not one of the acceptance procedures in [`docs/acceptance/`](docs/acceptance/) has
-been executed, because nobody working on this repository has a TrueNAS, Unraid,
-OpenMediaVault, Synology or Proxmox VE machine to execute them on. The procedures are
-written, reviewed and specific, and they are prose until somebody runs them.
+This section used to open with one word, "Nothing", and that word is now wrong, so read
+what replaced it carefully rather than assuming it generalises.
+
+**One machine, one release, one real cycle.** #263 installed v0.2.0 on a UGREEN NAS
+(`x86_64`, Linux 6.12.30+, Docker 29.4.3, Compose v5.1.3, over SSH as a non-root uid in
+`docker` with no passwordless sudo) with `scripts/install/install_docker_host.py`, and then
+exercised the product on it rather than stopping at "the command exited 0": the engine's own
+Docker health status read back from the daemon, the Web UI serving the first-run flow, both
+containers surviving a restart, uninstall and re-install behaving as documented, and a
+backup set running a full cycle whose artifacts came out `COMMITTED` with the set
+`HEALTHY`. Be precise about that last one: the source was a real SFTP endpoint standing on
+the NAS itself rather than a production server, because the NAS's own sshd ships no SFTP
+subsystem and so cannot be its own source. The cycle was real, the transport was real, and
+the machine it pulled from was a stand-in. Pointing this at the actual production hosts is
+#264, and it is blocked on a credential.
+Two refusals happened during that run and both were the product being right: the ancestry
+key-permission check refused a world-writable directory holding the SSH key and named the
+exact `chmod`, and the remote delete declined because the deletion-safety delay had not
+elapsed. [`docs/install.md`](docs/install.md) is the installer, and #263 carries the
+verbatim evidence.
+
+**Not one of the provider acceptance procedures in
+[`docs/acceptance/`](docs/acceptance/) has been executed**, because nobody working on this
+repository has a TrueNAS, Unraid, OpenMediaVault, Synology, Proxmox VE, CasaOS, ZimaOS,
+Portainer or Dockge machine to execute them on. The procedures are written, reviewed and
+specific, and they are prose until somebody runs them. A UGREEN NAS running a generic
+Docker install is not any of those platforms' packaging, so it certifies none of them, and
+the UGOS procedure it could in principle certify has no `.UPK` to install yet, which is
+#83.
 
 [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) is the generated
-record and it says the same thing from the other side: twenty cells across five providers
-report `PENDING_OPERATOR`, which is that matrix's word for "the automated half held and the
-hardware run has not happened". In section 68's own words, every one of those providers is
-**build-supported and uncertified**. A green conformance matrix proves the packaging
-metadata is well-formed and mutually consistent, and it proves nothing whatsoever about how
-any of these platforms behaves.
+record and it says the same thing from the other side: thirty-six cells across nine
+providers report `PENDING_OPERATOR`, which is that matrix's word for "the automated half
+held and the hardware run has not happened". In section 68's own words, every one of those
+providers is **build-supported and uncertified**. A green conformance matrix proves the
+packaging metadata is well-formed and mutually consistent, and it proves nothing whatsoever
+about how any of these platforms behaves.
 
-The image itself has never been published either. `ghcr.io/spdrman/backup-manager` is the
-settled target and `distribution/packaging/canonical.json` records `published: false`, so
-that reference resolves to nothing today and every acceptance procedure opens with a step 0
-covering how to make it resolvable in the meantime.
+The image is published now, which is the other thing this section used to deny. EPIC F cut
+v0.1.0 and then v0.2.0 to `ghcr.io/spdrman/backup-manager`, and
+`container/release-manifest.json` carries a real `index_digest` and a real
+`registry_digest` per architecture rather than the nulls it used to.
+`distribution/packaging/canonical.json`'s `published` flag and those digests move together,
+and a test refuses either one without the other, because a flag with no digest is a
+half-truth. Every acceptance procedure still keeps its step 0 for a deployment that cannot
+reach ghcr.io, and every profile keeps the reference substitutable.
 
 ### There are no screenshots in this document
 
-There should be, and issue #112 asks for them per provider. I did not add any, and I would
-rather say so than ship something that looks like evidence and is not. `docs/assets/` holds
-the two logo files and nothing else. The only screenshots I could produce from this tree
-would be of the mock API in a dev server, which is exactly the kind of picture that makes a
-reader believe a claim this document has just spent a section retracting. Real screenshots
-need a running packaged deployment, and a running packaged deployment needs #196 and #166
-first. Provider logos are a separate question and a trademark one, so they are the project
-owner's call rather than mine.
+There should be, and issue #112 asks for them per provider. There still are none, and I
+would rather say so than ship something that looks like evidence and is not. `docs/assets/`
+holds the two logo files and nothing else. The only screenshots this tree produces on its
+own are of the mock API in a dev server, which is exactly the kind of picture that makes a
+reader believe a claim this document has just spent a section retracting.
+
+What used to block them no longer does: this paragraph named #196 and #166, both of which
+landed, and #263 has now had a real packaged deployment up on a real NAS. So the honest
+version is that nobody has gone back and captured any, per provider or otherwise, not that
+it cannot be done. Provider logos are a separate question and a trademark one, so they are
+the project owner's call rather than mine.
+
+### What is left, and what each of them is waiting on
+
+Three epics have closed: #1, the engine itself; #81, the multi-NAS support model; and #232,
+alternative storage mediums. Three are open, and each is open for a reason worth stating
+rather than leaving to be inferred from a quiet section.
+
+**EPIC C (UGOS platform runtime boundary) and EPIC D (UGOS UPK artifact lifecycle) both
+need real UGREEN hardware and neither has had it.** #92 is the UGOS authentication and
+trusted-proxy boundary gate, #93 is private state and backup-root separation, #83 is the
+UPK thin adapter over the canonical release, #91 is a minimal UPK proof on real hardware,
+#89 is resource and hardware certification on real devices, and #178 is signing, the release
+channel and the App Center submission. The UGOS column in the conformance matrix is sixteen
+`BLOCKED` cells for exactly that reason, and they are reported in full rather than left out
+of the totals. The support table above says the same thing in one line: UGOS Pro ships the
+frontend bridge and nothing else, no `.UPK` and no packaging.
+
+**#92 is not only EPIC C's problem.** It is the issue that owns opening the gate in front of
+destructive operations, so until it lands every deployment refuses every destructive HTTP
+operation, as [the API section](#the-api-and-the-web-ui-meet-in-the-middle) says. That is a
+product-wide consequence of an epic that looks provider-specific.
+
+**EPIC F (#265) has one issue left, and #264 is blocked on a credential rather than on
+code.** Everything else in it shipped: the release branch policy, the publish path, v0.1.0
+and then v0.2.0, the installer, and the proof on the NAS. What is left is pointing this
+manager at the two production VPS it exists to back up. They are reached over SFTP on a
+port that is deliberately in no tracked file, and the read-only account this work would use
+is not available to it yet, which is the whole of what is holding the issue. The path
+itself is proven without them, against a real sshd in the machine tier,
+and pointing the installer at a real source is configuration rather than a code change.
+What is missing is the last acceptance criterion: a real backup run from each production
+host, with anything the account cannot read reported rather than worked around.
+
+**The provider acceptance procedures are still prose**, and the screenshots are still
+absent, both as the two sections above say.
 
 ## Installing it
 
@@ -401,6 +533,34 @@ capabilities dropped and `no-new-privileges`. The image has no shell and no init
 **the host paths have to exist and be owned by that uid/gid before the first start**;
 nothing in the container will chown them for you.
 
+### Or let the installer do it
+
+`scripts/install/install_docker_host.py` (#262) is that same topology brought up on a
+machine you have SSH on, or refused with the exact prerequisite that stopped it:
+
+```bash
+python3 scripts/install/install_docker_host.py install
+```
+
+That is the whole command on a bare host. It installs under `~/rclone-manager`, generates
+an SSH keypair and an empty `known_hosts` under `<prefix>/secrets` if they are not there,
+and prints the public half with a note that it belongs in the `authorized_keys` of the host
+being backed up. It is one file and needs no checkout beside it, nothing else from this
+project on disk, and nothing outside the Python standard library, because an operator
+installing onto a NAS does not have a git clone there. A **defaulted** credential path that
+does not exist is created; an **explicitly named** one that does not exist is still a
+refusal, because generating a different key under a path you typed would hand you one the
+far host has never seen while reporting success, and an existing key is never regenerated
+over whatever its age. Directories it creates are born `0700`, and ones that already exist
+only lose group and world write, because the engine refuses an SSH key whose whole ancestry
+is not tight, not just the key file.
+
+Six subcommands: `preflight` checks and creates nothing, `install` checks then installs,
+`status` reports, `uninstall` removes what the installer made, `network-doctor` diagnoses
+and optionally repairs Docker bridge networking, and `network-undo` removes exactly what a
+repair added. [`docs/install.md`](docs/install.md) is the whole of it, and this is the path
+#263 used on the UGREEN NAS.
+
 ### Which mount holds what, and why they are never the same directory
 
 Every platform mounts three separate places for three different jobs, and conflating any two
@@ -417,6 +577,14 @@ read-only, and it must **not** be inside the backup root: put it there and every
 that directory carries the key that can read and delete the source. The backup root on every
 platform below is a dedicated child directory rather than a share you already use, for the
 same reason.
+
+One sizing note for a deployment with a retention chain that puts two tiers on two
+different storage mediums. A hop from one medium to another stages through a `.moves`
+directory under the backup set's own `local_path`, so the backup mount needs room for the
+largest artifact that will ever hop, transiently, on top of whatever it retains
+permanently. A hop that will not fit is refused before anything is downloaded, and the copy
+it would have moved stays where it is. See
+[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e).
 
 `distribution/packaging/canonical.json` is the single source of truth for these paths, and
 this repository's own test suite fails the build if any platform's metadata disagrees with
@@ -442,12 +610,12 @@ it.
 
 <!-- END SUPPORT-MODEL -->
 
-The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`
-for the four container profiles it declares, and from `conformance.json`, which declares all
-seven targets with their tiers. The gate checks every row of this table against those two
-files rather than trusting the table, and it checks in both directions: a row here that
-neither file declares is a failure, and so is a target they declare that this table has
-dropped.
+The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`,
+which declares nine platforms and the seven runtime profiles behind them, and from
+`conformance.json`, which declares all eleven targets with their tiers. The gate checks
+every row of this table against those two files rather than trusting the table, and it
+checks in both directions: a row here that neither file declares is a failure, and so is a
+target they declare that this table has dropped.
 
 Two things about the Proxmox row are worth saying out loud. Its paths are inside the guest,
 not on the PVE host: the supported model is a dedicated container-host guest with one host
@@ -471,16 +639,23 @@ The Synology line reads like a contradiction and is not one. #85 shipped an `.sp
 adds a Container Manager Compose path alongside the shipped package rather than replacing
 it. Retiring shipped packaging would be a product decision and nobody has made one.
 
-Portainer, CasaOS, ZimaOS and Dockge appear in EPIC B's Phase 6 support model as targets
-that get a documented deployment profile. None of them exists in this tree yet, so this
-document does not list them as installable.
+Portainer, CasaOS, ZimaOS and Dockge were the four EPIC B's Phase 6 support model named as
+targets that get a documented deployment profile, and this paragraph used to say none of
+them was in the tree. All four are, they are rows in the table above, and the gate would
+fail if they were not: `apps/portainer/` is an App Template plus its Compose stack,
+`apps/casaos/` and `apps/zimaos/` are the same `x-casaos` Compose file for two stores, and
+`apps/dockge/` deliberately ships no packaging because Dockge imports
+`container/compose.yaml` itself. What none of them has is a hardware run, which is the
+[conformance matrix's](#what-has-actually-been-exercised-on-real-hardware) business, not
+this section's.
 
 ## Who owns what
 
-rclone owns the data plane: SFTP and local backends, listing, copying, hashing, deletion
-primitives, transfer accounting. This project owns the control plane: backup-set config,
-artifact discovery, the durable lifecycle journal, copy/verify/commit/delete sequencing,
-GFS retention, validation and quarantine, and reconciliation after a crash.
+rclone owns the data plane: the SFTP, local and s3 backends, listing, copying, hashing,
+deletion primitives, transfer accounting. This project owns the control plane: backup-set
+config, artifact discovery, the durable lifecycle journal, copy/verify/commit/delete
+sequencing, GFS retention, where a copy lives and what proves it is good, validation and
+quarantine, and reconciliation after a crash.
 
 ```text
 rclone:
@@ -540,16 +715,26 @@ decision away from the lifecycle manager.
 
 ### The pinned version, and the backend count that surprised us
 
-`core/go.mod` pins `github.com/rclone/rclone v1.75.0`. `core/internal/transport/rclone/adapter.go`
-blank-imports exactly two backend packages, `backend/local` and `backend/sftp`. But the
-adapter also needs `operations.Copy` from `fs/operations`, and that package itself imports
-`backend/crypt` for an unrelated feature (decrypting filenames for `--show-encrypted`).
-Backends self-register via `init()`, so importing `fs/operations` registers `crypt` too,
-silently, as a side effect nothing in a casual read of the blank imports would reveal. So
-importing two backends registers three. This is measured, traced to the exact import chain,
-and pinned by `TestRegisteredBackendsExactSet` in
-`core/internal/transport/rclone/backends_test.go`, so the registered set can't widen again
-without the build failing.
+`core/go.mod` pins `github.com/rclone/rclone v1.75.0`.
+`core/internal/transport/rclone/adapter.go` blank-imports exactly three backend packages,
+`backend/local`, `backend/s3` and `backend/sftp`. But the adapter also needs
+`operations.Copy` from `fs/operations`, and that package itself imports `backend/crypt` for
+an unrelated feature (decrypting filenames for `--show-encrypted`). Backends self-register
+via `init()`, so importing `fs/operations` registers `crypt` too, silently, as a side effect
+nothing in a casual read of the blank imports would reveal. So importing three backends
+registers four. This is measured, traced to the exact import chain, and pinned by
+`TestRegisteredBackendsExactSet` in `core/internal/transport/rclone/backends_test.go`, so
+the registered set can't widen again without the build failing.
+
+`backend/s3` is EPIC E's addition, and it is the whole S3 implementation: no AWS SDK is
+imported by any file in this repository, in Go or in TypeScript. It was recorded as an
+explicit architecture decision in `backends.go` rather than left as an import line somebody
+has to notice, with the cost measured the way `crypt`'s was, on a linux/arm64,
+`CGO_ENABLED=0` build with the flags `container/Dockerfile` actually ships: 19.25 MiB
+without it, 28.25 MiB with, a delta of 9.00 MiB or +46.8%. The flags are part of the
+measurement rather than a footnote, because the same two builds unstripped give a smaller
+percentage against a much larger binary, which is a number about something this product
+does not ship.
 
 If you need to confirm what's actually registered in a built binary rather than trust this
 paragraph: `go mod why github.com/rclone/rclone/backend/crypt` shows the chain, and
@@ -573,6 +758,14 @@ can't overwrite a completed one, and verifying the server's host key out-of-band
 trusting whatever answers first. `core/internal/transport/rclone/ssh.go` refuses to build a
 connection at all without both a real key file and a real `known_hosts` file; there's no
 password fallback and no way to disable host-key checking.
+
+It checks the key's whole ancestry, not just the key file's own mode, and that surprises
+people the first time (it is what refused the first two cycles of the run on the NAS in
+#263). Any group- or world-writable directory anywhere above the key means somebody holding
+that bit can replace the key whatever the key file itself says, so the connection is
+refused and the message names the exact `chmod go-w` to run. The installer creates its own
+directories `0700` and tightens ones that already exist for this reason, but a directory
+you made yourself is yours to fix.
 
 That hardening has a direct consequence for verification and delete safety, and it's
 important enough to state here instead of only in the setup doc: **rclone's SFTP hashing
@@ -618,13 +811,17 @@ described.
 
 ## The lifecycle
 
-An artifact moves through twelve states, defined in `core/internal/lifecycle/state.go` and
-`machine.go`, which are the single source of truth; the table below is a summary, not a
+An artifact moves through thirteen states, defined in `core/internal/lifecycle/state.go`
+and `machine.go`, which are the single source of truth; the table below is a summary, not a
 substitute.
 
 ```text
 DISCOVERED -> TRANSFERRING -> TRANSFERRED -> VERIFYING -> VERIFIED
     -> COMMITTING -> COMMITTED -> REMOTE_DELETE_PENDING -> COMPLETE
+
+REMOTE_RETAINED  the second happy-path terminal, reached from COMMITTED or
+                 REMOTE_DELETE_PENDING exactly where COMPLETE normally would
+                 be, for a backup set declared read-only (issue #282)
 
 FAILED         reachable from any state before COMMITTED; exits to
                DISCOVERED (retry) or QUARANTINED (retry budget spent)
@@ -635,19 +832,29 @@ QUARANTINED    reachable from VERIFYING, COMMITTED, REMOTE_DELETE_PENDING;
 QUARANTINED_LOST   reachable only from COMPLETE; TERMINAL, no exit at all
 ```
 
-`COMPLETE` and `QUARANTINED_LOST` are the two terminal states, and they mean opposite
-things. `COMPLETE` is the only state that confirms the remote source is already gone, which
+`REMOTE_RETAINED` is the thirteenth and it is a policy outcome, not a failure.
+`config.BackupSet.ReadOnly` means FR-15's delete step is never offered this artifact and
+`Transport.DeleteRemote` is never called for it, so the remote object is retained by policy
+rather than pending deletion. It exists so a read-only set's artifacts stop being re-offered
+to the delete gate every cycle and logging a refusal each time, which was the complaint
+#282 made about a configuration that could only delay consent to delete and never withhold
+it. Unlike `COMPLETE` it says nothing about whether the remote object still exists: this
+manager never checked, on purpose, because it was never going to touch it either way.
+
+`COMPLETE` and `QUARANTINED_LOST` are the two ends of the pipeline that mean opposite
+things (`REMOTE_RETAINED` is the third ending and the one that means nothing went wrong at
+all). `COMPLETE` is the only state that confirms the remote source is already gone, which
 is exactly why it's the only predecessor of `QUARANTINED_LOST`: if the durably committed
 local copy is later found corrupted and the remote copy is already deleted, there is no
 copy of that artifact left anywhere, and no automatic path recovers it. `QUARANTINED`, by
 contrast, means the content looked bad while a remote copy still exists or hasn't been
 confirmed gone, so retrying from `DISCOVERED` has a real chance of fixing it.
 
-This twelfth state isn't in the original FR-10 list; it was added because the eleven-state
-version had no way to represent "the source is confirmed gone and the only copy we have is
-bad," and sending that case back to `DISCOVERED` the way `QUARANTINED` does would just
-livelock against a source that no longer exists. I re-checked the transition table for this
-rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, pinned by
+`QUARANTINED_LOST` isn't in the original FR-10 list either; it was added because the
+eleven-state version had no way to represent "the source is confirmed gone and the only copy
+we have is bad," and sending that case back to `DISCOVERED` the way `QUARANTINED` does would
+just livelock against a source that no longer exists. I re-checked the transition table for
+this rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, pinned by
 `TestOnlyCompletePrecedesQuarantinedLost`, and it still has no edge back into the pipeline
 and no automatic exit of any kind. Issue #220 gave it exactly one operator-triggered exit,
 back to the `COMPLETE` it came from, for the case where the local copy turns out to be intact
@@ -765,6 +972,23 @@ to retry. `backup-manager reconcile` runs it for every configured backup set, an
 `daemon` run it for each backup set before touching that set (`core/internal/app/cycle.go`
 is the ordering).
 
+There is a row EPIC E added, and it is the one that would otherwise be catastrophic: no
+local copy at all, because the artifact's durable copy is on a storage medium, which is
+what a completed move leaves behind. That is not `invalid` and it is not a verdict about
+the artifact at all. Reconciliation has no way to read a medium and no mandate to, since
+FR-31 makes anything beyond an existence check operator-initiated, so it leaves a moved
+artifact alone and `core/internal/revalidate` is what runs the existence check. A caller
+that collapsed this into "the local file is missing" would record a healthy backup as an
+irrecoverable loss.
+
+An interrupted MOVE is reconciled by the move engine rather than here, and it has no
+separate resume path: `RunCycle` reconciles every non-terminal move and plans new ones, and
+both end up in the same advance loop. That is deliberate. A crash suite that drives an
+artifact through a state machine of its own proves things about that machine, and the
+product's own driver can be missing a case for a state with nobody noticing; here there is
+one driver, its switch is checked against the phase table's own list of non-terminal
+phases, and the crash harness cannot spell a phase at all.
+
 ### Quarantine
 
 Quarantine is a state, not a place. There is no quarantine directory and no file gets
@@ -780,8 +1004,8 @@ how an operator acts on one by hand, in one of three ways (issue #277):
   storage medium rather than a local file, that is where it looks (issue #435), at the
   strongest verification class that costs nothing. **This is not `validate` under
   a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
-  (`COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE`) and refuses a `QUARANTINED` or
-  `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
+  (`COMMITTED`, `REMOTE_DELETE_PENDING`, `COMPLETE` or `REMOTE_RETAINED`) and refuses a
+  `QUARANTINED` or `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
   only ever accepts one of those two.
 - `quarantine retry <source/backup-set/artifact>` puts a `QUARANTINED` artifact back into
   `DISCOVERED` so the ordinary pipeline attempts it again from a fresh fetch.
@@ -902,9 +1126,10 @@ itself: a submitted policy goes through the identical `config.Validate` a hand-e
 `config.yaml` goes through at boot, so half a chain is refused with the same sentence in
 the browser, at the terminal and in the file.
 
-One rollback note: unknown keys are a parse error, so a config file carrying a set-level
-`retention:` block cannot be read by a build from before this feature. Writing one is a
-one-way door for a deployment that might need to go back.
+One rollback note, and it applies to `storage_mediums` and a tier's `medium` key just as
+much: unknown keys are a parse error, so a config file carrying a set-level `retention:`
+block cannot be read by a build from before that feature. Writing one is a one-way door for
+a deployment that might need to go back.
 
 ### Which timestamp puts a backup in a bucket
 
@@ -941,6 +1166,19 @@ the chain if you want it kept.
 from the previous version of this document, which said no code path deleted a local file:
 one does now, and it is the second file in this repository whose doc comment calls itself
 the most dangerous line in the project.
+
+Since EPIC E it also has to answer "where is this artifact's durable copy" before it
+deletes anything, and there are three answers rather than two. Exactly one `ACTIVE`
+placement is `CONFIRMED` and names the medium. No placement row at all is `UNRECORDED`,
+which is every artifact written before the placement table existed, and it takes nothing
+away from FR-20, whose proof was never a placement row: it is a canonicalized path, proven
+beneath the configured root, re-derived at the moment of the delete. More than one `ACTIVE`
+placement is `CONTESTED`, which is a move's copy phase in flight, and it is a refusal:
+there are two answers to where the artifact is, and removing either copy is the race the
+move journal exists to make unrepresentable. Collapsing `UNRECORDED` and `CONTESTED` into
+one "we do not know" is a bug this shipped once. `core/internal/placement`'s own prune is
+the same rule applied where the copy is an object rather than a file, written the same way
+and for the same reason.
 
 ### A restore point written as several files
 
@@ -1009,6 +1247,276 @@ the week start and each tier so you can compare policies without editing config;
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 
+Since #430 a preview carries the moves it would make and the medium each deletion happens
+on, both surfaces alike. The medium is spelled by ABSENCE when it is local, which is what
+keeps a deployment that declares no medium seeing exactly the response it saw before the
+field existed, and it is the question FR-30 wants answered before an apply: "delete 40
+backups" means a different thing when half of them are objects in a bucket somebody else is
+billed for. A move never adds a backup to the keep set and never removes one, which is why
+moves travel beside the verdicts rather than inside them, and there is no field for what a
+provider would charge or how long it would take, because this product holds neither number.
+
+## Where a durable copy actually lives (EPIC E)
+
+Everything above this section assumes an artifact's durable copy is a file at the backup
+set's `local_path`, because until EPIC E it always was. A **storage medium** is a named
+destination it can live on instead, chosen per retention tier: daily on local disk so a
+recent restore is a filesystem read, monthly on S3, annual on a colder readable class.
+`s3` is the only type, which means any endpoint speaking the S3 API, MinIO and Wasabi
+included, because it is the same rclone backend and no AWS SDK is imported anywhere in this
+repository.
+
+[`docs/storage-mediums.md`](docs/storage-mediums.md) is the operator's half: every field,
+what the disclosure commits you to, and what each verification class proves and costs.
+[`docs/EPIC-E-alternative-storage.md`](docs/EPIC-E-alternative-storage.md) is the
+specification, and
+[`docs/conformance/epic-e-matrix.md`](docs/conformance/epic-e-matrix.md) is the account of
+which of its gate lines are checked by something that has been watched to fail. This
+section is the part a reader of this document needs before any of those.
+
+```yaml
+storage_mediums:
+  - id: offsite_s3
+    type: s3
+    region: us-east-1
+    bucket: nas-backups
+    prefix: rclone-manager
+    storage_class: STANDARD
+    upload_verification: readback
+    credentials:
+      file: /var/lib/backup-manager/s3/offsite_s3.creds
+
+retention:
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7                    # no medium key: local disk, exactly as today
+    - name: monthly
+      granularity: month
+      keep: 12
+      medium: offsite_s3
+```
+
+A credential is a `file`, an `env` or a `command`, and there is deliberately no field for a
+literal key. `local` is reserved for the implicit medium every deployment already has, so a
+configured medium can never claim it. Which medium an artifact calls home is the **first
+tier in chain order that currently selects it**, which gives chain order a second meaning:
+order still never changes WHICH artifacts are kept, because `KEEP` is the union of every
+tier's selections, but it now decides WHERE a multiply-selected one lives.
+
+### The verification ladder, and why it is not a boolean
+
+Off local disk, "is this copy good" stops being one question with one answer. Reading a
+hundred gigabytes back out of an object store to re-hash it is a real bill; asking the
+endpoint what it thinks the checksum is costs nothing and proves less; asking whether the
+object exists at all costs less still and proves less still. So `core/internal/placement`
+has three rungs, ordered:
+
+| Class | What it does | What it proves |
+|---|---|---|
+| `content` | reads the bytes back and hashes them | they are the bytes the journal recorded at ingestion |
+| `attested` | one metadata call for the provider's own full-object checksum | the endpoint's word, which an endpoint that lies can make worthless |
+| `existence` | one HEAD | the object is there at the recorded size, and nothing about its content |
+
+The config key is `upload_verification` and it names two of those three, under names of its
+own: `readback` (the default) achieves `content`, and `attested` achieves `attested`.
+`readback` is the default because the alternative asks the destination to grade its own
+work, and a hostile or broken endpoint can echo back the checksum it was handed at upload
+without having stored a byte, with a deleted local copy as the reward for believing it.
+EPIC E's own security review rejected an earlier draft over exactly that. `attested` is a
+per-medium opt-in that names its trust assumption out loud.
+
+**Every surface reports the class that was actually ACHIEVED, never the one that was
+configured or hoped for.** That is the whole reason the package exists: an existence check
+reported as "verified" is worse than no check at all, because it turns "nobody has looked
+at this backup in a year" into a green tick. `Verify` returns the class it ran and has no
+path that returns a class it did not run, and where an endpoint cannot produce what a class
+needs the answer is an explicit capability refusal rather than a weaker class wearing a
+stronger name, which is FR-13's rule restated by FR-31. An unverified placement carries no
+class at all, and the empty string is deliberately not one of the three: a caller reaching
+for a name for "unverified" is usually about to record it as a weak pass. `existence` is
+never sufficient to delete a source copy.
+
+One measured consequence, because it is the kind of thing that should not be discovered
+during a move: against rclone v1.75.0 an `s3` medium can never produce an `attested`
+answer, since the only digest that backend serves is not a whole-object content hash. A
+medium declared `upload_verification: attested` therefore cannot serve one move on this
+build, and `medium preflight` asks and reports the refusal rather than reporting the step
+green.
+
+### Placements, and what their absence means
+
+A **placement** is one durable copy of one backup and where it actually is
+(`core/migrations/0007_placements.sql`). A placement exists because the journal recorded a
+finished copy, so the absence of a placement is the absence of a copy: a transfer still in
+flight has none, and neither does a copy this deployment has released. That is what lets a
+surface tell "there is no copy here" apart from "there is a copy here nobody can confirm",
+which is what the access and verification-class fields are for.
+
+`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
+with its location, status, access, storage class, the class it was verified as and when,
+the class it could be checked at right now, and whether reading it back is billed. It
+prints nothing at all when the artifact has one ordinary local copy and nothing else, which
+is every artifact in every deployment that has not configured a medium. Over HTTP the same
+facts are on the artifact surface rather than on a route of their own.
+
+### Moving a copy is three phases and a journal
+
+`core/internal/placement/engine.go` executes FR-30's journaled three-phase moves, and the
+phase table in `phases.go` is written the way `core/internal/lifecycle/machine.go` is
+written, for the same reason: a crash can land the process anywhere, so which changes are
+legal has to be a table a test can walk rather than a rule spread across whichever
+functions happen to make each change.
+
+```text
+PLANNED -> COPYING -> COPIED -> VERIFYING -> VERIFIED -> SOURCE_DELETE_PENDING -> DONE
+   \          \         \          \                            |
+    \          \         \          \                           v
+     ---------- ABANDONED -----------                        COPYING
+```
+
+The whole safety argument is the order: the source copy is deleted only after `VERIFIED` is
+durably recorded, and the wrong order is not a mistake somebody can make in a function
+body, it is an edge that does not exist. `VERIFIED` is the disposability boundary and that
+is why it has no `ABANDONED` edge. `ABANDONED` means "the destination copy was disposable
+and has been disposed of, and the source was never touched", which is true at `PLANNED`,
+`COPYING`, `COPIED` and `VERIFYING` and stops being true the instant the destination gets
+its placements row. The edge back from `SOURCE_DELETE_PENDING` to `COPYING` is FR-30's
+restart semantics and not a tidy-up: a destination that has just failed a verification it
+previously passed does not hold the artifact, so the source goes back to `ACTIVE`, the
+destination is thrown away and the copy runs again. The engine takes that edge only after
+restoring the source, so there is no instant at which the journal calls both copies
+disposable. The artifact itself stays `COMPLETE` throughout; move phases never appear on an
+artifact row.
+
+The source delete at the end is guarded the way `remotedelete.go` guards the remote one:
+every fact re-derived from the artifact's own journal record and the backup set's own
+configured root at the moment of the delete, never trusted from what the caller already
+checked, even though `deleteSource` has already re-verified the destination and the phase
+table has already made arriving here from anywhere but `SOURCE_DELETE_PENDING` impossible.
+The redundancy is the design, because the cost of being wrong once is a backup that no
+longer exists.
+
+**A chain with two medium tiers needs a hop from one medium to another, and that one goes
+through local disk.** The engine reads the source down to a `.moves` directory under the
+backup set's own `local_path`, proves what arrived hashes to what the journal recorded at
+ingestion, uploads that, and removes it. So such a chain needs room on the NAS for the
+largest artifact that will ever hop, transiently, even though nothing is stored there
+permanently, and a hop that will not fit is refused before anything is downloaded, with the
+copy it would have moved left exactly where it is. The source placement stays `ACTIVE` and
+content-verified for the whole copy phase, so the staging file is never itself a placement.
+
+Every reason a move did not happen is visible without reading logs: a cycle in which
+artifacts were due to move and none arrived says so on the last-run panel, in the operation
+record the activity feed reads, in the FR-23 event stream under `op=move`, and in
+`backup-manager run`'s exit status, which becomes 1 with the reason on stderr.
+
+### Archive classes, and asking for a copy back
+
+`GLACIER` and `DEEP_ARCHIVE` are the storage classes where a copy is durable, intact, and
+completely out of reach for the next several hours. `core/internal/archive` owns the closed
+vocabulary for what can be done with a copy right now, four words and no more:
+`immediate`, `requires_restore`, `restoring`, `unreachable`. It is the only definition of
+them in this repository, held there by a test that fails on a second declaration of any of
+the four strings anywhere under `core/internal`, and every surface uses the same four so a
+person at a terminal and a person in a browser read the same truth about the same artifact.
+There is deliberately no fifth word for "unknown": a surface that cannot work out which
+applies has a bug or a drifted class table, and printing a fifth word would turn that bug
+into something operators learn to ignore. The code returns an error there instead, and the
+caller says something about its own failure rather than dressing it up as a fact about the
+backup.
+
+**A retention tier whose medium names an archive class is refused when the config loads,
+and the refusal names the tier, the medium, the class and what to write instead.** The
+manager will not delete a copy against a destination it could not read back, an archived
+object cannot be read back, and there is no `upload_verification` mode that says existence
+is enough. Refusing the pairing where an operator writes it beats accepting it and then
+refusing it silently once per cycle for ever. The refusal is about the PAIRING and not the
+medium: declaring an archive-class medium that no tier delivers to is legal, and it is what
+you want if you already hold objects on `DEEP_ARCHIVE`, because the manager can see them
+and restore them and will never write there.
+
+```bash
+backup-manager restore production/postgres/backup.dump --medium offsite_s3 --days 7 --acknowledge
+```
+
+`--acknowledge` is required rather than a `--force` to skip, which is the opposite way
+round from a force flag: the value that costs nothing is the default, so a restore is never
+something a caller reaches by omission. It is billed and it takes hours. `--days` defaults
+to 7 and is bounded to 1 to 30, because zero is not a shorter restore, it is one that is
+billed and then immediately unavailable, and a fat-fingered large number is a month of
+Over HTTP it is `POST /api/v1/operations` with `action: restore_placement`, which is
+written and, today, unreachable: that route is behind the destructive gate, and the gate
+denies unconditionally until #92. So the CLI is the only surface that can actually ask for
+a restore right now. There is no percentage field, no completion-time field and no cost
+field on either surface: S3 reports a restore as running or finished and nothing else, and
+this product holds no price list, so all three would be invented.
+
+A bucket LIFECYCLE RULE can transition an object to an archive class days after it was
+written, whatever class the medium declares and whatever the endpoint reported at the
+moment of the write. Nothing observable at write time tells such a bucket from one without,
+so a medium that passed its preflight can still hold objects that need a restore later.
+That is caught at the moment a read is attempted rather than assumed away.
+
+### Proving a medium before a real backup depends on it
+
+A backup set has had `POST /backup-sets/test-connection` since it was written. A storage
+medium had no equivalent, so the first thing in this product ever to touch a bucket was a
+move, in the middle of a cycle, after an artifact had already been selected to leave local
+disk: a wrong region, a bucket that is not there, a credentials file the daemon cannot
+read, a policy that denies `PutObject`, every one of them discovered by the operation that
+needed it to work.
+
+`backup-manager medium preflight <medium-id>` (and the button beside the medium on the
+settings form, and `POST /api/v1/storage-mediums/{id}/preflight`) is
+`core/internal/mediumcheck`, and it does what a move needs rather than what feels like
+enough: credentials and reach answered separately, because obtaining a credential is a
+question for the host and reaching a bucket with it is a question for the provider, then
+deliverable, write, read back byte for byte, the storage class the endpoint really reports
+against the one the configuration claims, the declared verification class asked live, and
+the probe object confirmed deleted. An archive class is refused at `deliverable` with
+nothing written at all, because an object there is billed for a minimum duration measured
+in months and that is not a thing to discover empirically.
+
+No report it produces ever carries key material, and that is structural rather than
+careful: every sentence in a report is one of the package's own strings, composed only out
+of facts this manager already publishes about a medium, and there is no field an underlying
+error's text could travel in. The classified cause goes to the log instead, because it
+names a path on this host or an environment variable, which is a fact an API caller has no
+use for.
+
+Two things it cannot prove, said out loud rather than left to a failed restore. The probe
+lives at its own key under a reserved segment of the medium's prefix, so a bucket policy
+scoped to the whole prefix covers both the probe and a real artifact and this check means
+what it looks like, while a policy scoped per backup set covers one and not the other and
+the check cannot tell. And a lifecycle rule that archives objects later is invisible at
+write time, as above.
+
+### The promise to a deployment that wants none of this
+
+FR-35: a deployment that declares no storage medium must be byte for byte the product it
+was before EPIC E. That is not a sentence anybody has to trust. `core/tests/compat` is a
+captured corpus of the medium-free surfaces (the config decisions, the journal schema an
+upgrade inherits, what the CLI prints, what the `/api/v1` contract promises), compared line
+for line on every gate run, and `scripts/compat/selftest.sh` plants a real violation per
+cell in a copy of the tree and requires the gate to fail AND to name the cell whose promise
+the violation broke. Naming the cell rather than merely failing is what stops a mutation
+that broke the build for an unrelated reason from reading as a pass. The one assertion a
+regeneration of that corpus cannot silence compares two captures from the same run rather
+than a capture against a file.
+
+Two of its cells are compared additively rather than exactly, and it is worth knowing which
+and why: the migrated schema may gain tables and migrations, and the CLI usage block may
+gain lines, because both grow in a direction that is routine and harmless and an exact
+comparison there would have people regenerating the corpus without reading it. Neither may
+change or lose a line it already has, and the violation that family exists to catch, an
+additive column rendered where there is no non-local placement, lands in the artifact
+detail, which is compared exactly.
+
+The additive rule falls out of the same promise: the `copy:` block only renders when there
+is something additive to say, which is why an artifact with one ordinary local copy prints
+exactly what it always printed.
+
 ## Status and health
 
 `core/internal/health` computes two structurally separate things and enforces, by test, that
@@ -1062,21 +1570,47 @@ sqlite3 /path/to/state.db "
 "
 ```
 
-Only three states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_PENDING`,
-`COMPLETE`**. That's not a convention, it's the exact set `core/internal/health` calls
-`knownGood`. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`, `QUARANTINED`,
-`QUARANTINED_LOST`, or any `.partial` file you find sitting on disk regardless of what the
-journal says, is not a restore point. Take the newest row in one of the three good states;
+Only four states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_PENDING`,
+`COMPLETE`, `REMOTE_RETAINED`**. That's not a convention, it's the exact set
+`core/internal/health` calls `knownGood`. This document said three for a long time, and it
+was wrong from #282 onward: `REMOTE_RETAINED` is a durable local restore point exactly like
+`COMPLETE`, just one whose remote copy this manager will never delete rather than one it
+already has, and a read-only backup set working exactly as declared reaches it and never
+reaches `COMPLETE` at all. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`,
+`QUARANTINED`, `QUARANTINED_LOST`, or any `.partial` file you find sitting on disk
+regardless of what the journal says, is not a restore point. Take the newest row in one of
+the four good states;
 its `local_path` is the file, already fsynced and atomically committed (see
-[Durable commit](#durable-commit)). Copy it wherever you're restoring to. There is no
-`restore` command to do that for you and there is not meant to be: restore execution is out
-of scope, so the last step is yours.
+[Durable commit](#durable-commit)). Copy it wherever you're restoring to. Nothing here
+copies it back for you and nothing is meant to: restore execution is out of scope, so the
+last step is yours. `backup-manager restore` is a different thing despite the name, and the
+next paragraph is when you need it.
+
+**If the copy is not on local disk, find out where it is before planning anything.**
+`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
+(nothing at all when the only copy is an ordinary local file, so silence here is an
+answer). Read `access` first: `immediate` means read it now, `requires_restore` means the
+copy is on an archive class and is durable, intact and hours away, `restoring` means
+somebody already asked, and `unreachable` means the medium did not answer, which is a
+different problem from the copy being gone. For `requires_restore`, `backup-manager restore
+<source/backup-set/artifact> --medium M --days N --acknowledge` asks the provider to make it
+readable again; it is billed, it takes hours, and there is no progress number because S3
+does not serve one. See
+[Archive classes, and asking for a copy back](#archive-classes-and-asking-for-a-copy-back).
 
 If the newest row for that backup set is `QUARANTINED_LOST`: that specific backup is gone
 for good. The remote copy was already deleted before the local corruption was found, and no
 automatic path recovers it (see [The lifecycle](#the-lifecycle)). Look at the next-newest
 row in a known-good state and treat the loss as real when deciding what to tell whoever
 needs the data, not as something to retry.
+
+If the newest row is `FAILED`: an attempt did not finish, which is a different finding from
+quarantine. Quarantine is a positive statement about the content; `FAILED` is a statement
+about the mechanics of an attempt, and health treats a `FAILED` artifact with no retry
+scheduled as `FAILING`. `backup-manager retry <source/backup-set/artifact> [--note T]` puts
+it back into the pipeline. Nothing does that automatically, deliberately: a blind
+re-transfer of gigabytes for a cause nothing has classified is a cost this manager will not
+take on its own, so somebody has to look first and then say so.
 
 If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this can self-heal.
 `backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
@@ -1102,11 +1636,13 @@ committed artifacts, and dropping `--dry-run` does it.
 
 ## Toolchain
 
-Go 1.27, Node for the frontend workspaces, and Docker for the disposable SFTP server the
-integration tests use.
+Go 1.27, Node for the frontend workspaces, and Docker for the containers the machine tier
+puts a test on: a real sshd standing in for the server being backed up, and a real S3 API
+standing in for a storage medium.
 
-This repository is four Go modules stitched together by `go.work`: `core/`, `apps/common/`,
-`apps/generic/` and `apps/synology/`. The engine's own commands run from `core/`:
+This repository is five Go modules stitched together by `go.work`: `core/`, `apps/common/`,
+`apps/generic/`, `apps/synology/` and `distribution/`. The engine's own commands run from
+`core/`:
 
 ```bash
 cd core
@@ -1120,16 +1656,43 @@ because this engine's core loop is a scheduler handing a config snapshot to a cy
 service methods swap that snapshot underneath it. Drop the flag for a quick single-package
 loop if you like; do not form an opinion about a change from a run without it.
 
+The unit packages need no Docker at all, which is worth knowing before reaching for the
+daemon:
+
+```bash
+cd core
+go test -race ./internal/... ./service/... ./cmd/...   # 52s, no daemon
+```
+
+That is #448 and #450's doing. `core/internal/transport/rclone` used to build its own sshd
+image and take 128 to 180s; it has no container in it at all now and takes 23s. Six
+container-backed tests moved out of unit packages into `core/tests/machinegate`, and two
+integration tests that exec'd `docker` themselves went through the harness instead. The
+rule is [Which tier a test belongs on](#which-tier-a-test-belongs-on) below, and a guard
+holds the tree to it rather than a convention.
+
 ### The local gate
 
 `scripts/ci-local.sh` is the gate for this repository. `.github/workflows/ci.yml`,
 `rclone-upgrade-gate.yml` and `nightly-e2e.yml` are all `workflow_dispatch`-only, so
 **nothing runs on push or on a pull request**, and `.husky/pre-commit` runs this script on
 every commit instead. It mirrors those workflows job for job, which makes it slow: the whole
-`core/` suite including the Docker-backed crash matrix and the SFTP integration tests, both
-cross-compiles, every Go module's build/vet/test/lint, the frontend
-lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, and the
-repository-structure dependency proofs.
+`core/` suite including the crash matrix, the SFTP and MinIO integration suites and the
+machine tier, both cross-compiles, every Go module's build/vet/test/lint, the frontend
+lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, EPIC E's
+FR-35 compatibility corpus, and the repository-structure dependency proofs. About
+twenty-five minutes.
+
+It opens with the cheap checks that can invalidate everything after them, because a control
+that turns out to have been planting nothing is worth knowing about in second one rather
+than in minute twenty-five. `scripts/selftest/check-anchors.sh` is the one worth naming:
+the compat, conformance, race and format self-tests each plant deliberate violations to
+prove their cells can go red, every plant is anchored to a verbatim copy of product source
+living in a script the author of the product change never opens, and a refactor drifts the
+anchor so the mutation quietly stops planting anything. That was caught before #458 too,
+loudly, but only at the end of a full run and one stale anchor at a time. Now every anchor
+in all four is dry-run against the real tree, building nothing, in about half a second, and
+one run names the whole list.
 
 Install the JS workspaces before the first full run in a new clone or `git worktree`:
 
@@ -1144,9 +1707,9 @@ for each one that is not. It used to skip those checks and still print
 `==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
 
 The Docker daemon is the same rule with a bigger blast radius. With it stopped, the crash
-matrix, the SFTP integration suite, `distribution/tests/adapterstacks` and the whole
-`apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and nothing
-would reach the ledger. A full run refuses to start without a reachable daemon.
+matrix, the SFTP and MinIO integration suites, `distribution/tests/adapterstacks` and the
+whole `apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and
+nothing would reach the ledger. A full run refuses to start without a reachable daemon.
 
 That refusal is about the start of the run, and the start of the run is not the run (#457).
 Docker Desktop's Resource Saver stops the hypervisor after five idle minutes, and this gate
@@ -1160,10 +1723,17 @@ immediately before it runs, which costs about 100ms and turns "the VM died at mi
 into `==> ci-local: FAILED` naming the step that needed it. The preflight also warns, and
 only warns, when it can see that Resource Saver is on.
 
-Everything the gate starts gets `CI_LOCAL=1` in its environment, which is how the Docker
-fixtures in `core/tests` tell "this laptop has no Docker", an honest skip when you are
-running one suite by hand, from "the daemon this gate already used has gone away", which is
-a failure.
+Everything the gate starts gets `CI_LOCAL=1` in its environment, and that marker is the
+whole of how a fixture tells two identical-looking situations apart. "This laptop has no
+Docker" is an honest skip when somebody is running one suite by hand. "The daemon this gate
+already used has gone away" is a failure, because a full run refused to start without one,
+so its absence now is the daemon dying rather than never being there. Under `CI_LOCAL=1` a
+Docker fixture in `core/tests` **refuses rather than skips** (#456), and it says so in the
+failure: the machine could not offer a daemon, which is an infrastructure failure and not a
+product one. That is not a preference. Before it, a daemon that died mid-run produced
+`==> ci-local: ok` with four suites silently empty. `CI_LOCAL_SKIP_DOCKER=1` is the
+exception at both ends, is already in the environment of everything the gate starts, and
+ledgers, so that run cannot end `ok`.
 
 Every `go test` the gate runs carries `-race` (#417). Until that landed it ran none at all,
 anywhere, which is the same shape as every other hole this gate has had to close: `go test`
@@ -1277,20 +1847,87 @@ in a copy of the tree, requires the detector to catch it and to name the write t
 it, and then runs the same mutant with the flag off and requires it to go green. That last
 cell is the one that makes the other two mean anything.
 
-Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
-says which tier a test belongs to (unit, integration, or a machine reached through
-`core/tests/machines`), and `core/internal/testtier` holds the tree to it.
+### Which tier a test belongs on
 
-Three environment variables change what runs:
+Which tests get a container is a rule, not a habit (#447). A test belongs to the tier of
+the heaviest thing it needs, and the tier decides the directory:
+
+| Tier | What it needs | Where it lives |
+|---|---|---|
+| unit | nothing outside the process: fakes, `t.TempDir()`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` |
+| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package |
+| machine | a source machine, optionally a storage medium, on a dedicated network | `core/tests/<name>`, reached through `core/tests/machines` |
+
+[`docs/architecture/test-tiers.md`](docs/architecture/test-tiers.md) is the whole rule,
+including the list of coverage that would be silently deleted if every test ran on two
+machines: a crash between the rename and the directory fsync inside `Commit`, a copy that
+returns partial bytes and then an error, a `DeleteRemote` that fails the instant it is
+called, an archive-class object that answers `InvalidObjectState`, an injected clock. None
+of those is something a real server can be made to do on demand, and most of them are how
+this product proves it does not delete the wrong backup.
+
+`core/internal/testtier` holds the tree to it, with the Go parser rather than grep so
+comments are invisible to it. Two rules: a file under a unit directory that imports a
+machine package or execs `docker`, and a file under `core/tests` that execs `docker` itself
+instead of going through the harness. It also reads `scripts/ci-local.sh` and checks that
+every package importing the harness is named both on the `gotestwatch` line and in the
+exclusion group of the plain `go test` step, so a machine-tier package cannot end up under
+a fixed timeout or, worse, not run at all. Its ledger is empty: it held eight files when
+the guard landed, six moved into `core/tests/machinegate` and two given harness
+capabilities, and the empty slice stays because the next migration should find the shape
+already here. A listed file that stops violating fails the guard until it is removed, so
+the ledger cannot go stale in either direction.
+
+The machine tier is the two-machine topology, and `core/tests/machines` is the whole of it
+since #450 folded the SFTP and MinIO fixtures and three copies of the Docker plumbing into
+one place. `machines.Start(t)` creates a network and nothing else; `m.Source(t)` starts the
+machine being backed up on it (a real sshd, chrooted, key-only, with iptables so it can
+carry a connection cap), `m.Medium(t)` joins a real S3 API to the same network, and
+`m.AnotherSource(t)` gives a second, independent server, which is what "this address has no
+known_hosts entry" needs to be real rather than a rebuilt image. Nothing starts that a test
+did not ask for, which is not a micro-optimisation: an eagerly started source would have
+added an `ssh-keygen rsa 2048` and a container start to every one of the MinIO suite's
+eight tests. Failure shapes are methods rather than paragraphs, and each one has a
+negative control where getting it wrong by hand would be silent: `KnownHostsFor` re-records
+a machine's real host keys against a relay's address, and `DecoyKnownHostsFor` is the
+control that proves pinning the wrong one fails.
+
+`scripts/e2e/run-machine-tier.sh` (#451) is the second placement for that tier and the one
+the gate uses: a manager machine built from a Go toolchain with a Docker client, the
+repository mounted at the same absolute path inside as out, joined to the network as an
+ordinary user, running the machine-tier packages from inside. On Docker Desktop for macOS a
+host process cannot sit on a bridge network, so by default the source publishes a port on
+`127.0.0.1`; inside the manager nothing publishes anything and the source is reached by
+alias. `Source.Addr()` answers correctly either way, so a test never has to know which
+placement it is in. The manager gets the Docker socket, which
+`scripts/e2e/two-machine-backup.sh` refuses for itself and for a good reason: that one runs
+the real installer, so a socket would install onto the developer's own host, while this one
+runs the harness, which is orchestration and not the product.
+
+Measured on a quiet machine, after #448 and #450: every machine package inside the manager
+container, `-race`, under `gotestwatch`, warm, is 164s, and 169s with both caches empty, of
+which 45s is the compile. Only the packages the tier imports get compiled, not the whole
+product, and this builds arm64 natively, which matters because
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` left in force had an earlier attempt measuring qemu.
+That compile figure is why the tier is a tier at all: multiplied by the number of packages,
+it is the reason "run every test on two machines" was rejected rather than adopted, and
+#451 asked for the number to be measured here rather than inherited from the original
+estimate.
+
+### Turning parts of the gate off, out loud
+
+Seven environment variables change what runs, and every one that leaves something out
+ledgers it:
 
 | Variable | Effect |
 |---|---|
-| `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix and the SFTP integration tests), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
+| `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix, the SFTP and MinIO integration suites and the machine tier), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
 | `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
 | `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
 | `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
+| `CI_LOCAL_SKIP_E2E=1` | Leaves out the browser suite and the CLI smoke slice from `rclone-manager-tests`, which are the only automated execution either of them gets. The step otherwise refuses on a machine with no Playwright Chromium and names the install command. Ends INCOMPLETE. |
 | `CI_LOCAL_SENTINEL=0` | Does not start the sentinel container that keeps the Docker daemon out of Resource Saver's idle timer (#457). The per-step daemon probes still run, so a daemon that dies is still a named failure rather than a skip. |
-| `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, chosen because the SFTP fixture already builds from it so every machine that can run this gate has it cached. |
+| `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, pinned rather than `latest` so a machine that can run this gate at all already has it cached and the sentinel costs no pull. |
 
 A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
 and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
@@ -1334,9 +1971,9 @@ tested and linted on every run.
 
 The previous version of this README described a binary with one subcommand, eleven
 subcommands after that stopped being true. It listed eleven packages under `core/internal`
-when there were seventeen. Both survived because prose does not fail a build, so the claims in here
-that a machine can decide are now decided on every run, by
-`distribution/packaging/readme_claims_test.go`:
+when there were seventeen, and there are twenty-three now. Both survived because prose does
+not fail a build, so the claims in here that a machine can decide are now decided on every
+run, by `distribution/packaging/readme_claims_test.go`:
 
 - every markdown link and every backticked repository path in this file resolves, with the
   handful of paths this document names *because* they are absent kept in an explicit list
@@ -1352,7 +1989,9 @@ that a machine can decide are now decided on every run, by
   the repair either, which is how #211 found out this section needed rewriting);
 - the "build-supported and uncertified" statement holds for exactly as long as the generated
   conformance matrix still reports an unexecuted operator cell, in both directions;
-- the support tiers in the table above come from `distribution/packaging/canonical.json`.
+- the support tiers in the table above come from `distribution/packaging/canonical.json`
+  and `conformance.json`, and a target either file declares that the table has dropped is a
+  failure, the same as a row here that neither declares.
 
 Each of those carries its own positive control, because a check that cannot fail is
 decoration. What is deliberately *not* checked there, and why, is written at the top of that
@@ -1360,6 +1999,14 @@ test file: anything needing real hardware, and the measured binary size. The cli
 request paths used to be on that list as "not decidable by reading TypeScript string
 concatenation"; #166 landed the contract that made the question answerable and #211 answered
 it, in `scripts/api/check-client-paths.sh`.
+
+**Read what those checks are for, though, before trusting them further than they go. They
+check structure, not truth.** They can tell that every path this file names exists and that
+the command table matches the binary; they cannot tell that a paragraph about what is not
+built yet describes something that was built two epics ago. Every wrong sentence #478 found
+was in the half no check can reach, and several of them were wrong for months while the
+gate stayed green. So a green `distribution/packaging` says the scaffolding held, and the
+prose still has to be read against the tree by somebody.
 
 ## Layout
 
@@ -1387,7 +2034,7 @@ core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
-  artifactstore/ where a committed artifact's bytes live, and the seam that lets that be somewhere else later
+  artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)
   discovery/     turns a raw remote listing into artifacts proven complete
@@ -1397,11 +2044,11 @@ core/internal/
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging
-  placement/     the verification ladder: what each class of check proves about a durable copy, and what it costs
+  placement/     where a durable copy is, the ladder that says what proves it good, and the journaled move engine
   quarantine/    the operator-facing view of what is quarantined and why
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
-  retention/     GFS classification, last-known-good protection, and the local prune
+  retention/     GFS classification, last-known-good protection, home-medium planning, and the local prune
   revalidate/    scheduled re-verification of artifacts that already passed
   state/         the SQLite journal: durable, idempotent transition recording
   testenv/       the environment a test has to be in before it may conclude anything from file permissions
@@ -1439,17 +2086,22 @@ conformance module (#85/B4.4), which ships no product binary of its own and inst
 the release binaries unchanged and checks their digest against
 `container/release-manifest.json`.
 
-Four providers carry packaging metadata next to their bridge: `apps/truenas/` (a custom-app
-Compose file plus a TrueNAS Apps catalog entry), `apps/unraid/` (two Community Applications
-Docker templates), `apps/openmediavault/` (a Compose deployment profile) and
-`apps/proxmox/` (the same Compose profile again, for a dedicated container-host guest,
-because Proxmox VE has no application store to package into at all). All four are metadata
-and templates only, wrapping the exact canonical OCI image with no lifecycle code of their
-own, and `distribution/packaging/` holds them to that on every commit: one shared source of
-truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are decidable from
-the repository alone.
+Eight providers are adapters over the canonical image with no lifecycle code of their own,
+seven of them carrying packaging metadata next to their bridge and one carrying none on
+purpose: `apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
+`apps/unraid/` (two Community Applications Docker templates), `apps/openmediavault/` (a
+Compose deployment profile), `apps/proxmox/` (the same Compose profile again, for a
+dedicated container-host guest, because Proxmox VE has no application store to package into
+at all), `apps/portainer/` (a version 3 App Template and the stack it deploys),
+`apps/casaos/` and `apps/zimaos/` (one `x-casaos` Compose file that is both the runtime
+definition and the store submission, for two stores), and `apps/dockge/` (no packaging at
+all, on purpose, because Dockge imports `container/compose.yaml` itself). Every one of them
+is metadata and templates wrapping the exact canonical OCI image, and
+`distribution/packaging/` holds them to that on every commit: one shared source of truth in
+`canonical.json`, plus scanners for the gate checks that are decidable from the repository
+alone.
 
-The same package runs the cross-provider conformance matrix (§63A) across all seven
+The same package runs the cross-provider conformance matrix (§63A) across all eleven
 providers at once, reporting an outcome per provider per capability rather than one
 verdict per run, with `UNSUPPORTED`, `NOT_APPLICABLE` and `BLOCKED` as first-class
 results a provider has to declare rather than reach by omission. The recorded run is
@@ -1459,10 +2111,10 @@ not decidable here, installing and updating and removing on the real platform, l
 [`docs/acceptance/`](docs/acceptance/) as prewritten operator procedures, and until one
 is executed its provider is build-supported and uncertified.
 
-EPIC B's Phase 6 reorganises this into explicit core, runtime-platform and distribution
-layers and reduces every platform package to a thin adapter. That work is #184, #194, #199
-and #169, none of them merged as this document is written, so the layout above is what is
-here today rather than what it is becoming.
+EPIC B's Phase 6 reorganised this into explicit core, runtime-platform and distribution
+layers and reduced every platform package to a thin adapter. This paragraph used to name
+#184, #194, #199 and #169 as unmerged, which stopped being true a long time ago: all four
+are in, and the layout above is what that refactor left rather than what it is becoming.
 
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
@@ -1476,7 +2128,10 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/rclone-upgrade.md`](docs/rclone-upgrade.md) – the pinned-version upgrade procedure and its CI gate
 - [`docs/ssh-setup.md`](docs/ssh-setup.md) – the dedicated key, the restricted SFTP account, host-key verification
 - [`docs/recovery.md`](docs/recovery.md) – recovery and the restore procedure, in full
+- [`docs/recovery-without-a-terminal.md`](docs/recovery-without-a-terminal.md) – the same emergency, for an administrator who has the web interface and nothing else, which is the normal case on a NAS appliance
+- [`docs/install.md`](docs/install.md) – the Python installer: one command on a bare host, what it generates, what it still refuses, and the network doctor
 - [`docs/storage-mediums.md`](docs/storage-mediums.md) – configuring an S3 medium per retention tier, what the disclosure commits you to, what each verification class proves and costs, and what an archive class means for the day you need the file back
+- [`docs/EPIC-E-alternative-storage.md`](docs/EPIC-E-alternative-storage.md) – the alternative-storage specification the section above is built against
 - [`docs/conformance/epic-e-matrix.md`](docs/conformance/epic-e-matrix.md) – which of EPIC E's gate lines are checked by something that has been watched to fail, which are checked by nothing, and which issue owns each gap
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
@@ -1487,6 +2142,10 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
 - [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written and not yet executed
 - [`docs/architecture/layers.md`](docs/architecture/layers.md) – the three layers (core, runtime platform, distribution), what each owns, the dependency direction, and the checks that enforce it
+- [`docs/architecture/test-tiers.md`](docs/architecture/test-tiers.md) – which tests get a machine and which only a fake can prove, the guard that decides it, and what the tiers cost measured
+- [`docs/adr/0004-reinstating-a-quarantined-backup.md`](docs/adr/0004-reinstating-a-quarantined-backup.md) – why a quarantined backup can be trusted again, and why that forfeits the remote delete for ever
+- [`docs/runtime-contract.md`](docs/runtime-contract.md) – `container/compose.yaml` as the authoritative runtime definition every deployment artifact derives from
+- [`docs/release-branch.md`](docs/release-branch.md) – what the `release` branch is, and the policy the rest of the release path assumes
 - [`docs/perf/README.md`](docs/perf/README.md) – the Phase 6 performance baselines, the benchmark host and workload, and the concrete regression thresholds
 - [`distribution/README.md`](distribution/README.md) – the distribution layer: what makes an adapter an adapter, and where the rest of that layer still lives
 - [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
