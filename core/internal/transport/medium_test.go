@@ -222,19 +222,48 @@ func TestConfigurationCategoryIsNotRetryable(t *testing.T) {
 	}
 	// The category has to be distinct from every other one, or a switch on
 	// it silently takes another branch.
-	seen := map[transport.Category]string{}
+	//
+	// The map is keyed by the NAME, and that is the whole check. An earlier
+	// version keyed it by the loop variable, which is unique on every
+	// iteration by construction, so the duplicate branch underneath could
+	// not execute and the block read as protection while proving nothing
+	// (#492). Both plants were watched against that version and both passed
+	// it: categoryNames[Conflict] set to "configuration", and the Conflict
+	// entry deleted outright.
+	//
+	// The empty name is called out separately rather than folded into the
+	// duplicate check, because it is the failure categoryNames' indexed
+	// literal is designed to produce. Deleting one entry leaves a gap that
+	// String() renders as "" rather than as a neighbour's word, and "" is
+	// not a name that collides with anything, so a distinctness check alone
+	// would let the second plant through the way the count floor did.
+	byName := map[string]transport.Category{}
 	for c := transport.Category(0); c < 32; c++ {
 		name := c.String()
 		if strings.HasPrefix(name, "Category(") {
+			// Past the end of the vocabulary, which is what String()
+			// falling back to its numeric form means.
 			continue
 		}
-		if other, dup := seen[c]; dup {
-			t.Errorf("category %d renders as both %q and %q", c, other, name)
+		if name == "" {
+			t.Errorf("category %d has no name at all; categoryNames lost its entry, and an unnamed category reaches a log line as an empty field rather than as a word an operator can act on", int(c))
+			continue
 		}
-		seen[c] = name
+		if other, dup := byName[name]; dup {
+			t.Errorf("categories %d and %d both render as %q; a switch written against one of them silently takes the other's branch", int(other), int(c), name)
+		}
+		byName[name] = c
 	}
-	if len(seen) < 12 {
-		t.Errorf("only %d categories have names; the vocabulary lost one", len(seen))
+	// The exact count, not a floor. A floor of twelve over thirteen
+	// categories tolerated exactly the loss this line exists to catch, and
+	// it counted the "" a lost entry leaves behind as a name, so it could
+	// not go red on either plant. An added category updates this number on
+	// purpose: errors.go's own doc says a new value is a decision every
+	// switch has to be asked about, and being asked here is the cheapest
+	// place to be asked at all.
+	const wantNamed = 13
+	if len(byName) != wantNamed {
+		t.Errorf("%d categories carry a distinct name, want %d; the FR-22 vocabulary gained or lost one", len(byName), wantNamed)
 	}
 }
 
