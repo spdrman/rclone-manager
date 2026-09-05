@@ -47,6 +47,30 @@
 // response has every use for. It goes to the log through Deps.Observe
 // instead, which is where the operator's own diagnostics already live.
 //
+// # What it cannot prove, said out loud
+//
+// A green preflight is not a promise that a restore will work in a year,
+// and the two reasons are worth writing down rather than leaving for
+// somebody to discover from a failed restore.
+//
+// The probe lives at its own key, under a reserved segment inside the
+// medium's prefix, and an artifact lives at
+// <prefix>/<source>/<set>/<name>. A bucket policy scoped to the whole
+// prefix covers both and this check means what it looks like; a policy
+// scoped per backup set covers one and not the other, and this check
+// cannot tell. Putting the probe inside a real artifact namespace would
+// answer that and buy a much worse problem, which is a probe object and a
+// backup sharing a key space, so the trade is taken deliberately in this
+// direction.
+//
+// And a bucket LIFECYCLE RULE can transition an object to an archive class
+// days after it is written, whatever class the medium declares and
+// whatever class the endpoint reported at the moment of the write. Nothing
+// observable at write time distinguishes a bucket with such a rule from
+// one without, so a medium that passes here can still hold objects that
+// need a restore later. internal/archive is where that is caught, at the
+// moment a read is attempted, and it is caught rather than assumed away.
+//
 // # Where it does not belong
 //
 // Not in config.Validate. Validation is a decision about a file, taken

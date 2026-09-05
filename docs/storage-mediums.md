@@ -190,6 +190,16 @@ Nothing in the report ever carries a credential, a path on this host, or the nam
 of an environment variable. The classified cause goes to the manager's log, where
 your diagnostics already are.
 
+Two things it does not prove, which are worth knowing before you read a green
+result as a guarantee. The probe lives at its own key under the medium's prefix,
+so a bucket policy scoped to the whole prefix is covered and one scoped per
+backup set is not. And a bucket **lifecycle rule** can transition objects to an
+archive class days after they are written, whichever class you declared and
+whichever class the endpoint reported at the moment of the write; nothing
+observable at write time tells those buckets apart, so a medium that passes here
+can still end up holding objects that need a restore. The manager catches that
+when a read is attempted rather than assuming it away.
+
 ## The disclosure, and what you are agreeing to
 
 Mapping a tier of a backup-affecting chain to a non-local medium is a
