@@ -3,11 +3,15 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/health"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // BuildHealthReport is `backup-manager status`' use case (FR-24). It calls
@@ -70,6 +74,13 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 		haltReasons[h.Set] = h.Reason
 	}
 
+	// Every move row this journal holds, indexed by backup set, loaded at
+	// most once for the whole report and only if some set actually needs
+	// it. See placementEvidence and movesBySet for why it is lazy: a
+	// deployment that has never declared a storage medium must not start
+	// requiring a journal that can answer a question it will never ask.
+	var moves movesBySet
+
 	var sets []health.BackupSetHealth
 	for _, src := range s.Config.Sources {
 		for _, bs := range src.BackupSets {
@@ -96,6 +107,18 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 				return health.Report{}, fmt.Errorf("app: health: reinstatement history for %s: %w", bs.ID, err)
 			}
 
+			// FR-24's placement half (issue #444). It is computed here
+			// rather than inside internal/health because it needs the
+			// set's resolved retention chain, and internal/health must
+			// not acquire a second way to answer "where does this
+			// artifact belong": internal/retention.HomeMedium is the ONE
+			// derivation of that rule, and a second one would eventually
+			// disagree with the first about a deletion.
+			evidence, err := s.placementEvidence(ctx, bs, records, &moves, now)
+			if err != nil {
+				return health.Report{}, err
+			}
+
 			in := health.BackupSetInputs{
 				LastSuccessfulPollAt: s.lastPollAt(bs.ID),
 				LastRetentionRunAt:   s.lastRetentionAt(bs.ID),
@@ -109,8 +132,137 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 				in.FreeBytes = &free
 			}
 
-			sets = append(sets, health.ComputeBackupSetHealth(bs.ID, records, reinstated, bs.StaleAfter.Duration(), in, now))
+			sets = append(sets, health.ComputeBackupSetHealth(bs.ID, records, reinstated, evidence, bs.StaleAfter.Duration(), in, now))
 		}
 	}
 	return health.NewReport(process, sets, now), nil
+}
+
+// moveReader is the half of the move journal a health pass needs: the
+// read, and nothing that could write one.
+//
+// It is a type assertion on Service.Journal rather than a method on the
+// Journal interface, the same shape moveEngine already uses for
+// placement.MoveJournal. The reason is the one placementEvidence's own
+// gate gives: a deployment with no medium in play never reaches this, so
+// requiring it of every journal implementation would make a question
+// nobody asks into a compile-time obligation for every one of them.
+type moveReader interface {
+	ListMoves(ctx context.Context, phases ...string) ([]state.Move, error)
+}
+
+// movesBySet is every move row in the journal, grouped by the backup set
+// its artifact belongs to. A nil map means "not loaded yet", which is why
+// this is a named type rather than a bare map: loaded-and-empty is a real
+// and common answer (a deployment with mediums configured that has never
+// had to move anything), and it must not re-trigger the load.
+type movesBySet map[model.BackupSetID][]state.Move
+
+// placementEvidence answers FR-24's placement question for one backup
+// set: which of its artifacts are not on the medium its chain names, and
+// what the move journal says about getting them there (issue #444).
+//
+// # The gate, and why it is not a short circuit
+//
+// The whole computation is skipped for a backup set whose chain names no
+// medium other than local AND none of whose artifacts sits on one. That
+// is not "assume the reassuring answer for deployments we would rather
+// not ask about", which is the shape this issue exists to remove. It is
+// exact: every tier's EffectiveMedium is local, so every artifact's home
+// is local, so an artifact can only be away from home by being on
+// something other than local, and the second half of the gate is a direct
+// read of exactly that. The zero PlacementEvidence really is the answer,
+// and it is asserted rather than argued
+// (TestBuildHealthReport_ADeploymentWithNoMediumAsksNoPlacementQuestion).
+//
+// What the gate buys is that no deployment predating EPIC E changes
+// behaviour at all: it runs no retention classification on a status call,
+// and it does not have to have a journal that can read the move table.
+// Both of those would be new ways for `backup-manager status` to fail for
+// a deployment that has never asked for any of this.
+//
+// # Why a failure here fails the whole report
+//
+// A retention classification that will not resolve, or a chain naming a
+// tier it does not contain, is a disagreement between two things this
+// function computed together, and there is no honest partial answer to
+// give. Reporting zero artifacts away from home because the question
+// could not be asked produces exactly the output of a deployment where
+// everything is where it belongs, which is the collapse this whole field
+// exists to end. That is the same call BuildHealthReport already makes
+// for the reinstatement history and the connection refusals, and the
+// opposite of the one it makes for FreeBytes, which is a live reading of
+// something outside the journal and is genuinely allowed to be missing.
+func (s *Service) placementEvidence(ctx context.Context, bs config.BackupSet, records []state.Record, moves *movesBySet, now time.Time) (health.PlacementEvidence, error) {
+	if !placementQuestionApplies(bs, records) {
+		return health.PlacementEvidence{}, nil
+	}
+
+	if *moves == nil {
+		reader, ok := s.Journal.(moveReader)
+		if !ok {
+			return health.PlacementEvidence{}, fmt.Errorf(
+				"app: health: this deployment stores artifacts on a medium other than local, but its journal (%T) cannot read the move journal, "+
+					"so a relocation that has been failing for weeks would report as nothing at all", s.Journal)
+		}
+		all, err := reader.ListMoves(ctx)
+		if err != nil {
+			return health.PlacementEvidence{}, fmt.Errorf("app: health: reading the move journal: %w", err)
+		}
+		loaded := make(movesBySet, len(all))
+		for _, mv := range all {
+			loaded[mv.Artifact.Set] = append(loaded[mv.Artifact.Set], mv)
+		}
+		*moves = loaded
+	}
+
+	// The same two calls RetentionPreview makes, in the same order,
+	// against the same records, so the health report and the retention
+	// preview cannot come to disagree about where an artifact belongs.
+	// recordRetentionRun is deliberately NOT called: reading a health
+	// report is not running retention, and claiming it was would put a
+	// fabricated timestamp in LastRetentionRunAt on every dashboard poll.
+	verdicts, _, err := retention.DecideKeep(now, bs.Retention, bs.ID, records)
+	if err != nil {
+		return health.PlacementEvidence{}, fmt.Errorf("app: health: classifying %s for placement: %w", bs.ID, err)
+	}
+	plan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, ActiveMediumFromRecords(records))
+	if err != nil {
+		return health.PlacementEvidence{}, fmt.Errorf("app: health: %s: %w", bs.ID, err)
+	}
+
+	evidence := health.PlacementEvidence{
+		Unconfirmed: len(plan.Unconfirmed),
+		Moves:       (*moves)[bs.ID],
+	}
+	for _, m := range plan.Moves {
+		evidence.AwayFromHome = append(evidence.AwayFromHome, health.AwayFromHome{
+			Artifact: m.Artifact, On: m.From, Home: m.To,
+		})
+	}
+	return evidence, nil
+}
+
+// placementQuestionApplies reports whether this backup set can have an
+// artifact away from home at all. See placementEvidence for why this is
+// an exact test rather than a convenience.
+func placementQuestionApplies(bs config.BackupSet, records []state.Record) bool {
+	for _, t := range bs.Retention.EffectiveTiers() {
+		if t.EffectiveMedium() != config.MediumLocal {
+			return true
+		}
+	}
+	// A tier that named a medium and no longer does leaves artifacts
+	// stranded on it, and those artifacts ARE away from home now: their
+	// home became local the moment the tier changed. Reading the config
+	// alone would hide exactly the population an operator most needs to
+	// be told about after that edit.
+	for _, r := range records {
+		for _, p := range r.Placements {
+			if p.Status == state.PlacementActive && !p.IsLocal() {
+				return true
+			}
+		}
+	}
+	return false
 }
