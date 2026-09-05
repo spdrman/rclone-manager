@@ -199,6 +199,14 @@ machine_image="rclone-manager-e2e-machine:1"
 source_base="atmoz/sftp:alpine"
 machine_base="docker:28-dind"
 
+# The source machine's Dockerfile, shared with the Go machine tier. Its
+# FROM line is $source_base; the constant above is kept because a couple of
+# steps below run a throwaway container from the bare base image rather
+# than from the built one.
+source_dockerfile="$repo_root/scripts/e2e/source-machine.Dockerfile"
+[ -r "$source_dockerfile" ] || die "the source machine Dockerfile is missing at $source_dockerfile." \
+  "It is the one definition of the simulated VPS, shared with core/tests/machines, so there is nothing to build a source machine from without it."
+
 sftp_user="backupuser"
 sftp_uid=1001
 
@@ -459,13 +467,13 @@ docker build \
          "Everything below tests that image, so there is nothing to fall back to: a published tag would test somebody else's build, which is #342."
 
 step "building the two throwaway machine images"
-# The source machine is the SFTP fixture's own image plus iptables, which
-# is what lets the connection-cap case impose the production rule without
-# the container being privileged.
-docker build -q -t "$source_image" - >/dev/null <<DOCKERFILE || die "could not build the source machine image from $source_base."
-FROM $source_base
-RUN apk add --no-cache iptables
-DOCKERFILE
+# The source machine comes from scripts/e2e/source-machine.Dockerfile,
+# which is the one definition of the simulated VPS (#451). The Go machine
+# tier builds the same file through core/tests/machines, so "the source
+# machine" means one thing in this repository rather than two that agree
+# until they do not.
+docker build -q -t "$source_image" -f "$source_dockerfile" "$(dirname "$source_dockerfile")" >/dev/null \
+  || die "could not build the source machine image from $source_dockerfile."
 # The manager machine is docker-in-docker plus python3, because the real
 # installer is a Python script and this test runs the real installer.
 # Nothing else: it is meant to be a box with Docker and nothing on it, and

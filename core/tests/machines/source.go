@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
@@ -1537,6 +1538,69 @@ func (f *Source) probeCap(t *testing.T, n int) (held int, acceptedOneMore bool) 
 		time.Sleep(200 * time.Millisecond)
 	}
 	return held, acceptedOneMore
+}
+
+// KnownHostsFor writes a known_hosts file pinning THIS machine's real host
+// keys at a different address, and returns its path.
+//
+// It exists for the tests that put something in front of a machine (a TCP
+// relay that adds latency or drops a connection, say) and then point the
+// adapter at the relay. Host-key verification has to stay real across that
+// move: the server the relay forwards to is this machine, so the keys are
+// this machine's keys, and only the ADDRESS they are recorded against
+// changes.
+//
+// Doing it here rather than in each test is the point. A test that rebuilt
+// the file by hand would have to know that ssh-keyscan writes a bare host
+// for port 22 and [host]:port otherwise, and that known_hosts matching
+// follows the same rule; get it wrong and the entry is never consulted,
+// the adapter refuses everything, and the obvious fix is to weaken the
+// check. Worse, a test that hardcoded 127.0.0.1 would keep passing on the
+// host placement and quietly verify against nothing once the tier runs
+// inside a manager container, where this machine's address is an alias on
+// a bridge network (#451). Both failures are silent, which is why this is
+// a capability and not a comment.
+func (f *Source) KnownHostsFor(t *testing.T, host string, port int) string {
+	t.Helper()
+	recorded, err := os.ReadFile(f.KnownHostsFile)
+	must(t, err, "read this machine's known_hosts")
+
+	addr := knownhosts.Normalize(net.JoinHostPort(host, strconv.Itoa(port)))
+	var out strings.Builder
+	kept := 0
+	for _, line := range strings.Split(string(recorded), "\n") {
+		line = strings.TrimSpace(line)
+		// ssh-keyscan writes a `# host:port SSH-2.0-...` banner above each
+		// key, and a banner has three fields too. Reading one as a key
+		// produced a file rclone rejected with "illegal base64 data at
+		// input byte 3", which is a legible error for once and would not
+		// have been if the bytes had happened to decode.
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		// Parsed rather than copied through, so anything that is not
+		// actually a key is dropped here rather than written into a file
+		// that then fails to load. The key itself is untouched: this is a
+		// re-addressing, never a re-keying.
+		key, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(fields[1] + " " + fields[2]))
+		if parseErr != nil {
+			continue
+		}
+		out.WriteString(knownhosts.Line([]string{addr}, key))
+		out.WriteString("\n")
+		kept++
+	}
+	if kept == 0 {
+		t.Fatalf("machines: %s held no usable host key line, so a known_hosts written from it would pin nothing and every verification against it would fail closed for the wrong reason", f.KnownHostsFile)
+	}
+
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("known_hosts_%s_%d", sanitize(host), port))
+	must(t, os.WriteFile(path, []byte(out.String()), 0o644), "write the re-addressed known_hosts")
+	return path
 }
 
 // --- key material a test can change --------------------------------------
