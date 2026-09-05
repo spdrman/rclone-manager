@@ -285,7 +285,17 @@ func createRepointedFields(recorded state.BackupSetAddress, req CreateBackupSetR
 // A record with no local path at all (DISCOVERED, or a transfer that
 // never completed) contributes nothing: it names no place, so it cannot
 // be stranded from one.
+//
+// The request's path is compared CLEANED, unlike the recorded-address
+// comparison above which is a plain string match like the update path's.
+// The asymmetry is not a preference: the roots on this side come out of
+// filepath.Dir and are therefore already clean, and the question being
+// asked is whether the artifacts are stranded, which is decided by the
+// path retention actually computes (filepath.Join, which cleans). A
+// trailing slash on an otherwise identical local_path strands nothing, so
+// asking about it would be a refusal with nothing behind it.
 func strandedLocalPath(records []state.Record, localPath string) []repointedField {
+	requested := filepath.Clean(localPath)
 	var roots []string
 	seen := map[string]bool{}
 	for _, rec := range records {
@@ -293,7 +303,7 @@ func strandedLocalPath(records []state.Record, localPath string) []repointedFiel
 			continue
 		}
 		root := filepath.Dir(rec.LocalPath)
-		if root == localPath {
+		if root == requested {
 			return nil
 		}
 		if !seen[root] {

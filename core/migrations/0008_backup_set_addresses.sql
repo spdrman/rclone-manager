@@ -25,10 +25,18 @@
 -- being knowable. Writing it there means the record is complete for every
 -- id whose configuration was removed by this build, with nothing to
 -- backfill: a create can only follow a removal that already happened.
--- Because a row is only ever READ for an id the configuration does not
--- currently hold, and only ever WRITTEN as an id leaves the
--- configuration, what a reader finds is always the last address that id
--- was configured with.
+--
+-- What a reader finds is therefore the address that id had when its
+-- configuration was last REMOVED, which is the last address it was
+-- configured with in every case that goes through this manager. The one
+-- case where the two differ is a set that was removed, created again
+-- somewhere else with an acknowledgement, and then taken out of
+-- config.yaml by a hand edit rather than by a removal. The row then names
+-- the older of the two addresses, and a create at the newer one is asked
+-- about when it need not have been. That is a refusal an operator can
+-- acknowledge, in the direction that errs toward asking, and closing it
+-- would mean writing this row from every path that persists a set rather
+-- than from the one event this is about.
 --
 -- WHY THIS IS NOT A TOMBSTONE. backupsetremove.go is explicit that a
 -- removed set does not stay in the catalog in any form, and this does not

@@ -230,9 +230,12 @@ func TestCreateBackupSet_WithoutARecordedAddressStillGuardsTheLocalPath(t *testi
 	}
 
 	// The control: the same create pointed at where those artifacts
-	// actually are is the undo, and costs nothing.
+	// actually are is the undo, and costs nothing. Written with a
+	// trailing slash on purpose: config.Validate accepts one and never
+	// cleans it, retention computes the same file path either way, so an
+	// artifact under it is not stranded and must not be asked about.
 	req = validCreateReq(t, svc, "ghost")
-	req.LocalPath = landed
+	req.LocalPath = landed + "/"
 	if _, err := svc.CreateBackupSet(ctx, req); err != nil {
 		t.Fatalf("creating over that history at the path its artifacts actually landed under: %v", err)
 	}
