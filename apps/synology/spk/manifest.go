@@ -98,6 +98,14 @@ func (m ReleaseManifest) Arch(goarch string) (ArchEntry, error) {
 	return ArchEntry{}, fmt.Errorf("the release manifest records no %s entry (it has %v), so there is nothing to check a %s package against", goarch, have, goarch)
 }
 
+// isSHA256 reports whether s is exactly 64 hex characters.
+//
+// It is a shape check and not a verification, and the distinction is why
+// it exists at all: a truncated or placeholder digest in the manifest
+// would otherwise be compared against a real one, fail parity, and be
+// reported as "this package carries the wrong binary" when the actual
+// fault is upstream in the manifest. Refusing it at load time names the
+// right file.
 func isSHA256(s string) bool {
 	if len(s) != 64 {
 		return false

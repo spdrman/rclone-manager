@@ -170,6 +170,10 @@ func formatTime(t time.Time) string {
 	return t.Format(time.RFC3339Nano)
 }
 
+// writeArtifactsResponse serves a list, allocating the slice at length
+// zero rather than leaving it nil. That is what makes an empty result an
+// empty JSON array instead of null, and the two are not interchangeable to
+// a client: one iterates and the other has to be guarded first.
 func writeArtifactsResponse(w http.ResponseWriter, artifacts []service.Artifact) {
 	resp := listArtifactsResponse{Artifacts: make([]artifactResponse, 0, len(artifacts))}
 	for _, a := range artifacts {

@@ -86,6 +86,12 @@ type versionResponse struct {
 	Configured bool `json:"configured"`
 }
 
+// systemVersion is GET /api/v1/system/version. It is the first call every
+// client makes, so it is also the one that has to answer on a
+// half-configured instance: a nil backend produces an empty config
+// revision and a not-ready flag rather than a panic, which is this
+// package's standing posture that "not fully wired yet" is a degraded
+// answer and never a crash.
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 	v := service.BuildVersion(h.binaryVersion, h.commit)
 	// h.backend can be nil the same way healthReady already allows for
@@ -135,6 +141,11 @@ type capabilitiesResponse struct {
 	AppStorePackaging   bool   `json:"app_store_packaging"`
 }
 
+// systemCapabilities is GET /api/v1/system/capabilities. It copies the
+// adapter's answer field for field and adds nothing of its own, which is
+// the point: a capability has exactly one place it is declared, and a
+// route that could enrich or override it would be a second one that
+// disagrees.
 func (h *handlers) systemCapabilities(w http.ResponseWriter, r *http.Request) {
 	c := h.platform.Capabilities()
 	writeJSON(w, http.StatusOK, capabilitiesResponse{

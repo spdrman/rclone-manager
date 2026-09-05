@@ -261,6 +261,15 @@ type retentionSettingsBody struct {
 	ProtectLastKnownGood bool                `json:"protect_last_known_good"`
 }
 
+// settingsSchemaBody is the validation the server will actually apply,
+// served alongside the settings themselves.
+//
+// It exists so a form does not have to invent its own bounds. A frontend
+// that hardcoded the allowed granularities, the tier-name pattern or the
+// maximum keep count would be a second copy of a rule that lives in
+// core/internal/config, and the day the two disagree the user gets a
+// client-side error for a value the server would have accepted, or,
+// worse, a client-side pass for one it will not.
 type settingsSchemaBody struct {
 	Retention retentionSchemaBody `json:"retention"`
 	Storage   storageSchemaBody   `json:"storage"`
