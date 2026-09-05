@@ -1,4 +1,4 @@
-package rclone
+package sftpintegration_test
 
 import (
 	"bufio"
@@ -26,8 +26,8 @@ import (
 // Because a test that needs a transfer to last long enough to interrupt has
 // two ways to get one, and only one of them is about the transfer.
 //
-// rclone's own --bwlimit is the other one, and it was what
-// gate_test.go's MidTransferCancellation used until issue #414. It throttles
+// rclone's own --bwlimit is the other one, and it was what the
+// mid-transfer cancellation row used until issue #414. It throttles
 // INSIDE rclone, in two places: fs/accounting's Account.accountRead pays
 // the token bucket after every chunk it hands the copy loop, and
 // fs/fshttp's dialer pays it again on every socket read. Both wait with

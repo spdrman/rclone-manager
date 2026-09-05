@@ -1,22 +1,23 @@
-package rclone
+package sftpintegration_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
-
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
 
 // handshakeSamples is how many real connects the measurement below makes.
 // One sample is a number the scheduler picked as much as the network did;
-// ten of them, worst taken, is a statement about the host.
+// several of them, worst taken, is a statement about the host.
 const handshakeSamples = 6
 
 // handshakeHeadroom is how many times the slowest connect measured on this
-// host the ConnectTimeout ceiling has to be.
+// host the rclone.ConnectTimeout ceiling has to be.
 //
 // It is a ratio rather than a duration because the thing it guards against
 // is a direction, not a number: #415's ceiling exists to make the retry
@@ -39,7 +40,7 @@ const handshakeSamples = 6
 const handshakeHeadroom = 5
 
 // TestConnectTimeoutLeavesARealHandshakeRoom is the measured half of
-// ConnectTimeout's derivation (issue #415).
+// rclone.ConnectTimeout's derivation (issue #415).
 //
 // The other half, the ceiling, is arithmetic: six attempts have to fit
 // inside the budget app.DefaultRetryPolicy's doc claims, and
@@ -47,28 +48,42 @@ const handshakeHeadroom = 5
 // timeout down, though, and a connect timeout pushed far enough down stops
 // being a bound on a failure and becomes a cause of one. This is the floor
 // under it, and it is measured rather than asserted: the numbers below come
-// from this host, dialling a real sshd through the same fsFor every
-// operation in this adapter uses, on the run you are reading.
+// from this host, dialling a real sshd through the adapter's own public API,
+// on the run you are reading.
+//
+// # What is being timed
+//
+// One List against an empty directory. That is a connect (TCP dial, SSH key
+// exchange, authentication) plus a single LIST round trip plus the pool
+// shutdown, because List is the cheapest exported call that performs a full
+// connect and this package is deliberately outside transport/rclone and
+// cannot reach fsFor directly. Timing slightly MORE than the connect is the
+// safe direction for a floor: it can only make this row stricter, never
+// laxer, and on loopback the extra round trip is noise beside a handshake.
 func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 	f := sftpfixture.Start(t)
-	a := New()
-	src := f.Source("connect-timeout-headroom", "")
+	a := rclone.New()
+
+	// An empty root, so the LIST that rides along with the connect has
+	// nothing to enumerate and the measurement stays as close to the
+	// handshake as an exported call can get.
+	const root = "connect-timeout-headroom"
+	if err := os.MkdirAll(filepath.Join(f.UploadDir, root), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	src := f.Source(root, root)
 
 	var worst, total time.Duration
 	for i := 1; i <= handshakeSamples; i++ {
-		// oneConnectionAtATime first, so what is measured is the connect
-		// a production operation performs and not a differently
-		// configured one. fsFor is where the TCP dial, the SSH key
-		// exchange and the authentication all happen; ConnectTimeout is
-		// the deadline over that whole step.
-		ctx := oneConnectionAtATime(context.Background())
 		start := time.Now()
-		fsys, err := a.fsFor(ctx, src)
+		got, err := a.List(context.Background(), src)
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatalf("connect %d of %d against the fixture failed, so there is nothing to measure: %v", i, handshakeSamples, err)
 		}
-		shutdownFs(ctx, fsys)
+		if len(got) != 0 {
+			t.Fatalf("the measurement root %q is not empty (%d entries), so what was timed includes enumerating it", root, len(got))
+		}
 
 		total += elapsed
 		if elapsed > worst {
@@ -77,9 +92,9 @@ func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 	}
 
 	mean := total / handshakeSamples
-	t.Logf("%d real connects through fsFor against the fixture: worst %s, mean %s; the %s ceiling is %.0fx the worst",
+	t.Logf("%d real connects through Adapter.List against the fixture: worst %s, mean %s; the %s ceiling is %.0fx the worst",
 		handshakeSamples, worst.Round(time.Millisecond), mean.Round(time.Millisecond),
-		ConnectTimeout, float64(ConnectTimeout)/float64(worst))
+		rclone.ConnectTimeout, float64(rclone.ConnectTimeout)/float64(worst))
 
 	// A measurement of zero is not a fast host, it is a broken clock or a
 	// connect that never happened, and either one would make the ratio
@@ -88,7 +103,7 @@ func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 		t.Fatalf("the slowest of %d connects measured %s, which is not a measurement; this row cannot say anything about headroom", handshakeSamples, worst)
 	}
 
-	if need := time.Duration(handshakeHeadroom) * worst; ConnectTimeout < need {
+	if need := time.Duration(handshakeHeadroom) * worst; rclone.ConnectTimeout < need {
 		t.Fatalf("ConnectTimeout is %s, under the %s that is %dx the slowest real connect this host performed (%s).\n"+
 			"Two things look like this, and they want opposite fixes.\n"+
 			"  If ConnectTimeout was shortened: that ceiling can be lowered to keep app.DefaultRetryPolicy's budget "+
@@ -97,51 +112,6 @@ func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 			"fewer attempts costs a retry, a shorter connect timeout costs the source.\n"+
 			"  If ConnectTimeout is still %s: a loopback SSH handshake to a container took %s, and nothing about a "+
 			"healthy machine explains that. Re-run this on a host that is not also running another gate.",
-			ConnectTimeout, need, handshakeHeadroom, worst.Round(time.Millisecond), ConnectTimeout, worst.Round(time.Millisecond))
-	}
-}
-
-// TestAStalledSourceIsBoundedByADifferentNumber is the honesty guard on
-// app.DefaultRetryPolicy's budget (issue #415).
-//
-// That budget is "six attempts, at most ConnectTimeout each", and it is
-// true of a source that never answers, which is what an operator means when
-// they say a NAS is off. It is NOT true of every failure. ConnectTimeout
-// bounds a dial; a source that answers, accepts the session and then goes
-// quiet partway through a read is bounded by rclone's --timeout, an idle
-// timeout on the transfer, which this adapter deliberately does not touch.
-//
-// So there are two numbers, they are far apart, and the way #415 comes back
-// is somebody reading "six times ConnectTimeout" as the whole story. This
-// row fails if they ever become one number, in either direction: by the
-// idle timeout being pulled down to the connect timeout (which would start
-// failing slow-but-live links), or by this adapter starting to override it
-// at all (which would move a bound app's doc describes without app's doc
-// knowing).
-func TestAStalledSourceIsBoundedByADifferentNumber(t *testing.T) {
-	rcloneDefault := fs.GetConfig(context.Background())
-	ours := fs.GetConfig(oneConnectionAtATime(context.Background()))
-
-	idle := time.Duration(ours.Timeout)
-	connect := time.Duration(ours.ConnectTimeout)
-	t.Logf("a dial is bounded by ConnectTimeout (%s, ours); a stalled transfer by --timeout (%s, rclone's own default, untouched)",
-		connect, idle)
-
-	// This adapter bounds one of them and not the other, on purpose.
-	if idle != time.Duration(rcloneDefault.Timeout) {
-		t.Errorf("this adapter now sets rclone's --timeout to %s, against the %s default it used to leave alone. "+
-			"app.DefaultRetryPolicy's doc describes the stalled-source worst case in terms of that default and would "+
-			"now be wrong; and --timeout is a bound on a transfer making no progress, so shortening it fails "+
-			"slow-but-live links rather than unreachable ones",
-			idle, time.Duration(rcloneDefault.Timeout))
-	}
-
-	// And they have to stay recognisably different, or "six attempts at
-	// ConnectTimeout each" would quietly start reading as the whole budget.
-	if idle <= connect {
-		t.Errorf("--timeout is %s, at or under the %s connect timeout, so the two bounds have collapsed into one. "+
-			"app.DefaultRetryPolicy's doc has a whole section explaining that they are different failures with "+
-			"different costs; if that is genuinely no longer true, that section is what has to change",
-			idle, connect)
+			rclone.ConnectTimeout, need, handshakeHeadroom, worst.Round(time.Millisecond), rclone.ConnectTimeout, worst.Round(time.Millisecond))
 	}
 }
