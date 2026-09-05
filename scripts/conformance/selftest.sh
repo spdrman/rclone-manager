@@ -264,16 +264,31 @@ expect_check_fails "bucketing derived from when a copy was verified" "$d" \
 echo
 echo "==> the engine's refusals"
 
-# Medium to medium is refused because it would need a local staging copy
-# and a second set of failure modes. The refusal is what the composed
-# scenario runs into on the chain's second hop, so removing it has to move
-# that check.
-d=$(mutant medium-to-medium-allowed)
+# Medium to medium goes through a local staging copy (#429). The chain's
+# second hop is the composed run of it, so putting the old outright refusal
+# back has to turn that check red: the artifact stays on the monthly medium
+# and never reaches the annual one.
+d=$(mutant medium-to-medium-refused-again)
 swap "$d/core/internal/placement/engine.go" \
-  '	if src.Medium != config.MediumLocal && destination != config.MediumLocal {' \
-  '	if false { // PLANTED VIOLATION (scripts/conformance/selftest.sh).'
-expect_check_fails "the medium-to-medium refusal removed" "$d" \
-  "did not refuse the hop as medium-to-medium" \
+  '		if err := e.canStage(rec.Artifact); err != nil {' \
+  '		if err := fmt.Errorf("PLANTED VIOLATION (scripts/conformance/selftest.sh)"); err != nil {'
+expect_check_fails "the medium-to-medium hop refused instead of staged" "$d" \
+  "want DONE (refusal:" \
+  'TestTheChainsSecondHopIsMediumToMedium'
+
+# The staging copy is removed at the end of the copy phase. Leave it and
+# every hop between two mediums costs a permanent artifact-sized file on
+# the backup set's own disk, which is the disk the next hop's size check is
+# about. Nothing else about the move changes, so only a check that looks
+# for the leftover can see it.
+d=$(mutant staging-copy-left-behind)
+swap "$d/core/internal/placement/staging.go" \
+  '	rmErr := e.Local.Remove(ctx, staged)' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): the upload
+	// landed; the staging copy stays.
+	var rmErr error'
+expect_check_fails "a staged hop that never removes its staging copy" "$d" \
+  "the staging copy is still at" \
   'TestTheChainsSecondHopIsMediumToMedium'
 
 # The other end of the same ordering: the source delete is durably
@@ -396,25 +411,33 @@ expect_unit_check_fails "a dry-run that does not say where a deletion would happ
 echo
 echo "==> the archive gate"
 
-# A move to an archive-class destination is refused at PLAN time, before a
-# move row exists and before a byte is uploaded. Take that away and the
-# engine finds out one step later: it plans, it abandons, and the retention
-# pass plans a fresh one next cycle because the artifact still is not where
-# the chain says it belongs. The move rows accumulate, and on a class with
-# a minimum billable duration so does the bill.
-d=$(mutant archive-refusal-not-at-plan-time)
-swap "$d/core/internal/placement/engine.go" \
-  '	if err := e.destinationCanBeVerified(destination); err != nil {
-		return state.Placement{}, fmt.Errorf(
-			"%w: %s cannot be moved to %q: %w", ErrNotEligible, rec.Artifact, destination, err)
-	}
-	return src, nil' \
-  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): plan the move
-	// and find out the expensive way.
-	return src, nil'
-expect_check_fails "an archive-class destination refused after planning instead of before" "$d" \
-  "for a move it refused before planning" \
-  'TestAnArchiveClassTierIsRefusedBeforeItCostsAnything'
+# A retention tier bound to an archive-class medium is refused at LOAD,
+# before a daemon starts (#442). Take that away and the config validates,
+# the deployment runs, and every cycle plans a move the engine then refuses
+# for ever; before #437 it also paid for two uploads and three deletes a
+# cycle on a class that bills a 180-day minimum for each discarded copy.
+#
+# The engine's own plan-time refusal is still there and is still the second
+# line of defence, for a journal written by an older build or a bucket that
+# grew a lifecycle rule. It is unreachable from this suite now, because the
+# config it needs no longer loads, so its falsification lives in
+# internal/placement's archiveupload_test.go instead.
+d=$(mutant archive-tier-accepted-at-load)
+swap "$d/core/internal/config/validate.go" \
+  '	class, ok := archived[t.Medium]
+	if !ok {
+		return
+	}' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): accept the
+	// pairing and let the operator find out per cycle.
+	class, ok := archived[t.Medium]
+	if true || !ok {
+		_ = class
+		return
+	}'
+expect_check_fails "a retention tier on an archive class accepted at load" "$d" \
+  "the config loaded with the annual tier on a GLACIER medium" \
+  'TestAnArchiveClassTierIsRefusedAtLoad'
 
 # An archived copy tops out at existence, because reading one fails. Let it
 # claim content and the composed scenario's whole argument about why the

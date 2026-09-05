@@ -50,11 +50,28 @@ import (
 // journal reads clean and the artifact has no readable copy at all, and
 // every journal-only check in this repository would call that fine.
 //
-// So this watcher keeps a set of locators it has watched being destroyed,
+// So this watcher keeps a set of copies it has watched being destroyed,
 // and subtracts them from the record before evaluating. A placement row
 // pointing at bytes this run deleted is not a copy, and the watcher will
-// not count one. The set is cleared for a locator when something writes
-// to it again, which is what a move back to local does.
+// not count one. The set is cleared for a copy when something writes to it
+// again, which is what a move back to local does.
+//
+// # A copy is a medium AND a locator, never a locator alone
+//
+// This set used to be keyed by the locator on its own, and that was fine
+// for exactly as long as no artifact had two copies on two mediums at the
+// same time. FR-28's key is <prefix>/<source>/<set>/<artifact-name>, and a
+// medium that declares no prefix contributes no segment, so two mediums
+// without prefixes give one artifact the SAME object key on both buckets.
+// The chain this suite runs is now that shape: the second hop is medium to
+// medium (#429), and for the length of it the artifact has a copy on each.
+//
+// Keyed by locator alone, deleting the source subtracted the destination
+// too, and the watcher reported a breach at an instant when a perfectly
+// good verified copy existed. The other direction is worse and is why this
+// is a fix rather than a de-noising: a stale entry from one medium silently
+// masks a live copy on another, so a run in which the invariant genuinely
+// broke could read clean.
 //
 // # What it does NOT claim
 //
@@ -84,8 +101,9 @@ type watcher struct {
 	events []string
 	// breaches is every instant at which the invariant did not hold.
 	breaches []string
-	// destroyed is the set of locators this run has watched being
-	// deleted and has not seen rewritten.
+	// destroyed is the set of copies this run has watched being deleted
+	// and has not seen rewritten, keyed by medium AND locator. See this
+	// file's own comment for why the locator alone will not do.
 	destroyed map[string]bool
 
 	// expectBreaches suppresses the immediate failure below, for the one
@@ -108,7 +126,7 @@ func newWatcher(t *testing.T, j *state.Journal, ids []model.ArtifactID, sufficie
 func (w *watcher) observe(event string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.observeLocked(event, "")
+	w.observeLocked(event, "", "")
 }
 
 // observeIfGone evaluates the invariant as it WILL be the instant the copy
@@ -116,18 +134,18 @@ func (w *watcher) observe(event string) {
 // and it is the check that has to refuse rather than merely record: a
 // delete taken past a broken invariant is a lost backup, and this suite
 // would rather fail with the copy still there.
-func (w *watcher) observeIfGone(event, locator string) error {
+func (w *watcher) observeIfGone(event, medium, locator string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if broke := w.observeLocked(event, locator); broke != "" {
+	if broke := w.observeLocked(event, medium, locator); broke != "" {
 		return fmt.Errorf("the standing invariant does not hold, so %s is refused: %s", event, broke)
 	}
 	return nil
 }
 
-// observeLocked is the evaluation itself. pending, when non-empty, is a
-// locator to treat as already gone.
-func (w *watcher) observeLocked(event, pending string) string {
+// observeLocked is the evaluation itself. pendingMedium and pendingLocator,
+// when non-empty, name a copy to treat as already gone.
+func (w *watcher) observeLocked(event, pendingMedium, pendingLocator string) string {
 	w.observations++
 	w.events = append(w.events, event)
 
@@ -140,10 +158,10 @@ func (w *watcher) observeLocked(event, pending string) string {
 		surviving := rec
 		surviving.Placements = nil
 		for _, p := range rec.Placements {
-			if w.destroyed[canonicalLocator(p.Location)] {
+			if w.destroyed[copyKey(p.Medium, p.Location)] {
 				continue
 			}
-			if pending != "" && samePlace(p.Location, pending) {
+			if pendingLocator != "" && p.Medium == pendingMedium && samePlace(p.Location, pendingLocator) {
 				continue
 			}
 			surviving.Placements = append(surviving.Placements, p)
@@ -169,19 +187,30 @@ func (w *watcher) observeLocked(event, pending string) string {
 	return broke
 }
 
-// destroyedNow records that the copy at locator no longer exists, so every
-// later observation stops counting its placement row as a copy.
-func (w *watcher) destroyedNow(locator string) {
+// destroyedNow records that the copy at locator on medium no longer
+// exists, so every later observation stops counting its placement row as a
+// copy.
+func (w *watcher) destroyedNow(medium, locator string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.destroyed[canonicalLocator(locator)] = true
+	w.destroyed[copyKey(medium, locator)] = true
 }
 
-// writtenNow records that a copy exists at locator again.
-func (w *watcher) writtenNow(locator string) {
+// writtenNow records that a copy exists at locator on medium again.
+func (w *watcher) writtenNow(medium, locator string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.destroyed, canonicalLocator(locator))
+	delete(w.destroyed, copyKey(medium, locator))
+}
+
+// copyKey names one copy: which medium it is on, and where on it.
+//
+// The separator is a NUL because it cannot appear in either half. A
+// medium id is lower_snake_case by config's own rule, and
+// transport.validKeySegment refuses a NUL in an object key; a local
+// locator is a filesystem path, where a NUL cannot appear either.
+func copyKey(medium, locator string) string {
+	return medium + "\x00" + canonicalLocator(locator)
 }
 
 // report closes a scenario out.
@@ -298,7 +327,7 @@ type watchedStore struct {
 func (s *watchedStore) UploadFromLocal(ctx context.Context, medium transport.Medium, localPath, key string, opts transport.UploadOptions) (transport.UploadResult, error) {
 	res, err := s.MediumStore.UploadFromLocal(ctx, medium, localPath, key, opts)
 	if err == nil {
-		s.w.writtenNow(key)
+		s.w.writtenNow(medium.ID, key)
 	}
 	s.w.observe(fmt.Sprintf("after the copy to %q landed on %q", key, medium.ID))
 	return res, err
@@ -306,12 +335,12 @@ func (s *watchedStore) UploadFromLocal(ctx context.Context, medium transport.Med
 
 func (s *watchedStore) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
 	event := fmt.Sprintf("deleting the object %q on %q", key, medium.ID)
-	if err := s.w.observeIfGone(event, key); err != nil {
+	if err := s.w.observeIfGone(event, medium.ID, key); err != nil {
 		return err
 	}
 	err := s.MediumStore.DeleteObject(ctx, medium, key)
 	if err == nil {
-		s.w.destroyedNow(key)
+		s.w.destroyedNow(medium.ID, key)
 	}
 	s.w.observe("after " + event)
 	return err
@@ -326,7 +355,7 @@ type watchedLocal struct {
 func (l *watchedLocal) Put(ctx context.Context, locator string, r io.Reader) error {
 	err := l.Local.Put(ctx, locator, r)
 	if err == nil {
-		l.w.writtenNow(locator)
+		l.w.writtenNow(state.MediumLocal, locator)
 	}
 	l.w.observe(fmt.Sprintf("after the copy to the local path %q landed", filepath.Base(locator)))
 	return err
@@ -334,12 +363,12 @@ func (l *watchedLocal) Put(ctx context.Context, locator string, r io.Reader) err
 
 func (l *watchedLocal) Remove(ctx context.Context, locator string) error {
 	event := fmt.Sprintf("removing the local copy %q", filepath.Base(locator))
-	if err := l.w.observeIfGone(event, locator); err != nil {
+	if err := l.w.observeIfGone(event, state.MediumLocal, locator); err != nil {
 		return err
 	}
 	err := l.Local.Remove(ctx, locator)
 	if err == nil {
-		l.w.destroyedNow(locator)
+		l.w.destroyedNow(state.MediumLocal, locator)
 	}
 	l.w.observe("after " + event)
 	return err

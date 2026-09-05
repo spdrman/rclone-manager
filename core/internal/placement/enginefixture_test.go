@@ -328,11 +328,11 @@ type guard struct {
 }
 
 func (g *guard) check(what string) error {
-	return g.checkSurviving(what, "")
+	return g.checkSurviving(what, "", "")
 }
 
-// checkSurviving asserts FR-30's invariant, and, when a locator is given,
-// asserts it will STILL hold once the copy at that locator is gone.
+// checkSurviving asserts FR-30's invariant, and, when a copy is named,
+// asserts it will STILL hold once that copy is gone.
 //
 // The second half is the one that matters and it was added after a planted
 // mutation walked past the first. A guard that only re-reads the journal
@@ -342,7 +342,16 @@ func (g *guard) check(what string) error {
 // it through. Requiring a surviving copy that is NOT the one being deleted
 // is what closes that, and it is also the honest reading of the invariant:
 // the point was never that a row exists, it was that a copy does.
-func (g *guard) checkSurviving(what, locator string) error {
+//
+// A copy is a medium AND a locator. Filtering on the locator alone was
+// enough while an artifact never had two medium copies at once, and the
+// staged medium-to-medium move (#429) ended that: FR-28's key carries the
+// medium's prefix and nothing else that distinguishes the medium, so two
+// mediums declaring no prefix give one artifact the same key on both. The
+// conformance watcher had the same defect and it fired there, on a chain
+// whose mediums have no prefixes; here the two prefixes differ, so this is
+// the same fix applied before it has anything to catch.
+func (g *guard) checkSurviving(what, medium, locator string) error {
 	rec, err := g.journal.Get(context.Background(), g.artifact)
 	if err != nil {
 		return fmt.Errorf("reading the journal to check the invariant before %s: %w", what, err)
@@ -356,13 +365,13 @@ func (g *guard) checkSurviving(what, locator string) error {
 	surviving := rec
 	surviving.Placements = nil
 	for _, p := range rec.Placements {
-		if samePlace(p.Location, locator) {
+		if p.Medium == medium && samePlace(p.Location, locator) {
 			continue
 		}
 		surviving.Placements = append(surviving.Placements, p)
 	}
 	if err := placement.CheckInvariant(surviving, g.sufficient...); err != nil {
-		return g.violation(what, fmt.Errorf("once the copy at %q is gone, %w", locator, err))
+		return g.violation(what, fmt.Errorf("once the copy at %q on %q is gone, %w", locator, medium, err))
 	}
 	return nil
 }
@@ -377,11 +386,11 @@ func (g *guard) violation(what string, err error) error {
 // beforeDelete is the guard on the two destructive calls: the durable
 // journal has to say another good copy, one that is not this one, exists
 // before either of them may proceed.
-func (g *guard) beforeDelete(what, locator string) error {
+func (g *guard) beforeDelete(what, medium, locator string) error {
 	g.mu.Lock()
 	g.deletes = append(g.deletes, what+":"+locator)
 	g.mu.Unlock()
-	return g.checkSurviving(what+" "+locator, locator)
+	return g.checkSurviving(what+" "+locator, medium, locator)
 }
 
 func (g *guard) fail() {
@@ -437,7 +446,7 @@ type guardedMedium struct {
 }
 
 func (m *guardedMedium) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
-	if err := m.guard.beforeDelete("deleting the destination object", key); err != nil {
+	if err := m.guard.beforeDelete("deleting the destination object", medium.ID, key); err != nil {
 		return err
 	}
 	return m.fakeMedium.DeleteObject(ctx, medium, key)
@@ -451,7 +460,7 @@ type guardedLocal struct {
 }
 
 func (l guardedLocal) Remove(ctx context.Context, locator string) error {
-	if err := l.guard.beforeDelete("removing the local copy", locator); err != nil {
+	if err := l.guard.beforeDelete("removing the local copy", state.MediumLocal, locator); err != nil {
 		return err
 	}
 	return l.Local.Remove(ctx, locator)

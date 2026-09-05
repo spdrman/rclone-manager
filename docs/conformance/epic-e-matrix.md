@@ -90,23 +90,50 @@ two years, and then advances the clock and lets `GFSDecide`,
 tells the engine where an artifact belongs.
 
 Composing them turned up two things no unit suite could have, and both are
-now issues rather than rows: an archive-class tier can never take delivery
-of an artifact (#428), and a chain with two medium tiers needs a
-medium-to-medium move, which the engine refuses (#429). Neither loses data.
+now closed: an archive-class tier can never take delivery of an artifact
+(#428), and a chain with two medium tiers needs a medium-to-medium move,
+which the engine refused (#429). Neither ever lost data.
 
-#428 has since been answered at the engine by #437: a move to an
-archive-class destination is refused at PLAN time, for nothing, and
-reported again every cycle rather than abandoned and retried. That answer
-is also what made the composed scenario's own annual rung untestable, since
-the rung stopped producing anything to observe, so the scenario's annual
-tier is now an ordinary `s3` medium and the archive pairing has a cell of
-its own that asserts the refusal, the zero move rows and the zero objects.
-What the suite can and cannot claim about a cold class as a result is
-spelled out in P2.1 and P2.6, and again at the bottom of this file. #442,
-which would move the same refusal into `config.Validate`, is the next place
-it belongs, and the conformance suite no longer stands in its way: no cell
-needs a tier on an archive class to LOAD, and the one that builds such a
-chain says in its own failure message that it is the cell to move.
+#428 was answered at the engine by #437, which refuses a move to an
+archive-class destination at PLAN time, for nothing, and reports it again
+every cycle rather than abandoning and retrying. #442 then moved the same
+refusal one layer earlier, into `config.Validate`, so the pairing is
+refused where an operator writes it and a deployment on one never starts.
+The engine's refusal is still there as the second line of defence, for a
+journal written by an older build or a bucket that grew a lifecycle rule,
+and its falsification moved to `internal/placement/archiveupload_test.go`
+because the composed suite can no longer reach it: the config it would need
+does not load. The scenario's annual tier is an ordinary `s3` medium, the
+GLACIER medium stays DECLARED and unreferenced (which is the half #442
+leaves legal, for #241's restores), and the archive pairing has a cell of
+its own that asserts the load refusal, the control that the same file
+loads with one field changed, and the declared-medium half. What the suite
+can and cannot claim about a cold class is spelled out in P2.1 and P2.6,
+and again at the bottom of this file.
+
+#429 is answered by a staging copy. A move between two mediums reads the
+source down to a `.moves` directory under the backup set's own
+`local_path`, proves what arrived hashes to what the journal recorded at
+ingestion, uploads that, and removes it; the source stays ACTIVE and
+content-verified throughout, so FR-30's standing invariant rests on it for
+the whole copy phase and the staging file is never a placement. The
+composed second hop asserts arrival now rather than refusal, and P2.1 is
+PASS.
+
+Running it also turned up a defect in this suite's own watcher, which is
+worth recording because it is the shape that makes a guard useless rather
+than noisy. The watcher identified a copy by its LOCATOR, and FR-28's key
+is `<prefix>/<source>/<set>/<artifact-name>`, so two mediums declaring no
+prefix give one artifact the same key on both buckets. Nothing had two
+medium copies at once until the second hop did. Keyed that way, deleting
+the source subtracted the destination as well and the watcher reported a
+breach that had not happened; the dangerous direction is the same bug
+seen from the other side, where a stale entry for one medium masks a live
+copy on another and a real breach reads clean. The set is keyed by medium
+AND locator now, the same fix is applied to `internal/placement`'s own
+fixture guard before it has anything to catch, and the composed cell
+asserts that the two keys really do collide so the coverage cannot
+evaporate the day somebody adds a prefix.
 
 #239's rows (P2.4 and V6) are PASS as of this run, and what changed is more
 than a word. Its code is in the tree. The prune cell that used to pin

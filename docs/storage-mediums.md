@@ -23,33 +23,40 @@ than no reference at all.
 | Credentials are resolved from a file, an environment variable or a command | Not landed (#235) |
 | Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
 | Verification classes, and revalidation that knows about mediums | Not landed (#237) |
-| Artifacts actually MOVE between mediums when a tier says so | Landed, with two limits below |
+| Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
 | Retention plans, previews and prune understand mediums | Landed, except across the HTTP boundary: the API does not yet carry the preview's moves or the medium each deletion happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
-| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
+| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
-Two limits are worth knowing before you write a chain, because both of them
-are the manager refusing to do something rather than doing it badly, and
-both were found by running the whole chain end to end rather than by
-reasoning about it:
+One limit is worth knowing before you write a chain, and it is the manager
+refusing to do something rather than doing it badly:
 
 - **A tier whose medium names `GLACIER` or `DEEP_ARCHIVE` cannot take
-  delivery of an artifact** (#428). The manager will not delete a local copy
-  against a destination it could not read back, an archived object cannot be
-  read back, and there is no `upload_verification` mode that says "existence
-  is enough". So the move is refused and the artifact stays where it is.
-  Nothing is lost; nothing arrives either.
-- **A chain with two tiers naming two different mediums stalls at the second
-  hop** (#429). Moving an artifact from one medium to another needs a local
-  staging copy, and the engine does not do that yet, so an artifact that
-  ages from a monthly `s3` tier into an annual one stays on the monthly
-  medium. Again the refusal is explicit and nothing is deleted.
+  delivery of an artifact, and the config will not load** (#428, #442). The
+  manager will not delete a copy against a destination it could not read
+  back, an archived object cannot be read back, and there is no
+  `upload_verification` mode that says "existence is enough". So the pairing
+  is refused where you write it, with a message naming the tier, the medium,
+  the class and what to write instead, rather than accepted at load and
+  refused silently once per cycle for ever.
 
-A chain with ONE medium tier, which is the common case (daily local, monthly
-offsite), works end to end today.
+  The refusal is about the PAIRING, not about the medium. Declaring an
+  archive-class medium that no tier delivers to is legal and is what you
+  want if you already have objects on `DEEP_ARCHIVE`: the manager can see
+  them and restore them, and nothing is going to be written there.
 
-Both refusals, and every other reason a move does not happen, are now visible
-without reading logs. A cycle in which artifacts were due to move and none
+A chain with two medium tiers, which is the shape this document opens with
+(daily local, monthly `s3`, annual on a colder readable class), works end to
+end (#429). The second hop is a move from one medium to another, and the
+manager does it by reading the artifact down to a `.moves` directory under
+the backup set's own `local_path`, checking that what arrived hashes to what
+it recorded at ingestion, uploading that, and removing it. So a chain like
+this needs room on the NAS for the largest artifact that will ever hop
+between two mediums, transiently, even though nothing is stored there
+permanently. A hop that will not fit is refused before anything is
+downloaded, and the copy it would have moved stays exactly where it is.
+
+Every reason a move does not happen is visible without reading logs. A cycle in which artifacts were due to move and none
 arrived says so on the `Last run cycle` panel, in the operation record the
 activity feed reads, in the FR-23 event stream under `op=move`, and in
 `backup-manager run`'s exit status, which becomes 1 with the engine's own reason

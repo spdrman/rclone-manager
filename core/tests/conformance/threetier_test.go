@@ -611,9 +611,29 @@ func TestTheChainsSecondHopIsMediumToMedium(t *testing.T) {
 	assertActiveOn(t, w, fresh.id, mediumAnnual)
 	assertBytesAreReal(t, w, fresh)
 
+	// The two copies this hop had in existence at once are addressed by
+	// the SAME object key, on two different buckets, and that is a
+	// property of the chain rather than an accident. FR-28's key is
+	// <prefix>/<source>/<set>/<artifact-name> and neither medium here
+	// declares a prefix, so neither contributes a segment.
+	//
+	// It is asserted rather than left implicit because the watcher's
+	// correctness turns on it: a watcher that identified a copy by its
+	// locator alone would subtract the destination when the source was
+	// deleted, and a stale entry for one medium would mask a live copy on
+	// another. The day this fixture grows prefixes, that coverage
+	// evaporates silently, so this says so out loud instead. See
+	// watcher_test.go's own comment.
+	offsiteKey := recordedLocationOn(t, w, fresh.id, mediumOffsite)
+	if annualKey := recordedLocationOn(t, w, fresh.id, mediumAnnual); annualKey != offsiteKey {
+		t.Errorf("the two copies of %s are at %q on %q and %q on %q; this chain declares no prefixes, so the keys are meant to be identical, "+
+			"and a watcher that tells the copies apart by locator alone is no longer under test here",
+			fresh.id.Name, offsiteKey, mediumOffsite, annualKey, mediumAnnual)
+	}
+
 	// The source object really left the monthly bucket. A hop that copied
 	// and did not delete would satisfy every assertion above.
-	if _, err := adapter().StatObject(w.ctx, w.offsite, recordedLocationOn(t, w, fresh.id, mediumOffsite)); err == nil {
+	if _, err := adapter().StatObject(w.ctx, w.offsite, offsiteKey); err == nil {
 		t.Errorf("%s is still on %q after a completed hop to %q; the second copy was made and the first was not removed",
 			fresh.id.Name, mediumOffsite, mediumAnnual)
 	}
