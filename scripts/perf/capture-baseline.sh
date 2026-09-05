@@ -35,6 +35,11 @@ OUT=""
 SKIP_IMAGE=0
 IMAGE_PLATFORM="linux/$(go env GOARCH)"
 
+# The flags are documented here and nowhere else, so this text is the
+# reference. Each one says what the number means as well as what it sets,
+# because a baseline captured with the wrong repeat count or on the wrong
+# platform is not obviously wrong later: it is just a number that will not
+# reproduce.
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/perf/capture-baseline.sh [options]

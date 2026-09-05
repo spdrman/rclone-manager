@@ -209,6 +209,15 @@ mod_cache="rclone-manager-machine-tier-gomodcache"
 # ---------------------------------------------------------------- teardown
 
 failed=0
+# cleanup runs from the exit trap, so it has to work on a run that died
+# anywhere, including before the things it removes existed. Everything is
+# forced and every failure is swallowed for that reason.
+#
+# The straggler sweep is the part that is not obvious. A network cannot be
+# removed while an endpoint is still attached, and a killed run leaves the
+# harness's own machines behind, so removing the manager alone leaves a
+# network that never goes away. Anything still attached is ours by
+# construction, because the network name carries this run's id.
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ] && [ "$keep" = "1" ]; then

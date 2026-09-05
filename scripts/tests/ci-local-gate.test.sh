@@ -66,6 +66,11 @@ INCOMPLETE=3
 checks=0
 failures=0
 
+# Every assertion goes through pass or fail and both count, so the run
+# ends with a number rather than an impression. That count is what caught
+# this suite's own worst failure: a review neutered the gate's skip
+# ledger twice and it stayed green at 37 checks both times, which is why
+# Groups D and E exist and why the total is worth reading.
 pass() { checks=$((checks + 1)); printf '    ok   %s\n' "$1"; }
 fail() {
   checks=$((checks + 1))
@@ -144,6 +149,11 @@ make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   printf '%s\n' "$tree"
 }
 
+# A stub `docker` on the tree's own PATH, in whichever state the case
+# needs. The Docker probe is a property of the machine and every case here
+# is about what the gate DOES with the answer, so the answer has to be the
+# fixture's to choose: measuring the host would make the docker cases pass
+# or fail depending on who ran them.
 set_docker() { # <tree> <available|unavailable>
   if [ "$2" = available ]; then
     printf '#!/bin/sh\nexit 0\n' >"$1/bin/docker"
@@ -177,6 +187,10 @@ PKG
   if [ "$3" = installed ]; then mkdir -p "$1/$2/node_modules/.fixture"; fi
 }
 
+# A real module, not a marker directory: the gate runs `go build` and
+# `go vet` per module, so a fixture module has to compile. One stub file
+# is the cheapest thing that does, and keeping it minimal is what lets a
+# full synthetic run finish in seconds.
 add_go_module() { # <tree> <relpath> <module name>
   mkdir -p "$1/$2"
   printf 'module %s\n\ngo 1.21\n' "$3" >"$1/$2/go.mod"

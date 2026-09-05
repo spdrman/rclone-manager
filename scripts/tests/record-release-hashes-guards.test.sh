@@ -48,6 +48,11 @@ failures=0
 current=""
 tmpdirs=()
 
+# Every case works in its own throwaway git repository, and this removes
+# them from an EXIT trap so a case that dies partway through still cleans
+# up after itself. The ${tmpdirs+...} expansion is not decoration: under
+# set -u an empty array is an unbound variable, and a run that refuses
+# before creating anything would otherwise fail inside its own cleanup.
 cleanup() {
   for d in ${tmpdirs+"${tmpdirs[@]}"}; do
     [ -n "$d" ] && rm -rf "$d"
@@ -119,6 +124,12 @@ run_guards() {
   echo "$out"
 }
 
+# expect asserts the exit code AND the message. Every refusal in the
+# script under test exits with the same code, so a code-only assertion
+# cannot tell one refusal from another, and the message is the half that
+# says which guard fired. The code is checked first, because when it is
+# wrong the script went somewhere else entirely and the message assertion
+# would only report the symptom.
 expect() {
   local rc="$1" out="$2" want_rc="$3" want="$4"
   if [ "$rc" != "$want_rc" ]; then
@@ -131,6 +142,9 @@ expect() {
   esac
 }
 
+# refute asserts an absence, so it passes on its own against a run that
+# died early. Every use of it sits beside an expect that pins what did
+# happen.
 refute() {
   local out="$1" unwanted="$2"
   case "$out" in
@@ -138,6 +152,9 @@ refute() {
   esac
 }
 
+# The two halves of what a guarded run returns: a bash function has one
+# output channel, so the exit code rides on the first line and everything
+# the script printed follows it.
 split_rc() { echo "$1" | head -n1; }
 split_out() { echo "$1" | tail -n +2; }
 

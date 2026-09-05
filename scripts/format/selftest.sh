@@ -65,6 +65,10 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 
+# Every verdict goes through one of these two, so the run ends with a
+# count it can check rather than with an impression. A self-test that
+# skipped half its cases and printed nothing about it is the failure this
+# file exists to rule out elsewhere.
 ok()   { echo "  ok:   $1"; pass=$((pass + 1)); }
 bad()  { echo "SELFTEST FAIL: $1" >&2; shift; [ $# -gt 0 ] && printf '%s\n' "$1" | sed 's/^/    /' >&2; fail=$((fail + 1)); }
 

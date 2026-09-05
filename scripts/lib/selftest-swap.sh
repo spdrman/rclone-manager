@@ -106,6 +106,21 @@ _selftest_display() {
   printf '%s' "$shown"
 }
 
+# _selftest_anchor is the one place an anchor is matched, for both modes,
+# which is what makes --check-anchors mean anything: a dry run that
+# matched by a different rule from the planting run could pass while every
+# plant lands nowhere.
+#
+# Exactly once is the requirement, and both other counts are refusals with
+# their own message. Zero is the drift this exists to catch. More than one
+# is worse and less obvious: the plant would land in several places, so
+# the mutation is no longer the one the control describes.
+#
+# The failure report names the line where the match stops rather than
+# printing the block and leaving the reader to diff it by eye. That turns
+# "somebody refactored something" into a line the person holding the diff
+# recognises, which is the difference between re-aiming an anchor and
+# deleting it.
 _selftest_anchor() {
   local mode=$1 file=$2 old=$3 new=${4:-} out status=0 display
   # display cannot be assigned on the line above: bash declares every name in

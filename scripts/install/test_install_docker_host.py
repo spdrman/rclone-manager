@@ -100,6 +100,18 @@ class Fixture:
         self.known.write_text("# pinned host keys go here\n")
 
     def args(self, *extra: str, command: str = "preflight"):
+        """A resolved Namespace for one subcommand, built through the real
+        parser.
+
+        Through build_parser and resolve rather than constructed directly,
+        so a test is exercising the flags an operator would actually type
+        and a flag that moves between subparsers fails here rather than
+        silently stopping being covered.
+
+        The credential and compose flags are added only for the two
+        subcommands that declare them, since the others would reject them at
+        parse time.
+        """
         argv = [command, "--prefix", str(self.prefix)]
         # --ssh-key/--known-hosts/--compose-file only exist on preflight and
         # install's own subparsers (issue #330): only Preflight's checks and
@@ -113,6 +125,14 @@ class Fixture:
 
 
 def refusal_from(fn, *a, **kw):
+    """Run a check and hand back the Refusal it raised, or None.
+
+    Returning rather than asserting, so the caller can assert on the code
+    AND the message. Every refusal in the installer exits non-zero, so a
+    test that only caught "it raised" cannot tell "this architecture has
+    no image" from "that port is taken", and those are the two facts an
+    operator on an unfamiliar machine needs kept apart.
+    """
     try:
         fn(*a, **kw)
     except installer.Refusal as exc:
@@ -200,6 +220,13 @@ def _all_subparser_flags(parser):
 
 
 class TestArchitectureRefusal(unittest.TestCase):
+    """The one refusal no flag can get past.
+
+    Both directions: an architecture with no released image is refused
+    and named, and the two that are released map to the right image
+    architecture. The second half is what stops the first from passing
+    against a check that refuses everything.
+    """
     def test_an_unreleased_architecture_is_refused_by_name(self):
         fx = Fixture(self)
         pf = installer.Preflight(fx.args())
@@ -241,6 +268,16 @@ class TestArchitectureRefusal(unittest.TestCase):
 
 
 class TestCredentialRefusals(unittest.TestCase):
+    """The key and the known_hosts, refused for the reasons OpenSSH itself
+    would refuse them.
+
+    A key readable beyond its owner is what the ssh client rejects at
+    connection time, so refusing it here moves the failure from the
+    middle of the first backup cycle to the front of the install. The
+    missing known_hosts case asserts the message names the flag, since
+    this file is the only place that says which host keys are trusted
+    and "not found" without the flag name sends people to generate one.
+    """
     def test_a_world_readable_key_is_refused(self):
         fx = Fixture(self)
         os.chmod(fx.key, 0o644)
@@ -288,6 +325,14 @@ class TestCredentialRefusals(unittest.TestCase):
 
 
 class TestPathRefusals(unittest.TestCase):
+    """The directories, under the constraint this installer actually runs
+    in: a non-root account with no passwordless sudo.
+
+    That is why "owned by somebody else" is a refusal rather than a
+    chown. The installer cannot fix it, and the message has to say so,
+    or an operator reads it as a bug rather than as something they need
+    to do first.
+    """
     def test_a_directory_owned_by_someone_else_is_refused_with_the_no_sudo_reason(self):
         fx = Fixture(self)
         args = fx.args()
@@ -360,6 +405,9 @@ class TestPathRefusals(unittest.TestCase):
 
 
 class TestPayloadRefusal(unittest.TestCase):
+    """Where the runtime definition comes from, once it no longer has to
+    come from a checkout.
+    """
     def test_a_missing_canonical_definition_is_refused_rather_than_improvised(self):
         """Since #346 the installer carries the canonical definition, so
         supplying nothing is fine. Naming a path that is not there is
@@ -750,6 +798,14 @@ class TestARunningCheckoutIsNotSilentlyIgnored(unittest.TestCase):
 
 
 class TestPortRefusal(unittest.TestCase):
+    """The port check, and the idempotence property that hangs off it.
+
+    A second run of a working install finds its own Web UI on the port,
+    and it must not report that as a conflict. So the two cases here are
+    the same check with _port_is_ours answering differently, which is
+    also why that method is a seam rather than inline: nothing in a unit
+    test can stand up a real Compose stack to be found.
+    """
     def test_a_port_held_by_something_else_is_refused(self):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
@@ -780,6 +836,12 @@ class TestPortRefusal(unittest.TestCase):
 
 
 class TestSpaceRefusal(unittest.TestCase):
+    """Free space, refused before anything is written.
+
+    The ordering is the assertion. A disk that fills partway through a
+    transfer leaves a partial artifact and a catalog entry describing
+    it, which is a worse state to be in than never having started.
+    """
     def test_a_full_volume_is_refused_before_anything_is_written(self):
         fx = Fixture(self)
         args = fx.args()
@@ -798,6 +860,14 @@ class TestSpaceRefusal(unittest.TestCase):
 
 
 class TestImageRefusal(unittest.TestCase):
+    """A named image archive that is not there, refused without reaching
+    for Docker.
+
+    The remedy is asserted rather than only the code, because the fix
+    is a `docker save` on another machine and an operator who is told
+    only that the file is missing has no reason to think that is what
+    produces one.
+    """
     def test_a_missing_archive_is_refused_without_touching_docker(self):
         fx = Fixture(self)
         args = fx.args("--image-archive", str(fx.prefix / "nope.tar"))
@@ -808,6 +878,16 @@ class TestImageRefusal(unittest.TestCase):
 
 
 class TestRendering(unittest.TestCase):
+    """What gets written to disk: the .env, the image override, and their
+    permissions.
+
+    The first test reads its expectations out of the canonical compose
+    file rather than restating them, which is the difference between a
+    test that notices a newly required variable and one that has to be
+    remembered. The rest pin the two things an operator would otherwise
+    discover the hard way: that the override changes only the image, and
+    that the .env is owner-only.
+    """
     def test_the_env_names_every_variable_the_canonical_compose_requires(self):
         """container/compose.yaml mounts five host paths with `:?`, so a
         missing one is not a warning, it is the stack refusing to start.
@@ -1701,6 +1781,16 @@ class TestDestroyPreview(unittest.TestCase):
 
 
 class TestModeFlagReplacesIfInstalled(unittest.TestCase):
+    """--if-installed is gone, and its absence has to be usable.
+
+    The removal is easy; what these pin is the part that was got wrong
+    once. A flag deleted outright makes a scripted `--if-installed
+    converge` die at argparse's own exit 2 with "unrecognized
+    arguments", which names neither --mode nor the mapping, so whoever
+    hits it in a cron job has to come and read the source. So it stays
+    registered, hidden from --help, and its only job is to say what to
+    write instead.
+    """
     def flags_of(self, command):
         return {opt for a in _subparser(installer.build_parser(), command)._actions
                 for opt in a.option_strings}
@@ -1828,6 +1918,13 @@ REAL_RULESET_AFTER = (REAL_RULESET_BEFORE
 
 
 class TestToolLookup(unittest.TestCase):
+    """Finding the privileged tools from an account whose PATH has no
+    /sbin.
+
+    This is a real diagnosis that came back useless: iptables and nft
+    were reported absent, and the entire firewall section of the report
+    was empty as a result, which was the section holding the answer.
+    """
     def test_a_privileged_tool_is_found_even_when_PATH_excludes_sbin(self):
         """The mistake that made an earlier diagnosis of this host useless.
 
@@ -1849,6 +1946,16 @@ class TestToolLookup(unittest.TestCase):
 
 
 class TestCounterParsing(unittest.TestCase):
+    """Reading an iptables dump: abbreviated counters, chains, policies and
+    DROP rules.
+
+    The whole network diagnosis is a counter comparison, so a parse that
+    reads 12M as zero makes the busiest rule on the host look idle, and
+    the busiest rule is exactly the one that gets abbreviated. The
+    ruleset test runs against a dump captured from a real NAS rather
+    than a hand-written one, so the shape it parses is the shape it will
+    meet.
+    """
     def test_abbreviated_counters_are_not_read_as_zero(self):
         """iptables prints 12M and 494K, and the busiest DROP on a NAS is
         exactly the one that gets abbreviated. A parse that returned 0 for
@@ -2229,6 +2336,14 @@ class TestSudoRefusals(unittest.TestCase):
 
 
 class TestHealthyHostIsANoOp(unittest.TestCase):
+    """A host whose bridge networking already works is never touched and
+    never asked for a password.
+
+    That property is what makes it defensible to run the repair as part
+    of an ordinary install, so it is asserted by making any escalation
+    an outright test failure rather than by checking afterwards that
+    nothing changed.
+    """
     def test_a_working_host_changes_nothing_and_never_escalates(self):
         fx = Fixture(self)
         args = fx.args("--fix-network", "auto", command="install")
@@ -2672,6 +2787,15 @@ class TestSubcommandFlagScoping(unittest.TestCase):
 
 
 class TestFixNetworkVocabulary(unittest.TestCase):
+    """One flag with four values, and the right default per subcommand.
+
+    Two knobs for one decision is how they end up disagreeing, so the
+    tests refuse a second flag by name as well as pinning the choices.
+    The defaults differ on purpose and each is asserted with its reason:
+    install repairs because that is what makes the install work, and a
+    command called "doctor" diagnoses, because running it to check
+    should not itself escalate sudo and rewrite a firewall.
+    """
     def test_the_default_is_the_conservative_one(self):
         args = Fixture(self).args(command="install")
         self.assertEqual(args.fix_network, "auto",
@@ -3049,6 +3173,13 @@ class TestEveryDirectoryIsBornWithoutGroupOrWorldWrite(unittest.TestCase):
 
 
 class TestPreflightDoesNotCryAboutWhatInstallWillCreate(unittest.TestCase):
+    """The one asymmetry between preflight and install.
+
+    preflight validates and install creates, so the one thing install
+    generates by itself cannot be a preflight refusal: reporting a fresh
+    host as broken for doing nothing wrong is how a dry run stops being
+    worth running.
+    """
     def test_a_defaulted_missing_key_is_reported_as_pending_not_refused(self):
         """preflight is a dry run of install. Refusing on a fresh host for
         the one thing install creates by itself reports the machine as

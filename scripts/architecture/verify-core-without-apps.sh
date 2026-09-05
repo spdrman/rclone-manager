@@ -9,6 +9,12 @@ cd "$(git rev-parse --show-toplevel)"
 source scripts/architecture/lib.sh
 
 wt=""
+# Trapped on EXIT rather than run at the end, because this check deletes
+# whole directories inside the worktree and then runs a build in it: an
+# interrupt or a failing build partway through would otherwise leave a
+# registered git worktree full of holes behind, and the next run inherits
+# it. The guard is for the interrupt that lands before the worktree
+# exists.
 cleanup() { [ -n "$wt" ] && arch::cleanup_worktree "$wt"; }
 trap cleanup EXIT
 

@@ -1,3 +1,22 @@
+// The suite behind the licence obligations the shipped image itself has
+// to discharge: the materials are inside it, the build context can still
+// reach every source it copies, the runtime stage labels what it carries,
+// and every distribution target says how a recipient gets the licence.
+//
+// All of it is read out of container/Dockerfile and .dockerignore rather
+// than out of a built image, which is the compromise this file is built
+// around. Nothing in a unit suite can pull an image, so what is provable
+// here is that the recipe says the right thing; the check that the recipe
+// was followed is a separate, recorded artifact, and one test below
+// insists that artifact exists rather than letting the recipe stand in
+// for it.
+//
+// Reading a Dockerfile as text invites the failure mode this package
+// keeps meeting: a matcher that quietly matches nothing passes. So every
+// reader here has a test whose whole job is to watch it refuse, driving
+// it against a recipe that is wrong in one specific way, and the
+// .dockerignore reader is held to Docker's own precedence rules rather
+// than to a simplification that happens to agree on today's file.
 package packaging
 
 import (

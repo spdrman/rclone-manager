@@ -15,6 +15,11 @@ import (
 // hand-maintained record of a test run is a record of what somebody
 // believed at the time.
 
+// The generated region's boundaries. Markers rather than owning the whole
+// file, so the report can carry hand-written context around a body that
+// is regenerated and byte-compared: a fully generated document invites
+// somebody to explain a verdict in it and lose the explanation on the
+// next run.
 const (
 	preflightBeginMarker = "<!-- BEGIN GENERATED PREFLIGHT -->"
 	preflightEndMarker   = "<!-- END GENERATED PREFLIGHT -->"
@@ -114,6 +119,10 @@ func submissionGatedBy(e Epic) string {
 	return "reported here, gated by EPIC " + string(e)
 }
 
+// storeLabel gives a target with no store a name rather than a blank
+// cell. Having no store is a legitimate answer here (some targets ship
+// through a documented workflow instead), and an empty cell reads as a
+// missing record of the same fact.
 func storeLabel(st Store) string {
 	if st.Kind == "none" {
 		return "no store (documented workflow)"

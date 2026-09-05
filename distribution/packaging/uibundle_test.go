@@ -1,3 +1,15 @@
+// Issue #180's packaging half: which adapter UI bundles the canonical
+// image carries, and the proof that carrying them is a decision rather
+// than an accident.
+//
+// The interesting constraint is that this rule fails in both directions
+// and the two failures look nothing alike. Carrying too few reinstates
+// #180 for whichever adapter was dropped, and it does so at the worst
+// moment, because serve-ui refuses to start rather than quietly serving
+// the wrong bridge. Carrying too many is an image-size regression against
+// a budget with a couple of megabytes of headroom, which nobody notices
+// until a release. So the tests below assert the set, not a floor, and
+// the reasoning behind the set lives on the test that checks it.
 package packaging
 
 import (

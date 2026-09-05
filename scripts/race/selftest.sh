@@ -145,6 +145,11 @@ expect_race_missed() {
   fi
 }
 
+# The negative control: the racing test has to be clean under -race on the
+# unmutated tree, or R2's red says nothing about the mutation. It returns
+# early on a stale anchor and under --check-anchors for the same reason
+# its siblings do, since neither of those is a run whose result means
+# anything.
 expect_gate_passes() {
   local label=$1 dir=$2
   if selftest_stale_verdict "$label"; then

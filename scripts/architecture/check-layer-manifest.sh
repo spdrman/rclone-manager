@@ -33,6 +33,11 @@ if [ ! -f "$manifest" ]; then
 fi
 
 fail=0
+# note records the failure and keeps going, so one run reports every
+# violation rather than the first one. That matters more here than it
+# looks: these findings arrive in batches (a manifest edit that misses
+# several files, a new module that imports across two layers at once), and
+# a check that stops at the first turns one fix into several runs.
 note() { echo "$@" >&2; fail=1; }
 
 # ---- vocabulary and shape -------------------------------------------------
