@@ -131,7 +131,12 @@ cannot_run() {
 
 # --------------------------------------------------------------- options
 
-packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/... ./tests/miniointegration/..."
+# Every package that reaches a machine, which is the gate's own
+# gotestwatch list plus tests/machines. The harness package is not on the
+# gate's list because it is a harness rather than a machine-tier package
+# and runs in the plain `go test` step, but it is exactly the package whose
+# own #161, #243 and #456 proofs are worth running in this placement too.
+packages="./tests/machines/... ./tests/machinegate/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/... ./tests/crashmatrix/..."
 keep=0
 run_filter=""
 verbose=""
