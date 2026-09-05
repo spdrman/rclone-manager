@@ -29,6 +29,13 @@ import deploy_generic  # noqa: E402
 
 
 def _base_args(ssh_key: str, known_hosts: str, **overrides: str) -> list[str]:
+    """A command line that is valid in every respect except the one under test.
+
+    Every test starts from this and overrides one thing, so a refusal
+    proves the rule it is aimed at fired rather than that the arguments
+    were incomplete. --no-start is always present: these tests render
+    and validate, and nothing here may reach Docker.
+    """
     args = [
         "--ssh-key", ssh_key,
         "--known-hosts", known_hosts,
@@ -45,6 +52,17 @@ def _base_args(ssh_key: str, known_hosts: str, **overrides: str) -> list[str]:
 
 
 def _write_key(path: Path, mode: int = 0o600, content: str = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n") -> None:
+    """A private key file, with its mode set explicitly.
+
+    The mode is a parameter because it is the subject of two of these
+    tests, and setting it with chmod rather than relying on the umask is
+    what makes those tests say the same thing on every machine.
+
+    The content is fake and looks real enough to be recognisable in a
+    diff. Two tests replace it with a marker string and then search the
+    rendered output for that marker, which is the only way to assert
+    that key material never leaves the file it came from.
+    """
     path.write_text(content)
     os.chmod(path, mode)
 
@@ -215,6 +233,14 @@ class ConfigRenderingTests(unittest.TestCase):
         self.assertNotIn(secret_marker, config_yaml, "the key's CONTENTS must never appear in config.yaml")
 
     def test_config_yaml_never_contains_key_contents_even_via_main_dry_run(self):
+        """The same claim as the test above, made against a whole run.
+
+        Rendering one file and finding no key material in it proves nothing
+        about the other files a real invocation writes, or about what it
+        prints. So this one drives main end to end and searches every file
+        under the deploy directory plus both output streams for a marker
+        planted as the key's contents.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -249,6 +275,12 @@ class ConfigRenderingTests(unittest.TestCase):
         self.assertIn(str(key), env_file)
 
     def test_rendering_is_deterministic(self):
+        """Two renders of the same arguments produce the same bytes.
+
+        Worth asserting because the output is a file an operator may keep
+        under version control, and a dict iteration order or a timestamp
+        creeping in would turn every re-run into a diff nobody can read.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")

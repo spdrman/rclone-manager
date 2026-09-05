@@ -59,6 +59,20 @@ class Unembeddable(Exception):
 
 
 def refuse_if_unembeddable(compose_text: str) -> None:
+    """Refuse the two contents that cannot survive the splice.
+
+    Both refusals are about a failure that regenerating cannot clear,
+    which is why they are refusals and not warnings. The embedded copy
+    is a non-raw triple-quoted literal: a backslash in the canonical
+    file comes back as an escape rather than as itself, and a triple
+    quote closes the literal early and leaves the rest of a compose file
+    standing where Python source should be, which breaks the installer
+    at import and takes its whole suite with it.
+
+    The messages name both ways out (change the canonical file, or
+    change how the definition is carried) because the person who hits
+    this is holding a compose file they had a reason to write.
+    """
     if "\\" in compose_text:
         raise Unembeddable(
             "container/compose.yaml now contains a backslash, and the embedded copy is a "
@@ -100,6 +114,17 @@ def rewrite(module_src: str, compose_text: str) -> str:
 
 
 def main(argv=None) -> int:
+    """Regenerate the embedded copy, or say why it did not.
+
+    Already-identical is a success and prints so, because this is run to
+    make a state true rather than to make a change, and a run that
+    reports nothing done is the expected result on a clean tree.
+
+    Reading and writing bytes with an explicit UTF-8 decode is not
+    tidiness: read_text uses the locale's encoding, the canonical file
+    carries a section sign and em dashes, and under LC_ALL=C it does not
+    decode at all.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     canonical = Path(argv[0]) if argv else CANONICAL
     if not canonical.is_file():

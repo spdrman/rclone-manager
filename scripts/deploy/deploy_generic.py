@@ -99,6 +99,14 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Every flag, grouped the way an operator has to think about them.
+
+    The credential group is required with no defaults at all, and that
+    is the deliberate part: an --ssh-key that fell back to ~/.ssh would
+    make "which key did this deployment use" a question about the
+    machine it ran on, and the answer would change when somebody else
+    ran the same command.
+    """
     parser = argparse.ArgumentParser(
         prog="deploy_generic.py",
         description="Deploy the generic backup-manager Docker app (issue #82/B4.1).",
@@ -309,6 +317,18 @@ def _write_if_changed(path: Path, content: str) -> None:
 
 
 def _run_docker_compose(args: argparse.Namespace, env_file: Path) -> None:
+    """Bring the stack up from the canonical compose file.
+
+    Never a generated one. This script renders config.yaml and a .env
+    and nothing else, because container/compose.yaml is held to the
+    runtime contract by a gate and a deployment shaped by a script that
+    gate never sees would be a stack nobody checked.
+
+    The output is captured and only surfaced on failure, wrapped in
+    DeploymentError, so a compose failure arrives with its stdout and
+    stderr attached instead of scrolling past between the steps either
+    side of it.
+    """
     cmd = [
         "docker", "compose",
         "-p", args.project_name,
@@ -326,6 +346,13 @@ def _run_docker_compose(args: argparse.Namespace, env_file: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Validate, render, then deploy, and return an exit code rather than
+    raising.
+
+    The order is the safety property, and the comment below marks the
+    line it turns on: nothing is created until both credential checks
+    pass, so a run that refuses leaves the host exactly as it found it.
+    """
     try:
         args = parse_args(argv)
 
