@@ -1,3 +1,24 @@
+// This file is FR-9's answer to "the journal is gone, or it is missing
+// rows nobody can explain": rebuild what can be rebuilt from the
+// non-secret sidecar recovery manifests every committed artifact already
+// carries next to its bytes, and report honestly on the rest.
+//
+// It aggregates across every configured backup set and takes no set id,
+// which is the unit the event actually comes in. A journal is one
+// database for the whole deployment, so an operator who has lost it has
+// lost it for every set at once, and an API that made them rebuild one
+// set at a time would turn a single recovery into a loop they can get
+// half way through.
+//
+// The two entry points below are one code path with a flag, on purpose.
+// A preview computed by a second implementation is a preview of something
+// other than what runs, and the thing an operator is deciding from this
+// report is whether to let it write.
+//
+// Nothing here contacts a remote. Rebuild reads manifests that are
+// already on local disk and writes only to the local journal, so it is
+// available in exactly the situation that needs it, which is the one
+// where the state of the remotes is the question rather than the answer.
 package service
 
 import (

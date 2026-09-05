@@ -1,5 +1,22 @@
 //go:build !unix
 
+// This file is what lock_unix.go's advisory locking becomes on a GOOS
+// this project does not ship: nothing, loudly.
+//
+// It exists so the rest of the package compiles everywhere without
+// spelling out a build tag at every call site, and every function in it
+// refuses rather than pretending. A no-op lock is the worst available
+// answer, because it would let two processes snapshot and migrate the
+// same journal at once while both believed they had been serialised, and
+// the only evidence would be the damage afterwards. A safety condition
+// this codebase cannot honestly assess is reported, never quietly
+// skipped, and that rule is what these stubs implement.
+//
+// The sentinels are mirrored rather than moved into a shared file so that
+// a caller comparing against ErrStartupLocked or ErrJournalInUse names
+// one identifier on every platform. Neither is ever returned from this
+// build: acquiring fails first, with an error that names the GOOS, which
+// is the thing somebody porting this actually needs to read.
 package service
 
 import (
