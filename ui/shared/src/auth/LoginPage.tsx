@@ -1,3 +1,19 @@
+/**
+ * The sign-in screen, and the frame both pre-auth screens share.
+ *
+ * Two constraints shape it. It must not look like the NAS operating
+ * system's own login, because an operator who mistakes it for one has just
+ * typed their OS credentials into an application that never wanted them,
+ * so the page says what account it is asking for in as many words. And a
+ * refusal has to be reported as the refusal it was: a rate-limited address
+ * and a wrong password are different problems with different answers, and
+ * reading both as a wrong password sends someone to retype something that
+ * was never wrong.
+ *
+ * `AuthFrame` lives here rather than in components because it exists for
+ * exactly these two screens, and putting it next to the first one that
+ * needs it keeps the shared-with-whom question answerable by looking.
+ */
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

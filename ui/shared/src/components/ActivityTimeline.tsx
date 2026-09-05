@@ -1,3 +1,17 @@
+/**
+ * The event log, in the two densities the app reads it at.
+ *
+ * Dense is the dashboard's recent-activity panel, where the day is already
+ * implied by "recent" and only the time of day carries information; the
+ * full form is the Activity page, where an event's set has to be named
+ * because the list spans all of them. That is the whole difference, and it
+ * is one prop rather than two components so the row layout cannot drift
+ * apart between the two places it appears.
+ *
+ * Warnings and errors are bolded as well as coloured and glyphed, which is
+ * the third redundant channel on the one list where scanning for the bad
+ * line is the actual task.
+ */
 import type { ActivityEvent, Severity } from "@shared/types/operation";
 import { stamp } from "@shared/utilities/format";
 

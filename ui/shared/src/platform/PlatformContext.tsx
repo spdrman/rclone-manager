@@ -1,3 +1,24 @@
+/**
+ * The provider that puts the bridge and the signed-in identity onto the
+ * graph, and the hook the rest of the app reads them back through.
+ *
+ * There is no React context here despite the name, and that is the point:
+ * the bridge has to be readable by a derived node (capabilityCopyNode),
+ * and a derived compute can only see other nodes. The name stayed because
+ * every import site says what it means.
+ *
+ * Three things in this file look like they could be simpler and cannot,
+ * and each carries its own note at the point it happens. The bridge is
+ * committed during render rather than in an effect, because an effect runs
+ * after children have already rendered once and a child asking on that
+ * first pass would find nothing. The guard against re-committing is local
+ * state rather than a read-back comparison, because the engine may swap
+ * its own backend underneath and reference stability across that swap is
+ * not promised. And the hook's return value is memoised, because a fresh
+ * object every render is invisible until the first person puts
+ * `refreshAuth` in a dependency array and gets an infinite refetch with
+ * nothing pointing at this file.
+ */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { AuthContext as AuthCtx, PlatformBridge } from "@shared/types/platform";

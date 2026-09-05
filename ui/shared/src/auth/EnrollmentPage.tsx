@@ -1,3 +1,20 @@
+/**
+ * Creating the one administrator account, which happens once per instance
+ * and cannot be repeated.
+ *
+ * The form is ordinary. What is not is the refusal handling, and it takes
+ * up most of the file because enrolment fails for several reasons that the
+ * wire deliberately does not fully distinguish, and the operator's next
+ * step differs between them. The long note on `EnrollmentFailure` works
+ * through which of those this page settles itself, which the service
+ * already separates, and which two are folded together on purpose because
+ * they are recovered identically.
+ *
+ * The password rules are checked here as well as by the service. That is
+ * not a second source of truth so much as a courtesy: a rule an operator
+ * can see before pressing the button beats the same rule arriving as a
+ * rejection afterwards, and the service remains the one that decides.
+ */
 import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

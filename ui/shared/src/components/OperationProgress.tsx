@@ -1,3 +1,22 @@
+/**
+ * A running operation, measured only where the service actually measured
+ * it.
+ *
+ * Every branch in this file exists to avoid the same lie. A bar sitting at
+ * zero says "measured, nothing has moved", which is false for an operation
+ * that reports no progress at all, so an unmeasurable one is indeterminate
+ * and says in words why there is nothing to show. An absent byte count
+ * renders no element rather than a zero. And the bar tracks the ONE
+ * artifact being copied rather than the run, because a cycle discovers
+ * what it will do as it goes and has no honest denominator; the caption
+ * under the bar says which of the two it is.
+ *
+ * The footer line about deletion is not decoration. It states, on the
+ * screen where a transfer is visibly in progress, that the remote original
+ * outlives the copy until the copy is verified and committed, which is the
+ * product's central promise and the moment an operator is most likely to
+ * be wondering about it.
+ */
 import type { Operation, TransferProgress } from "@shared/types/operation";
 import { TRANSFER_STAGES, progressPercent } from "@shared/types/operation";
 import { bytes, rate } from "@shared/utilities/format";

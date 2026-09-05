@@ -1,3 +1,18 @@
+/**
+ * The title block every page opens with, including its way back and its
+ * page-level actions.
+ *
+ * Actions belong up here rather than beside the thing they act on
+ * whenever their scope is the whole page, which is a distinction this
+ * product has already got wrong once: a control's placement says what it
+ * acts on, louder than its label does, so a deployment-wide pass drawn
+ * inside a per-set card reads as a per-set run (see BackupSetCard's own
+ * note). Anything handed to `actions` here is claiming page scope.
+ *
+ * `title` and `subtitle` take nodes rather than strings so a page can put
+ * an identity in mono or a badge beside the name without this component
+ * growing a prop per case.
+ */
 import type { ReactNode } from "react";
 
 export function PageHeader({

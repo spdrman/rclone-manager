@@ -1,3 +1,22 @@
+/**
+ * How a backup's retention shows up on a row: which tiers keep it, and
+ * what selected it for each of them.
+ *
+ * The file holds two badge families and the difference between them is the
+ * thing to understand before changing either. `RetentionBadges` takes the
+ * CLOSED four-value vocabulary that describes a backup, and
+ * `RetentionTierBadges` takes a verdict's own tiers, whose value set is
+ * open because an operator defines the chain. An unrecognised tier is
+ * therefore badged under its own name rather than dropped, since dropping
+ * it would leave a kept artifact looking unclassified, which is the
+ * wording for the opposite situation.
+ *
+ * Placement is named per badge rather than per row on purpose. One
+ * artifact can be selected for one tier by the timestamp this manager
+ * recorded and for another by the producer's own, and those differ in how
+ * much they can be trusted, so a single answer for the row would be wrong
+ * for exactly the artifact where it matters.
+ */
 import type {
   RetentionClass,
   RetentionTierPlacement,
