@@ -40,7 +40,7 @@ import (
 // is slow AND partly uninterruptible. That is fine for sampling progress
 // and fatal for proving an interruption; gate_test.go's
 // MidTransferCancellation used to use it and did not prove what it said
-// (#414). It throttles a slow link instead.
+// (#414). That row runs over a slow link now instead.
 func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	// "1M" is rclone's own spelling for 1 MiB/s. It is written as a
 	// suffixed string on purpose: a bare number in an rclone bandwidth
