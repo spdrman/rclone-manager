@@ -1,4 +1,38 @@
 #!/bin/sh
+# Puts UGREEN's own `ugcli` on a UGOS Pro NAS, at whatever version UGREEN has
+# published most recently.
+#
+# `ugcli` is the vendor's packaging tool, the thing `ugcli pack --build <n>`
+# turns a directory into a `.upk` with, so nothing in the UGOS packaging story
+# can be tried by hand until it is on the machine. There is no repository to
+# apt-get it from and no artifact of it in this checkout, which leaves two ways
+# to get it there. The committed `.deb` under dpkg/ is the repeatable one: its
+# bytes were reviewed and its SHA-256 is recorded beside it, and it stays
+# pinned for exactly that reason. This script is the current one, and it is
+# knowingly the weaker of the two, because it installs an artifact nobody here
+# has looked at. README.md sets out which to reach for; that choice is the
+# whole reason both exist.
+#
+# One fact about the endpoint shapes most of what follows, and the
+# configuration block below sets out the evidence for it: UGREEN publishes no
+# `latest` pointer, no manifest and no directory listing, so "newest" cannot be
+# asked for and has to be found. The script walks version numbers upward from
+# the last one it was verified against until the server stops answering. That
+# is where the version floor comes from, why probing carries on a little past
+# the first 404 rather than stopping dead, and why a 404 and an unreachable
+# server are handled differently: a miss is evidence and a timeout is not, and
+# reading a timeout as "nothing newer" would pin the install to the floor while
+# calling it the latest.
+#
+# The remaining length is an appliance being an unforgiving place to install
+# into, and each decision here is a reaction to that rather than a style.
+# /bin/sh with no bashisms, because UGOS does not promise bash. sudo asked for
+# at the point something first needs root instead of up front, so a person
+# reading the prompt can see what it is about to be spent on. Only the system
+# packages actually found missing get installed, because reinstalling a working
+# dependency on a NAS is a good way to stop it being one. And every failure the
+# script cannot fix ends in printed manual recovery steps, because whoever hits
+# one is at the end of an SSH session with no other way in.
 
 set -eu
 
