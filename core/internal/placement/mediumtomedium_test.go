@@ -475,11 +475,23 @@ func TestAStaleStagingCopyIsReplacedRatherThanUploaded(t *testing.T) {
 		t.Fatalf("planting a stale staging copy: %v", err)
 	}
 
+	uploadsBefore := f.medium.uploadCount()
 	f.moveToB()
 	f.guard.fail()
 
 	if got := string(f.medium.bytesAt(f.keyB)); got != string(f.content) {
 		t.Fatalf("the copy on %q holds %q; a stale staging file was uploaded as the artifact", mediumB, got)
+	}
+
+	// One upload, and the count is the assertion rather than the end
+	// state. A build that uploaded the stale bytes would still finish
+	// correctly: the destination fails verification, the move goes back to
+	// COPYING, the staging file is gone by then so the second attempt
+	// downloads properly, and the artifact arrives. Only the count says
+	// whether the check ran, and the difference is a whole artifact's
+	// egress and ingress on every interrupted move.
+	if got := f.medium.uploadCount() - uploadsBefore; got != 1 {
+		t.Errorf("the move made %d upload(s), want 1; a stale staging copy was uploaded and then re-copied after it failed verification", got)
 	}
 	if leftovers := f.stagingLeftovers(); len(leftovers) != 0 {
 		t.Errorf("the staging area holds %v after the move that replaced its contents", leftovers)
