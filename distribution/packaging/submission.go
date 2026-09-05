@@ -580,6 +580,14 @@ func CheckNoFloatingTag(path, text string) []Violation {
 	return out
 }
 
+// tagKind is how an image reference names its bytes, and the five values
+// exist because four different mistakes read as the same thing from a
+// distance. A missing tag, `latest`, and a variable whose default is
+// `latest` all deploy whatever the registry holds that day, and each
+// arrives by a different route, so each gets its own message. tagVariable
+// is separate again: a reference that resolves through a variable with no
+// floating default is not pinned by this file's own reading, and saying
+// so is not the same as accusing it of floating.
 type tagKind int
 
 const (

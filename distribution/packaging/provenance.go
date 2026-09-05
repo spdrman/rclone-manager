@@ -334,6 +334,11 @@ func isFirstPartyModule(path string) bool {
 // the state of.
 const UISharedLockfile = "ui/shared/package-lock.json"
 
+// npmLockfile is as much of the v3 lockfile as the inventory needs. Dev
+// is modelled and read rather than skipped at parse time, because the
+// production/development split is the whole question here: a dev-only
+// package carries no obligation for the shipped artifact, and deciding
+// that from a field the parser dropped is not possible.
 type npmLockfile struct {
 	LockfileVersion int `json:"lockfileVersion"`
 	Packages        map[string]struct {

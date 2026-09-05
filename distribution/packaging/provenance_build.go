@@ -49,6 +49,12 @@ func (g GeneratedProvenance) Files() []struct {
 	}
 }
 
+// inventoryNote and provenanceNote are written INTO the generated files,
+// so the argument for what is in them reaches whoever opens the artifact
+// rather than only whoever opens this package. A generated file that says
+// nothing about how it was derived gets hand-edited the first time it
+// disagrees with somebody, and these two are evidence, so a hand edit is
+// exactly the thing that must not happen quietly.
 var inventoryNote = []string{
 	"Generated. Do not hand-edit: run `go run ./cmd/provenance -write` from apps/common.",
 	"",
@@ -417,6 +423,13 @@ func GenerateProvenance() (GeneratedProvenance, error) {
 	return g, nil
 }
 
+// linkReadiness turns the one recorded fact (whether the source
+// repository is public) into the sentence a store reviewer's situation
+// actually calls for. The negative branch is the long one on purpose: it
+// separates "the materials do not exist" from "the materials exist and a
+// reviewer cannot reach them", says which of those this is, names who can
+// change it, and points at the written source offer that stands until
+// somebody does. A bare false would read as the first.
 func linkReadiness(c Compliance) LinkReadiness {
 	if c.StoreReadyForPublicLinks() {
 		return LinkReadiness{

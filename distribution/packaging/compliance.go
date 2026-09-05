@@ -448,6 +448,11 @@ func (c Compliance) AcceptedNonPermissiveIDs() []string {
 	return out
 }
 
+// containsFold compares SPDX identifiers, which are case-insensitive by
+// the specification and are written by hand in this repository's own JSON
+// as well as read out of upstream module metadata. Trimming both sides
+// too, for the same reason: a trailing space in an accepted-licence list
+// is not a different licence.
 func containsFold(list []string, want string) bool {
 	want = strings.TrimSpace(want)
 	for _, id := range list {
