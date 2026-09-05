@@ -1,3 +1,23 @@
+// The three system reads a client makes before it does anything else:
+// version, capabilities, and readiness.
+//
+// The version response is under a standing constraint that is not visible
+// from its field names: nothing it serves may spell "rclone" or "sqlite".
+// Those are implementation choices this product does not put on the wire,
+// and the rule is enforced at the source of the values as well as here, so
+// a new field cannot leak one by inheriting it.
+//
+// Ready is the field with a history worth knowing. It is asked of the
+// backend, which is the only thing that knows whether the startup
+// sequence completed. It used to be derived here from the config revision
+// being non-empty, which was true of every backend that could be
+// constructed at all, including ones that had run no startup sequence: a
+// readiness flag that could not report false, standing in front of the
+// precondition §36 makes destructive operations depend on.
+//
+// Capabilities is served straight from the platform adapter rather than
+// assembled here, so there is exactly one place a capability is declared
+// and no way for this surface to report something the adapter would deny.
 package webhost
 
 import (

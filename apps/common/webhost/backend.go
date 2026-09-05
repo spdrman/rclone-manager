@@ -1,3 +1,23 @@
+// The seam between this package and core/.
+//
+// It is an interface rather than a direct dependency on
+// core/service.BackupService for one reason that shows up in every test in
+// this package: standing up a real BackupService means a SQLite journal, a
+// state directory, migrations and an rclone transport, and a handler test
+// that has to build all that in order to check a JSON field is a handler
+// test nobody writes. The doubles in fixtures_test.go implement this
+// instead.
+//
+// What is worth reading rather than skimming is which methods are
+// read-only. That property is not visible from a signature, and it is what
+// decides whether the route in front of a method carries requireCSRF, the
+// destructive gate, both or neither. So each method's own doc says which
+// bucket of docs/EPIC-B-multi-nas.md §50 it falls into, and router.go's
+// route table is where that answer is spent.
+//
+// The interface is deliberately not the whole of BackupService. Only what
+// the handlers here call is listed, so an addition to core's public
+// surface does not silently become part of the HTTP API's reach.
 package webhost
 
 import (

@@ -1,3 +1,25 @@
+// The two middlewares every mutating route in this package passes through,
+// and the order they run in.
+//
+// Authentication first, then the destructive gate. That ordering is
+// deliberate: a caller is told who they are before being told the server
+// will not do this for anyone, so an unauthenticated attacker probing the
+// API cannot learn from the response whether destructive operations are
+// enabled here. Reversing them would turn the gate into an
+// unauthenticated fingerprint of the deployment.
+//
+// Every path through authMiddleware that does not end in an explicit
+// Authenticated:true writes a 401, and there are more of those paths than
+// there look to be. A nil adapter and a nil Authenticator are both legal
+// values a provider can hand over, and both are treated as a denial rather
+// than as "nothing to check", which is what makes the whole surface fail
+// closed for a provider mid-wiring. That is not hypothetical: it is the
+// state of every provider in this tree today.
+//
+// The actor is carried on the request context under an unexported key type
+// so that nothing outside this package can plant one. The handlers that
+// record who did something read it from there, and a forged actor would
+// end up in an audit field an operator later trusts.
 package webhost
 
 import (

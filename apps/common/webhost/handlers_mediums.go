@@ -1,3 +1,18 @@
+// Prove a declared storage medium works, before a cycle carrying a real
+// backup finds out for the operator.
+//
+// The whole route is a write followed by a delete of the object it just
+// wrote, which is what puts it in the CSRF tier without putting it in the
+// destructive one: it has a real side effect on somebody's bucket, and the
+// only object it can reach is its own probe.
+//
+// What the response deliberately does not carry is as important as what it
+// does. There is no field for key material and there will not be, and the
+// endpoint's own text of whatever came back never reaches this struct
+// either: a provider's error string can contain a signed URL, a bucket
+// listing or an account identifier, so the checks here carry a step, an
+// outcome and a category, and the raw sentence goes to the manager's log
+// where the operator already has the trust to read it.
 package webhost
 
 import (

@@ -1,3 +1,20 @@
+// The retention preview and its apply, which are the two halves of the
+// only operation in this package that deletes local restore points.
+//
+// They are deliberately asymmetric. The preview is read-only and carries
+// no CSRF and no gate, because computing what WOULD be deleted removes
+// nothing. The apply carries both, and it applies exactly the plan named
+// by its plan_id or applies nothing at all: a plan that has gone stale
+// because the configuration or the inventory moved underneath it is
+// refused by name rather than recomputed and applied, so an operator can
+// never approve one deletion set and have a different one happen.
+//
+// That refusal is what carries the safety argument for several other
+// routes in this package, PATCH /settings in particular. A settings write
+// between a preview and its apply invalidates the plan, so no ungated
+// route can widen a deletion an operator already approved. router.go's
+// comment on that route has the full chain and names the tests that pin
+// it.
 package webhost
 
 import (
