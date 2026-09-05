@@ -14,7 +14,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )

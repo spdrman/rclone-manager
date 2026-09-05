@@ -68,10 +68,8 @@ package machines
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -99,8 +97,11 @@ type Machines struct {
 
 	inNetwork bool
 	mu        sync.Mutex
-	source    *Source
-	medium    *Medium
+	// pending is the Source shell Start armed a watchdog on before its own
+	// docker probe. The first call to Source finishes standing it up.
+	pending *Source
+	source  *Source
+	medium  *Medium
 }
 
 // infraMarker is the fixed, greppable string every infrastructure refusal
@@ -182,34 +183,31 @@ func gateRequiresDocker() bool {
 func Start(t *testing.T) *Machines {
 	t.Helper()
 
-	// ssh-keygen and ssh-keyscan are as much a prerequisite as docker: the
-	// source machine's key material is generated with them, and a machine
-	// missing them cannot stand one up. Asking here rather than inside
-	// Source keeps the verdict in one place.
-	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			dockerUnavailable(t, "%q not found on PATH: %v", tool, err)
-		}
-	}
-	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
-		if errors.Is(err, errDockerTimedOut) {
-			t.Fatalf("%s machines: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove the machine tier from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
-		}
-		dockerUnavailable(t, "docker daemon not reachable: %v\n%s", err, errOut)
-	}
+	// The watchdog is armed before the first external command, not after
+	// it. Everything from here on shells out to docker, and #161 is what
+	// happens when one of those calls never returns and nothing is
+	// watching: the package hangs to its own timeout with nothing said
+	// about which step is stuck. The pending machine below is that
+	// watchdog's home, and Source hands the same one back when it is asked
+	// for a machine.
+	pending := newSource(t)
+	pending.probeDocker(t)
 
 	// Reclaim what a KILLED run left behind before adding to it: the
 	// containers, and now the networks too.
+	pending.setStage("dockerlease.Sweep (reclaiming what a killed run left behind)")
 	dockerlease.Sweep()
 	dockerlease.SweepNetworks()
 
 	network := os.Getenv(NetworkEnv)
 	inNetwork := network != ""
 	if !inNetwork {
+		pending.setStage("docker network create")
 		network = createNetwork(t)
 	}
+	pending.setStage("waiting for the test to ask for a machine")
 
-	return &Machines{Network: network, inNetwork: inNetwork}
+	return &Machines{Network: network, inNetwork: inNetwork, pending: pending}
 }
 
 // Source starts the machine being backed up the first time it is called and
@@ -221,7 +219,15 @@ func (m *Machines) Source(t *testing.T) *Source {
 	if m.source != nil {
 		return m.source
 	}
-	src := m.addSource(t)
+	pending := m.pending
+	if pending == nil {
+		// Only reachable if a future edit stops Start arming one. A fresh
+		// shell is correct rather than a panic, and it loses only the
+		// stage naming for steps that have already happened.
+		pending = newSource(t)
+	}
+	src := m.startOn(t, pending)
+	m.pending = nil
 	m.source = src
 	return src
 }
@@ -240,11 +246,18 @@ func (m *Machines) AnotherSource(t *testing.T) *Source {
 	return m.addSource(t)
 }
 
-// addSource stands up one source machine. The caller holds m.mu.
+// addSource stands up one additional source machine, with a watchdog of its
+// own. The caller holds m.mu.
 func (m *Machines) addSource(t *testing.T) *Source {
 	t.Helper()
+	return m.startOn(t, newSource(t))
+}
+
+// startOn stands f up as a machine on this network. The caller holds m.mu.
+func (m *Machines) startOn(t *testing.T, f *Source) *Source {
+	t.Helper()
 	alias := "source-" + shortID(t)
-	return startSource(t, sourceOptions{
+	return startSourceOn(t, f, sourceOptions{
 		Network:   m.Network,
 		Alias:     alias,
 		InNetwork: m.inNetwork,

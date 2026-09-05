@@ -273,30 +273,38 @@ type sourceOptions struct {
 // startSource is Start with a placement. New tests should not call either
 // directly: core/tests/machines is the one entry point to a machine, and
 // this package is on its way into it (#450).
-func startSource(t *testing.T, opts sourceOptions) *Source {
+// newSource creates the machine's Go-side shell and arms its watchdog, and
+// it does that BEFORE anything shells out to anything.
+//
+// That order is the whole of #161's setup half. Every step of standing a
+// machine up runs an external command, each of those commands can hang, and
+// the deadlines in the retry loops further down are only re-read BETWEEN
+// attempts, so one call that never returns outruns all of them. What stops
+// the package hanging silently is a watchdog that is already running while
+// those calls are made, and a stage string it can name when the budget
+// expires.
+//
+// Start calls this before its own `docker info`, which is why a wedged
+// daemon is reported as "still at docker info" within the test's budget
+// rather than sitting there for the full sixty seconds of that call's own
+// timeout.
+func newSource(t *testing.T) *Source {
 	t.Helper()
-	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
-		t.Fatalf("machines: sourceOptions.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
-	}
-
-	// The fixture exists, its cleanup is registered and its watchdog is
-	// running before anything can block. Every step below shells out to
-	// something, and the point of #161 is that none of them may be able to
-	// hang the package silently, setup included.
 	f := &Source{
 		Host: "127.0.0.1",
 		User: User,
 		done: make(chan struct{}),
 	}
-	if opts.InNetwork {
-		f.Host = opts.Alias
-		f.Port = 22
-	}
 	f.ctx, f.cancel = context.WithCancelCause(context.Background())
 	f.setStage("looking for docker, ssh-keygen and ssh-keyscan")
 	t.Cleanup(f.finish)
 	f.watch(t)
+	return f
+}
 
+// probeDocker is the capability check, run under an armed watchdog.
+func (f *Source) probeDocker(t *testing.T) {
+	t.Helper()
 	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			dockerUnavailable(t, "%q not found on PATH: %v", tool, err)
@@ -309,13 +317,27 @@ func startSource(t *testing.T, opts sourceOptions) *Source {
 		// A daemon that is present but not answering is not, and neither
 		// is one absent from the gate's own machine, where docker is a
 		// declared prerequisite: skipping either would quietly delete the
-		// whole SFTP suite from the gate, which is the failure mode #160
+		// whole machine tier from the gate, which is the failure mode #160
 		// is about and the one #456 reopened. dockerUnavailable is where
 		// that verdict is made.
 		if errors.Is(err, errDockerTimedOut) {
-			t.Fatalf("%s machines: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
+			t.Fatalf("%s machines: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove the machine tier from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
 		}
 		dockerUnavailable(t, "docker daemon not reachable, Docker itself appears absent or not running here: %v\n%s", err, errOut)
+	}
+}
+
+// startSourceOn finishes standing f up as a running machine. f comes from
+// newSource, so its watchdog has been running since before Start's own
+// docker probe.
+func startSourceOn(t *testing.T, f *Source, opts sourceOptions) *Source {
+	t.Helper()
+	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
+		t.Fatalf("machines: sourceOptions.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
+	}
+	if opts.InNetwork {
+		f.Host = opts.Alias
+		f.Port = 22
 	}
 
 	f.setStage("creating the run directory")
@@ -1143,31 +1165,61 @@ func writeSubstituteKnownHosts(t *testing.T, outPath string, host string, port i
 // gate test through the real adapter, using KnownHostsFile / BadKnownHostsFile.
 func waitForSSHReady(t *testing.T, f *Source) {
 	t.Helper()
-	key, err := os.ReadFile(f.KeyFile)
+	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
+	if err := waitForSSHAuth(addr, clientConfigFor(t, f.KeyFile, f.User), sshReadyWindow); err != nil {
+		dumpContainerLogs(t, f.containerID)
+		t.Fatalf("machines: sftp server never became ready at %s: %v", addr, err)
+	}
+}
+
+// sshReadyWindow is how long a machine gets to start answering.
+const sshReadyWindow = 20 * time.Second
+
+// clientConfigFor is the client the readiness probe authenticates as. It
+// verifies no host key on purpose: the probe's question is whether this
+// server will let this key in, and host-key verification is a separate
+// question the tests ask through known_hosts.
+func clientConfigFor(t *testing.T, keyPath, user string) *ssh.ClientConfig {
+	t.Helper()
+	key, err := os.ReadFile(keyPath)
 	must(t, err, "read client key")
 	signer, err := ssh.ParsePrivateKey(key)
 	must(t, err, "parse client key")
-
-	cfg := &ssh.ClientConfig{
-		User:            f.User,
+	return &ssh.ClientConfig{
+		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         sshDialTimeout,
 	}
+}
 
-	deadline := time.Now().Add(20 * time.Second)
+// waitForSSHAuth retries a full handshake until the server AUTHENTICATES
+// this key, not merely until it accepts TCP.
+//
+// The distinction is the whole of #250. A published docker port accepts
+// connections the moment the mapping exists, before sshd inside is
+// necessarily answering, so a probe that dialled and declared victory
+// called a machine ready that would then refuse every real operation. And
+// "speaks SSH" is not enough either: a server can complete the transport
+// handshake happily and turn the key away at authentication.
+//
+// It is lifted out of waitForSSHReady so it can be pointed at a server
+// whose answer is decided in advance. A container's is not, and the three
+// probe tests in source_test.go are only possible against one that is.
+func waitForSSHAuth(addr string, cfg *ssh.ClientConfig, within time.Duration) error {
+	deadline := time.Now().Add(within)
 	var lastErr error
-	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
-	for time.Now().Before(deadline) {
+	for {
 		err := trySSHHandshake(addr, cfg)
 		if err == nil {
-			return
+			return nil
 		}
 		lastErr = err
+		if time.Now().After(deadline) {
+			return lastErr
+		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	dumpContainerLogs(t, f.containerID)
-	t.Fatalf("machines: sftp server never became ready at %s: %v", addr, lastErr)
 }
 
 // trySSHHandshake bounds the handshake as well as the dial, which ssh.Dial
@@ -1508,9 +1560,13 @@ func (f *Source) AuthorizeKey(t *testing.T, authorizedKeyLine string) {
 	if strings.ContainsAny(line, "\n\r'") {
 		t.Fatalf("machines: AuthorizeKey was given a key line with a newline or a quote in it, which is not an authorized_keys line: %q", line)
 	}
-	keys := "/home/" + User + "/.ssh/keys/extra-" + shortID(t) + ".pub"
-	script := fmt.Sprintf("mkdir -p /home/%s/.ssh && printf '%%s\\n' '%s' >> /home/%s/.ssh/authorized_keys && printf '%%s\\n' '%s' > %s && chown %s:%s /home/%s/.ssh/authorized_keys && chmod 600 /home/%s/.ssh/authorized_keys",
-		User, line, User, line, keys, containerUID, containerUID, User, User)
+	// authorized_keys only. The directory the machine's own key is mounted
+	// through (/home/<user>/.ssh/keys) is a READ-ONLY bind mount, and
+	// atmoz/sftp copies it into authorized_keys at startup anyway, so the
+	// file is the writable surface and the mount is not.
+	home := "/home/" + User
+	script := fmt.Sprintf("mkdir -p %s/.ssh && printf '%%s\\n' '%s' >> %s/.ssh/authorized_keys && chown %s:%s %s/.ssh/authorized_keys && chmod 600 %s/.ssh/authorized_keys",
+		home, line, home, containerUID, containerUID, home, home)
 	if _, errOut, err := dockerRun(dockerExecTimeout, "exec", f.ContainerID(), "sh", "-c", script); err != nil {
 		t.Fatalf("machines: authorizing an extra key on %s: %v\n%s", f.ContainerID(), err, errOut)
 	}
