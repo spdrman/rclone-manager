@@ -1,3 +1,22 @@
+// Where a backup set id was last pointing, written when its configuration
+// is removed and read when the same id is configured again.
+//
+// This is the one fact the journal keeps about a backup set rather than
+// about an artifact, and it exists because the create path asks a question
+// nothing else can answer. An id that already carries artifacts is either
+// the same data coming back after a config edit, or a different dataset
+// about to inherit somebody else's history, and the artifacts cannot tell
+// you which: they are keyed by the id, which is the thing being reused. So
+// the address the id was pointing at when it went away is kept, and a
+// later create compares against it.
+//
+// Two shapes here are deliberate and easy to undo by accident. A write
+// replaces rather than appends, because the only question anyone asks is
+// where the id was pointing last. And the read returns a bool beside the
+// value, because "nothing is recorded" is common and must never collapse
+// into "recorded as empty". Both are argued at the functions themselves,
+// and migration 0008 carries the rest: why this is stored at all, why
+// removal is the only writer, and why a row here is not a tombstone.
 package state
 
 import (

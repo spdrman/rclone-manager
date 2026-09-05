@@ -127,6 +127,15 @@ type anchoredMigration struct {
 	Refs     []string
 }
 
+// Every failure path in here is a t.Fatalf carrying instructions, and none
+// of them is a t.Skip, which is the decision the file header argues at
+// length: the gate does not read a Go-level skip, so "I could not perform
+// this check" has to be reported as a red or it becomes invisible.
+//
+// The messages are long on purpose. Whoever hits this is usually somebody
+// who did nothing wrong (a CI job with a shallow checkout, a fresh clone
+// with no tags) and the fix is a fetch flag they have no reason to know
+// about, so the failure carries it rather than making them find this file.
 func TestShippedMigrationsMatchWhatWasPublished(t *testing.T) {
 	repoRoot, err := gitRepoRoot()
 	if err != nil {
@@ -728,6 +737,15 @@ func newPublishedRepoFixture(t *testing.T) string {
 	return dir
 }
 
+// writeFixtureFile and gitFixture build the throwaway repositories the
+// falsification tests need. They exist because this guard's whole value is
+// that it fails when a published migration is edited, and the only honest
+// way to show that is to publish one and edit it.
+//
+// gitFixture fails the test on any git error rather than returning one: a
+// fixture that half-built would produce a red in the check under test for
+// the wrong reason, which is the shape of false confidence this file is
+// otherwise dedicated to preventing.
 func writeFixtureFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	full := filepath.Join(dir, migrationsDirFromRepoRoot, name)

@@ -1,3 +1,19 @@
+// The migration runner: that it applies, that applying twice changes
+// nothing, and above all that it refuses rather than guesses.
+//
+// The two refusals get the most attention because they are the ones with a
+// tempting wrong answer. A recorded version this binary does not know about
+// could be ignored, and a recorded checksum that no longer matches could be
+// papered over by reapplying, and either would let a journal this build
+// cannot account for be written to.
+//
+// The populated-database tests are here because of a real upgrade failure.
+// Every migration test in this package used to run against an empty
+// database, which has no rows for a foreign key to trip over, so the whole
+// suite stayed green while v0.1.0 deployments that had discovered even one
+// artifact could not migrate to the next release at all. Anything asserted
+// about a migration now gets asserted against a database with rows in it.
+
 package state
 
 import (
@@ -9,6 +25,14 @@ import (
 	"testing"
 )
 
+// openRaw gives a handle to an empty database with no pragmas set and no
+// migrations run, which is what most tests in this file need: they are
+// testing the runner, so they cannot use Open, which runs it for them.
+//
+// It deliberately does not set foreign_keys the way Open does. The tests
+// that care about foreign key enforcement set it themselves and say why,
+// which keeps the pragma visible at the assertion instead of inherited from
+// a helper.
 func openRaw(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "journal.db")

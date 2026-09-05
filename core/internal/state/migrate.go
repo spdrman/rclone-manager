@@ -1,3 +1,34 @@
+// The migration runner: how a database reaches the schema this binary
+// expects, and the two situations where it refuses to touch one at all.
+//
+// Schema changes are numbered files under core/migrations, embedded into
+// the binary, applied in order, each inside its own transaction, each
+// recorded alongside a sha256 of its own text. That checksum is not
+// bookkeeping, it is the mechanism behind the rule that makes the whole
+// scheme safe, and the rule is worth stating where somebody will hit it:
+//
+//	a migration file that has shipped can never be edited again,
+//	comments and whitespace included.
+//
+// The sum covers the whole file, so correcting a stale comment moves it,
+// and every deployment that already applied that version then refuses to
+// open with ErrSchemaDrift. Not warns. Refuses, because a journal whose
+// history this binary cannot account for is one it must not write to. Two
+// files in core/migrations say something about foreign keys that stopped
+// being true when suspendForeignKeys landed, and they are staying wrong
+// for exactly this reason: the correction goes in this file, or into a new
+// migration.
+//
+// TestShippedMigrationsAreImmutable pins the sum of every landed migration
+// and fails loudly if one moves. It deliberately does not print the sum it
+// computed, so the only way past it is to put the file back rather than to
+// paste the new number over the old one.
+//
+// The runner never reconciles, downgrades or reapplies anything. A
+// recorded version this binary does not carry means a different build has
+// been here (ErrUnknownSchemaVersion); a recorded version whose text no
+// longer matches means the rule above was broken (ErrSchemaDrift). Both
+// stop Open before it returns a Journal to anyone.
 package state
 
 import (
@@ -232,6 +263,18 @@ func suspendForeignKeys(ctx context.Context, db *sql.DB) (restore func(), err er
 	}, nil
 }
 
+// appliedMigrations reads schema_migrations into a version-to-checksum
+// map.
+//
+// Both halves of that pair are needed together, which is why this returns
+// the checksums rather than a set of version numbers: the runner has two
+// different questions to ask of the same row, whether this binary knows
+// the version at all and whether the file it knows still hashes to what
+// was recorded, and they produce two different refusals
+// (ErrUnknownSchemaVersion and ErrSchemaDrift).
+//
+// It is also called by PendingMigration, which never applies anything, so
+// it takes a *sql.DB rather than running inside a migration's transaction.
 func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version, checksum FROM schema_migrations`)
 	if err != nil {

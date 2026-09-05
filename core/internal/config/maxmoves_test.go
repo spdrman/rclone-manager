@@ -1,3 +1,16 @@
+// EPIC E's per-cycle move budget, tested around the distinction its
+// pointer type exists for: a key the operator left out and a key they
+// explicitly set to zero are different facts.
+//
+// One defaults, the other is refused. Collapsing them would mean either
+// silently ignoring an operator who wrote 0 to stop moves, or defaulting a
+// number they deliberately chose.
+//
+// The medium-free cases are FR-35's compatibility claim in this corner: a
+// deployment that declares no storage medium can never run a move, so the
+// budget has to stay absent from its config rather than materialise as a
+// key nobody wrote into a file the operator later reads.
+
 package config
 
 import (

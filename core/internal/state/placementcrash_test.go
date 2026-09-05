@@ -1,3 +1,15 @@
+// What migration 7 leaves behind when the machine loses power partway
+// through, proven by actually killing a process rather than by arguing from
+// the Go code.
+//
+// The comment above crashEnvVar explains why the polite interruption tests
+// in placements_test.go are not enough and how the child process is killed.
+// The part worth knowing before reading any of it is why this is a separate
+// file at all: the tests here fork the test binary back into itself, so
+// they carry an environment variable protocol, a child entry point and a
+// set of production pragmas that have to stay in step with Open. None of
+// that belongs in the middle of a file about placements.
+
 package state
 
 import (
@@ -113,6 +125,11 @@ func TestMigration0007SurvivesTheProcessBeingKilledMidBackfill(t *testing.T) {
 	}
 }
 
+// productionPragmas has to be what Open sets, because the whole question
+// here is what SQLite leaves on disk after a kill, and WAL plus
+// synchronous=FULL are the two settings that decide it. A child that
+// crashed under the defaults would prove something about a configuration
+// this product does not ship.
 var productionPragmas = []string{
 	"PRAGMA journal_mode = WAL",
 	"PRAGMA synchronous = FULL",
@@ -168,6 +185,9 @@ func crashChild(path string) {
 	os.Exit(9)
 }
 
+// countPlacementsDB counts through a raw handle rather than a Journal,
+// because after the crash the point is to see what is on disk without Open
+// running migrations over it first and changing the answer.
 func countPlacementsDB(t *testing.T, db *sql.DB) int {
 	t.Helper()
 	var n int

@@ -1,3 +1,16 @@
+// The fast half of the two-part guard that keeps a shipped migration file
+// from ever changing: a table of checksums and one test that compares it
+// against the tree.
+//
+// The comment on the table is the argument for the rule and is the thing to
+// read before touching a .sql file under core/migrations. What this header
+// adds is only where the file sits: it runs anywhere, needs nothing but the
+// working tree, and fails in a second, which is exactly why it cannot be
+// the whole guard. It lives beside the files it describes, so editing a
+// migration and editing a row here are the same size of act.
+// migrationanchor_test.go is the half that closes that, by reading what
+// this repository actually published rather than what is on disk now.
+
 package state
 
 import "testing"
@@ -61,6 +74,17 @@ const driftConsequence = "A deployment that already applied this version compare
 	"Updating the row instead is not a fix: migrationanchor_test.go compares the same file " +
 	"against the bytes origin/release published, and that one does not read this table at all."
 
+// The comparison runs in both directions, and both matter. A file in the
+// tree with no row means a new migration nobody has frozen yet, so the
+// failure tells you how to compute the checksum without printing it. A row
+// with no file means somebody withdrew a migration that has shipped, which
+// no deployment can follow: a journal that applied it still records the
+// version, and migrate refuses one it does not recognise.
+//
+// The two emptiness checks at the top are the anti-vacuity half. A table
+// that had quietly emptied, or a loadMigrations that had stopped returning
+// anything, would pass every assertion below without comparing a single
+// checksum, and pass loudly enough to look like proof.
 func TestShippedMigrationsAreImmutable(t *testing.T) {
 	known, err := loadMigrations()
 	if err != nil {

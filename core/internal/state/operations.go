@@ -1,3 +1,28 @@
+// The durable operations table: one row per request an API client made, so
+// a client can still find out what happened to it after the process that
+// was doing it died.
+//
+// Everything else in this package is about artifacts. This is about the
+// requests that act on them, and the two are kept apart because they
+// answer to different people. An artifact row is the manager's own account
+// of what it did; an operation row is a receipt held by a caller who is
+// going to poll for it. That is why it carries an actor and a
+// configuration revision it never interprets, and why the parameters are
+// opaque JSON: this package has no idea what actions exist and should not
+// learn one. FailInterruptedOperations is where that restraint costs
+// something, and it pays it by taking the exception list as an argument
+// rather than naming actions here.
+//
+// Two mechanisms are worth understanding before changing anything.
+// CreateOperation is idempotent on a caller-supplied key, in the same
+// shape and for the same reason RecordTransition is, and it refuses a key
+// presented for a logically different request rather than handing one
+// caller's operation, result text included, to another.
+//
+// And a row only ever moves forward: queued to running to completed or
+// failed. The one thing that moves a row nobody is executing any more is
+// the startup sweep, because a row left at running by a process that was
+// killed would otherwise sit there for ever while a client polls it.
 package state
 
 import (
@@ -68,6 +93,15 @@ type OperationOutcome struct {
 	Operation Operation
 }
 
+// validateOperationRequest refuses a request that could not be identified
+// or retried later, before a transaction is opened for it.
+//
+// The two identifiers are separate on purpose and both are required. The
+// operation id is what a client polls; the idempotency key is what makes a
+// resubmitted request resolve to the row that already exists. A request
+// missing either one would insert perfectly well and then be
+// unrecoverable, so it is refused here rather than left for a NOT NULL
+// error to describe in the schema's words instead of the caller's.
 func validateOperationRequest(req OperationRequest) error {
 	switch {
 	case req.OperationID == "":
@@ -311,11 +345,25 @@ func requireRowsAffected(res sql.Result, operationID string) error {
 	return nil
 }
 
+// operationSelectColumns is spelled once because scanOperation decodes it
+// by position, so a read that listed its own columns could put an actor
+// into a backup set field without anything failing. Every read below goes
+// through this constant and that one scanner.
 const operationSelectColumns = `
 	operation_id, idempotency_key, actor, backup_set, config_revision,
 	action, parameters, status, created_at, started_at, finished_at,
 	result, error`
 
+// getOperationByID and getOperationByIdempotencyKey are the same read
+// under the table's two unique keys, and they are kept apart rather than
+// parameterised because the not-found messages have to differ. A caller
+// polling an operation id and a caller replaying an idempotency key are
+// asking different questions, and being told "operation not found: <a key
+// you never saw>" is a worse answer than no answer.
+//
+// Both take a querier so CreateOperation can use them inside the
+// transaction it is holding, where the row it is about to insert either
+// exists or does not without a second writer changing the answer partway.
 func getOperationByID(ctx context.Context, q querier, operationID string) (Operation, error) {
 	row := q.QueryRowContext(ctx,
 		`SELECT `+operationSelectColumns+` FROM operations WHERE operation_id = ?`, operationID,
@@ -344,6 +392,12 @@ func getOperationByIdempotencyKey(ctx context.Context, q querier, key string) (O
 	return op, nil
 }
 
+// scanOperation decodes one row of operationSelectColumns.
+//
+// sql.ErrNoRows is passed through untouched rather than wrapped, because
+// its two callers turn it into ErrOperationNotFound with the identifier
+// they were actually given, and wrapping it here would leave them
+// unwrapping their own error to find it.
 func scanOperation(row scanRow) (Operation, error) {
 	var (
 		op                    Operation

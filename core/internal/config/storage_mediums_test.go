@@ -45,6 +45,10 @@ func mediumsConfig() Config {
 	return c
 }
 
+// mustValidate is for the cases where validating is the setup rather than
+// the assertion. Every refusal test in this file starts from a config that
+// passes and breaks one field, so a fixture that had stopped validating
+// would make all of them pass for the wrong reason.
 func mustValidate(t *testing.T, c *Config) {
 	t.Helper()
 	if err := c.Validate(); err != nil {
@@ -711,6 +715,19 @@ func TestMarshal_ANoMediumConfigGainsNoMediumKeys(t *testing.T) {
 	}
 }
 
+// assertNoMediumKeysSurviveAReMarshal is FR-35 held at the file level: a
+// deployment that declares no storage medium must not find medium keys
+// appearing in its config after this product saves it.
+//
+// That matters because the API layer round-trips the whole file to change
+// one setting. A struct field that marshalled as an empty block rather than
+// being omitted would rewrite an operator's file with keys they never wrote
+// and cannot be expected to recognise.
+//
+// The byte comparison inside is deliberately not a before-Validate against
+// after-Validate diff, for the reason spelled out at the assertion: Validate
+// resolves defaults in place and is documented to, so those two differ for
+// reasons that have nothing to do with mediums.
 func assertNoMediumKeysSurviveAReMarshal(t *testing.T, fixture string) {
 	t.Helper()
 	cfg, err := Load(fixture)
