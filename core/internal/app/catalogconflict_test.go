@@ -13,6 +13,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-32 at the recovery door: a sidecar is a proposal, and a disagreement is
+// never resolved in its favour.
+//
+// The agreeing case is the control and it is doing real work. Without it,
+// an implementation that reported every sidecar as a conflict would satisfy
+// every other test in this file, and the report would be useless in exactly
+// the deployment where nothing is wrong.
+//
+// The disagreeing case is the one the requirement exists for. The sidecar is
+// rewritten on disk so it contradicts the journal, and the assertion is that
+// the row is untouched: a rebuild that took the sidecar's hash or timestamp
+// would be a path by which a stale or tampered file on the backup root
+// rewrites what retention keeps and what verification compares against.
+//
+// The placement cases cover the newer half. A committed artifact's manifest
+// has to carry its placements or a rebuilt catalog forgets where the copies
+// are, and a medium placement proposed by a sidecar is reported and not
+// adopted, for the same reason a hash is.
+
 // rebuildConflictFixture runs one full cycle so a real journal row and a
 // real sidecar manifest exist and agree, then hands both back so a test
 // can make the sidecar disagree.

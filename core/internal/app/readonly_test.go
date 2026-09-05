@@ -12,6 +12,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Issue #282: a backup set whose source this manager may never delete from.
+//
+// Both cases are about a call that must not happen, which is why both count
+// DeleteRemote on the fake rather than inspecting the artifact's final state.
+// A read-only set's artifact still has to reach a durable, finished state; it
+// just gets there without the source ever being touched.
+//
+// The resume case is the one that is easy to miss. An artifact already sitting
+// at REMOTE_DELETE_PENDING was put there by a cycle that ran before the set
+// was declared read-only, or by a config change since, and a pipeline that
+// only checked the flag on the way IN would happily finish that pending delete
+// on the next pass. The flag has to be honoured where the delete is issued,
+// not where it is planned.
+
 // TestProcessArtifact_ReadOnlyBackupSet_NeverCallsDeleteRemote is issue
 // #282's critical acceptance criterion, proven the way the issue insists
 // on: "not by asserting a refusal". tr is poisoned so

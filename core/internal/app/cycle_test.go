@@ -10,6 +10,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
+// FR-1's cycle, and the shared configuration fixtures the whole package
+// builds on.
+//
+// The fixtures live here because this is where they were first needed, and
+// they are worth reading before writing any test in this package.
+// config.Config values here are constructed by hand rather than loaded, so
+// nothing fills in the fields config.Validate would: testRetention mirrors
+// validateRetention's defaults, and resolveTestRetention runs the real
+// resolver rather than a second copy of it. A set left at the zero Retention
+// is not an unconfigured set, it is a chain that keeps nothing, and a test
+// built on one proves something about a configuration no operator could have.
+// That is why resolveTestRetention panics instead of returning an error, and
+// why a test that edits the global policy after building its config has to
+// call it again.
+//
+// The cycle cases themselves are arranged around one claim that is easy to
+// lose: a cycle can fail without any systemic error at all. Two of them come
+// at that from reconciliation, which is the path where a previously durable
+// artifact is found rotten by a pass that itself succeeded, and where an
+// implementation that only checked Err would report the cycle as fine. The
+// disabled-set case and the continue-after-failure case are the other half,
+// proving the loop skips what it should and keeps going through what it
+// should not.
+
 func testConfig(t *testing.T, sources ...config.Source) *config.Config {
 	t.Helper()
 	c := &config.Config{Sources: sources, Retention: testRetention()}

@@ -13,6 +13,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// Issue #350's two halves, plus the race the watcher is written to lose.
+//
+// The scheduler half is that a held set is not started. The interrupt half is
+// that a hold landing mid-pass stops the set where it stands. Both need a set
+// that is genuinely doing work, or a pass that skipped for some unrelated
+// reason would look identical to one that yielded.
+//
+// TestWatchForHold_CatchesAHoldPlacedInsideTheCheckWindow is the one that is
+// easy to delete by accident. The watcher reads Changed() before Held() on
+// every iteration, and the whole correctness of that ordering is about a hold
+// placed in the gap between the two: read the other way round, the hold
+// closes a channel nobody is listening on yet and the cancellation is lost
+// until something unrelated happens to wake the goroutine. The fixture plants
+// a hold inside exactly that window, which is why it is a purpose-built
+// double rather than the simple registry the other cases use.
+//
+// The last two cases are about honesty rather than mechanism. A pass an
+// operator stopped must not be reported as a failure, and must not be
+// reported as a set that backed nothing up either, because on the arithmetic
+// alone a stopped pass looks exactly like a barren one. Both were real false
+// alarms before the distinction existed.
+//
+// The no-registry case is the control that a cycle nobody is holding behaves
+// exactly as it did before any of this.
+
 // testHolds is a hand-rolled BackupSetHolds for these tests. core/service
 // has the real one; this package must not import it (the dependency runs
 // the other way), and a double here also lets a test place a hold at an

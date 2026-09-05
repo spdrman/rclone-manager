@@ -10,6 +10,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The live feed, and the two things a wrong denominator would hide.
+//
+// The main case asserts the stages arrive in the order they happen, against a
+// real cycle, so the feed describes the pipeline rather than a script written
+// beside it.
+//
+// The set-counting case pins the one total this feed reports. It is a count
+// of the ENABLED backup sets in the configuration snapshot the cycle started
+// with, so a disabled set must not inflate it: a progress bar whose
+// denominator includes work that will never be done reads as a cycle stuck
+// just short of finishing, forever.
+//
+// The no-observer case is the negative control and it is not a formality.
+// Every reading in this file is published from inside the cycle's own code
+// paths, so the way this feature breaks a deployment that never asked for it
+// is by changing what those paths do. The control asserts a cycle with no
+// observer behaves exactly as it did before any of this existed.
+
 // recordingObserver collects every reading a cycle publishes.
 type recordingObserver struct {
 	mu       sync.Mutex

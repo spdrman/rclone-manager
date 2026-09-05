@@ -10,6 +10,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-34's read surface, and the two answers it must never confuse.
+//
+// Every case here is about what a copy READS as when nobody has asked a
+// medium anything, because that is the whole contract: a status read never
+// initiates a restore as a side effect, so an archived copy reads as
+// requires_restore and the classes that serve on demand read as immediate.
+//
+// The case worth protecting is the medium the configuration dropped. That
+// copy reads as unreachable, and unreachable is deliberately not gone: the
+// object may well still be sitting in that bucket, and this manager simply
+// has no way to look. A view that reported it as missing would put "your
+// backup is not there" in front of an operator whose backup is fine and whose
+// config file merely changed.
+//
+// The empty case is the control, and it is what makes an empty list mean one
+// thing: a record with no placements has no copies, which is also what a
+// record built by hand and an artifact that has not transferred yet look
+// like.
+
 var copiesNow = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 
 // serviceWithMediums builds the minimum Service artifactCopies needs: a

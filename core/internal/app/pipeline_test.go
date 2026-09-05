@@ -15,6 +15,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The per-artifact walk, and the one boundary the whole shutdown-safety
+// argument rests on.
+//
+// The case to read first is the shutdown after commit. A commit makes the
+// local copy durable and the very next step deletes the source, so a
+// cancellation between those two must stop, and it must stop without having
+// issued the delete. The assertion is that DeleteRemote was never called at
+// all, counted on the fake, because an assertion about the artifact's final
+// state would pass against an implementation that deleted the source and
+// then failed to record it. Its neighbour, the same walk with no shutdown,
+// is the control that proves the delete does happen when nothing interrupts
+// it, so the first test cannot be satisfied by a pipeline that has stopped
+// deleting anything.
+//
+// The capacity case is the other refusal that has to be counted rather than
+// inferred: FR-21 says a transfer known not to fit must not BEGIN, which is
+// a claim about a call that was never made.
+//
+// The two regression cases are here because both bugs were invisible in a
+// happy path. A missing local directory failed only on a first run into a
+// fresh path, and a delete left half-done by a previous cycle needed a
+// second cycle to resume it, which no single-pass test would ever reach.
+
 func testBackupSet(t *testing.T, localDir string) config.BackupSet {
 	t.Helper()
 	return config.BackupSet{

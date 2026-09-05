@@ -6,6 +6,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
+// The seam where configuration becomes a transport.Source, and the failure
+// that keeps happening there.
+//
+// Four times now a credential source has worked in the adapter's own tests
+// and done nothing in a real run, because sourceFor forwarded one field of a
+// set and not the others. The key file worked and key.env and key.command did
+// not. Then the same for the passphrase, then for key encryption, then for the
+// connection ceiling.
+//
+// So each of these tests asserts EVERY field of its group travels, not that
+// the group is represented. That is the whole point: a test that sets one
+// field and checks it arrives passes against exactly the bug this file exists
+// to catch, because the field somebody remembered is always the one the test
+// was written around.
+//
+// Anything added to config.Remote or to the key block wants a case here
+// before it wants an adapter test.
+
 // sourceFor is the seam where configuration becomes a transport.Source, and it
 // is easy to add a config field and forget this function exists. That is
 // exactly what happened with #74: the adapter grew env and command key

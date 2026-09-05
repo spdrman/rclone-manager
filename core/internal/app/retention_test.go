@@ -8,6 +8,17 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Classification only, which is what makes these tests cheap.
+//
+// RetentionPreview computes verdicts and deletes nothing, so these run a real
+// cycle to produce a genuine COMPLETE artifact and then ask what the policy
+// says about it. Keeping the only complete artifact is the base case of every
+// GFS chain and the one that fails first if tier resolution breaks.
+//
+// The deletion side is not here. prune_test.go owns it, because that is where
+// files actually disappear and where the interesting assertions are about
+// what stays on disk.
+
 // TestRetentionPreview_KeepsTheOnlyCompleteArtifact drives one artifact
 // all the way to COMPLETE through the real pipeline (exactly like
 // pipeline_test.go's control case), then checks that RetentionPreview

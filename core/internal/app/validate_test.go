@@ -13,6 +13,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// FR-14 against a local copy: what passes, what quarantines, and what is
+// refused outright.
+//
+// The pass and the corruption cases are the two directions of the same check,
+// and they are run twice, once for an ordinary committed artifact and once for
+// a REMOTE_RETAINED one. That duplication is issue #315 and it is not
+// redundant: `validate` used to refuse a retained artifact as "not a durable
+// restore point", which was simply wrong. It is one; this manager just never
+// deletes its remote copy. That refusal removed the third and only on-demand
+// way to catch a retained artifact's local copy going bad.
+//
+// The unresolved-validator case is the fail-open this file exists to prevent.
+// A backup set naming a ValidatorID that resolved to no runnable command must
+// be an error and never a pass, or `validate` reports an artifact as fine
+// without ever running the validator its set names, which is FR-13's own
+// failure reached through a different door.
+//
+// ParseArtifactID gets a round trip and a malformed-input case because it
+// parses an operator's single positional argument, and the round trip is what
+// keeps it inverting String() rather than merely accepting the shapes somebody
+// thought of.
+
 // committedFixture is one artifact driven through the real pipeline all
 // the way to COMPLETE, ready for ValidateArtifact tests to act on.
 type committedFixture struct {

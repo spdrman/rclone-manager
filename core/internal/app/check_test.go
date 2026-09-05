@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// Two cases, and the second one is the whole file.
+//
+// Proving that a valid configuration opens and closes a journal is a smoke
+// test. Proving that an invalid one fails BEFORE the database is touched is
+// the ordering `check` promises, and it is the reason the invalid case uses a
+// config with no state.database in it at all: if validation were skipped or
+// ran second, the run would fail on a missing database path rather than on
+// the duration it cannot parse, and both spellings look like a passing
+// refusal from the outside.
+//
+// Neither case contacts a remote, which is the point of `check` rather than
+// an omission in its tests.
+
 func TestCheck_ValidConfigOpensAndClosesTheJournal(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")

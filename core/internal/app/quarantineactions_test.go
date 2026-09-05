@@ -18,6 +18,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The four operator judgements, and what each of them is allowed to touch.
+//
+// Read them as a set, because their differences are the design. Revalidate
+// reports and writes nothing, so an operator can look before deciding, and
+// the test asserts the journal is unchanged afterwards rather than that the
+// verdict was right. Retry ingestion throws the local copy away and refetches,
+// so it is proven against a source that still exists. Reinstate keeps the
+// local copy and hands the artifact its standing back.
+//
+// The refusals carry as much weight as the actions. QUARANTINED_LOST cannot be
+// re-ingested because it is reached only from COMPLETE, which is the state
+// that confirms the source was already deleted, so there is nothing left
+// anywhere to fetch. An artifact that never committed cannot be reinstated,
+// because there is no durable copy to reinstate. And an artifact whose backup
+// set the configuration no longer names is refused by all of them, since every
+// one needs the set's own policy to act under.
+//
+// The mixed-verdict case is the sharpest. A backup set with a validator that
+// passes and a hash that no longer matches must not be reinstated, because
+// reinstatement asks for evidence that could have failed and a passing
+// validator beside a failing hash is not that. An implementation that
+// combined the two tiers with an or would satisfy every other case here.
+
 // quarantinedFixture is one discovered artifact walked to a quarantine
 // state through the journal's own transition log.
 //
