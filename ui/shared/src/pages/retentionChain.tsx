@@ -1,8 +1,12 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
+import { useApi } from "@shared/api/ApiContext";
+import { BackupManagerError } from "@shared/api/contracts";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 import type {
+  MediumPreflight,
   RetentionSchema,
   RetentionSettings,
   RetentionTierSetting,
@@ -489,6 +493,10 @@ export function MediumDisclosure({
       <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
         {storage.retrievalDisclosure}
       </p>
+      <MediumPreflightPanel
+        mediumIds={[...new Set(introduced.map((t) => t.medium).filter((id): id is string => !!id))]}
+        disabled={disabled}
+      />
       <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: "var(--text-base)" }}>
         <input
           type="checkbox"
@@ -501,6 +509,108 @@ export function MediumDisclosure({
           they upload, and that reading them back costs money and, on an archive class, hours.
         </span>
       </label>
+    </div>
+  );
+}
+
+/**
+ * The medium preflight, offered exactly where an operator is about to
+ * send backups somewhere for the first time (issue #443).
+ *
+ * This is the point in the product where "does that bucket actually work"
+ * stops being idle curiosity: one click from here, a retention pass starts
+ * uploading real backups to a place nothing has ever touched, and the
+ * first thing to find out that the region is wrong or that the policy
+ * denies PutObject would be a move, mid-cycle, after a backup had already
+ * been chosen to leave local disk.
+ *
+ * It is deliberately NOT a gate. The button is offered, never required,
+ * and a failing preflight does not block the save: an operator who is
+ * about to fix the bucket, or who knows something this check does not, is
+ * not served by a form that refuses. What it does is make the answer
+ * available before the consequence, which is the whole difference between
+ * finding out today and finding out in a month.
+ */
+export function MediumPreflightPanel({
+  mediumIds,
+  disabled
+}: {
+  mediumIds: string[];
+  disabled: boolean;
+}) {
+  if (mediumIds.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {mediumIds.map((id) => (
+        <MediumPreflightRow key={id} mediumId={id} disabled={disabled} />
+      ))}
+    </div>
+  );
+}
+
+function MediumPreflightRow({ mediumId, disabled }: { mediumId: string; disabled: boolean }) {
+  const api = useApi();
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<MediumPreflight | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function run() {
+    setBusy(true);
+    setReport(null);
+    setError(null);
+    api
+      .preflightStorageMedium(mediumId)
+      .then(setReport)
+      .catch((e: unknown) =>
+        setError(
+          e instanceof BackupManagerError
+            ? e.api.message
+            : "Backup Manager could not check this storage medium."
+        )
+      )
+      .finally(() => setBusy(false));
+  }
+
+  // Every check is rendered, passed ones included, and that is the point
+  // rather than noise: an operator reading "ready" needs to see WHICH
+  // things were established, because the one that matters to them may be
+  // the delete or the storage class rather than the write.
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          className="btn btn--sm"
+          type="button"
+          disabled={disabled || busy}
+          onClick={run}
+        >
+          {busy ? "Checking..." : "Check " + mediumId + " now"}
+        </button>
+        {report ? (
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
+            {report.ok
+              ? "This medium is ready for a backup."
+              : "This medium is not ready. Saving is still allowed; the checks below say why."}
+          </span>
+        ) : null}
+      </div>
+      {error ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--danger)" }}>{error}</p>
+      ) : null}
+      {report ? (
+        <ul style={{ margin: 0, paddingLeft: 20, fontSize: "var(--text-sm)" }}>
+          {report.checks.map((c) => (
+            <li key={c.step}>
+              <span className="mono">{c.step}</span>
+              {": "}
+              <strong>{c.outcome}</strong>
+              {c.category ? " (" + c.category + ")" : ""}
+              {". "}
+              {c.detail}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
