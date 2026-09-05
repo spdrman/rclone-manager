@@ -66,6 +66,11 @@ type UnconfiguredBackupSet struct {
 	// refuse a row whose backup set the configuration does not name.
 	Quarantined int
 
+	// Failed is how many were attempts that never produced a backup and
+	// that nothing will retry now the set is unconfigured. They hold no
+	// local bytes.
+	Failed int
+
 	// Bytes is what these occupy on local storage, as recorded.
 	Bytes int64
 
@@ -120,6 +125,7 @@ func (b *BackupService) UnconfiguredBackupSets(ctx context.Context) ([]Unconfigu
 			Retained:        u.Retained,
 			Stranded:        u.Stranded,
 			Quarantined:     u.Quarantined,
+			Failed:          u.Failed,
 			Bytes:           u.Bytes,
 			RetentionPolicy: "none",
 			FirstDiscovered: u.FirstDiscovered,
@@ -147,11 +153,34 @@ func (b *BackupService) PreviewStrandedArtifacts(ctx context.Context, id string)
 // acts only on acquisition-state rows, refuses any row carrying a durable
 // placement, and refuses any path that is not one of FR-12's .partial
 // names. See internal/app/unconfigured.go's clearOne.
+// # Why it takes configMu
+//
+// The app layer refuses a configured set, and that refusal has to still
+// be true when the files come off the disk rather than only when it was
+// asked. Every configuration write in this package holds configMu across
+// its own write and the state swap that follows (configreload.go's
+// adoptConfig), so holding it here means no set can become configured
+// part-way through a sweep of it. Without that, a CreateBackupSet landing
+// between the check and the first os.Remove would have this call clearing
+// rows that a cycle is once again entitled to resume.
+//
+// One window is left, and it is honest to name it: a set removed by hand
+// editing config.yaml takes no removal hold, so a cycle already in flight
+// on the pre-edit snapshot can still be writing that .partial. Deleting
+// it under a running copy costs a re-transfer and nothing else, because
+// the remote object is untouched at every state this acts on and the next
+// attempt clears the .partial itself before it starts. That window is
+// #391's, not this call's: the same hand edit lets that cycle keep
+// deleting from a source the operator thought they had detached.
 func (b *BackupService) ClearStrandedArtifacts(ctx context.Context, id string) ([]StrandedArtifact, error) {
 	set, err := b.unconfiguredSetID(id)
 	if err != nil {
 		return nil, err
 	}
+
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
 	found, err := b.state.Load().inner.ClearStranded(ctx, set)
 	return toServiceStranded(found), translateStrandedErr(id, err)
 }

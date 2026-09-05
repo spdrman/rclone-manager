@@ -531,3 +531,64 @@ func TestRunCycle_SaysNothingWhenEverythingIsGoverned(t *testing.T) {
 		t.Errorf("a fully-configured deployment was told it is holding ungoverned backups:\n%s", line)
 	}
 }
+
+// TestUnconfiguredSets_CountsEveryRowIntoExactlyOneColumn keeps the
+// report's arithmetic answerable. An operator reading "5 artifact(s), 2
+// retained, 1 stranded" has to be able to account for the other two
+// without guessing, and a row that lands in no column at all is a row the
+// report has quietly lost.
+func TestUnconfiguredSets_CountsEveryRowIntoExactlyOneColumn(t *testing.T) {
+	ctx := context.Background()
+	journal := openJournal(t)
+	localDir := t.TempDir()
+
+	gone := setNamed(t, "production", "beta", localDir)
+	tr := newFakeTransport()
+	for _, name := range []string{"done.dump", "stuck.dump", "bad.dump", "gaveup.dump"} {
+		tr.put(name, "payload for "+name, epoch.Unix())
+	}
+	rows := discoverAll(t, ctx, journal, tr, transport.Source{ID: "gone"}, gone, 4)
+	byName := map[string]state.Record{}
+	for _, r := range rows {
+		byName[r.Artifact.Name] = r
+	}
+
+	driveToComplete(t, ctx, journal, byName["done.dump"], filepath.Join(localDir, "done.dump"))
+	strandedRow(t, ctx, journal, byName["stuck.dump"], filepath.Join(localDir, "stuck.dump.partial"))
+	advanceTo(t, ctx, journal, byName["bad.dump"], lifecycle.Discovered, lifecycle.Failed)
+	advanceTo(t, ctx, journal, byName["bad.dump"], lifecycle.Failed, lifecycle.Quarantined)
+	advanceTo(t, ctx, journal, byName["gaveup.dump"], lifecycle.Discovered, lifecycle.Failed)
+
+	svc := New(testConfig(t, testSource("production")), journal, tr, nil)
+	sets, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		t.Fatalf("UnconfiguredSets: %v", err)
+	}
+	if len(sets) != 1 {
+		t.Fatalf("UnconfiguredSets = %+v, want one set", sets)
+	}
+	u := sets[0]
+	if u.Artifacts != 4 {
+		t.Fatalf("Artifacts = %d, want 4", u.Artifacts)
+	}
+	if got := u.Retained + u.Stranded + u.Quarantined + u.Failed; got != u.Artifacts {
+		t.Errorf("the columns add to %d over %d artifact(s) (%+v); every row has to land in exactly one, or the report has lost some", got, u.Artifacts, u)
+	}
+	if u.Failed != 1 {
+		t.Errorf("Failed = %d, want 1", u.Failed)
+	}
+}
+
+// advanceTo takes one legal edge, for a fixture that needs a row in a
+// state no ordinary pass would leave it in here.
+func advanceTo(t *testing.T, ctx context.Context, journal Journal, rec state.Record, from, to lifecycle.State) {
+	t.Helper()
+	if _, err := lifecycle.Advance(ctx, lifecycle.Deps{Journal: journal, Now: fixedNow(epoch)}, state.Transition{
+		Artifact: rec.Artifact,
+		Key:      "test:" + rec.Artifact.String() + ":" + string(from) + "->" + string(to),
+		From:     string(from),
+		To:       string(to),
+	}); err != nil {
+		t.Fatalf("advancing %s from %s to %s: %v", rec.Artifact, from, to, err)
+	}
+}

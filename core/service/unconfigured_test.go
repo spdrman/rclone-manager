@@ -266,3 +266,52 @@ func TestRemoveBackupSet_SaysZeroStrandedWhenItStrandedNothing(t *testing.T) {
 		t.Errorf(`a removal that stranded nothing does not say so:`+"\n%s", line)
 	}
 }
+
+// TestClearStrandedArtifacts_CannotInterleaveWithAConfigurationWrite. The
+// app layer refuses a configured set, and that refusal has to still be
+// true when the files come off the disk rather than only when it was
+// asked. Every configuration write here holds configMu across its own
+// write and the state swap that follows, so a sweep that did not take it
+// could have a CreateBackupSet land between the check and the first
+// os.Remove and go on clearing rows a cycle is once again entitled to
+// resume.
+//
+// The probe holds configMu the way a write in progress does and watches
+// the sweep not proceed. It can only ever pass falsely, never fail
+// falsely: while the lock is held the residue is on disk whether the
+// sweep has started or not, and without the lock the sweep reaches
+// os.Remove in microseconds.
+func TestClearStrandedArtifacts_CannotInterleaveWithAConfigurationWrite(t *testing.T) {
+	svc, _, localA, _ := openRemovalFixtureService(t)
+	ctx := context.Background()
+	_, partial := strandOneArtifact(t, svc, "production/alpha", localA, "stuck.dump")
+	if err := svc.RemoveBackupSet(ctx, "production/alpha"); err != nil {
+		t.Fatalf("RemoveBackupSet: %v", err)
+	}
+
+	svc.configMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.ClearStrandedArtifacts(ctx, "production/alpha")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		svc.configMu.Unlock()
+		t.Fatalf("the sweep finished (%v) while a configuration write held configMu", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(partial); err != nil {
+		svc.configMu.Unlock()
+		t.Fatalf("the sweep removed %s while a configuration write held configMu: %v", partial, err)
+	}
+
+	svc.configMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("the sweep failed once the lock was free: %v", err)
+	}
+	if _, err := os.Stat(partial); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("os.Stat(%s) = %v after the lock was released, want the residue gone", partial, err)
+	}
+}

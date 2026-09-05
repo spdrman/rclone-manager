@@ -102,8 +102,8 @@ func cmdUnconfigured(args []string) int {
 // with no policy line has no way to tell "kept under the deployment's
 // chain" from "kept because nothing is looking".
 func printUnconfiguredSet(u app.UnconfiguredSet) {
-	fmt.Printf("%s: %d artifact(s), %d retained, %d stranded, %d quarantined, %d byte(s) on storage\n",
-		u.Set, u.Artifacts, u.Retained, u.Stranded, u.Quarantined, u.Bytes)
+	fmt.Printf("%s: %d artifact(s), %d retained, %d stranded, %d quarantined, %d failed, %d byte(s) on storage\n",
+		u.Set, u.Artifacts, u.Retained, u.Stranded, u.Quarantined, u.Failed, u.Bytes)
 	fmt.Println("  retention policy: none. This backup set's configuration was removed, so no policy ages these")
 	fmt.Println("  backups out and nothing here will ever delete them. Create the set again to put them back")
 	fmt.Println("  under a policy, or remove the files yourself.")

@@ -144,6 +144,16 @@ type UnconfiguredSet struct {
 	// Quarantined is how many are in QUARANTINED or QUARANTINED_LOST.
 	Quarantined int
 
+	// Failed is how many are in FAILED: an attempt that did not produce a
+	// backup, holding no local bytes, that nothing will retry now the set
+	// is unconfigured.
+	//
+	// It is a field rather than arithmetic the reader is left to do,
+	// because Artifacts minus the other three is a number an operator
+	// would have to notice was missing before they could wonder what it
+	// was.
+	Failed int
+
 	// Bytes is the recorded size of every row that holds local bytes
 	// (internal/lifecycle.HoldsLocalCopy), which is the answer to "how
 	// much disk is this costing me and nothing is managing".
@@ -287,6 +297,8 @@ func summariseUnconfigured(id model.BackupSetID, records []state.Record) Unconfi
 			u.Stranded++
 		case lifecycle.IsQuarantineState(st):
 			u.Quarantined++
+		case st == lifecycle.Failed:
+			u.Failed++
 		}
 		if lifecycle.HoldsLocalCopy(st) && rec.Remote.Size != nil {
 			u.Bytes += *rec.Remote.Size
