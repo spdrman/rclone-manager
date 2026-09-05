@@ -1,3 +1,14 @@
+/**
+ * The sidebar badge and the quarantine list, proved to be one fact rather
+ * than two.
+ *
+ * They used to be separate fetches of the same resource, which meant they
+ * could show different numbers to the same operator on the same screen.
+ * The cases drive the graph directly and expect both to move together with
+ * no request involved at all, and the last one goes through the real
+ * action so that the reload it triggers is the shared one rather than a
+ * second, page-private read.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

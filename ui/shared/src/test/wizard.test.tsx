@@ -1,3 +1,19 @@
+/**
+ * The add-backup-set wizard's refusals, which are the part of it that has
+ * to hold.
+ *
+ * Most of what a wizard does is collect values, and this file spends
+ * almost none of its length on that. What it pins instead is what Save
+ * will NOT do: not until remote deletion is acknowledged, and not on an
+ * acknowledgement alone while the host is untrusted or no key has been
+ * imported. Those two together are the whole safety argument for a flow
+ * that ends by giving a service permission to delete from somebody's
+ * server.
+ *
+ * The remaining cases cover honesty rather than safety: a storage picker
+ * is not offered on a platform that has none, and no private key is ever
+ * rendered.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

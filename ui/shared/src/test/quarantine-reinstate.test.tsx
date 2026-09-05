@@ -1,3 +1,19 @@
+/**
+ * Reinstating a quarantined backup: what is disclosed before it happens,
+ * and how the three possible answers stay distinguishable afterwards.
+ *
+ * Reinstatement buys back a backup at the permanent cost of never deleting
+ * its remote source, so the disclosure cases check that the trade is named
+ * on the page, named again in the dialog, and named in the confirm button
+ * itself, and that nothing reaches the backend until the confirmation is
+ * taken.
+ *
+ * The outcome cases exist because a refusal and a failure are opposite
+ * facts wearing similar clothes. A refusal is a verdict about the backup
+ * that arrived intact; a failure is a request that did not. Reading one as
+ * the other sends an operator to retry something that was answered
+ * correctly, or to accept a broken request as a settled answer.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

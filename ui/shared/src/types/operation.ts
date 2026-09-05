@@ -1,3 +1,19 @@
+/**
+ * What is happening now and what has happened: operations, their live
+ * progress, the activity log, and the system health summary.
+ *
+ * The organising rule here is that nothing describes work that has not
+ * been measured. There is no field for how far through a whole run cycle
+ * the service is, because a cycle discovers what it will do as it goes and
+ * no honest denominator exists before it ends. There is no uptime, no cost
+ * and no restore estimate, for the same reason in three other places.
+ *
+ * That rule is not an aspiration, it is a repair. Nine displayed fields
+ * that nothing computed were removed from this file at once, and the
+ * shapes below are written so the mistake is harder to repeat: an optional
+ * field means the service genuinely may not report it, and a surface has
+ * to handle the absence rather than default it.
+ */
 export type OperationKind =
   | "transfer"
   | "validation"

@@ -1,3 +1,18 @@
+/**
+ * The backups page against the shared sets node, and the two moments
+ * where an in-flight fetch could show something untrue.
+ *
+ * The first group proves the set filter is fed by the one shared node
+ * rather than a fetch of its own, and it proves it the only way that
+ * distinguishes the two: by committing to the node directly and expecting
+ * the dropdown to follow with no request made anywhere.
+ *
+ * The other two groups are both about a list that is loading. An empty
+ * result and a result that has not arrived look identical on screen and
+ * mean opposite things, and rows belonging to the filter an operator just
+ * changed away from are worse than no rows at all, because they are
+ * clickable.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";

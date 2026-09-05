@@ -1,3 +1,20 @@
+/**
+ * The backup set detail page: the read path, the staleness rule its
+ * inline editor rests on, and the two independent axes an operator most
+ * often confuses.
+ *
+ * The staleness cases matter in both directions and that is the point of
+ * having three of them. Rejecting a save when someone else changed the set
+ * is the feature; rejecting one when nothing changed, or on the second
+ * per-box save of a single session, would make the editor unusable while
+ * still passing a test that only checked the positive.
+ *
+ * The enabled and read-only cases pin a distinction the copy has to keep
+ * making. Disabled means nothing is collected; read-only means the remote
+ * original is never deleted. A set can be either without being the other,
+ * and it is the second one that decides whether anything is removed from
+ * the source.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";

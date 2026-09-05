@@ -1,3 +1,27 @@
+/**
+ * What a backup set, a backup and a retention decision are, as this
+ * frontend understands them.
+ *
+ * Almost every declaration here carries a note, and reading a few of them
+ * shows what the file is actually for. It is not a transcription of the
+ * wire: client.ts does that, and the generated bindings hold the wire's
+ * own shapes. What these types add is the meaning an absence has, which no
+ * generated schema can carry.
+ *
+ * That is the thread running through the file. An optional field here is
+ * optional because absence says something a value could not, and the doc
+ * beside it says what: no halt reason on record is not "reachable", a copy
+ * with no verification class is not a weakly verified copy, a verdict with
+ * no medium is not a verdict about local storage. Several of these fields
+ * were required booleans once, filled in by the mapper with a literal
+ * false, which turned "nobody said" into a claim and put it on screen.
+ *
+ * The other recurring decision is which vocabularies are closed. Health
+ * states and completion methods are closed because the product defines
+ * them; retention tiers are open because an operator defines them, and
+ * anything narrowing an open vocabulary onto a closed one refuses rather
+ * than guessing.
+ */
 import type { RetentionSettings } from "@shared/api/contracts";
 import type { WirePlacement } from "@shared/api/generated/contract";
 

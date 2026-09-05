@@ -1,3 +1,25 @@
+/**
+ * The confirm-before-delete dialog: what it shows, and every reason it
+ * refuses to apply.
+ *
+ * The rendering cases are about not losing information an operator needs
+ * to notice a mistake. Verdicts appear per artifact with the tiers that
+ * kept them and what selected them for each; an operator-defined tier
+ * badges under its own name rather than falling through to
+ * "unclassified", which is the wording for the opposite situation.
+ *
+ * The refusals are the rest of the file, and they are separate cases
+ * because they have separate causes: a plan whose inventory moved, a plan
+ * that expired while the confirmation sat open, a plan belonging to a
+ * different backup set. Each has a positive control beside it, because a
+ * dialog that never applied anything would satisfy every refusal on its
+ * own.
+ *
+ * The plan fixture's expiry is computed from the current time rather than
+ * frozen, since a literal quietly falls into the past and turns every
+ * apply here into an expiry refusal, silently converting the whole suite
+ * into a test of one branch.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { RetentionPreviewDialog } from "@shared/pages/RetentionPreviewDialog";

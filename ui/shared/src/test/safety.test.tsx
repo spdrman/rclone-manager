@@ -1,3 +1,22 @@
+/**
+ * The promises this product cannot break, asserted across whatever surface
+ * happens to carry them.
+ *
+ * The file is organised by promise rather than by component, which is why
+ * it reaches into health rendering, the lifecycle timeline, confirmation
+ * dialogs, retention plans, key handling and storage pressure in one
+ * place. Each group states a rule that no future screen may violate: a
+ * running service is not a healthy backup, remote deletion can never
+ * appear before commit, a destructive button never says OK, a plan is
+ * applied as issued or not at all, no private key travels in any contract,
+ * and nothing anywhere offers to free space by deleting backups.
+ *
+ * The storage-pressure group is the one that looks like over-testing and
+ * is not: it searches the whole API surface for an operation that would
+ * reclaim space, rather than checking that one screen does not offer one.
+ * A rule that only holds where somebody remembered to check it is not a
+ * rule.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

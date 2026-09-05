@@ -1,3 +1,17 @@
+/**
+ * Revalidate and Retry ingestion, when the request is rejected.
+ *
+ * Both resolve with nothing worth reading, so their only visible effect is
+ * the list reloading. That made a rejection invisible: the button
+ * un-disabled itself and the page sat there, which is indistinguishable
+ * from a click that never registered. Each case therefore asserts two
+ * things, that a failure is stated and that the list is NOT reloaded,
+ * because reloading on a failure would put the old rows back and complete
+ * the illusion.
+ *
+ * The success case is the positive control. Without it a page that always
+ * showed an error and never reloaded would pass everything above.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
