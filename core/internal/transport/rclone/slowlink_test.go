@@ -150,12 +150,12 @@ func (l *slowLink) track(c net.Conn) {
 }
 
 func (l *slowLink) handle(client net.Conn) {
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	upstream, err := net.Dial("tcp", net.JoinHostPort(l.fixture.Host, strconv.Itoa(l.fixture.Port)))
 	if err != nil {
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	l.track(upstream)
 
 	var both sync.WaitGroup
