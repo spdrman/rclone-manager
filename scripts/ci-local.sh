@@ -261,10 +261,12 @@ gate_docker_step "distribution go build, vet, test -race (every package but pack
 #
 # distribution/packaging is a static-analysis suite: it reads this
 # repository's own manifests, matrices, READMEs and release records and
-# asserts they agree with each other. It contains no `go` statement, in
-# product code or in tests, no t.Parallel anywhere, and one sync.Once used
-# to memoise a fixture. There is no second goroutine for the detector to
-# find a race between, so -race there cannot report anything, ever.
+# asserts they agree with each other. It starts no goroutine of its own:
+# no `go` statement in product code or in tests, no t.Parallel anywhere,
+# and one sync.Once memoising a fixture. The only concurrency in the whole
+# package is os/exec's internal pipe plumbing, which is the standard
+# library's and is not what a race in this repository would look like. So
+# -race there has nothing of ours to report on.
 #
 # What it can do is cost. This is also the most CPU-bound package in the
 # repository (four of its epic-matrix cases alone are 14.5s, 7.4s, 7.1s and
