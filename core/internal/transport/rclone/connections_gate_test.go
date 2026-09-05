@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,6 +123,54 @@ func acceptedLogins(t *testing.T, f *sftpfixture.Fixture) int {
 	}
 }
 
+// sshClientLoopFrame is the stack frame golang.org/x/crypto/ssh puts on the
+// goroutine it starts for each client connection. newMux runs exactly one
+// mux.loop per connection and that goroutine only returns once the
+// connection's transport is closed, so counting these frames is a direct
+// reading of how many SSH connections this process is still holding.
+const sshClientLoopFrame = "ssh.(*mux).loop"
+
+// sshClientGoroutines is the client-side half of establishedConns, and it
+// is the half that can attribute a survivor.
+//
+// establishedConns reads the server's table from inside the container, and
+// the fixture publishes -p 127.0.0.1::22, so the socket sshd sees is the
+// container-side leg of Docker's userland forwarder rather than anything
+// this process opened. A count that stays at 1 there is therefore two
+// different stories wearing the same clothes: our pool never let go, or the
+// forwarding chain never passed the close on. Reading our own goroutines
+// tells them apart from inside, with no reproduction and no guessing.
+//
+// There is no t.Parallel in this package and the adapter never puts an Fs
+// in rclone's cache, so once an operation has returned and its Fs has been
+// shut down the correct reading here is zero.
+func sshClientGoroutines() (int, string) {
+	buf := make([]byte, 64<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	var (
+		count int
+		found []string
+	)
+	for i, stanza := range strings.Split(string(buf), "\n\ngoroutine ") {
+		if !strings.Contains(stanza, sshClientLoopFrame) {
+			continue
+		}
+		count++
+		if i > 0 {
+			stanza = "goroutine " + stanza
+		}
+		found = append(found, strings.TrimSpace(stanza))
+	}
+	return count, strings.Join(found, "\n\n")
+}
+
 // requireNoConnections fails unless the server's connection table empties
 // within connectionDrainBudget.
 func requireNoConnections(t *testing.T, f *sftpfixture.Fixture, after string) {
@@ -162,6 +211,15 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 		if got := acceptedLogins(t, f); got <= before {
 			shutdownFs(ctx, held)
 			t.Fatalf("accepted logins = %d after opening an Fs, was %d before; this probe cannot count a login, so the fan-out assertions below would pass on any behaviour", got, before)
+		}
+		// The third probe, and the one that reads this process rather than
+		// the server. Everything below trusts a zero from it to mean "this
+		// process holds no SSH client", and a probe looking for a frame
+		// that no longer exists says exactly the same zero. So it has to be
+		// caught seeing one first.
+		if got, _ := sshClientGoroutines(); got < 1 {
+			shutdownFs(ctx, held)
+			t.Fatalf("SSH client goroutines = %d while an Fs is deliberately held open and the server can see its connection; x/crypto/ssh runs one %s per live client connection, so a probe that cannot find one here would read zero at every drain below and would blame the forwarder for a client this process really is still holding", got, sshClientLoopFrame)
 		}
 
 		shutdownFs(ctx, held)
