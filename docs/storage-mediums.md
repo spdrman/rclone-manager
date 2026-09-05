@@ -171,24 +171,38 @@ re-read for free.
 
 | Class | What it proves | What it costs |
 | --- | --- | --- |
-| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | Two full downloads per move: time, plus egress, twice. See below. On an archive class, a restore first. |
+| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | One full download per move: time, plus egress, plus two metadata calls. See below. A move a restart picks up pays for a second download. On an archive class, a restore first. |
 | `attested` | The provider's stored full-object checksum equals the recorded SHA-256 | One metadata call, no egress. Trusts the endpoint to implement S3 checksum semantics honestly. |
 | `existence` | The object exists with the recorded size | One HEAD request |
 
 The rules that matter:
 
-- A move reaches VERIFIED at `content` class by default. The local copy is
-  downloaded back and re-hashed at the last moment the local truth still exists,
-  and only then is the source deleted.
-- **A move at `content` class downloads the object twice, and you are billed for
-  both.** Once to reach VERIFIED, and once again immediately before the source
-  delete, from scratch, without writing the second result anywhere. That is not
-  an accident and it is not a retry: the second read is what makes a move
-  interrupted by a crash and a move that has just this second been verified take
-  the same code path, so there is no separate resume path to get wrong. It does
-  mean that budgeting one artifact's worth of egress per move is budgeting half
-  of it. `attested` would avoid the download entirely and does not work on `s3`
-  in this build; see below.
+- A move reaches VERIFIED at `content` class by default. The copy that was just
+  uploaded is downloaded back and re-hashed against the SHA-256 recorded when
+  the artifact was ingested, while the source copy is still there, and the
+  source is deleted only after that verdict is durably recorded.
+- **A move at `content` class downloads the object once, and a move a restart
+  picks up downloads it again.** The manager will not delete your source copy
+  without a content-class verdict about the destination that is valid at that
+  instant, and it asks for one unconditionally, immediately before the delete.
+  Where that verdict comes from is the whole of the cost:
+
+  - On a move that runs start to finish in one pass, it is the read that reached
+    VERIFIED moments earlier, plus two HEAD requests: one taken immediately
+    before that read, and one immediately before the delete. If the object's
+    size, last-modified time or storage class has moved between the two, or the
+    endpoint reports no last-modified time at all, or more than two minutes have
+    passed, the manager downloads the object again rather than act on the older
+    reading. **One artifact's worth of egress per move** is the number to budget.
+  - On a move interrupted by a crash and picked up later, there is no such
+    reading to stand on, and there deliberately cannot be one: `VERIFIED` may
+    have been written weeks ago, and a bucket lifecycle rule, an expired restore
+    window or an overwrite in the meantime is exactly what the check is for. That
+    move downloads the object in full, every cycle, until it can finish. **Budget
+    a second artifact's worth of egress for any move you see resume.**
+
+  `attested` would avoid the download entirely and does not work on `s3` in this
+  build; see below.
 - `existence` is never sufficient to delete a source. Not ever, not with any
   setting.
 - Periodic revalidation checks medium placements at `existence` class only.

@@ -131,6 +131,23 @@ func TestTheSourceDeleteHasExactlyOneCaller(t *testing.T) {
 	}{
 		{"remove", []string{"deleteSource"}},
 		{"guardSourceDelete", []string{"deleteSource"}},
+
+		// reverifyForDelete is the ONE producer of the fact that
+		// authorises a source delete (#439, predelete.go). It is here for
+		// the reason guardSourceDelete is: a second caller would be a
+		// second place deciding what counts as proof that the destination
+		// is good, and the whole argument for reusing a read rather than
+		// repeating it is that there is exactly one place where that
+		// decision is made and it is called unconditionally.
+		{"reverifyForDelete", []string{"deleteSource"}},
+
+		// identifyBeforeReadBack is its counterpart at the other end: the
+		// only place a proof's subject is fixed, immediately before the
+		// bytes are read. A second caller would be a second identity,
+		// taken at a moment nobody argued about, and taking it after the
+		// read instead of before is the one edit that makes the whole
+		// mechanism unsound.
+		{"identifyBeforeReadBack", []string{"verifyDestination"}},
 		{"proveLocalSourceSafe", []string{"guardSourceDelete"}},
 		{"proveMediumSourceSafe", []string{"guardSourceDelete"}},
 		{"copiesOf", []string{"guardSourceDelete"}},
@@ -1059,4 +1076,118 @@ func taintedByParam(fn *ast.FuncDecl, param string) map[string]bool {
 		})
 	}
 	return taint
+}
+
+// TestNothingHoldsAPreDeleteProofBeyondOneWalkOfOneMove is the structural
+// half of #439's safety argument, and it is aimed at one specific edit.
+//
+// A pre-delete proof may stand in for the read that authorises a source
+// delete only because of where it lives: a local in advance, handed to
+// verifyDestination and to deleteSource, gone when advance returns. That
+// is what makes "a resumed move always reads in full" a property of the
+// program rather than a check somebody remembered to write, and it is the
+// direct answer to #372's shape, because the resume path and the nominal
+// path are still one path taking one branch.
+//
+// Moving it onto Engine, into a package-level map or into the journal
+// would change nothing observable in the happy case and would quietly
+// hand a delete in one cycle the authority of a read from another. Every
+// behavioural test in the suite would stay green. This is the check that
+// goes red instead.
+func TestNothingHoldsAPreDeleteProofBeyondOneWalkOfOneMove(t *testing.T) {
+	files := packageFiles(t)
+
+	// 1. No type in this package has a field of the proof's type. Engine
+	// is the one that matters, and the scan is over all of them because
+	// "Engine holds a thing that holds a proof" is the same bug spelled
+	// with one more indirection.
+	var found int
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, f := range st.Fields.List {
+				if namesTheProofType(f.Type) {
+					names := "an embedded field"
+					if len(f.Names) > 0 {
+						names = f.Names[0].Name
+					}
+					t.Errorf("%s declares a struct field %q of the pre-delete proof's type; a proof that outlives one walk of one move can authorise a delete in a cycle that did not read anything",
+						name, names)
+				}
+			}
+			return true
+		})
+	}
+
+	// 2. advance is where it is declared, and it is declared there as a
+	// value rather than reached from somewhere else.
+	advance := engineMethod(files, "advance")
+	if advance == nil {
+		t.Fatal("no (*Engine).advance was found, so this test proved nothing")
+	}
+	ast.Inspect(advance.Body, func(n ast.Node) bool {
+		decl, ok := n.(*ast.DeclStmt)
+		if !ok {
+			return true
+		}
+		gen, ok := decl.Decl.(*ast.GenDecl)
+		if !ok {
+			return true
+		}
+		for _, spec := range gen.Specs {
+			if vs, ok := spec.(*ast.ValueSpec); ok && vs.Type != nil && namesTheProofType(vs.Type) {
+				found++
+			}
+		}
+		return true
+	})
+	if found != 1 {
+		t.Errorf("advance declares %d pre-delete proofs, want exactly 1; the whole provenance argument is that the proof's lifetime IS this loop", found)
+	}
+}
+
+// namesTheProofType reports whether an expression is readBackProof or a
+// pointer to one. It is deliberately literal: this is a structural guard,
+// and an alias introduced to slip past it is a change a reviewer should
+// see rather than one a cleverer matcher should absorb.
+func namesTheProofType(e ast.Expr) bool {
+	if star, ok := e.(*ast.StarExpr); ok {
+		e = star.X
+	}
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "readBackProof"
+}
+
+// TestTheProofScanCanActuallyFail is the positive control for the scan
+// above, which is an absence assertion and therefore the shape that passes
+// for the wrong reason when it is pointed at nothing.
+func TestTheProofScanCanActuallyFail(t *testing.T) {
+	dir := t.TempDir()
+	planted := "package placement\n\ntype Engine struct {\n\tproof *readBackProof\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "engine.go"), []byte(planted), 0o600); err != nil {
+		t.Fatalf("planting the source: %v", err)
+	}
+	files := packageFilesIn(t, dir)
+
+	var caught int
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, f := range st.Fields.List {
+				if namesTheProofType(f.Type) {
+					caught++
+				}
+			}
+			return true
+		})
+	}
+	if caught != 1 {
+		t.Errorf("the field scan found %d planted proofs, want 1; it cannot fail, so its silence about the real package says nothing", caught)
+	}
 }
