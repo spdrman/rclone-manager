@@ -460,7 +460,7 @@ func (r *run) written(ctx context.Context) {
 		return
 	}
 
-	local, err := writeProbeFile()
+	local, cleanup, err := writeProbeFile()
 	if err != nil {
 		r.fail(StepWrite, err, "this manager could not stage the probe object on local disk, so nothing was sent; the endpoint was never asked")
 		for _, step := range []Step{StepReadBack, StepStorageClass, StepVerification, StepDelete} {
@@ -468,7 +468,7 @@ func (r *run) written(ctx context.Context) {
 		}
 		return
 	}
-	defer func() { _ = os.Remove(local) }()
+	defer cleanup()
 
 	if _, err := r.deps.Store.UploadFromLocal(ctx, r.medium, local, r.key, transport.UploadOptions{}); err != nil {
 		r.fail(StepWrite, err, r.writeFailed(err))
@@ -698,17 +698,24 @@ func probeKey(prefix string) (string, error) {
 // writeProbeFile stages the probe's bytes on local disk, because
 // MediumStore.UploadFromLocal is addressed by a path rather than by a
 // reader (see its own doc for why).
-func writeProbeFile() (string, error) {
+//
+// It returns a cleanup that removes the whole temporary DIRECTORY rather
+// than only the file inside it: a preflight run on a schedule an operator
+// wired up themselves would otherwise leave one empty directory per run in
+// the system temp area forever, which is the shape of leak nobody notices
+// until a filesystem runs out of inodes.
+func writeProbeFile() (path string, cleanup func(), err error) {
 	dir, err := os.MkdirTemp("", "rclone-manager-preflight-*")
 	if err != nil {
-		return "", err
+		return "", func() {}, err
 	}
-	path := filepath.Join(dir, "probe")
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	path = filepath.Join(dir, "probe")
 	if err := os.WriteFile(path, probeBody, 0o600); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", err
+		cleanup()
+		return "", func() {}, err
 	}
-	return path, nil
+	return path, cleanup, nil
 }
 
 // categoryName renders the FR-22 category a failure classified as, for the
