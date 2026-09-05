@@ -214,6 +214,66 @@ func TestTheMatrixHasARowPerGateLine(t *testing.T) {
 	}
 }
 
+// TestTheViolationLedgerHasARowPerSpecGuard is the same promise as
+// TestTheMatrixHasARowPerGateLine, aimed at the other table.
+//
+// The matrix opens by promising a row "per entry of its section 4
+// planted-violation table", and section 4 of the spec is where every guard
+// this EPIC adds names the mutation that has to make it fire. So the V rows
+// are counted against the spec's guard table rather than against a number
+// written down here.
+//
+// It doubles as the coverage check for the parser two tables share. The
+// citation guard reads V rows through outcomeRows, and the reason it has to
+// is that gateRows never did: V4 and V8 spent months BLOCKED citing closed
+// issues while the old check looked straight past them. A parser that
+// stopped seeing that table again would leave the guard reading clean and
+// checking nothing, which is a failure with no symptom, so the count is
+// asserted rather than assumed.
+//
+// It found one on the way in. The spec names nine guards and the matrix
+// carried eight: FR-29's "a migration variant that backfills every artifact
+// row" had no row at all, so the one guard about a backfill that hands a
+// `.partial` an ACTIVE placement, which is what lets a move delete a source
+// against an incomplete copy, was in the ledger nowhere. V9 is that row.
+func TestTheViolationLedgerHasARowPerSpecGuard(t *testing.T) {
+	matrix, err := os.ReadFile(matrixPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", matrixPath, err)
+	}
+	spec, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", specPath, err)
+	}
+
+	var got []string
+	for _, row := range outcomeRows(string(matrix)) {
+		if strings.HasPrefix(row.id, "V") {
+			got = append(got, row.id)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("no section 4 violation row was parsed out of the matrix at all, so the citation guard is reading one of its two tables and calling it both")
+	}
+
+	guards := specGuardRows(string(spec))
+	if len(guards) == 0 {
+		t.Fatal("no guard rows parsed out of the spec's section 4 table, so this check has nothing to compare against")
+	}
+
+	want := make([]string, 0, len(guards))
+	for i := range guards {
+		want = append(want, fmt.Sprintf("V%d", i+1))
+	}
+	sorted := append([]string(nil), got...)
+	sort.Strings(sorted)
+	sort.Strings(want)
+	if !sameStrings(sorted, want) {
+		t.Errorf("%s names %d guard(s) in its section 4 table and the matrix's ledger carries %v; it has to carry one row per guard (%v). The guards the spec names are:\n  %s",
+			specPath, len(guards), got, want, strings.Join(guards, "\n  "))
+	}
+}
+
 // TestEveryBlockedRowCitesAnIssueThatIsStillOpen is the citation guard, and
 // the word that matters in its name is "open".
 //
@@ -272,7 +332,7 @@ func TestEveryBlockedRowCitesAnIssueThatIsStillOpen(t *testing.T) {
 // could resolve complains rather than passing, and a BLOCKED row citing
 // nothing at all complains too.
 func TestTheBlockedCitationGuardCanFail(t *testing.T) {
-	rows := []blockedRow{{id: "P1.3", outcome: "BLOCKED (#235)", issues: []int{235}}}
+	rows := []outcomeRow{{id: "P1.3", outcome: "BLOCKED (#235)", issues: []int{235}}}
 
 	t.Run("a closed issue is refused", func(t *testing.T) {
 		got := blockedCitationComplaints(rows, func(int) (string, error) { return "CLOSED", nil })
@@ -303,7 +363,7 @@ func TestTheBlockedCitationGuardCanFail(t *testing.T) {
 	})
 
 	t.Run("a BLOCKED row citing nothing is refused", func(t *testing.T) {
-		bare := []blockedRow{{id: "V4", outcome: "BLOCKED"}}
+		bare := []outcomeRow{{id: "V4", outcome: "BLOCKED"}}
 		got := blockedCitationComplaints(bare, func(int) (string, error) {
 			t.Error("the resolver was called for a row that cites no issue")
 			return "OPEN", nil
@@ -377,8 +437,9 @@ type matrixRow struct {
 	where   string
 }
 
-// blockedRow is one BLOCKED declaration and the issues it cites.
-type blockedRow struct {
+// outcomeRow is one row of the matrix that declares an outcome, and the
+// issues that outcome cites.
+type outcomeRow struct {
 	id      string
 	outcome string
 	issues  []int
@@ -390,7 +451,7 @@ type blockedRow struct {
 //
 // An issue is resolved once per run rather than once per row, because
 // P1.8 cited three of them and rows share citations by design.
-func blockedCitationComplaints(rows []blockedRow, resolve func(int) (string, error)) []string {
+func blockedCitationComplaints(rows []outcomeRow, resolve func(int) (string, error)) []string {
 	type answer struct {
 		state string
 		err   error
@@ -481,17 +542,22 @@ func gateRows(md string) []matrixRow {
 	return out
 }
 
-// blockedRows collects every BLOCKED declaration in the matrix, from BOTH
-// tables that carry one.
+// outcomeRows collects every row of the matrix that declares an outcome,
+// from BOTH tables that carry one.
 //
 // The section 4 planted-violation table is here as well as the two exit
 // gates, and that is not tidiness: V4 and V8 were BLOCKED citing #235 and
 // #237 the entire time, and gateRows never looked at them, so the old
-// citation check was not weak about those two rows, it was absent. Their
-// table has four columns with the outcome last, which is why this parses
-// rather than reusing gateRows.
-func blockedRows(md string) []blockedRow {
-	var out []blockedRow
+// citation check was not weak about those two rows, it was absent.
+//
+// The two tables are different shapes. A gate row has five columns with the
+// outcome second; a violation row has four with the outcome last, and the
+// outcome is taken as the LAST column rather than as the fourth so that a
+// table gaining a column is a column this reads past rather than a table it
+// stops seeing. TestTheViolationLedgerHasARowPerSpecGuard is what notices
+// if it stops seeing one anyway.
+func outcomeRows(md string) []outcomeRow {
+	var out []outcomeRow
 	gate := regexp.MustCompile(`^P[12]\.\d+$`)
 	violation := regexp.MustCompile(`^V\d+$`)
 
@@ -504,15 +570,12 @@ func blockedRows(md string) []blockedRow {
 		switch {
 		case len(cols) >= 5 && gate.MatchString(cols[0]):
 			id, outcome = cols[0], cols[1]
-		case len(cols) == 4 && violation.MatchString(cols[0]):
-			id, outcome = cols[0], cols[3]
+		case len(cols) >= 4 && violation.MatchString(cols[0]):
+			id, outcome = cols[0], cols[len(cols)-1]
 		default:
 			continue
 		}
-		if !strings.HasPrefix(outcome, "BLOCKED") {
-			continue
-		}
-		row := blockedRow{id: id, outcome: outcome}
+		row := outcomeRow{id: id, outcome: outcome}
 		for _, m := range issueCitation.FindAllStringSubmatch(outcome, -1) {
 			n, err := strconv.Atoi(m[1])
 			if err != nil {
@@ -521,6 +584,18 @@ func blockedRows(md string) []blockedRow {
 			row.issues = append(row.issues, n)
 		}
 		out = append(out, row)
+	}
+	return out
+}
+
+// blockedRows is outcomeRows narrowed to the declarations the citation
+// guard is about.
+func blockedRows(md string) []outcomeRow {
+	var out []outcomeRow
+	for _, row := range outcomeRows(md) {
+		if strings.HasPrefix(row.outcome, "BLOCKED") {
+			out = append(out, row)
+		}
 	}
 	return out
 }
@@ -546,6 +621,37 @@ func specGateLines(md, heading string) []string {
 		if strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "- [x]") {
 			out = append(out, trimmed)
 		}
+	}
+	return out
+}
+
+// specGuardRows returns the Guard column of the spec's section 4
+// planted-violation table, in the order the spec writes them, which is the
+// order the matrix numbers V1..Vn in.
+//
+// It keys on the table's own header rather than on a section heading,
+// because the table is the thing being counted and a heading somebody
+// renames would silently empty this. An empty result is a failure at the
+// call site.
+func specGuardRows(md string) []string {
+	var out []string
+	inside := false
+	for _, line := range strings.Split(md, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inside {
+			if strings.HasPrefix(trimmed, "| Guard | Planted violation") {
+				inside = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "|") {
+			break
+		}
+		cols := splitRow(trimmed)
+		if len(cols) < 2 || strings.Trim(cols[0], "- ") == "" {
+			continue
+		}
+		out = append(out, cols[0])
 	}
 	return out
 }

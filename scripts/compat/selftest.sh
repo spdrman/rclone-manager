@@ -119,6 +119,65 @@ expect_cell_fails() {
   fi
 }
 
+# expect_unit_check_fails <label> <dir> <expected substring> <package> <run pattern>
+#
+# The migration-variant controls above read their verdict off the FR-35
+# corpus, because that is where their claim lives. FR-29's guard is
+# different in one way that matters: "the backfill records only durable
+# copies" is a claim about the placements table itself, and no medium-free
+# surface renders one, so the corpus is exactly the wrong place to ask. Its
+# verdict comes from internal/state's own both-directions test instead.
+#
+# Same discipline, one package narrower, and it is in this script rather
+# than another because plant_migration and the two other section 4 backfill
+# violations are here. A falsification filed away from its siblings is one
+# that quietly stops being run.
+expect_unit_check_fails() {
+  local label=$1 dir=$2 needle=$3 pkg=$4 pattern=$5
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
+  if (cd "$dir/core" && GOWORK=off go test -count=1 -run "$pattern" "$pkg") >"$tmp/out" 2>&1; then
+    echo "SELFTEST FAIL: $label. $pkg PASSED against a planted violation." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  elif ! grep -qF "$needle" "$tmp/out"; then
+    echo "SELFTEST FAIL: $label. The package failed, but never named the promise that was broken." >&2
+    echo "    expected its output to mention: $needle" >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  else
+    echo "  ok (caught): $label"
+    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-400)"
+    pass=$((pass + 1))
+  fi
+}
+
+# expect_unit_gate_passes <label> <dir> <package> is expect_gate_passes for
+# the one control that reads its verdict out of a package rather than out of
+# the corpus. Same argument: a mutation that turns a suite red proves
+# nothing about the mutation if the suite was red already.
+expect_unit_gate_passes() {
+  local label=$1 dir=$2 pkg=$3
+  if selftest_stale_verdict "$label"; then
+    return 0
+  fi
+  if selftest_anchors_only "$label"; then
+    return 0
+  fi
+  if (cd "$dir/core" && GOWORK=off go test -count=1 "$pkg") >"$tmp/out" 2>&1; then
+    echo "  ok (clean):  $label"
+    pass=$((pass + 1))
+  else
+    echo "SELFTEST FAIL: $label. The package FAILED against an unmutated tree, so its failures mean nothing." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  fi
+}
+
 # expect_gate_passes is the negative control, and the two early returns
 # are what stop it from lying. A control whose anchor went stale planted
 # nothing, so running the gate against that tree would report a clean pass
@@ -197,6 +256,31 @@ plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). Discove
 -- gate failing for being too weak.
 UPDATE artifacts SET discovered_at = '\''2026-08-29T09:00:00Z'\'' WHERE artifact_name = '\''monthly-only.dump'\'';'
 expect_cell_fails "a backfill that rewrites the journal's discovery timestamp" "$d" "11-upgraded-retention-verdicts"
+
+
+
+expect_unit_gate_passes "core/internal/state on an unmutated tree" "$root" ./internal/state/
+
+d=$(mutant backfill-takes-every-artifact-row)
+# docs/EPIC-E-alternative-storage.md section 4, verbatim: "a migration
+# variant that backfills every artifact row". The spec says beside it why
+# that is a guard rather than a tidiness rule, and it is worth repeating
+# where the mutation lives: a `.partial` holding an ACTIVE placement is
+# what lets a move delete a source against an incomplete copy.
+#
+# V9 of the matrix's ledger, and it had no row there at all until #522.
+# TestTheViolationLedgerHasARowPerSpecGuard is what found that, by counting
+# the ledger against the spec's own guard table rather than trusting it.
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). A backfill that takes
+-- every artifact row rather than only the durable ones, so an in-flight
+-- .partial gets an ACTIVE placement pointing at a half-written file.
+INSERT INTO placements (artifact_id, medium, location, status, created_at, updated_at)
+SELECT a.id, '\''local'\'', COALESCE(a.local_path, '\'''\''), '\''ACTIVE'\'', a.discovered_at, a.discovered_at
+  FROM artifacts a
+ WHERE a.id NOT IN (SELECT artifact_id FROM placements);'
+expect_unit_check_fails "a backfill that takes every artifact row rather than only the durable ones" "$d" \
+  "a .partial in flight is not a durable one" \
+  ./internal/state/ 'TestMigration0007BackfillsEveryDurableArtifactAndNothingElse'
 
 echo
 echo "==> the schema an upgrade inherits"
