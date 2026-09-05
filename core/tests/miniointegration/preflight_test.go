@@ -1,5 +1,3 @@
-package miniointegration_test
-
 // Issue #443's medium preflight, run against a real S3 API rather than
 // against a fake store.
 //
@@ -12,6 +10,7 @@ package miniointegration_test
 // repository keeps producing, so the deny cases here are driven against a
 // server that genuinely does not have the bucket rather than against a
 // double that says so.
+package miniointegration_test
 
 import (
 	"context"

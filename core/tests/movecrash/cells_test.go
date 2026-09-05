@@ -1,3 +1,19 @@
+// The matrix itself, and the three checks that keep it from certifying its
+// own harness.
+//
+// Each cell kills a real process at a real boundary and restarts the real
+// engine against whatever the dead process left behind. That shape has a
+// specific way of going quietly wrong: the kill can stop landing where the
+// cell says it does, or the harness can grow a phase machine of its own and
+// start proving things about itself instead of about the engine. So the
+// matrix travels with a control that fails if the kill assertion is vacuous,
+// a check that the harness has no phase logic of its own, and, for the
+// staged medium-to-medium cells, a check that they really do stage
+// something.
+//
+// Two of those controls read the harness source with go/ast rather than
+// running it. That is deliberate: the property is "this code does not exist
+// here", and an absence cannot be demonstrated by execution.
 package movecrash_test
 
 import (

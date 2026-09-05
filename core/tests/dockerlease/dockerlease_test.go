@@ -1,3 +1,17 @@
+// The label is the entire safety boundary for Sweep, so these tests drive a
+// real docker rather than a fake: the thing worth proving is that a `docker
+// rm -f` built from a `--filter label=` never reaches a container somebody
+// else owns.
+//
+// The other half of the file is about what happens when there is no daemon
+// at all, and it is here rather than in a package of its own because the two
+// halves are the same question asked from opposite sides. A sweep that is
+// too broad destroys somebody else's work; a gate that skips itself when
+// docker is missing destroys the evidence instead, silently, while the run
+// keeps printing ok. Both are checked against a real docker client pointed
+// at an endpoint nothing listens on, because the real answer is the one that
+// matters and stopping the shared daemon would take every other worktree's
+// run down with it.
 package dockerlease
 
 import (
@@ -11,11 +25,6 @@ import (
 	"testing"
 	"time"
 )
-
-// The label is the entire safety boundary for Sweep, so these tests drive a
-// real docker rather than a fake: the thing worth proving is that a `docker
-// rm -f` built from a `--filter label=` never reaches a container somebody
-// else owns.
 
 // requireDocker gates every test here that needs a real daemon, and decides
 // whether an absent one is a skip or a failure.

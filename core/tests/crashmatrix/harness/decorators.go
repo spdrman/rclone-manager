@@ -1,5 +1,3 @@
-package main
-
 // This file holds every seam the crash-matrix harness uses to turn a real
 // process into a real, precisely-timed crash: a journal decorator that
 // self-kills the instant a target lifecycle state is durably written, and a
@@ -11,6 +9,7 @@ package main
 //
 // See main.go's package doc for why a real SIGKILL, not a simulated one, is
 // used throughout, and what that does and does not prove.
+package main
 
 import (
 	"context"

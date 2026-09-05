@@ -1,3 +1,11 @@
+// This file is E2.1's integration half: the move engine driven end to end
+// against a real S3 API, out and back.
+//
+// The engine's own suite runs against a MediumStore double and against
+// rclone's local backend, which proves the engine. This proves the engine
+// over the backend an operator actually has, and the reverse leg proves
+// direction-agnosticism, which is the property that lets an operator undo
+// a tier-to-medium mapping without a restore procedure.
 package miniointegration_test
 
 import (
@@ -19,15 +27,6 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
-
-// This file is E2.1's integration half: the move engine driven end to end
-// against a real S3 API, out and back.
-//
-// The engine's own suite runs against a MediumStore double and against
-// rclone's local backend, which proves the engine. This proves the engine
-// over the backend an operator actually has, and the reverse leg proves
-// direction-agnosticism, which is the property that lets an operator undo
-// a tier-to-medium mapping without a restore procedure.
 
 // TestMoveToS3AndBackAgain moves one artifact off local disk onto a real
 // MinIO bucket, verified by read-back, and then moves it home.

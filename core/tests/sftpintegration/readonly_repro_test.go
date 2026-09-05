@@ -1,3 +1,17 @@
+// Issue #282's reproduction, run against a real server: a read-only backup
+// set ingests, verifies and commits, and the remote original is still there
+// afterwards.
+//
+// A read-only set is defined entirely by something NOT happening, which is
+// the hardest kind of claim to hold honestly. Asserting it against a double
+// proves that the double was not asked to delete; asserting it against a real
+// sshd proves the file is still on the server. Only the second one is the
+// promise an operator is given.
+//
+// The positive control is the rest of the cycle. The artifact has to reach a
+// committed state first, because a set that failed to back anything up also
+// leaves the remote directory intact, and the two outcomes are
+// indistinguishable from the remote's side.
 package sftpintegration_test
 
 import (

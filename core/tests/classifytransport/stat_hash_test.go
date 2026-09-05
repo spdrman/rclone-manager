@@ -1,3 +1,12 @@
+// The positive control for the decorator next door: the exact real-pipeline
+// scenario that gets stuck without it runs to completion with it.
+//
+// It is a whole pipeline rather than a unit assertion on purpose. What
+// WithStatHash affects is whether FR-16's re-identification can reach a
+// strong enough confidence to authorise deleting a remote original, and that
+// verdict is reached several layers above Stat. Asserting that the decorated
+// Stat returns a hash would prove the decorator works and say nothing about
+// the thing the decorator was for.
 package classifytransport
 
 import (

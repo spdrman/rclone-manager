@@ -1,3 +1,13 @@
+// This file is E2.2's integration leg (issue #239): preview, confirm and
+// apply, with a MOVE and a DELETION in one plan, against a real S3 API.
+//
+// Everything below runs through the production surfaces. The plan comes
+// out of service.BackupService.PreviewRetention, the deletion runs through
+// service.BackupService.ApplyRetentionPlan against the plan_id that
+// preview issued, and the move runs through app.Service.RunHomeMoves over
+// the plans app.HomeMovePlans derives from the same report. Nothing here
+// reassembles an engine or a resolver of its own, because a suite that
+// reassembles the wiring proves something about the reassembly.
 package miniointegration_test
 
 import (
@@ -16,17 +26,6 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
-
-// This file is E2.2's integration leg (issue #239): preview, confirm and
-// apply, with a MOVE and a DELETION in one plan, against a real S3 API.
-//
-// Everything below runs through the production surfaces. The plan comes
-// out of service.BackupService.PreviewRetention, the deletion runs through
-// service.BackupService.ApplyRetentionPlan against the plan_id that
-// preview issued, and the move runs through app.Service.RunHomeMoves over
-// the plans app.HomeMovePlans derives from the same report. Nothing here
-// reassembles an engine or a resolver of its own, because a suite that
-// reassembles the wiring proves something about the reassembly.
 
 const integrationMediumID = "cold_offsite"
 
