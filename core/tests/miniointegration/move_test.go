@@ -357,7 +357,7 @@ func (s *countedStore) RestoreStatus(ctx context.Context, m transport.Medium, ke
 // it, and if it stopped, this is the test that would say so rather than a
 // bill that would.
 func TestAMoveToS3ReadsTheObjectBackOnce(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.Medium()
 	ctx := context.Background()
 

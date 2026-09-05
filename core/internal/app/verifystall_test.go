@@ -260,7 +260,7 @@ func TestRetryFailedIngestion_PutsAStrandedArtifactBackIntoThePipeline(t *testin
 	// artifact reaches FAILED and the one #419 does not otherwise touch.
 	tr.copyToLocalErr = transport.NewError(transport.Transient, "copy_to_local", errors.New("connection reset"))
 
-	if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+	if got := svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact)); got != lifecycle.Failed {
 		t.Fatalf("cycle 1 left the artifact at %s, want %s", got, lifecycle.Failed)
 	}
 
@@ -269,7 +269,7 @@ func TestRetryFailedIngestion_PutsAStrandedArtifactBackIntoThePipeline(t *testin
 	// however many times the pipeline walks past it.
 	tr.copyToLocalErr = nil
 	for cycle := 2; cycle <= 3; cycle++ {
-		if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+		if got := svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact)); got != lifecycle.Failed {
 			t.Fatalf("cycle %d left the artifact at %s, want it still %s", cycle, got, lifecycle.Failed)
 		}
 	}
@@ -278,7 +278,7 @@ func TestRetryFailedIngestion_PutsAStrandedArtifactBackIntoThePipeline(t *testin
 	if err := svc.RetryFailedIngestion(ctx, rec.Artifact, "the NAS came back"); err != nil {
 		t.Fatalf("RetryFailedIngestion: %v", err)
 	}
-	back := mustGet(t, journal, rec.Artifact)
+	back := mustGetRow(t, journal, rec.Artifact)
 	if back.State != string(lifecycle.Discovered) {
 		t.Fatalf("after the retry the artifact is %s, want %s", back.State, lifecycle.Discovered)
 	}
@@ -323,7 +323,7 @@ func TestRetryFailedIngestion_RefusesWhatItMustRefuse(t *testing.T) {
 	// Now strand it, and take its backup set out of the configuration.
 	tr.copyToLocalErr = transport.NewError(transport.Transient, "copy_to_local", errors.New("connection reset"))
 	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 2}
-	if got := svc.processArtifact(ctx, source, bs, mustGet(t, journal, rec.Artifact)); got != lifecycle.Failed {
+	if got := svc.processArtifact(ctx, source, bs, mustGetRow(t, journal, rec.Artifact)); got != lifecycle.Failed {
 		t.Fatalf("the artifact is at %s, want %s (test setup did not reach the state under test)", got, lifecycle.Failed)
 	}
 
@@ -334,7 +334,7 @@ func TestRetryFailedIngestion_RefusesWhatItMustRefuse(t *testing.T) {
 	if !errors.As(err, &notFound) {
 		t.Fatalf("retrying under a removed backup set gave %v, want a named not-found refusal", err)
 	}
-	if got := mustGet(t, journal, rec.Artifact); got.State != string(lifecycle.Failed) {
+	if got := mustGetRow(t, journal, rec.Artifact); got.State != string(lifecycle.Failed) {
 		t.Fatalf("the refused retry moved the artifact to %s", got.State)
 	}
 }

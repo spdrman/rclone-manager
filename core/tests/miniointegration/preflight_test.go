@@ -23,7 +23,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 func preflight(t *testing.T, medium transport.Medium, class placement.Class) mediumcheck.Report {
@@ -53,7 +53,7 @@ func stepOf(t *testing.T, r mediumcheck.Report, step mediumcheck.Step) mediumche
 // in this product ever collects, and only the endpoint can be asked
 // whether it is really gone.
 func TestMinioPreflight_PassesAgainstARealBucketAndLeavesNothingBehind(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 
 	report := preflight(t, medium, placement.Content)
@@ -90,7 +90,7 @@ func TestMinioPreflight_PassesAgainstARealBucketAndLeavesNothingBehind(t *testin
 // lying about the one thing it exists to establish, and a fake store
 // saying so proves only that the fake was written to say so.
 func TestMinioPreflight_RefusesAttestedAgainstARealEndpoint(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 
 	report := preflight(t, medium, placement.Attested)
@@ -128,7 +128,7 @@ func TestMinioPreflight_RefusesAttestedAgainstARealEndpoint(t *testing.T) {
 // there. That is the single most likely thing an operator gets wrong, and
 // before this check the first thing to find it out was a move.
 func TestMinioPreflight_ABucketThatIsNotThereIsConfigurationAndNothingIsWritten(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.MediumForBucket("no-such-bucket-" + strings.Repeat("z", 8))
 
 	report := preflight(t, medium, placement.Content)
@@ -166,7 +166,7 @@ func TestMinioPreflight_ABucketThatIsNotThereIsConfigurationAndNothingIsWritten(
 // different claims and only the second one is free. A server that can be
 // asked afterwards is the only thing that can tell them apart.
 func TestMinioPreflight_AnArchiveClassSpendsNothingAgainstARealEndpoint(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 	medium.StorageClass = config.StorageClassDeepArchive
 
@@ -198,7 +198,7 @@ func TestMinioPreflight_AnArchiveClassSpendsNothingAgainstARealEndpoint(t *testi
 // transport.ErrCredentialsUnavailable exists: both are Configuration, and
 // an operator has to be told which machine to go and look at.
 func TestMinioPreflight_AnUnobtainableCredentialNeverReachesTheEndpoint(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 	medium.Credentials = transport.MediumCredentials{File: "/nonexistent/no-such-credentials"}
 

@@ -704,7 +704,7 @@ func readObject(t *testing.T, ctx context.Context, medium transport.Medium, key 
 // planted one in internal/placement's own suite. A cell that claimed to
 // reach it by crashing would be describing a state a crash cannot make.
 func TestTheStagedCrashMatrixAgainstARealS3Endpoint(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 
 	for _, cell := range []struct {
 		name                        string
@@ -878,7 +878,7 @@ func TestTheStagedCrashMatrixAgainstARealS3Endpoint(t *testing.T) {
 // cannot carry itself: every cell asserts the staging area ends EMPTY, and
 // a hop that never staged anything would satisfy that trivially.
 func TestTheStagedS3CellsReallyStageSomething(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	w := newCrashWorld(t, fixture)
 	w.firstHop()
 
