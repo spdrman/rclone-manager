@@ -44,10 +44,10 @@ func TestValidate_ARetentionTierOnAnArchiveClassIsRefused(t *testing.T) {
 				t.Fatalf("Validate accepted a retention tier delivering to a %s medium, which can never take delivery of an artifact", class)
 			}
 			for _, want := range []string{
-				"retention.tiers[1]", // the tier's own key, so an operator knows which line to edit
-				"monthly",            // the tier's name
-				"offsite_s3",         // the medium it names
-				class,                // the storage class the refusal turns on
+				"retention.tiers[1]",            // the tier's own key, so an operator knows which line to edit
+				"monthly",                       // the tier's name
+				"offsite_s3",                    // the medium it names
+				class,                           // the storage class the refusal turns on
 				"archived the instant it lands", // the mechanism, in the engine's own words
 				StorageClassStandard,            // at least one class that would work
 			} {
