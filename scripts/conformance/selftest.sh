@@ -33,6 +33,19 @@
 # up MinIO containers, so budget ten minutes. It is the only thing standing
 # between "the composed scenario is green" and "the composed scenario is
 # green because it cannot go red".
+#
+# Every mutation below is anchored to a verbatim copy of product source,
+# tabs and all, which means a refactor over there can leave an anchor here
+# naming code that is no longer in the tree. #437 did exactly that to the
+# crash-matrix anchor. That is the third verdict, STALE ANCHOR: the control
+# is skipped, because a tree with nothing planted in it would pass and
+# reading that as a pass is the exact failure this file exists to rule out,
+# and the run carries on so one run names every stale control instead of
+# dying on the first (#458).
+#
+# `bash scripts/conformance/selftest.sh --check-anchors` is that check on
+# its own: every anchor against the real tree, building nothing, in about a
+# second. scripts/selftest/check-anchors.sh runs it for both selftests.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
