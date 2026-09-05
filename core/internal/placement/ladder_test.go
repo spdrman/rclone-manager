@@ -16,6 +16,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the ladder's own suite, and most of it is one promise
+// approached from different angles: Verify reports the class it RAN, and
+// there is no path through it that reports one it did not.
+//
+// That promise is easy to state and easy to break by accident, because
+// every way of breaking it looks like helpfulness at the call site. An
+// endpoint that cannot attest could be given an existence check wearing an
+// attested label. A placement with no recorded hash could be passed on its
+// size. A medium that did not answer could be read as an object that is
+// not there. Each of those is a test below, and each of them fails in the
+// direction that costs something: a green tick over a backup nobody has
+// looked at.
+//
+// The double is a fake rather than a real backend because the interesting
+// cases are ones a real endpoint cannot be made to produce on demand: an
+// attestation of the wrong algorithm, an empty attestation, a stat that
+// fails for a reason other than absence. attested_test.go is the other
+// half of that argument, where a real rclone backend that genuinely can
+// attest proves the refusal here belongs to the endpoint rather than to
+// the ladder.
+
 var testNow = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
 // fakeStore is a MediumStore double that answers exactly what a test tells

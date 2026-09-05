@@ -11,6 +11,33 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is FR-34's restore, and it is the one operation in this
+// product whose work does not happen in this process.
+//
+// Everything else in the operations table is executed by a goroutine
+// here, so a process that dies mid-operation really has abandoned it and
+// the startup sweep is right to fail the row. A restore is asked for at
+// the provider and then takes hours, and this deployment stopping,
+// restarting or being replaced changes nothing about it whatever. So the
+// two halves of an operation come apart, and the whole file is arranged
+// around that: the row records what was ASKED FOR, which never changes,
+// and where it has GOT TO is re-derived from the endpoint every time
+// anybody asks (Derive).
+//
+// What that arrangement buys is the only property that matters here,
+// which is that a restore this product started is never invisible. Submit
+// writes the row before the provider is asked, so the worst crash leaves a
+// row describing a restore that may not have started, and asking again
+// costs a request. The other ordering leaves a restore running at the
+// provider that nothing in this deployment knows about, and that one is
+// billed and cannot be found.
+//
+// What it costs is a rule every declaration below has to keep: nothing
+// here invents a fact about somebody else's system. No price, no
+// percentage, no completion time, and nothing concluded from a provider
+// that said nothing at all. Each of those is refused somewhere specific,
+// and each place says why it is refusing rather than defaulting.
+
 // ActionRestore is the durable operation's action name, and it is the
 // string internal/state stores in operations.action.
 //
@@ -122,6 +149,16 @@ type Request struct {
 	// IdempotencyKey is the caller's retry key, exactly as run_cycle uses
 	// it: a retried submission finds the original row rather than
 	// starting a second restore.
+	//
+	// That holds for the retry this key is mostly for, which is a
+	// submission that never reached the provider. It does NOT hold once
+	// the first submission was accepted: Submit asks the provider whether
+	// a restore is already running before it resolves this key, and a
+	// restore this product started is precisely one the provider now
+	// reports in progress, so the replay comes back as ErrAlreadyRestoring
+	// rather than as the original row. See the comment at that check, and
+	// restore_test.go's replay test, which says what settling it would
+	// take.
 	IdempotencyKey string
 
 	// Actor is who asked, recorded on the row.
@@ -238,6 +275,16 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 	// writing anything. A second restore of an object already being
 	// restored is billed again on some providers and buys nothing on any
 	// of them.
+	//
+	// Asking here, ahead of the idempotency key, is also what makes a
+	// replay of a key whose first submission SUCCEEDED come back as
+	// ErrAlreadyRestoring instead of as the row it already has, which is
+	// not what IdempotencyKey's own doc promises. Resolving the key first
+	// would fix that and break the other promise this ordering keeps,
+	// which is that a refused request leaves no row behind at all; keeping
+	// both needs a lookup by idempotency key that Journal has no method
+	// for, so it is a change to make deliberately rather than in
+	// passing.
 	current, err := r.store.RestoreStatus(ctx, req.Medium, req.Copy.Placement.Location)
 	if err != nil {
 		return Submitted{}, fmt.Errorf("archive: asking %q about %q before restoring it: %w",

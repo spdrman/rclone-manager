@@ -18,6 +18,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the archive gate's suite: what may be ATTEMPTED against a
+// copy given what can be done with it right now, and what finding that out
+// is allowed to cost.
+//
+// Most of the claims here are that a refusal is correct. Two of them are
+// that it is FREE, which is why gateStore counts calls: the gate's whole
+// reason for sitting in front of Verify is that it answers from facts
+// already held, so a suite that only checked the refusal would pass just
+// as happily against a gate that spent a GET on being told
+// InvalidObjectState first, and that gate would cost a request per
+// archived copy per cycle while looking identical from the outside.
+//
 // These tests came across from internal/archive with the gate (see
 // gate.go for why it moved). They are unchanged in what they claim; only
 // the package they claim it in changed.

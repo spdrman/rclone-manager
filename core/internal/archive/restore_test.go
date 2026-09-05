@@ -14,6 +14,19 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the restore operation's suite, and most of what it tests is
+// an ordering nothing can observe from the outside.
+//
+// Submit writes the durable row before it asks the provider for anything,
+// and Derive works out where a restore has got to by asking the provider
+// rather than by trusting a status this process wrote before it was
+// restarted. Both of those look identical to the opposite choice on every
+// run that does not crash, which is every run. So the assertions reach
+// past the return value: a hook fires the instant InitiateRestore is
+// called and reads the row out of the database at that moment, refusals
+// are checked by counting the rows they left behind, and "started nothing"
+// is a call counter rather than an absence of error.
+
 // openJournal gives a test the real SQLite journal, migrated, because the
 // durability claims in this file are claims about a database and proving
 // them against a map would prove nothing.
@@ -233,7 +246,16 @@ func (o *observingStore) InitiateRestore(ctx context.Context, m transport.Medium
 	return o.fakeMedium.InitiateRestore(ctx, m, key, windowDays)
 }
 
-// TestARefusedProviderRequestFailsTheRowRatherThanLeavingItRunning.
+// TestARefusedProviderRequestFailsTheRowRatherThanLeavingItRunning is
+// about the one window in Submit where a row exists and the provider has
+// agreed to nothing.
+//
+// The row is marked running BEFORE the ask, deliberately, because a crash
+// in that window has to leave a row saying a restore might be running. A
+// provider that answers with a refusal is not that: it is a definite no,
+// this process is alive to hear it, and a row left at running would sit
+// there for ever, since Derive concludes nothing from a provider reporting
+// no restore and there is no restore to report.
 func TestARefusedProviderRequestFailsTheRowRatherThanLeavingItRunning(t *testing.T) {
 	store := &fakeMedium{initiateErr: errors.New("the bucket said no")}
 	r, j := newTestRestorer(t, store)
@@ -274,7 +296,30 @@ func TestASecondRestoreOfAnObjectAlreadyRestoringIsRefused(t *testing.T) {
 	}
 }
 
-// TestReplayingAnIdempotencyKeyStartsNothingNew.
+// TestReplayingAnIdempotencyKeyStartsNothingNew is the retry an
+// idempotency key exists for: the same logical request arriving twice
+// finds the original row and initiates nothing.
+//
+// # What the line in the middle is hiding, which is a real gap
+//
+// The double is told to forget the restore it just started, and that line
+// is doing far more work than it looks. A real provider does not forget:
+// asking it to restore an object is precisely what makes it report one in
+// progress, which is what the double models everywhere else. Take the line
+// out and this test fails, because Submit asks the provider before it
+// resolves the idempotency key, so the replay is turned away with
+// ErrAlreadyRestoring instead of being handed back the row it already has.
+//
+// That is a disagreement between two documented promises rather than a
+// quirk of the double. Request.IdempotencyKey says a retried submission
+// finds the original row, and service.RestorePlacementRequest repeats that
+// to the operator-facing caller; ErrAlreadyRestoring says a second restore
+// of an object already restoring is refused. Both are reasonable, and once
+// a first submission has actually reached the provider they cannot both
+// hold. Settling it means resolving the key before asking the provider,
+// which needs a lookup by idempotency key that the Journal interface here
+// does not have, so it is a change to make deliberately rather than in
+// passing.
 func TestReplayingAnIdempotencyKeyStartsNothingNew(t *testing.T) {
 	store := &fakeMedium{}
 	r, _ := newTestRestorer(t, store)
@@ -283,9 +328,9 @@ func TestReplayingAnIdempotencyKeyStartsNothingNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Submit: %v", err)
 	}
-	// The provider now reports a restore running, exactly as it would
-	// after the first submission, so this replay has to be recognised as
-	// a replay rather than turned away as a duplicate restore.
+	// Make the provider forget the restore it just started. See this
+	// test's own doc comment: this line is what keeps the replay reaching
+	// the idempotency check at all.
 	store.restore = nil
 
 	second, err := r.Submit(context.Background(), restoreRequest())
@@ -454,7 +499,19 @@ func TestTheStartupSweepStillFailsAnAbandonedRunCycle(t *testing.T) {
 	}
 }
 
-// TestDeriveCompletesTheRowOnlyWhenTheProviderSaysSo.
+// TestDeriveCompletesTheRowOnlyWhenTheProviderSaysSo walks the row through
+// both halves of the only transition Derive is allowed to make.
+//
+// The first half is the one it would be tempting to leave out, and it is
+// the one that matters: a restore still running has to leave the row
+// exactly where it was. A Derive that completed a row on being asked would
+// turn "somebody opened the screen" into "the copy is readable", and the
+// operator who acts on that goes and tries to read bytes that are still
+// hours away.
+//
+// The second half then asks for the expiry on the DURABLE row rather than
+// only on the Status that was returned, because the row is what a process
+// that has just restarted has to work from.
 func TestDeriveCompletesTheRowOnlyWhenTheProviderSaysSo(t *testing.T) {
 	store := &fakeMedium{}
 	r, j := newTestRestorer(t, store)
@@ -531,7 +588,15 @@ func TestDeriveConcludesNothingFromSilence(t *testing.T) {
 	}
 }
 
-// TestAMediumThatWillNotAnswerDoesNotFailAnOperatorsRestore.
+// TestAMediumThatWillNotAnswerDoesNotFailAnOperatorsRestore keeps a bucket
+// that did not answer apart from a restore that went wrong.
+//
+// Nothing about the restore has changed. It was asked for, the provider
+// accepted it, and it is still running somewhere and still being billed.
+// The only thing that happened is that one status call did not come back,
+// and ending an operator's restore on the strength of a connection refused
+// would be this product inventing a fact about somebody else's system. So
+// the row stays where it is and the access state carries the bad news.
 func TestAMediumThatWillNotAnswerDoesNotFailAnOperatorsRestore(t *testing.T) {
 	store := &fakeMedium{}
 	r, _ := newTestRestorer(t, store)

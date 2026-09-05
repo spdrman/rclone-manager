@@ -9,6 +9,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
+// This file is the class table's suite, and every test in it is about a
+// way the table can be wrong while still compiling.
+//
+// It can describe a class an operator cannot configure, or miss one they
+// can, which is the drift the first test pins in both directions. It can
+// get a row's Archive flag wrong, which is checked as an exact set over
+// the whole table rather than as two assertions, with GLACIER_IR pulled
+// out on its own because the word Glacier in the name is the trap somebody
+// will fall into while tidying. It can carry a restore wait for a class
+// that needs none, or fail to carry one for a class that needs one, which
+// is a per-row consistency the last test walks. And it can be asked about
+// a class it has never heard of, where the only safe answer is the one
+// that refuses to read.
+
 // TestClassTableAndConfigAgree pins this package's table against the closed
 // set internal/config validates against, in BOTH directions.
 //

@@ -11,6 +11,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This file is the access vocabulary's suite: the four words, the
+// derivation that picks one of them, and the sentence a surface prints
+// beside it.
+//
+// Two of its claims are about what is deliberately NOT there, and both are
+// tested over a whole set rather than over the interesting members,
+// because both are broken by adding something rather than by editing
+// something. There is no fifth state, so a class the table has no row for
+// makes Access refuse instead of guessing, and the derivation is walked
+// across the entire closed set of classes and not just the two archive
+// ones. And nothing this package renders anywhere carries a percentage, a
+// price or a finishing time, which is asserted by reflecting over every
+// field of every struct a surface can read, not by reading the strings
+// somebody remembered to check.
+
 var testNow = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 
 func ptrTime(t time.Time) *time.Time { return &t }
