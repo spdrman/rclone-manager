@@ -495,8 +495,9 @@ product-wide consequence of an epic that looks provider-specific.
 code.** Everything else in it shipped: the release branch policy, the publish path, v0.1.0
 and then v0.2.0, the installer, and the proof on the NAS. What is left is pointing this
 manager at the two production VPS it exists to back up. They are reached over SFTP on a
-port that is deliberately in no tracked file, and the reader account for them does not
-exist yet. The path itself is proven without them, against a real sshd in the machine tier,
+port that is deliberately in no tracked file, and the read-only account this work would use
+is not available to it yet, which is the whole of what is holding the issue. The path
+itself is proven without them, against a real sshd in the machine tier,
 and pointing the installer at a real source is configuration rather than a code change.
 What is missing is the last acceptance criterion: a real backup run from each production
 host, with anything the account cannot read reported rather than worked around.
