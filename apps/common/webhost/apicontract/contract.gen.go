@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9"
+const ContractSHA256 = "1fbcd53bbb39d7f231ce77c6a2105b352481b2eeb4958137dd6434f248dd1657"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -77,6 +77,7 @@ const (
 	ErrorCodeRestoreRefused                  ErrorCode = "RESTORE_REFUSED"
 	ErrorCodeRestoreUnavailable              ErrorCode = "RESTORE_UNAVAILABLE"
 	ErrorCodeCopyNotFound                    ErrorCode = "COPY_NOT_FOUND"
+	ErrorCodeMediumNotFound                  ErrorCode = "MEDIUM_NOT_FOUND"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -112,6 +113,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
 	ErrorCodeCopyNotFound,
+	ErrorCodeMediumNotFound,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -171,6 +173,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
 	ErrorCodeCopyNotFound,
+	ErrorCodeMediumNotFound,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -180,7 +183,7 @@ var ErrorClasses = map[string][]ErrorCode{
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
-	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
+	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
 	"unavailable":    {ErrorCodeNotConfigured},
 	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed, ErrorCodeMediumDisclosureRequired},
@@ -618,6 +621,17 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeHostKeyProbeFailed},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "preflightStorageMedium", Method: "POST", Path: "/storage-mediums/{id}/preflight",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1144,6 +1158,46 @@ type ManagerStorage struct {
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 }
 
+// MediumPreflightCheck is one step of a storage-medium preflight. There is deliberately no
+// field here for key material of any kind, and there never will be
+// (FR-33): `detail` is one of the engine's own sentences, never the
+// text of what actually came back, because that names a path on the
+// host or the name of an environment variable. The classified cause
+// goes to this manager's log instead.
+type MediumPreflightCheck struct {
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail"`
+	Outcome  string `json:"outcome"`
+	Step     string `json:"step"`
+}
+
+// MediumPreflightResponse is the result of proving one storage medium works. The preflight
+// writes a small probe object to the medium, reads it back byte for
+// byte, checks the storage class it landed in against the one the
+// configuration claims, asks whether the verification class the
+// medium declares can actually be achieved there, and deletes the
+// probe. That is deliberately more than a reachability ping: a wrong
+// region, a policy that denies PutObject and an endpoint that
+// silently ignores storage_class all answer a ping perfectly well
+// and then fail a move, in the middle of a cycle, after an artifact
+// has already been chosen to leave local disk. A medium that does
+// not work is a 200 with `ok` false, not an error: a bucket that is
+// not there is what an operator did, not what broke, exactly as a
+// failed backup-set connection test reports itself. The operation
+// takes an id and never a candidate medium, unlike that connection
+// test: a medium is declared in the configuration file and nowhere
+// else, and the only fields that would make a candidate one
+// meaningful are the three credential references, so a request body
+// for one would make a path on this host into something an API
+// caller sends (FR-33). Nothing schedules this; it is a real side
+// effect on somebody's bucket and it runs only because a person
+// asked.
+type MediumPreflightResponse struct {
+	Checks []MediumPreflightCheck `json:"checks"`
+	Medium string                 `json:"medium"`
+	OK     bool                   `json:"ok"`
+}
+
 // Operation is one durable operation record. Timestamp fields are omitted, not
 // zero-valued, until the event they name has happened. progress is
 // the separate, ephemeral thing: see OperationProgress for why it is
@@ -1605,6 +1659,8 @@ var SchemaTypes = map[string]any{
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
 	"ManagerStorage":              ManagerStorage{},
+	"MediumPreflightCheck":        MediumPreflightCheck{},
+	"MediumPreflightResponse":     MediumPreflightResponse{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
 	"OperationRestore":            OperationRestore{},

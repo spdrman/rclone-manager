@@ -32,6 +32,7 @@ import type {
   WireListOperationsResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
+  WireMediumPreflightResponse,
   WireOperation,
   WirePlacement,
   WireRetentionOverride,
@@ -56,6 +57,7 @@ import type {
   CreateBackupSetRequest,
   CreatedBackupSet,
   ManagerStorage,
+  MediumPreflight,
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
@@ -1390,6 +1392,25 @@ export const httpApi: BackupManagerApi = {
       method: "PATCH",
       body: JSON.stringify(wireUpdateSettings(req))
     }).then(fromWireSettingsResponse),
+
+  // Issue #443. Like reinstate above, this one reads its response: a
+  // preflight that reaches the backend and comes back saying the bucket
+  // denies writes is a 200, and a caller that ignored the body could not
+  // tell that from a medium that works.
+  preflightStorageMedium: (mediumId) =>
+    request<WireMediumPreflightResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/preflight",
+      { method: "POST" }
+    ).then((r) => ({
+      medium: r.medium,
+      ok: r.ok,
+      checks: r.checks.map((c) => ({
+        step: c.step as MediumPreflight["checks"][number]["step"],
+        outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
+        category: c.category ?? "",
+        detail: c.detail
+      }))
+    })),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

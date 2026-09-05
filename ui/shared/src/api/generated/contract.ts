@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9";
+export const CONTRACT_SHA256 = "1fbcd53bbb39d7f231ce77c6a2105b352481b2eeb4958137dd6434f248dd1657";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -51,6 +51,7 @@ export const WIRE_ERROR_CODES = [
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
+  "MEDIUM_NOT_FOUND",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -114,6 +115,7 @@ export const API_ERROR_CODES = [
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
   "COPY_NOT_FOUND",
+  "MEDIUM_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -125,7 +127,7 @@ export const API_ERROR_CLASSES = {
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
   "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
-  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
+  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
   "unavailable": ["NOT_CONFIGURED"],
   "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED", "MEDIUM_DISCLOSURE_REQUIRED"],
@@ -872,6 +874,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "preflightStorageMedium",
+    method: "POST",
+    path: "/storage-mediums/{id}/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "getSystemCapabilities",
     method: "GET",
     path: "/system/capabilities",
@@ -1435,6 +1456,46 @@ export interface WireManagerStorage {
   unknown_reason: "" | "no_backup_root" | "not_created" | "unreadable" | "misconfigured";
   used_bytes: number;
   warning_free_bytes: number;
+}
+
+/** One step of a storage-medium preflight. There is deliberately no
+ *  field here for key material of any kind, and there never will be
+ *  (FR-33): `detail` is one of the engine's own sentences, never the
+ *  text of what actually came back, because that names a path on the
+ *  host or the name of an environment variable. The classified cause
+ *  goes to this manager's log instead. */
+export interface WireMediumPreflightCheck {
+  category?: string;
+  detail: string;
+  outcome: "passed" | "failed" | "skipped";
+  step: "credentials" | "reach" | "deliverable" | "write" | "read_back" | "storage_class" | "verification" | "delete";
+}
+
+/** The result of proving one storage medium works. The preflight
+ *  writes a small probe object to the medium, reads it back byte for
+ *  byte, checks the storage class it landed in against the one the
+ *  configuration claims, asks whether the verification class the
+ *  medium declares can actually be achieved there, and deletes the
+ *  probe. That is deliberately more than a reachability ping: a wrong
+ *  region, a policy that denies PutObject and an endpoint that
+ *  silently ignores storage_class all answer a ping perfectly well
+ *  and then fail a move, in the middle of a cycle, after an artifact
+ *  has already been chosen to leave local disk. A medium that does
+ *  not work is a 200 with `ok` false, not an error: a bucket that is
+ *  not there is what an operator did, not what broke, exactly as a
+ *  failed backup-set connection test reports itself. The operation
+ *  takes an id and never a candidate medium, unlike that connection
+ *  test: a medium is declared in the configuration file and nowhere
+ *  else, and the only fields that would make a candidate one
+ *  meaningful are the three credential references, so a request body
+ *  for one would make a path on this host into something an API
+ *  caller sends (FR-33). Nothing schedules this; it is a real side
+ *  effect on somebody's bucket and it runs only because a person
+ *  asked. */
+export interface WireMediumPreflightResponse {
+  checks: WireMediumPreflightCheck[];
+  medium: string;
+  ok: boolean;
 }
 
 /** One durable operation record. Timestamp fields are omitted, not

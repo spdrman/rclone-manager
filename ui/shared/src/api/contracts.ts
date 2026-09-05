@@ -373,6 +373,56 @@ export interface StorageMedium {
 }
 
 /**
+ * One step of a storage-medium preflight (issue #443).
+ *
+ * There is no field here for a credential and there is not going to be
+ * (FR-33). `detail` is one of the engine's own sentences and never the
+ * text of what actually came back, because that names a path on the host
+ * or the name of an environment variable; the classified cause goes to the
+ * manager's log instead.
+ */
+export interface MediumPreflightCheck {
+  /** What this step proves. `credentials` is whether the credential the
+   *  medium declares can be obtained at all, which is a question for the
+   *  host; `reach` is whether the endpoint answers and holds the bucket
+   *  with that credential, which is a question for the provider. */
+  step:
+    | "credentials"
+    | "reach"
+    | "deliverable"
+    | "write"
+    | "read_back"
+    | "storage_class"
+    | "verification"
+    | "delete";
+  /** `skipped` is a real answer and not a quiet pass: an earlier step
+   *  failed in a way that makes this one meaningless. Rendering a skipped
+   *  write as anything but "this was never tried" tells an operator their
+   *  bucket is writable on the strength of a credential nobody obtained. */
+  outcome: "passed" | "failed" | "skipped";
+  /** The transport category a failure classified as, absent when the step
+   *  did not fail. Branch on this, never on `detail`. */
+  category?: string;
+  detail: string;
+}
+
+/**
+ * The result of proving one storage medium works.
+ *
+ * A medium that does not work RESOLVES with `ok` false rather than
+ * rejecting: a bucket that is not there is what an operator did, not what
+ * broke, exactly as a failed connection test reports itself.
+ */
+export interface MediumPreflight {
+  medium: string;
+  ok: boolean;
+  /** One entry per step, always the full list, so a surface renders a
+   *  fixed set of rows rather than discovering which steps happened to
+   *  run. */
+  checks: MediumPreflightCheck[];
+}
+
+/**
  * One rung of the verification ladder (FR-31), with the backend's own
  * words for what it proves and what achieving it takes.
  *
@@ -987,6 +1037,34 @@ export interface BackupManagerApi {
    *  actually persisted rather than echoing its own request back. */
   getSettings(): Promise<AppSettings>;
   updateSettings(req: UpdateSettingsRequest): Promise<AppSettings>;
+
+  /**
+   * Prove one declared storage medium actually works, before a cycle
+   * carrying a real backup finds out for the operator (issue #443).
+   *
+   * This is the medium's equivalent of testCandidateConnection, and
+   * deliberately a stronger check: it writes a probe object, reads it back
+   * byte for byte, compares the storage class it landed in against the one
+   * the configuration claims, asks whether the verification class the
+   * medium declares can actually be achieved there, and deletes the probe.
+   * A wrong region, a policy that denies PutObject and an endpoint that
+   * silently ignores storage_class all answer a reachability ping
+   * perfectly well and then fail a move, in the middle of a cycle, after a
+   * backup has already been chosen to leave local disk.
+   *
+   * It takes an ID and never a candidate, unlike testCandidateConnection:
+   * a medium is declared in the configuration file and nowhere else, and
+   * the only fields that would make a candidate one meaningful are its
+   * three credential references, so a request body for one would make a
+   * path on the host into something this UI sends.
+   *
+   * It resolves rather than rejects when the medium does not work. Read
+   * `ok` for the verdict and `checks` for which step failed and how; a
+   * caller that only rendered "failed" has dropped the only part an
+   * operator can act on. Rejects with MEDIUM_NOT_FOUND for an id the
+   * configuration does not declare.
+   */
+  preflightStorageMedium(mediumId: string): Promise<MediumPreflight>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see
