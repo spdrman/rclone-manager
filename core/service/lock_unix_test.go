@@ -1,5 +1,20 @@
 //go:build unix
 
+// This file covers the startup lock's actual behaviour against a real
+// file: a second acquire is refused, a release makes it available again,
+// and releasing nothing is harmless.
+//
+// The third case exists for the callers rather than for the lock. The
+// release is documented as safe on a nil lock precisely so a caller can
+// defer it without first working out whether it acquired one, and a
+// property that is only promised in prose stops being true the first time
+// somebody rearranges a startup path. A panic there would replace the
+// error an operator needed to read with a crash in the cleanup.
+//
+// Refusal is the case worth having on a real file rather than a fake.
+// flock's whole value here is that the kernel drops it when a process
+// dies, and a lock reimplemented as a Go mutex for the test would prove
+// nothing about the property the design is actually buying.
 package service
 
 import (

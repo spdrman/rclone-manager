@@ -1,3 +1,13 @@
+// This file covers the startup step that decides whether the state
+// directory can be used, and the asymmetry is what it is really about.
+//
+// A missing directory is created and an unusable one is refused, so the
+// cases come in that shape: created, accepted, refused for being a plain
+// file, refused for being unwritable. The last one probes by writing
+// rather than by reading permission bits, and it is tested through a real
+// unwritable directory for the same reason: bits do not account for ACLs,
+// read-only mounts or a uid they do not describe, and the only honest
+// answer to "can this process write here" comes from trying.
 package service
 
 import (

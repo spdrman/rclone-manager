@@ -1,3 +1,22 @@
+// This file covers the preview/apply envelope around the one thing here
+// that deletes backups, and most of it is about the gap between the two.
+//
+// The gap is where everything goes wrong: a cycle running, a new artifact
+// arriving, a settings save, a configuration edit, midnight passing in
+// the operator's own timezone. Each of those makes the plan on screen no
+// longer the plan that would run, and each has its own case here, because
+// they are the same defect reached by five different routes and a guard
+// that catches four of them is not a guard.
+//
+// Every staleness case asserts zero deletions, not just the error.
+// Refusing after deleting half a plan would produce exactly the error
+// message the test was looking for, which is how this kind of test passes
+// while the product it covers is destroying data.
+//
+// The concurrency cases are here for the same reason. A plan is
+// single-use, and "single" has to mean it under two callers submitting
+// the same id at once, so those tests race deliberately and assert on
+// what was deleted rather than on what was returned.
 package service
 
 import (

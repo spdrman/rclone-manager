@@ -1,3 +1,19 @@
+// This file covers live progress, where every interesting case is about
+// telling absent from zero.
+//
+// A reading of zero bytes on a transfer that has just started and no
+// reading at all are the same JSON to anything that flattens them, and
+// they are opposite claims: one says nothing has moved yet, the other
+// says nobody can see. So the cases here are deliberately paired around
+// that line: a measured zero survives, a finished operation reports
+// nothing, an operation left running by a dead process reports nothing,
+// and one that is running but has not reported yet also reports nothing.
+//
+// The last two are the same assertion from different sides, and both are
+// needed. Serving the last reading of an operation this process is not
+// executing would describe a transfer that no longer exists as though it
+// were still moving, which is the one failure a progress bar must never
+// have.
 package service
 
 import (

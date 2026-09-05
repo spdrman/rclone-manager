@@ -1,3 +1,24 @@
+// This file covers the edit hold: the mechanism that stops backups
+// touching one set while somebody is changing it, and lets go again.
+//
+// A hold is only worth anything if it reaches a cycle that is already
+// running, so these run real cycles through the same submission path an
+// operator's Run takes rather than calling the engine directly. That
+// route is the one that carries the holds onto the context, and a test
+// that reached past it would prove the registry works while the wiring
+// that installs it did not.
+//
+// The pairs matter more than the individual cases. A hold that stops a
+// pass is worth nothing without the control showing an unheld set is
+// processed; releasing is proved beside releasing twice; a lease lapsing
+// on its own is proved beside one renewed past it. A hold that never
+// lifted would pass a suite that only ever checked things stop.
+//
+// The last two are about what a hold is NOT. A set skipped because it is
+// held did not fail, so the operation carrying it must still complete,
+// while a set that genuinely failed still has to fail it. Collapsing
+// those two would either hide real failures or turn every edit into a red
+// operation.
 package service
 
 import (

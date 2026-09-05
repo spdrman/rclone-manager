@@ -1,3 +1,19 @@
+// This file covers the per-backup-set capacity reading FR-21 admits work
+// against, and every case is about a number being answerable rather than
+// about it being right.
+//
+// The failure this guards is a reading that is unavailable being served
+// as a zero. A destination that does not exist yet is the ordinary state
+// of a set nobody has run, and reporting it as no free space is the same
+// bytes on the wire as a full disk. So unavailability is asserted as its
+// own answer, and the cases that do produce a reading also assert the
+// number the level was decided from, because a level with no figure
+// beside it cannot be checked by the person it is shown to.
+//
+// The level is proved to agree with what the admission check would decide
+// rather than merely to be plausible. Two components computing pressure
+// separately eventually disagree, and the one that disagrees is the one
+// that refuses a backup nobody expected to be refused.
 package service
 
 import (

@@ -1,3 +1,21 @@
+// This file covers the registered-validator catalog: a fixed set of
+// scripts this build ships, named by id, and the reasons an id is the
+// only thing a request is ever allowed to carry.
+//
+// The refusals are grouped deliberately. A raw executable path, a
+// traversal attempt, an empty string and a plausible name that is not
+// registered all have to be refused identically, because the moment they
+// differ, the difference is an oracle: a caller learns which paths exist
+// by watching which refusal comes back. The companion case asserts the
+// same thing from the request side, that nothing an API caller can send
+// names an executable at all.
+//
+// The materialisation cases are about the scripts not being there when
+// they are needed. A temp-directory reaper deletes them, a filesystem
+// corrupts one, and the next unattended cycle is where that surfaces. So
+// repair is proved for both, proved not to latch after one failure, and
+// proved to write under the directory it was given rather than into
+// TMPDIR, which is the reaped location the whole change moved away from.
 package service
 
 import (

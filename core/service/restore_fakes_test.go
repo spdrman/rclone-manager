@@ -1,3 +1,15 @@
+// This file holds the transports the restore tests are built on, and the
+// pair of them is the point rather than the boilerplate.
+//
+// Whether a deployment can restore at all is discovered by asking the
+// transport it was handed, not declared in a constructor. So the two
+// fakes here differ in exactly that: one satisfies the transport
+// interface and nothing else, which is what a deployment with no medium
+// boundary looks like from the inside, and the other also satisfies the
+// archive store, which is the shape the shipped adapter has. Assembling
+// them the same way the real one is assembled is what makes the tests
+// next door about the discovery rather than about a flag they set
+// themselves.
 package service
 
 import (

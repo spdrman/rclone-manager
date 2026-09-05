@@ -1,3 +1,13 @@
+// This file covers the summary a finished run cycle leaves behind, which
+// is the only place a caller can tell a cycle that did nothing from one
+// that did everything.
+//
+// The reason it can be told apart nowhere else is a decision this package
+// makes deliberately and does not overturn here: an artifact's own
+// quarantine is a business outcome, not an operation failure, so the
+// cycle around it completes either way. Status, sets processed and
+// duration are then identical for a good afternoon and a total one, and
+// the counts recorded on the summary are what separate them.
 package service
 
 import (

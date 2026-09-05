@@ -1,3 +1,17 @@
+// This file covers the connection test running against the same remote a
+// cycle would use, rather than against a lookalike assembled from a
+// subset of its fields.
+//
+// The test button copies a configured remote into a transport.Source one
+// field at a time, so every field is one that can be forgotten, and a
+// forgotten one is not cosmetic: it makes the check succeed where a real
+// cycle fails, or fail where a real cycle succeeds. Either way the button
+// answers about something other than the thing it was pressed about.
+//
+// Everything here is therefore written against what was ASKED of the
+// transport rather than against what came back. A fake that only reports
+// success cannot tell a faithful request from a lossy one, so the fake
+// records instead.
 package service
 
 import (
