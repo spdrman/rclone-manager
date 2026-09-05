@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# HELP-START
 # The Go machine tier, run from inside a manager machine (issue #451).
 #
 # Rom's ask for #447 was two containers on a dedicated network, one of them
@@ -109,6 +110,7 @@
 # interrupt. Everything carries a per-run id, nothing publishes a host
 # port, and the harness reclaims its own machines. Two of these can run at
 # once.
+# HELP-END
 # Everything below is one brace group, and that is not a style choice.
 #
 # bash reads a script from the file incrementally, by byte offset, so
@@ -121,6 +123,10 @@
 {
 set -euo pipefail
 
+# --help reads this file, and the run cd's to the repository root two lines
+# below, so a $0 the shell left relative stops resolving once it does. Both
+# paths are settled here, from the same dirname, before that happens.
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo_root"
 
@@ -147,6 +153,28 @@ cannot_run() {
   shift
   for line in "$@"; do echo "    $line" >&2; done
   exit "$EXIT_CANNOT_RUN"
+}
+
+# ------------------------------------------------------------------ help
+#
+# --help prints the header block between the two markers at the top of
+# this file, and deliberately not a range of line numbers (#514). The old
+# form was `sed -n '2,84p' "$0"`, so the help an operator read was a set of
+# coordinates rather than a piece of text: inserting a comment above the
+# boundary rewrote it, deleting one truncated it, and nothing anywhere
+# would have noticed either. Both had already happened by the time #514
+# was written. Markers move with the text they delimit, and
+# scripts/tests/e2e-help.test.sh pins the rendered result, so a reword is
+# a decision now rather than an accident.
+render_help() {
+  awk '
+    /^# HELP-END$/   { closed = 1; inside = 0; next }
+    /^# HELP-START$/ { opened = 1; inside = 1; next }
+    inside           { sub(/^# ?/, ""); print }
+    END              { if (!opened || !closed) exit 1 }
+  ' "$self" || die "the help block is missing from $self" \
+    "--help renders the lines between the HELP-START and HELP-END markers," \
+    "and this file has lost one or both of them."
 }
 
 # --------------------------------------------------------------- options
@@ -181,7 +209,7 @@ while [ $# -gt 0 ]; do
     # for reading. Never the default.
     --keep-on-failure) keep=1; shift ;;
     -h|--help)
-      sed -n '2,84p' "$0" | sed 's/^# \{0,1\}//'
+      render_help
       exit 0 ;;
     *) die "unknown option $1" "Usage: $0 [--packages '<go test patterns>'] [--run <regexp>] [-v] [--race] [--keep-on-failure]" ;;
   esac

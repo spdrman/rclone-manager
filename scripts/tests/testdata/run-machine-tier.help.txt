@@ -1,0 +1,110 @@
+The Go machine tier, run from inside a manager machine (issue #451).
+
+Rom's ask for #447 was two containers on a dedicated network, one of them
+the rclone-manager machine. scripts/e2e/two-machine-backup.sh makes that
+literally true for the installer. For the Go machine tier it was not: the
+test process runs on the host and reaches the source over a published
+loopback port, because on Docker Desktop for macOS a host process cannot
+sit on a bridge network. core/tests/machines was written with a seam for
+this (Source.Addr answers 127.0.0.1:<published> on the host and
+source:22 inside the network, chosen by RCLONE_MANAGER_MACHINES_NETWORK),
+and this script is the other side of it.
+
+What it stands up:
+
+  * a MANAGER machine: a Go toolchain with a docker client, this
+    repository mounted, and the Go build and module caches mounted, on
+    the dedicated network, playing the NAS;
+  * a dedicated NETWORK, labelled the way core/tests/dockerlease labels
+    everything so a killed run is reclaimed;
+  * the SOURCE machines, created by the harness inside the manager, one
+    per test, from scripts/e2e/source-machine.Dockerfile.
+
+Then it runs the machine-tier packages inside the manager with
+RCLONE_MANAGER_MACHINES_NETWORK set, so nothing publishes a port and every
+address a test uses is the address a real manager would use.
+
+It runs them under core/cmd/gotestwatch rather than under a bare
+`go test`, which is the same wrapper scripts/ci-local.sh puts them under
+and for the same reason (#256): a machine-tier package's wall clock tracks
+real machine load, and a fixed -timeout chosen on a quiet machine kills a
+run that is still making progress. Being a drop-in for that step is the
+point, so it takes --race too.
+
+# The docker socket question, answered
+
+The manager container gets the docker socket. There were two ways to do
+this and the other one does not work: the harness creates its machines
+per test, with per-test key material and per-test host keys, so a driver
+cannot pre-create them and hand them over. Anything short of the socket
+would mean rewriting the harness to take machines it did not make, which
+is the opposite of #447.
+
+two-machine-backup.sh refuses the socket for its own manager, and that
+refusal is still right there and does not apply here. Its manager runs
+the real INSTALLER, so a mounted socket would put the product's own
+containers on the developer's host and the installer would be installing
+onto the machine the script is running on, which is the one thing that
+test exists not to do. This manager runs the test harness. The harness is
+orchestration, not the product, and what this script is proving is where
+the manager sits on the network, not what its daemon can see.
+
+Two consequences worth knowing before reading a failure here. The
+containers the harness creates are SIBLINGS of the manager on the host's
+daemon rather than children of it, which is fine because they join the
+same network by name. And a bind mount the harness asks for is resolved
+by the host's daemon against the HOST's filesystem, which is why this
+script mounts the repository at the same absolute path inside the manager
+as it has outside: core/tests/.run/<test> then means one directory to
+both sides. Mount it anywhere else and the source machines come up with
+empty key directories and refuse every login.
+
+# Not root, and not opted out of
+
+core/internal/testenv refuses to run as root rather than skipping the
+permission-bit tests, which is deliberate (#456's shape: a skip deletes
+coverage from a run that goes on saying ok). So the manager runs as the
+invoking user's uid and gid. The docker socket is root:root 0660, so the
+container is given gid 0 as a SUPPLEMENTARY group, which is how
+docker-outside-of-docker has always granted socket access. euid is still
+not zero, so the refusal is satisfied honestly rather than opted out of.
+
+# Cost, measured on this machine rather than guessed
+
+On the 4 CPU / 4 GB Docker Desktop VM this gate runs against, arm64
+native, running every machine package:
+
+  warm, --race, under gotestwatch:  169s wall, 164s inside, compile 3s
+  the compile alone, both caches empty, --race:  45s
+
+  cold, --race, under gotestwatch: 217s wall, 169s inside, compile 45s
+
+and, measured before this took --race and gotestwatch, on four packages
+under a plain `go test`: 210s wall cold and 120s warm, so about 76s of
+compile.
+
+#451 asked for the cold figure because a cold compile of rclone's module
+graph took over six minutes in CI with no cache, and that is what the
+"run every test on two machines" option was rejected on. It does not
+reproduce here, for two reasons worth knowing before either number is
+quoted again: only the packages the tier imports get compiled, not the
+whole product, and this builds arm64 natively. DOCKER_DEFAULT_PLATFORM is
+linux/amd64 on this machine, and with it in force the manager was built
+emulated and the compile was measuring qemu, which is why the platform is
+named from the daemon's own architecture below.
+
+The 45 seconds is worth its own line, because it is exactly gotestwatch's
+unmeasured floor. A cold compile inside the watched window does not merely
+risk tripping the watchdog, it lands on the boundary, and under any load
+at all it goes over. That is why the compile is its own step above the
+watched run rather than inside it.
+
+The caches are volumes rather than being thrown away with the container
+precisely so the warm number is the one a gate pays.
+
+# Hygiene
+
+The manager and the network are torn down on success, on failure and on
+interrupt. Everything carries a per-run id, nothing publishes a host
+port, and the harness reclaims its own machines. Two of these can run at
+once.

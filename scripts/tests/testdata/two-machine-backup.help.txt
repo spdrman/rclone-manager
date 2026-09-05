@@ -1,0 +1,113 @@
+Two throwaway machines, a temporary network, and one real backup
+(issue #356), plus the completed installs three other issues were closed
+without (#347, #346, #343).
+
+Everything between "nothing installed" and "an artifact is on disk" was
+proven in pieces and nowhere joined up. core/tests/sftpfixture proves
+the transport, distribution/packaging proves the artifacts, and
+scripts/install's own suite proves the installer's logic against a
+mocked Docker. None of them can say that a fresh install, pointed at a
+machine, pulls a backup off it. That is the only claim a user makes, and
+this is the test for it.
+
+What it stands up, per case:
+
+  * a MANAGER machine: docker-in-docker, so it is a box with Docker and
+    nothing else, playing the NAS;
+  * a SOURCE machine: a real sshd (atmoz/sftp, the same image
+    core/tests/sftpfixture uses) holding a payload of known content,
+    playing the VPS being backed up;
+  * a temporary network joining exactly those two.
+
+Then it installs rclone-manager onto the manager machine with
+scripts/install/install_docker_host.py, the real installer, creates a
+backup set through the CLI, runs it, and compares the artifact's SHA-256
+against the source's. Not "the file is there": the bug this was written
+after (#264) was a transfer that failed while everything around it
+looked healthy, so the assertion is on the bytes.
+
+# The order, and why the manager machine comes first
+
+The installer generates the SSH keypair now and prints the public half
+(#347), so the machine being backed up cannot authorise it until it
+exists. That is the real sequence an operator follows, so it is the
+sequence here: install, take the printed public key, authorise it on the
+source, then add the backup set. Nothing in this script writes a client
+key of its own.
+
+# Why docker-in-docker rather than the host's socket
+
+Mounting /var/run/docker.sock into a "manager" container would make the
+product's own containers siblings on the developer's host rather than
+residents of the fake machine. The installer would then be installing
+onto the machine this script is running on, which is the one thing this
+test exists not to do. dind costs a privileged container and about
+fifteen seconds; what it buys is that "a fresh machine" is true.
+
+# Why the image is built here rather than pulled
+
+The image under test is built from THIS working tree and moved into the
+manager machine's own daemon with `docker save | docker load`. So the
+run proves this code rather than whatever is published, and it needs no
+registry. #342 exists because a stale published default installed 0.1.0
+and reported success, so every case also asserts that the engine reports
+the version and commit that were installed.
+
+# The cases
+
+  plain           the ordinary install: --image and --no-pull, and the
+                  canonical compose file copied in from a checkout.
+
+  no-arguments    #347 and #346 together, and the reason both were
+                  reopened. `install` with NO arguments at all, on a
+                  machine holding one copied install_docker_host.py and
+                  no checkout anywhere: no --compose-file (the embedded
+                  copy is what gets written), no --ssh-key (the
+                  installer generates the keypair), no --prefix, no
+                  --image. It runs all the way to a serving stack and
+                  then pulls a real backup, which is the half neither
+                  issue's evidence reached.
+
+  connection-cap  #264, the shape that actually broke on real hardware.
+                  Both production sources carry an iptables rule
+                  rejecting a third simultaneous SSH connection from one
+                  address with a TCP reset. rclone-manager failed
+                  against it because every operation built its own Fs
+                  and nothing released one, so the pools accumulated
+                  until the third was refused. Listing succeeded and the
+                  transfer got "connection refused". The source machine
+                  here carries that same rule (-m connlimit, which needs
+                  NET_ADMIN and not privileged), and the case proves the
+                  cap bites before it trusts it.
+
+                  sshd's own MaxStartups was the cheaper thing to try
+                  and it does not model this: it bounds connections that
+                  have not finished authenticating, and a leaked pool's
+                  connections are authenticated and idle, so they never
+                  count. connlimit counts established connections per
+                  source address, which is the production rule restated.
+
+  lifecycle       #343's two counting criteria, which are written in
+                  deliberately anti-assertion language. It backs up,
+                  creates an administrator, counts users, backup sets
+                  and catalogued artifacts, runs --mode upgrade to a
+                  newer tag, counts again, then runs --mode
+                  factory-reset and watches the resulting install issue
+                  an enrollment link, which is the only thing that
+                  proves the administrator record went with the
+                  database.
+
+# Hygiene
+
+Every container and the network are torn down on success, on failure and
+on interrupt. Every name carries a per-run id, and no host port is
+published at all, so two of these can run at once. Every wait has a
+deadline and names what it was waiting for: an end-to-end test that
+hangs forever on a cold machine is worse than one that fails.
+
+# Cost, written down rather than left to be rediscovered
+
+One case is about seventy seconds on the machine this was written on,
+once the image under test is built. The image build is the expensive
+part on a cold Docker cache (minutes: it compiles the Go binaries and
+builds the UI bundle) and is done once for the whole run.
