@@ -1,3 +1,27 @@
+package conformance_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+)
+
 // The composed scenario itself: the loop that runs one retention-and-
 // placement cycle the way the daemon will, the stand-ins for the two seams
 // the daemon does not own yet, and the cells that read the result.
@@ -23,29 +47,6 @@
 // share is that every assertion is made against what the product decided,
 // at a fixed instant, with the invariant watcher attached to every event
 // inside the cycle.
-package conformance_test
-
-import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
-	"sort"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-)
 
 // adapter is the real rclone adapter. One function so every caller in
 // this package reaches the same code an operator runs.

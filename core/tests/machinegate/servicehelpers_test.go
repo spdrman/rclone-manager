@@ -1,3 +1,16 @@
+package machinegate_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
 // A deliberate copy of two of core/service's own test helpers, and the one
 // number that had to change on the way over.
 //
@@ -11,18 +24,6 @@
 // runs under a watchdog that derives its bound from observed progress. So
 // the budget here is a single stated number with its own reasoning, rather
 // than a fraction of a deadline that does not exist.
-package machinegate_test
-
-import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/service"
-)
 
 // The two helpers below are core/service's own openTestService and
 // waitForTerminalStatus, restated here rather than shared.

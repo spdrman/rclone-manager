@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // What each command exits with, and what it says on the way out.
 //
 // The exit status is half a contract on its own. A refusal that exits 2
@@ -13,12 +20,6 @@
 // to work on either side of an operand for every command that takes one.
 // Each table therefore pairs its refusals with a positive control, because
 // a command that refused everything would satisfy the refusals alone.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 // checkExitAndStderr is the shared assertion for the three tables below:
 // it runs one argv through run() and asserts both the exit code and what

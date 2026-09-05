@@ -1,3 +1,16 @@
+package machinegate_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // The error classifier held to errors a real server produced, rather than
 // to errors this repository wrote for it.
 //
@@ -12,18 +25,6 @@
 // Every refusal here is read next to a positive control on the same machine,
 // because "refused" and "this fixture is broken" produce the same verdict
 // from the outside.
-package machinegate_test
-
-import (
-	"context"
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // TestClassify_Docker is the classifier held to real errors from a real
 // server, rather than to errors this repository wrote itself.

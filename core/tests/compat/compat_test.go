@@ -1,3 +1,13 @@
+package compat
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // The gate itself: capture every FR-35 surface from this working tree and
 // hold it against the corpus checked in beside it.
 //
@@ -17,15 +27,6 @@
 // gate for the first time is meeting it while something is red, so the
 // message says which cells may grow, which may not, and what regenerating
 // actually claims.
-package compat
-
-import (
-	"context"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestMediumFreeSurfacesAreUnchanged is EPIC E's FR-35 gate.
 //

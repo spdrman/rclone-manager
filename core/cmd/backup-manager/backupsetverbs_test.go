@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // The hazard that only exists because the verbs share one flag set.
 //
 // Separately, each verb declared its own flags, so passing another verb's
@@ -10,14 +19,6 @@
 // paired with a control that the same invocation without the wrong flag
 // really does succeed, because a command that refused everything would pass
 // the refusal half on its own.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestRun_BackupSetVerbsRefuseEachOthersFlags is the composition's own
 // test, and it exists because merging #350's `patch` and #356's `create`

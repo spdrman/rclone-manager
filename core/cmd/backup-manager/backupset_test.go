@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // The `backup-set patch` verb: that it writes, that it writes only what it
 // was asked to, and that it refuses the edits that need an operator to say
 // something out loud first.
@@ -12,14 +21,6 @@
 // not a missing flag, an unnamed field has to come back unchanged, and
 // repointing a set that already has artifacts on record is a decision an
 // operator has to acknowledge rather than something the command guesses at.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestRun_BackupSetPatchChangesOneFieldAndPersists is the CLI half of
 // issue #350's "the CLI can perform the same update, so the two surfaces

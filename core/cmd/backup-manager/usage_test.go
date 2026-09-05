@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // Whether the usage block still names every verb the binary can run.
 //
 // It is a small file guarding a failure that has already happened: a verb
@@ -10,12 +17,6 @@
 // typed here, which is what makes this a check instead of a second list to
 // keep in step. Adding a verb over there is checked here without anybody
 // remembering this file exists.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 // TestUsage_NamesEveryBackupSetVerb. The usage block is what `--help`,
 // `help` and an unknown command print, and it is also what a black-box

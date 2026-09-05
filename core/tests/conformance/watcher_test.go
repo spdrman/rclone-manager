@@ -1,3 +1,23 @@
+package conformance_test
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
 // This file is the continuous invariant watcher the phase 2 exit gate
 // asks for, and the argument for why it is continuous rather than a
 // sampler.
@@ -10,8 +30,8 @@
 // when something deletes it. So the complete set of events that can
 // falsify the invariant is:
 //
-//  1. a journal write
-//  2. a call that removes a copy
+//	1. a journal write
+//	2. a call that removes a copy
 //
 // and a check attached to every one of those is a check over the whole
 // run, with no gap between observations for a breach to hide in. That is
@@ -61,25 +81,6 @@
 // arithmetic against reality as this process has changed it; the bytes are
 // hashed at the end of every scenario, separately, by the assertion that
 // reads each surviving ACTIVE placement back.
-package conformance_test
-
-import (
-	"context"
-	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"sync"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-)
 
 // watcher evaluates FR-30's standing invariant at every event that can
 // falsify it, for every artifact in the scenario.

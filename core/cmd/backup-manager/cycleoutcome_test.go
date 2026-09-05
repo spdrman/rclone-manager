@@ -1,14 +1,3 @@
-// What a cycle's exit status means, driven through the real command.
-//
-// This is what a cron job reads and the only thing it reads, so each cell
-// runs `run` or `fetch` over a real local-backend config and checks the
-// status against a cycle that really happened: nothing waiting is not a
-// failure, a steady state is not a failure, and nothing getting through is.
-//
-// The pairs are the point. `run` and `fetch` had quietly grown two different
-// definitions of a failed cycle, each defensible on its own and only visible
-// side by side, so the cells here ask both commands the same question about
-// the same deployment and require the same answer.
 package main
 
 import (
@@ -21,6 +10,18 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
+
+// What a cycle's exit status means, driven through the real command.
+//
+// This is what a cron job reads and the only thing it reads, so each cell
+// runs `run` or `fetch` over a real local-backend config and checks the
+// status against a cycle that really happened: nothing waiting is not a
+// failure, a steady state is not a failure, and nothing getting through is.
+//
+// The pairs are the point. `run` and `fetch` had quietly grown two different
+// definitions of a failed cycle, each defensible on its own and only visible
+// side by side, so the cells here ask both commands the same question about
+// the same deployment and require the same answer.
 
 // --- fixtures ---
 //

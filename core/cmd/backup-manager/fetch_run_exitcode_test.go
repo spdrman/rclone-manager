@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // `fetch` and `run` held to the same definition of a failed cycle, against a
 // deployment where everything fails for a real reason.
 //
@@ -12,14 +21,6 @@
 // produced this file was not either of them being wrong on its own. They
 // disagreed, and a disagreement is only visible when both are asked the same
 // question about the same deployment in the same run.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // writeFailingVerificationConfig mirrors writeTestConfig (main_test.go),
 // with one difference: the backup set names an application validator

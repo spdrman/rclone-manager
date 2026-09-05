@@ -1,3 +1,10 @@
+package main
+
+import (
+	"regexp"
+	"testing"
+)
+
 // Whether a KEEP line says which of the two timestamps earned it.
 //
 // A tier name alone is half an answer. Since a tier can select an artifact
@@ -11,12 +18,6 @@
 // the protection term is not a placement so it carries no attribution at
 // all. That reasoning is what the pattern below spells out, which is why it
 // is a pattern and not a captured line.
-package main
-
-import (
-	"regexp"
-	"testing"
-)
 
 // Issue #218. `retention` itemises one line per artifact, and since #215
 // a KEEP on that line can have come from either of FR-18's two

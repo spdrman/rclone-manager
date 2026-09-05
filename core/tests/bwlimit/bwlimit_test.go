@@ -1,3 +1,15 @@
+package bwlimit
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/accounting"
+)
+
 // The evidence for this package's own doc, which is otherwise a story about
 // rclone's internals that a reader has no way to check.
 //
@@ -12,17 +24,6 @@
 // The fourth cell is the factor-of-1024 trap, pinned rather than described:
 // a bare number in a bandwidth string is kibibytes, which is why a limit
 // written without a unit is refused instead of silently never engaging.
-package bwlimit
-
-import (
-	"context"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
-)
 
 // The numbers TestClearingTheLimitReallyClearsIt measures against.
 //

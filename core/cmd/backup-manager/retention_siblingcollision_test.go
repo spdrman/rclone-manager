@@ -1,12 +1,3 @@
-// Issue #292's own reproduction: a producer (the issue's example is a
-// Gitea backup host) writes one restore point as two files sharing the
-// same run timestamp -- a portable archive and a database dump. GFS picks
-// one of them as its bucket's representative and the other comes back
-// tiers=[], which prints identically to a genuinely superseded artifact.
-// This drives the real `retention --dry-run` command, over a real local
-// backend fetch, the same way retention_attribution_test.go's
-// TestRun_RetentionLineSaysWhichPlacementSelectedEachTier does, and reads
-// what it actually printed.
 package main
 
 import (
@@ -16,6 +7,16 @@ import (
 	"testing"
 	"time"
 )
+
+// Issue #292's own reproduction: a producer (the issue's example is a
+// Gitea backup host) writes one restore point as two files sharing the
+// same run timestamp -- a portable archive and a database dump. GFS picks
+// one of them as its bucket's representative and the other comes back
+// tiers=[], which prints identically to a genuinely superseded artifact.
+// This drives the real `retention --dry-run` command, over a real local
+// backend fetch, the same way retention_attribution_test.go's
+// TestRun_RetentionLineSaysWhichPlacementSelectedEachTier does, and reads
+// what it actually printed.
 
 // siblingRunFixtureTimestamp is the shared run instant both files in this
 // fixture carry as their on-disk modification time. internal/discovery

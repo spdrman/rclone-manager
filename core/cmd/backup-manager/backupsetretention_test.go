@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // The `backup-set retention` verb: showing which policy is in force for one
 // set, setting a chain on it, and clearing it again.
 //
@@ -10,14 +19,6 @@
 // The refusals are checked in the config layer's own words rather than in
 // words this command invents, so an operator gets the same explanation for
 // half a chain or a contradictory pair of flags wherever they type it.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // writeTestConfigWithDeploymentPolicy is writeTestConfig with a
 // deployment retention policy that is deliberately NOT the product

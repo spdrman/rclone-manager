@@ -1,3 +1,32 @@
+package machines
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+)
+
 // The source machine: a disposable SFTP server in a container, so a test
 // drives the real rclone sftp backend against a real server rather than
 // reasoning about the API from the outside.
@@ -29,34 +58,6 @@
 // in parallel, either that VM needs more than 4 GB, or the two architecture
 // checks need to stop re-running a container-backed suite to prove a
 // dependency boundary that no container is involved in.
-package machines
-
-import (
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"net"
-	"os"
-	"os/exec"
-	"path"
-	"path/filepath"
-	"runtime"
-	"runtime/debug"
-	"strconv"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
-)
 
 // User is the fixed username created inside the container.
 const User = "backupuser"

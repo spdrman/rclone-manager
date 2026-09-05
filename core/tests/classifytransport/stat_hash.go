@@ -1,3 +1,11 @@
+package classifytransport
+
+import (
+	"context"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
 // A Transport decorator that attaches a best-effort hash to whatever Stat
 // returns, and the reasoning for why it is still here after the defect it
 // worked around was fixed.
@@ -8,13 +16,6 @@
 // adapter's Stat now carries enough identity for FR-16 on its own, and this
 // only still earns its place against a Transport that genuinely does not
 // hash in Stat.
-package classifytransport
-
-import (
-	"context"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-)
 
 // WithStatHash decorates tr so its Stat method also attaches a best-effort
 // sha256 hash to whatever it returns, exactly mirroring the pattern

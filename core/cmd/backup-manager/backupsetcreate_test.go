@@ -1,3 +1,16 @@
+package main
+
+import (
+	"crypto/ed25519"
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"golang.org/x/crypto/ssh"
+)
+
 // The `backup-set create` verb, on a fresh install and on an existing one.
 //
 // The two are genuinely different situations and both are checked, because
@@ -15,18 +28,6 @@
 // reason every fixture in this repository generates its own: a private key
 // committed to a repository is a private key forever, whatever it was
 // generated for.
-package main
-
-import (
-	"crypto/ed25519"
-	"encoding/pem"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"golang.org/x/crypto/ssh"
-)
 
 // writeTestPrivateKey writes a fresh, unencrypted ed25519 private key in
 // OpenSSH format and returns its path. Generated per test rather than

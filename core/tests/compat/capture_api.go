@@ -1,3 +1,13 @@
+package compat
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+)
+
 // FR-35 clause 3, "identical API responses except for additive fields",
 // turned into two cells a machine can decide.
 //
@@ -21,15 +31,6 @@
 // an empty requirement set) exist because the first main this gate met
 // reported ordinary additive changes as breaks. Each is argued where it is
 // made.
-package compat
-
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"sort"
-	"strings"
-)
 
 // captureAPIContract projects api/v1/openapi.json down to the list of
 // promises it makes, one promise per line, sorted.

@@ -1,8 +1,3 @@
-// This file is gotestwatch's pure decision-making core (see doc.go for
-// what the tool is and why it exists), deliberately kept free of any
-// process or I/O concerns so it can be proved against a synthetic clock
-// (tracker_test.go) the same way tests/crashmatrix's own progressTracker
-// is in crash_matrix_test.go, which this is modeled on.
 package main
 
 import (
@@ -12,6 +7,12 @@ import (
 	"sync"
 	"time"
 )
+
+// This file is gotestwatch's pure decision-making core (see doc.go for
+// what the tool is and why it exists), deliberately kept free of any
+// process or I/O concerns so it can be proved against a synthetic clock
+// (tracker_test.go) the same way tests/crashmatrix's own progressTracker
+// is in crash_matrix_test.go, which this is modeled on.
 
 // testEvent is the subset of `go test -json`'s per-line schema (see the
 // standard library's cmd/internal/test2json) gotestwatch actually acts on.

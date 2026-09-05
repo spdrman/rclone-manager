@@ -1,3 +1,12 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"time"
+)
+
 // The command's own edges: the default bounds, the argument split, and the
 // exit status.
 //
@@ -11,14 +20,6 @@
 // nothing but package paths and flags meant for `go test`, so the common
 // case has to work with no separator at all, and a leading "--" is still
 // accepted so a package path beginning with a dash is never ambiguous.
-package main
-
-import (
-	"flag"
-	"fmt"
-	"os"
-	"time"
-)
 
 // defaultBounds mirrors tests/crashmatrix's defaultHarnessBounds (issue
 // #247) deliberately: stepFloor is the same 45s the harness's own floor

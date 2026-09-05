@@ -1,12 +1,3 @@
-// The fixture helpers this package's cells share: a journal, a hash, and one
-// artifact driven to the state the move engine leaves it in.
-//
-// Seeding through the journal directly is the honest route rather than a
-// shortcut. Nothing in this tier runs a move for these cells to piggyback
-// on, so the alternative is a test that stages its own placements inline,
-// once per file, with each copy free to be subtly different. One helper means
-// every cell here starts from the same artifact in the same state, and a
-// change to what "on a medium" means is one edit rather than a search.
 package miniointegration_test
 
 import (
@@ -20,6 +11,16 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
+
+// The fixture helpers this package's cells share: a journal, a hash, and one
+// artifact driven to the state the move engine leaves it in.
+//
+// Seeding through the journal directly is the honest route rather than a
+// shortcut. Nothing in this tier runs a move for these cells to piggyback
+// on, so the alternative is a test that stages its own placements inline,
+// once per file, with each copy free to be subtly different. One helper means
+// every cell here starts from the same artifact in the same state, and a
+// change to what "on a medium" means is one edit rather than a search.
 
 func sha256HexOf(content []byte) string {
 	sum := sha256.Sum256(content)

@@ -1,3 +1,11 @@
+package compat
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+)
+
 // The orchestrator: one function that drives every surface FR-35 names and
 // hands back the whole corpus, plus the path the checked-in baseline lives
 // at.
@@ -18,13 +26,6 @@
 // makes renaming one a two-sided edit: the old name reads as a cell that
 // stopped being observed and the new one as a cell with no baseline, and
 // Compare reports both.
-package compat
-
-import (
-	"context"
-	"fmt"
-	"path/filepath"
-)
 
 // CorpusPath is where the checked-in baseline lives.
 const CorpusPath = "testdata/medium-free-surfaces.json"

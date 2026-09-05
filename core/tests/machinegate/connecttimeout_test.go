@@ -1,3 +1,16 @@
+package machinegate_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // Whether the connect ceiling the retry budget is derived from leaves a real
 // handshake room to complete.
 //
@@ -13,18 +26,6 @@
 // never pays, and that overhead is exactly what grows when several gate
 // lanes run at once. The constants below carry their own reasoning for how
 // many samples are taken and how much headroom is demanded.
-package machinegate_test
-
-import (
-	"context"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // handshakeSamples is how many real connects the measurement below makes.
 // One sample is a number the scheduler picked as much as the network did;

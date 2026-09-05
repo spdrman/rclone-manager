@@ -1,3 +1,27 @@
+package conformance_test
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // This file is #242's other half of job one: "the full crash matrix from
 // E2.1 runs against this composed scenario, not only against unit
 // fixtures".
@@ -24,29 +48,6 @@
 // watcher also subtracts copies it has watched being destroyed, so a
 // restart that removed bytes while the journal still called them ACTIVE
 // would be caught here and is not caught there.
-package conformance_test
-
-import (
-	"context"
-	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"sync"
-	"syscall"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // crashArtifactName is the one artifact each cell moves. It is dated so
 // that a chain would put it on a medium, but no chain runs here: a crash

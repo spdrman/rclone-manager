@@ -1,3 +1,15 @@
+package main
+
+import (
+	"flag"
+	"io"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+)
+
 // The FR-18/FR-19 override flags: how each one folds onto a loaded config,
 // and what happens when one of them is wrong.
 //
@@ -16,17 +28,6 @@
 // os.Stderr for a pipe, which catches both writers these suites care about,
 // since this package's own failure path and a flag set with no explicit
 // output both resolve os.Stderr at the moment they write.
-package main
-
-import (
-	"flag"
-	"io"
-	"os"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-)
 
 // captureStderr redirects os.Stderr for the duration of fn, so a test can
 // assert on exactly what fail() (setup.go) printed, e.g. that a rejected

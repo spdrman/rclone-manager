@@ -1,3 +1,17 @@
+package dockerlease
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+)
+
 // The label is the entire safety boundary for Sweep, so these tests drive a
 // real docker rather than a fake: the thing worth proving is that a `docker
 // rm -f` built from a `--filter label=` never reaches a container somebody
@@ -12,19 +26,6 @@
 // at an endpoint nothing listens on, because the real answer is the one that
 // matters and stopping the shared daemon would take every other worktree's
 // run down with it.
-package dockerlease
-
-import (
-	"bytes"
-	"context"
-	"errors"
-	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"testing"
-	"time"
-)
 
 // requireDocker gates every test here that needs a real daemon, and decides
 // whether an absent one is a skip or a failure.

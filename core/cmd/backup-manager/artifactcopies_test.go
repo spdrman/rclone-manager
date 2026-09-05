@@ -1,3 +1,15 @@
+package main
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // What the per-artifact copy block prints, and the deployments where it must
 // print nothing at all.
 //
@@ -19,17 +31,6 @@
 // What is under test is the printing, and staging four different placement
 // shapes through a real journal would put most of the file's weight on
 // fixture-building for a claim about output.
-package main
-
-import (
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 func localCopyView() app.ArtifactCopy {
 	return app.ArtifactCopy{

@@ -1,3 +1,19 @@
+package compat
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+)
+
 // FR-35 clause 4, the CLI: build backup-manager from this working tree,
 // run a fixed table of invocations against the seeded medium-free
 // deployment, and write down exactly what an operator would have seen.
@@ -19,21 +35,6 @@
 // The argv table is chosen rather than exhaustive, and captureCLI says
 // which surfaces it leaves out and why, because a surface nobody mentions
 // cannot be told apart from one nobody thought of.
-package compat
-
-import (
-	"bytes"
-	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-)
 
 // buildCLI builds backup-manager from this working tree.
 //

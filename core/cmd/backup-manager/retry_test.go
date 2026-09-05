@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // Whether the retry verb can be found, and whether it can be asked for
 // wrongly without anything being opened.
 //
@@ -11,12 +18,6 @@
 // them evidence about ordering. A check that leaked past the argument
 // handling would fail opening a state database and return the failure code
 // rather than the usage code, so the exit status alone tells the two apart.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 // TestRetryIsDiscoverableFromTheCommandLine. A verb absent from the
 // command table cannot be run and a verb absent from the usage block

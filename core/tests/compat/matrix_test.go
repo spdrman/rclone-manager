@@ -1,3 +1,14 @@
+package compat
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
 // Whether docs/conformance/epic-e-matrix.md is still describing this
 // repository, or has quietly become prose.
 //
@@ -13,16 +24,6 @@
 // existence check and only from that one: naming a file that does not
 // exist yet is what being blocked means, and they still have to name the
 // issue that would unblock them.
-package compat
-
-import (
-	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"testing"
-)
 
 // matrixPath is the conformance matrix this package's cells are cited by.
 const matrixPath = "../../../docs/conformance/epic-e-matrix.md"

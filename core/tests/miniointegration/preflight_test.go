@@ -1,15 +1,3 @@
-// Issue #443's medium preflight, run against a real S3 API rather than
-// against a fake store.
-//
-// internal/mediumcheck's own suite proves the preflight's LOGIC: which
-// step fails for which shape of failure, what gets skipped, what is never
-// spent. It cannot prove the thing this file is for, which is that the
-// eight checks compose into a real answer through the real adapter, and
-// that the answer is not accidentally green. A preflight that passes
-// against a bucket that cannot serve a restore is the defect shape this
-// repository keeps producing, so the deny cases here are driven against a
-// server that genuinely does not have the bucket rather than against a
-// double that says so.
 package miniointegration_test
 
 import (
@@ -24,6 +12,19 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
+
+// Issue #443's medium preflight, run against a real S3 API rather than
+// against a fake store.
+//
+// internal/mediumcheck's own suite proves the preflight's LOGIC: which
+// step fails for which shape of failure, what gets skipped, what is never
+// spent. It cannot prove the thing this file is for, which is that the
+// eight checks compose into a real answer through the real adapter, and
+// that the answer is not accidentally green. A preflight that passes
+// against a bucket that cannot serve a restore is the defect shape this
+// repository keeps producing, so the deny cases here are driven against a
+// server that genuinely does not have the bucket rather than against a
+// double that says so.
 
 func preflight(t *testing.T, medium transport.Medium, class placement.Class) mediumcheck.Report {
 	t.Helper()

@@ -1,3 +1,14 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
 // Issue #333's regression seam. `retention`'s six FR-18/FR-19 override
 // flags (#111, B3.6) fold onto cfg.Retention, but since this issue every
 // decision reads a backup set's own resolved bs.Retention instead. Nothing
@@ -10,16 +21,6 @@
 // These tests drive the real command over a real local-backend fetch and
 // read what it actually printed, which is the only shape that stays honest
 // when the resolution seam moves again.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"testing"
-	"time"
-)
 
 // writeTwoSetTestConfig writes a config with two backup sets in one
 // source: one inheriting the deployment's retention policy, one declaring

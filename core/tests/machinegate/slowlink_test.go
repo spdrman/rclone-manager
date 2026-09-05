@@ -1,3 +1,18 @@
+package machinegate_test
+
+import (
+	"context"
+	"io"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // A relay that hands the client bytes at a fixed rate, so a transfer lasts
 // long enough to be interrupted, and the check that slowing the link did not
 // weaken anything else.
@@ -14,20 +29,6 @@
 // reached through the relay is reached at the relay's address, so host-key
 // verification has to be re-pinned there, and a re-pin done wrongly leaves
 // the check passing everything. The decoy key is what makes that visible.
-package machinegate_test
-
-import (
-	"context"
-	"io"
-	"net"
-	"sync"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // slowLink is a TCP relay that sits in front of the SFTP fixture and hands
 // the client bytes at a fixed rate.

@@ -1,3 +1,14 @@
+package compat
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
 // The corpus format and the comparison over it: what a captured cell is,
 // how two captures are held against each other, and how a difference is
 // reported to whoever has to act on it.
@@ -14,16 +25,6 @@
 // captured line that is new is only a break under RuleIdentical, and a
 // cell that captured nothing is a break under every rule there is. Compare
 // argues each of those where it makes the decision.
-package compat
-
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-)
 
 // Rule is how a cell's captured lines are compared against the corpus.
 type Rule string

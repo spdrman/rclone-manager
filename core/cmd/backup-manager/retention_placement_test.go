@@ -1,10 +1,3 @@
-// FR-27/FR-30 (issue #239) on the surface FR-20 calls the mandatory
-// dry-run: `backup-manager retention` has to show every MOVE it would
-// make, not only every deletion, before anything runs.
-//
-// Both tests drive the real command over a real local-backend fetch, the
-// same way TestRun_RetentionLineSaysWhichPlacementSelectedEachTier does,
-// and read what it actually printed.
 package main
 
 import (
@@ -18,6 +11,14 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
+
+// FR-27/FR-30 (issue #239) on the surface FR-20 calls the mandatory
+// dry-run: `backup-manager retention` has to show every MOVE it would
+// make, not only every deletion, before anything runs.
+//
+// Both tests drive the real command over a real local-backend fetch, the
+// same way TestRun_RetentionLineSaysWhichPlacementSelectedEachTier does,
+// and read what it actually printed.
 
 // writeOffsiteTestConfig is writeTestConfig with one storage medium
 // declared and a chain whose single daily tier lives on it.

@@ -1,3 +1,18 @@
+package movecrash_test
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // The matrix itself, and the three checks that keep it from certifying its
 // own harness.
 //
@@ -14,20 +29,6 @@
 // Two of those controls read the harness source with go/ast rather than
 // running it. That is deliberate: the property is "this code does not exist
 // here", and an absence cannot be demonstrated by execution.
-package movecrash_test
-
-import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // TestCrashMatrix is the matrix. Each cell kills a real process at one
 // real boundary, then restarts the real engine against what it left

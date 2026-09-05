@@ -1,3 +1,16 @@
+package conformance_test
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // This file is the negative control for the whole package.
 //
 // conformance_test.go claims the invariant watcher is continuous rather
@@ -31,18 +44,6 @@
 // control is about the WATCHER. The equivalent mutation to product code is
 // planted in scripts/conformance/selftest.sh, which is where the product's
 // own cells are falsified.
-package conformance_test
-
-import (
-	"context"
-	"fmt"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // earlyRelease is the planted breach: it lets go of the source copy one
 // phase too early, and everything tidies itself up a few writes later.

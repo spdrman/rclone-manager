@@ -1,17 +1,3 @@
-// Whether revalidation against a real S3 endpoint checks existence without
-// ever paying to read the bytes back.
-//
-// The claim is about a cost, and a cost claim asserted from the outside is
-// almost always asserted wrongly: a backend can answer a read from a cache,
-// and a test watching the wire would call that a pass. So the accounting
-// happens at the boundary the code under test actually calls, where every
-// ASK is recorded whether or not it becomes a request.
-//
-// The cells around it are what stop the accounting passing for the wrong
-// reason. An object that is genuinely gone has to be noticed rather than
-// shrugged off, because a revalidator that asks for nothing at all also
-// downloads nothing, and attesting a placement this endpoint cannot attest
-// has to be refused rather than assumed.
 package miniointegration_test
 
 import (
@@ -34,6 +20,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
+
+// Whether revalidation against a real S3 endpoint checks existence without
+// ever paying to read the bytes back.
+//
+// The claim is about a cost, and a cost claim asserted from the outside is
+// almost always asserted wrongly: a backend can answer a read from a cache,
+// and a test watching the wire would call that a pass. So the accounting
+// happens at the boundary the code under test actually calls, where every
+// ASK is recorded whether or not it becomes a request.
+//
+// The cells around it are what stop the accounting passing for the wrong
+// reason. An object that is genuinely gone has to be noticed rather than
+// shrugged off, because a revalidator that asks for nothing at all also
+// downloads nothing, and attesting a placement this endpoint cannot attest
+// has to be refused rather than assumed.
 
 // accountingStore is the request accounting the issue's INTEGRATION step
 // asks for, taken at the boundary the code under test actually uses.

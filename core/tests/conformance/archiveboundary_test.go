@@ -1,3 +1,22 @@
+package conformance_test
+
+import (
+	"errors"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // This file is the honest half of #242's archive question, and it is
 // written as checks rather than as prose because a paragraph saying "we
 // cannot test this" ages into a paragraph nobody reads.
@@ -30,24 +49,6 @@
 // configuration this build accepts and cannot execute. The conformance
 // matrix records that as a BLOCKED row with an issue against it, rather
 // than as a pass with a footnote.
-package conformance_test
-
-import (
-	"errors"
-	"path/filepath"
-	"sort"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // TestThisFixtureRefusesAnArchiveStorageClass establishes fact one against
 // the real server, on every run.

@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // The deployment-wide settings surface: reading it back, patching it, and
 // refusing what is not a patch.
 //
@@ -7,12 +14,6 @@
 // capacity of zero has to mean "remove the cap" rather than "cap at zero",
 // which is the one value in this surface where the obvious reading is the
 // dangerous one.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 func TestRun_SettingsGetAgainstAWorkingConfig(t *testing.T) {
 	configPath := writeTestConfig(t)

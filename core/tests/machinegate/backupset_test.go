@@ -1,3 +1,15 @@
+package machinegate_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // Creating a backup set the way the wizard does, against a real server,
 // and then proving a backup actually happened.
 //
@@ -13,17 +25,6 @@
 // API, and that division is deliberate: this file is the evidence that the
 // sequence works, and the UI suite is the evidence that the screens drive
 // the sequence.
-package machinegate_test
-
-import (
-	"context"
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/service"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // TestCreateBackupSet_EndToEndAgainstARealSFTPFixture is issue #146's own
 // INTEGRATION requirement made concrete: "complete the wizard for real

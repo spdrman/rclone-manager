@@ -1,3 +1,11 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
 // The dispatch smoke tests, and the fixture most of this package's other
 // suites are built on.
 //
@@ -14,13 +22,6 @@
 // no network and no Docker. That is what makes the exit-status cells in the
 // files around this one worth anything: they are reading the status of a
 // cycle that happened.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
 
 func TestRun_NoArgsPrintsUsageAndFails(t *testing.T) {
 	if got := run(nil); got != 2 {

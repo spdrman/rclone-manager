@@ -1,14 +1,3 @@
-// This file holds every seam the crash-matrix harness uses to turn a real
-// process into a real, precisely-timed crash: a journal decorator that
-// self-kills the instant a target lifecycle state is durably written, and a
-// transport decorator that can race a calibrated timer against a real
-// network/disk call, or self-kill immediately after one succeeds. Nothing
-// here touches internal/lifecycle, internal/state or internal/transport/rclone;
-// it only composes their already-exported interfaces (lifecycle.Journal,
-// transport.Transport) the way any external caller could.
-//
-// See main.go's package doc for why a real SIGKILL, not a simulated one, is
-// used throughout, and what that does and does not prove.
 package main
 
 import (
@@ -24,6 +13,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
+
+// This file holds every seam the crash-matrix harness uses to turn a real
+// process into a real, precisely-timed crash: a journal decorator that
+// self-kills the instant a target lifecycle state is durably written, and a
+// transport decorator that can race a calibrated timer against a real
+// network/disk call, or self-kill immediately after one succeeds. Nothing
+// here touches internal/lifecycle, internal/state or internal/transport/rclone;
+// it only composes their already-exported interfaces (lifecycle.Journal,
+// transport.Transport) the way any external caller could.
+//
+// See main.go's package doc for why a real SIGKILL, not a simulated one, is
+// used throughout, and what that does and does not prove.
 
 // selfDestruct terminates this process immediately and unrecoverably via
 // SIGKILL, exactly as an OOM killer or a power loss would: no deferred

@@ -1,3 +1,12 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // The single-artifact detail view: that it prints the recorded reason a
 // backup is in trouble, and that it does not print two explanations for it.
 //
@@ -13,14 +22,6 @@
 // read, and it is sometimes non-empty and wrong; showing it beside the real
 // sentence would leave an operator with two disagreeing explanations and no
 // way to tell which to trust.
-package main
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // writeRejectingValidatorScript writes an executable shell script to a
 // fresh temp directory that always rejects (exit 1) and writes message to

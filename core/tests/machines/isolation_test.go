@@ -1,3 +1,10 @@
+package machines
+
+import (
+	"os"
+	"testing"
+)
+
 // Whether two machines started by the same test process are genuinely two
 // identities.
 //
@@ -12,12 +19,6 @@
 // distinct key files can still both be authorized on both servers, and a
 // machine that refuses everybody produces the same refusal as a machine that
 // is properly isolated.
-package machines
-
-import (
-	"os"
-	"testing"
-)
 
 // TestTwoSourceMachinesDoNotShareAClientKey is #250, held under the
 // mechanism that replaced the one it was filed against.

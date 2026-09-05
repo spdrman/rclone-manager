@@ -1,3 +1,15 @@
+package compat
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+)
+
 // FR-35 clause 1: every config fixture under testdata/configs put through
 // the exact load-then-validate path a daemon boots with, with both
 // possible answers written down.
@@ -12,17 +24,6 @@
 // The fixture directory is the unit of coverage here: a config shape
 // nobody wrote a fixture for is a shape this cell says nothing about, so
 // adding a fixture is how this clause grows.
-package compat
-
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-)
 
 // captureConfigValidation runs every fixture under testdata/configs
 // through the exact path the daemon uses (config.Load, then Validate) and

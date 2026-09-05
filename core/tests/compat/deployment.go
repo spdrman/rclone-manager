@@ -1,3 +1,20 @@
+package compat
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // The medium-free deployment every state-backed cell is captured from: the
 // fixed instant verdicts are decided at, the shape of one seeded artifact,
 // the ten of them, and the config YAML they live under.
@@ -15,22 +32,6 @@
 // deliberately has no file on disk so the prune cell contains a refusal
 // rather than only the happy path. Those reasons live on the fields
 // themselves, where somebody editing the fixture will meet them.
-package compat
-
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"os"
-	"path/filepath"
-	"time"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // fixedNow is the instant every verdict cell is decided at.
 //

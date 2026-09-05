@@ -1,15 +1,3 @@
-// The raw backend the controls in this package are argued against.
-//
-// Several cells here claim something about what the adapter does to a
-// server, and a claim like that is only meaningful next to what happens when
-// the adapter is NOT deciding. This builds an rclone sftp Fs with the
-// backend's own defaults and none of the adapter's opinions, so a
-// "connection table" or "connection count" assertion has a baseline that
-// came from the workload rather than from the code under test.
-//
-// It deliberately does not reuse the adapter's own Fs builder, which is
-// unexported and has to stay that way: a control constructed by the thing it
-// is controlling for is not a control.
 package machinegate_test
 
 import (
@@ -26,6 +14,19 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
+
+// The raw backend the controls in this package are argued against.
+//
+// Several cells here claim something about what the adapter does to a
+// server, and a claim like that is only meaningful next to what happens when
+// the adapter is NOT deciding. This builds an rclone sftp Fs with the
+// backend's own defaults and none of the adapter's opinions, so a
+// "connection table" or "connection count" assertion has a baseline that
+// came from the workload rather than from the code under test.
+//
+// It deliberately does not reuse the adapter's own Fs builder, which is
+// unexported and has to stay that way: a control constructed by the thing it
+// is controlling for is not a control.
 
 // rawSFTPFs builds an rclone sftp Fs against a source machine, with the
 // options this adapter sets and nothing else: no `connections` ceiling, so

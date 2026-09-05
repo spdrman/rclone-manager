@@ -1,3 +1,14 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+)
+
 // The retention override flags, from the flag.FlagSet variables that back
 // them to the resolved policy they fold onto a loaded config.
 //
@@ -13,16 +24,6 @@
 // identical reason, in the identical words, as the same mistake written into
 // the YAML file. An operator who fixed one by reading its message should not
 // meet a different message from the other.
-package main
-
-import (
-	"flag"
-	"fmt"
-	"strconv"
-	"strings"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-)
 
 // retentionFlags holds the flag.FlagSet variables backing the FR-18/FR-19
 // retention override flags `backup-manager retention` accepts (issue #111,

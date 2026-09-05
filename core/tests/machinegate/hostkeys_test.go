@@ -1,3 +1,14 @@
+package machinegate_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // FR-6's host-key posture, held against real servers: the recorded key
 // works, an address nothing has recorded is refused, and an address that
 // answers with a different key is refused.
@@ -11,16 +22,6 @@
 // is indistinguishable from a fixture that is simply broken, so the value of
 // the whole file rests on having shown the good path working on the same
 // machines in the same run.
-package machinegate_test
-
-import (
-	"context"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // TestSFTPHostKeyVerification is FR-6's host-key posture, held against real
 // servers: the recorded key works, an address known_hosts has never seen is

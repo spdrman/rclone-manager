@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // Whether `medium preflight` can be found, and whether it refuses before it
 // opens anything.
 //
@@ -11,12 +18,6 @@
 // strongest available form of "nothing was opened": if a refusal ever leaked
 // past the argument checks, the command would fail for want of a config
 // rather than for the reason under test, and the cell would notice.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 // TestMediumPreflightIsDiscoverableFromTheCommandLine. A verb absent from
 // the command table cannot be run, and a verb absent from the usage block

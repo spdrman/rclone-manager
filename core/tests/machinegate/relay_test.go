@@ -1,3 +1,18 @@
+package machinegate_test
+
+import (
+	"context"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
 // A plain TCP relay in front of a machine, and the one property that has to
 // survive putting anything in front of a machine at all.
 //
@@ -14,20 +29,6 @@
 // easy to get wrong in a direction that leaves the check silently disabled,
 // so it is done through the harness and paired with a decoy key that has to
 // be refused at the same address.
-package machinegate_test
-
-import (
-	"context"
-	"io"
-	"net"
-	"strconv"
-	"strings"
-	"sync"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
-)
 
 // startRelay puts a plain TCP relay in front of a machine and returns the
 // address the relay listens on.

@@ -1,18 +1,3 @@
-// The plumbing every command in this binary shares: the flag set, the
-// operand-tolerant parse, the two ways a service gets opened, the log sink,
-// and the two functions that decide what a cycle's exit status is.
-//
-// It is one file because the point of each of these is that there is exactly
-// one of it. Every command answering an unknown flag the same way, resolving
-// --config the same way, and closing its journal and releasing its lock in
-// the same order are all properties that only hold while nobody writes a
-// second version, and the two exit-status functions are here specifically
-// because `run` and `fetch` disagreed twice about what a failed cycle is,
-// each time because each was still deciding for itself.
-//
-// The refusals and diagnostics printed from here are operator-visible and
-// pinned by core/tests/compat, so their wording is part of the contract
-// rather than part of the implementation.
 package main
 
 import (
@@ -29,6 +14,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// The plumbing every command in this binary shares: the flag set, the
+// operand-tolerant parse, the two ways a service gets opened, the log sink,
+// and the two functions that decide what a cycle's exit status is.
+//
+// It is one file because the point of each of these is that there is exactly
+// one of it. Every command answering an unknown flag the same way, resolving
+// --config the same way, and closing its journal and releasing its lock in
+// the same order are all properties that only hold while nobody writes a
+// second version, and the two exit-status functions are here specifically
+// because `run` and `fetch` disagreed twice about what a failed cycle is,
+// each time because each was still deciding for itself.
+//
+// The refusals and diagnostics printed from here are operator-visible and
+// pinned by core/tests/compat, so their wording is part of the contract
+// rather than part of the implementation.
 
 // defaultConfigPath matches container/compose.yaml's mount point and
 // docs/deployment.md's documented layout. The packaged mount is the

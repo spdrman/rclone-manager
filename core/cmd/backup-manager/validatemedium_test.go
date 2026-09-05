@@ -1,3 +1,16 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
 // Issue #435 at the command, where two things can go wrong that no test
 // inside internal/app can see.
 //
@@ -15,18 +28,6 @@
 // The second is the flag. `--content` has to actually be a flag on this
 // subcommand's flag set, and it has to work on either side of the operand
 // the way every other flag on this binary does.
-package main
-
-import (
-	"context"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-)
 
 // TestRun_ValidateReachesTheMediumRatherThanRefusingForWantOfOne is the
 // wiring assertion.

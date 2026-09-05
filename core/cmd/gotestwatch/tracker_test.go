@@ -1,3 +1,12 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
+
 // The tracker's arithmetic, proved against a synthetic clock.
 //
 // Every bound this tool has is derived from what the run itself has already
@@ -13,14 +22,6 @@
 // package at the start of a run buys every later hang an unlimited budget,
 // and a package- or build-level event carries no test name, which is the
 // shape that panics if the tracker assumes every event names a test.
-package main
-
-import (
-	"fmt"
-	"strings"
-	"testing"
-	"time"
-)
 
 var testBounds = bounds{
 	stepFloor:     45 * time.Second,

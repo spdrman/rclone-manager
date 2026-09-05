@@ -1,3 +1,12 @@
+package machines
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
 // Whether the simulated VPS still has one definition, and whether the
 // placement seam still has a driver on the other side of it.
 //
@@ -13,14 +22,6 @@
 // line would fail on every legitimate edit to it, which trains people to
 // update the expectation without reading it, and the guard is against the
 // definition MOVING rather than against it changing.
-package machines
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
 
 // TestTheSourceMachineHasOneDefinition is #451's third acceptance criterion
 // held as a test: two-machine-backup.sh and this harness build the source

@@ -1,3 +1,17 @@
+package machines
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
 // The build watchdog's bounds, proved against a synthetic clock, and the
 // watched build itself, proved against real docker.
 //
@@ -14,19 +28,6 @@
 // mode. A watchdog fed by a tap that silently drops or coalesces lines still
 // looks like it is working, and it would trip on a healthy build under load,
 // which is the failure the whole progress-derived design exists to avoid.
-package machines
-
-import (
-	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"testing"
-	"time"
-)
 
 // --- the bounds themselves, against a synthetic clock --------------------
 //

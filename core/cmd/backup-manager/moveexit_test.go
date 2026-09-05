@@ -1,3 +1,10 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
 // `run` is what a cron job invokes, and its exit status is the only thing
 // that cron job reads. Until this file existed, a cycle in which every
 // single move was refused exited 0 with nothing on stderr, so a
@@ -9,12 +16,6 @@
 // not set, and the daily tier names the medium, so the artifact `run`
 // ingests a moment earlier is immediately due to move somewhere it cannot
 // reach. That is a real deployment one typo away.
-package main
-
-import (
-	"strings"
-	"testing"
-)
 
 // TestRun_ExitsNonZeroWhenEveryMoveWasRefused is the finding at the exit
 // status.

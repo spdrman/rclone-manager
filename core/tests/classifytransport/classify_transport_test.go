@@ -1,3 +1,13 @@
+package classifytransport
+
+import (
+	"context"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+)
+
 // Whether the classifying decorator still does something, now that the
 // adapter it was written to compensate for classifies its own errors.
 //
@@ -12,15 +22,6 @@
 // The raw adapter's own classification is checked first, in the same run.
 // Without it, an idempotency assertion passes just as happily over an
 // adapter that has silently stopped classifying anything.
-package classifytransport
-
-import (
-	"context"
-	"testing"
-
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-)
 
 // TestWrap_ClassifiesWhatTheRealAdapterLeavesUnclassified is the positive
 // control for this package's whole reason for existing: proof that the

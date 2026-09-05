@@ -1,3 +1,18 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
 // Running `go test -json` under the tracker: the process, the stream, and
 // putting the human-readable output back together.
 //
@@ -13,20 +28,6 @@
 // binary printed, so what a person reads on the terminal is what `go test -v`
 // would have shown, and no caller has to learn to read JSON to use the
 // watchdog.
-package main
-
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
-)
 
 // jsonEvent is `go test -json`'s per-line schema (see the standard
 // library's cmd/internal/test2json), trimmed to the fields gotestwatch

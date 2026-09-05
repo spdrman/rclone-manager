@@ -1,3 +1,15 @@
+package compat
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
 // FR-34's rule that no surface renders a cost figure or an invented ETA,
 // asserted against the whole /api/v1 contract by looking for the fields
 // rather than for the values.
@@ -17,17 +29,6 @@
 // The exception list is checked rather than trusted: an entry the contract
 // has outgrown fails this test instead of sitting there granting
 // permission nobody needs any more.
-package compat
-
-import (
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"testing"
-)
 
 // forbiddenFieldWord is FR-34's list, as words rather than substrings.
 //
