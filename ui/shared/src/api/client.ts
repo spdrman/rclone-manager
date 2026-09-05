@@ -1,3 +1,35 @@
+/**
+ * The one BackupManagerApi implementation that talks to a running
+ * service, and the wire-to-domain translation that lets everything above
+ * it forget a wire exists.
+ *
+ * Pages import `httpApi` and the domain types in `@shared/types`; no page
+ * ever names a `Wire*` type. That is the whole point of the file. A
+ * contract change lands in `generated/contract.ts` and then here, and the
+ * compiler walks the rest of the tree for us.
+ *
+ * The mapping is not mechanical, and the parts that are not are where the
+ * bugs were. Two habits run through it, and they pull in opposite
+ * directions on purpose. An array the wire OMITS is normalised to `[]`,
+ * because the domain types make those required and "the server did not
+ * say" is not a state any surface can render: a deployment with no
+ * storage medium simply has no moves, and asking every consumer to
+ * distinguish an absent list from an empty one buys nothing. A SCALAR the
+ * wire omits stays absent, or becomes null, because for those the absence
+ * IS the fact. An unverified copy has no verification class, and
+ * defaulting it to the weakest rung would put a claim on screen that
+ * nobody made. `RetentionVerdict.medium` is the sharpest instance and
+ * carries its own note at the field: resolving an absent medium to the
+ * implicit local one is right for a DELETE and a lie on the two REFUSE
+ * shapes, which name no place at all.
+ *
+ * The other recurring shape is the lookup table with no default. Halt
+ * reasons, health states, storage states and retention classes all map a
+ * server word onto a closed union, and an unrecognised word falls off the
+ * end into undefined rather than into the nearest neighbour. A newer
+ * service saying something this build has never heard of should draw
+ * nothing, not draw the wrong thing confidently.
+ */
 import { BackupManagerError, toApiErrorCode } from "./contracts";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written

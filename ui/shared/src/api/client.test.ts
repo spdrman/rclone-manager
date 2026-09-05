@@ -1,3 +1,22 @@
+/**
+ * What httpApi promises about the wire, pinned.
+ *
+ * The file is long because the client's job is entirely about details
+ * that no type can hold: which header rides which request, which of the
+ * two error-envelope shapes a route answers with, which path a method
+ * actually calls, and what an omitted field becomes on the way into a
+ * domain type. Each of those has been wrong at least once, and none of
+ * them is visible to `tsc`.
+ *
+ * Two groups are worth reading as one thought. The `ApiErrorCode covers
+ * every code ...` describes enumerate, by hand, the codes each Go package
+ * really emits, so that a branch in this frontend comparing against a
+ * literal is comparing against something that can arrive. And the mapping
+ * describes assert the absences: null for an unrecorded size, null for an
+ * unverified copy, `[]` for a list the wire omits. Those are the choices
+ * client.ts's own notes argue for, and this is where the argument is held
+ * to.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi } from "./client";
 import { BackupManagerError, toApiErrorCode } from "./contracts";

@@ -1,3 +1,24 @@
+/**
+ * The interface between this frontend and any backend that can serve it:
+ * `BackupManagerApi` at the bottom of the file, and every request and
+ * response type its methods name.
+ *
+ * Two implementations satisfy it, `httpApi` in client.ts and the fixtures
+ * in mock.ts, and the split matters more than it looks. Because pages
+ * depend on this file and never on client.ts, the whole UI can be
+ * exercised against fixtures without a service, and a page cannot reach
+ * for a field the contract does not promise.
+ *
+ * Nothing here is a snake_case wire shape. These are the camelCase domain
+ * types the app speaks; client.ts owns the translation, and the generated
+ * bindings own the wire. What this file adds on top of the generated
+ * module is the shape of a CONVERSATION rather than of a payload: which
+ * request fields go together, which answers can be absent and what an
+ * absence means, and which values are references rather than secrets. The
+ * per-declaration notes carry that, and several of them record a refusal
+ * the service will produce if a caller gets it wrong, because the type
+ * alone cannot say "the server rejects this combination".
+ */
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
 import type { ApiErrorCode } from "./generated/contract";
 import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
