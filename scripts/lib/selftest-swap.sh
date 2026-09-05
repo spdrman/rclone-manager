@@ -38,9 +38,12 @@ selftest_anchors_stale=0
 selftest_stale_count=0
 selftest_stale_controls=""
 
-# Complaints raised since the last verdict. Every swap for a control runs
-# before that control's verdict, so a plain accumulator is enough.
+# Complaints raised since the last verdict, and how many anchors that
+# verdict covers. Every swap for a control runs before that control's
+# verdict, so plain accumulators are enough.
 selftest_stale_pending=""
+selftest_anchors_in_control=0
+selftest_anchors_last=0
 
 # selftest_parse_args "$@" understands the one flag both selftests take.
 selftest_parse_args() {
@@ -79,31 +82,38 @@ selftest_note_stale() {
 # would land in two places, so the mutant would no longer be the one
 # violation the control describes. Either way the control cannot run, and
 # either way the answer is to fix the anchor, not to guess.
-_selftest_anchor() {
-  local mode=$1 file=$2 old=$3 new=${4:-} out status=0 display
-  # display=$file cannot go on the line above: bash declares every name in a
-  # `local` before it assigns any of them, so under `set -u` the reference
-  # would read an unbound $file.
-  display=$file
-  selftest_anchors_checked=$((selftest_anchors_checked + 1))
-  # A complaint names the product file, spelled the way the diff that broke
-  # the anchor spells it. Which copy of the tree it was reached through is
-  # noise the reader has to strip by eye, so strip it here instead. $root
-  # and $tmp are the selftests' own, and this is the only thing that uses
-  # them: without them the message just carries the longer path.
+# _selftest_display <path> echoes the path a complaint should name: the
+# product file, spelled the way the diff that broke the anchor spells it.
+# Which throwaway copy of the tree it was reached through is noise the reader
+# would have to strip by eye. $root and $tmp are the selftests' own and this
+# is the only thing that reads them; without them the message just carries
+# the longer path.
+_selftest_display() {
+  local shown=$1
   if [ -n "${tmp:-}" ]; then
-    case "$display" in
+    case "$shown" in
       "$tmp"/*)
-        display=${display#"$tmp"/}
-        display=${display#*/}
+        shown=${shown#"$tmp"/}
+        shown=${shown#*/}
         ;;
     esac
   fi
   if [ -n "${root:-}" ]; then
-    case "$display" in
-      "$root"/*) display=${display#"$root"/} ;;
+    case "$shown" in
+      "$root"/*) shown=${shown#"$root"/} ;;
     esac
   fi
+  printf '%s' "$shown"
+}
+
+_selftest_anchor() {
+  local mode=$1 file=$2 old=$3 new=${4:-} out status=0 display
+  # display cannot be assigned on the line above: bash declares every name in
+  # a `local` before it assigns any of them, so under `set -u` a reference to
+  # $file there reads an unbound variable.
+  display=$(_selftest_display "$file")
+  selftest_anchors_checked=$((selftest_anchors_checked + 1))
+  selftest_anchors_in_control=$((selftest_anchors_in_control + 1))
   out=$(python3 - "$mode" "$file" "$old" "$new" "$display" <<'PY'
 import sys
 
@@ -186,7 +196,7 @@ mutate_py() {
   fi
   out=$(python3 - "$file" 2>&1) || status=$?
   if [ "$status" -ne 0 ]; then
-    selftest_note_stale "$file: the mutation refused to plant:
+    selftest_note_stale "$(_selftest_display "$file"): the mutation refused to plant:
 $(printf '%s\n' "$out" | sed 's/^/      | /')"
   fi
 }
@@ -197,6 +207,10 @@ $(printf '%s\n' "$out" | sed 's/^/      | /')"
 # that as a pass is the whole thing being guarded against.
 selftest_stale_verdict() {
   local label=$1
+  # Every verdict calls this first, so it is where the per-control anchor
+  # count is closed off.
+  selftest_anchors_last=$selftest_anchors_in_control
+  selftest_anchors_in_control=0
   if [ -z "$selftest_stale_pending" ]; then
     return 1
   fi
@@ -212,11 +226,17 @@ selftest_stale_verdict() {
 # selftest_anchors_only <label> is true when this run is only checking
 # anchors, so the caller returns before building anything.
 selftest_anchors_only() {
-  if [ "$selftest_dry_run" = 1 ]; then
-    echo "  ok (anchors): $1"
-    return 0
+  if [ "$selftest_dry_run" != 1 ]; then
+    return 1
   fi
-  return 1
+  # Saying how many is worth the words: a control that quietly stopped
+  # having any anchors is not a control this mode can vouch for.
+  case "$selftest_anchors_last" in
+    0) echo "  (no anchors):  $1" ;;
+    1) echo "  ok (1 anchor): $1" ;;
+    *) echo "  ok ($selftest_anchors_last anchors): $1" ;;
+  esac
+  return 0
 }
 
 # selftest_stale_summary prints every stale control from this one run, which
