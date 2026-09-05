@@ -26,6 +26,7 @@ const BASE: BackupArtifact = {
   checksumAlgorithm: "sha256",
   validation: "verified",
   retentionClasses: ["daily"],
+  retentionPolicy: "configured",
   remoteSourceRemovedAt: "2026-08-29T02:01:01+02:00",
   quarantine: null,
   placements: [

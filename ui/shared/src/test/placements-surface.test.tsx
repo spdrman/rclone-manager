@@ -49,6 +49,7 @@ function artifact(over: Partial<BackupArtifact> = {}): BackupArtifact {
     checksumAlgorithm: "sha256",
     validation: "verified",
     retentionClasses: ["daily"],
+    retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00",
     quarantine: null,
     placements: [LOCAL],

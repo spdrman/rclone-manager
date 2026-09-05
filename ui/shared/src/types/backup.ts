@@ -23,7 +23,7 @@
  * than guessing.
  */
 import type { RetentionSettings } from "@shared/api/contracts";
-import type { WirePlacement } from "@shared/api/generated/contract";
+import type { WireArtifact, WirePlacement } from "@shared/api/generated/contract";
 
 /** The service's verdict on one backup set, or on all of them together.
  *  Four values rather than a boolean because "stale" and "failing" call
@@ -253,6 +253,31 @@ export interface BackupPlacement {
 }
 
 /**
+ * What decides when one backup is deleted (issue #523).
+ *
+ * "configured" and "none" are the wire's own two values, taken from the
+ * generated type so this cannot drift from the contract. The third is
+ * this UI's and is the reason the type is not just the wire union:
+ *
+ *   - "configured" -> a retention chain still selects this backup and
+ *     will age it out in its own time;
+ *   - "none"       -> the backup set's configuration was removed while
+ *     the backup stayed on storage, so NO chain will ever select it,
+ *     nothing will ever delete it, and it holds its space until somebody
+ *     removes it by hand;
+ *   - "unknown"    -> the response did not say.
+ *
+ * "unknown" exists so that a response which did not answer cannot be read
+ * as an answer. The field is required on the wire, so this is the older
+ * build talking, and the tempting resolution, treating a missing field as
+ * "configured", is the one that is actively wrong: it would render the
+ * backups nothing will ever delete as ordinary healthy rows, which is the
+ * exact failure the field was added to end. So a surface renders
+ * "unknown" as a question it cannot answer, never as reassurance.
+ */
+export type ArtifactRetentionPolicy = WireArtifact["retention_policy"] | "unknown";
+
+/**
  * One backup: the file itself, where it came from, what has been proved
  * about it, and where its copies are.
  *
@@ -292,6 +317,12 @@ export interface BackupArtifact {
    *  path ingestion landed on and is not evidence that a readable file is
    *  sitting there. */
   placements: BackupPlacement[];
+  /** What will eventually delete this backup, or that nothing will.
+   *  Required, and deliberately not optional: an absent field would be a
+   *  fourth state every surface would have to decide about on its own,
+   *  and "unknown" is already that decision, made once. See
+   *  ArtifactRetentionPolicy. */
+  retentionPolicy: ArtifactRetentionPolicy;
 }
 
 /** The closed bucket a quarantined backup falls into, derived from the

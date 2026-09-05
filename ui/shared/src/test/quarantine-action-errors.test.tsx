@@ -36,6 +36,7 @@ const ARTIFACT: BackupArtifact = {
   checksumAlgorithm: "sha256",
   validation: "failed",
   retentionClasses: [],
+  retentionPolicy: "configured",
   remoteSourceRemovedAt: null,
   quarantine: {
     reason: "checksum-mismatch",

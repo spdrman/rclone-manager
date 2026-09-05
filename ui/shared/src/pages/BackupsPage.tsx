@@ -7,6 +7,15 @@
  * application restore, and calling a row a restore point would promise
  * something no code here does.
  *
+ * One row is not like the others, and the page has to say so. A backup
+ * whose set was removed stays on storage and stays listed, which is what
+ * the removal dialog promises, but it left every retention chain on the
+ * way out: nothing selects it, nothing expires it, and nothing here will
+ * ever delete it. Rendered plainly beside the governed rows it reads as an
+ * ordinary healthy backup, and the disk fills quietly. So the Retention
+ * cell says the consequence for those rows and the list carries the same
+ * footnote `backup-manager artifacts` prints under its own (issue #523).
+ *
  * The set list behind the filter is the shared node rather than another
  * fetch, so the dropdown cannot offer a set the rest of the app has
  * forgotten. The preview dialog needs a set's two-part identity while the
@@ -73,6 +82,12 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
   // page it already had, with the same columns and the same widths, and
   // nothing new to read past.
   const showsMedium = rows.some((a) => a.placements.some((p) => p.medium !== "local"));
+  // Counted off the rows actually LISTED, so the filter dropdown narrowing
+  // the table to a governed set takes the footnote with it. A note about
+  // rows that are not on screen is a note nobody can act on, which is the
+  // same reason the CLI's own footnote checks that a marked row printed.
+  const ungoverned = rows.filter((a) => a.retentionPolicy === "none").length;
+  const unreported = rows.filter((a) => a.retentionPolicy === "unknown").length;
 
   return (
     <>
@@ -176,7 +191,7 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                         {a.validation === "verified" ? "Verified" : a.validation === "failed" ? "Failed" : "Pending"}
                       </span>
                     </td>
-                    <td><RetentionBadges classes={a.retentionClasses} /></td>
+                    <td><RetentionCell artifact={a} /></td>
                     {showsMedium ? (
                       <td style={{ whiteSpace: "nowrap" }}><MediumCell artifact={a} /></td>
                     ) : null}
@@ -188,6 +203,29 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
               </tbody>
             </table>
           </div>
+          {ungoverned > 0 ? (
+            <div className="card__footer" style={NOTE_STYLE}>
+              <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u25b2"}</span>
+              <span>
+                {(ungoverned === 1 ? "One backup above belongs" : ungoverned + " backups above belong") +
+                  " to a backup set whose configuration was removed. No retention policy selects them, so" +
+                  " nothing here will ever delete them and they keep the space they occupy. Create the backup" +
+                  " set again to put them back under a policy, or remove the files yourself."}
+              </span>
+            </div>
+          ) : null}
+          {unreported > 0 ? (
+            <div className="card__footer" style={NOTE_STYLE}>
+              <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u25b2"}</span>
+              <span>
+                {"This server did not say which retention policy governs " +
+                  (unreported === 1 ? "one backup above" : unreported + " backups above") +
+                  ", so this page cannot tell you which of them nothing will ever delete." +
+                  " Updating Backup Manager restores the answer; the backup-manager unconfigured" +
+                  " command has it in the meantime."}
+              </span>
+            </div>
+          ) : null}
           <div
             className="card__footer"
             style={{ display: "flex", justifyContent: "space-between", gap: 16, fontSize: "var(--text-sm)", color: "var(--text-2)" }}
@@ -206,6 +244,54 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
       ) : null}
     </>
   );
+}
+
+/** The two footnotes under the table read as one voice, so they share one
+ *  style rather than each having its own near-miss of it. */
+const NOTE_STYLE = {
+  display: "flex",
+  gap: 10,
+  alignItems: "flex-start",
+  fontSize: "var(--text-sm)",
+  color: "var(--text-2)"
+} as const;
+
+/**
+ * What retains one backup, in one cell.
+ *
+ * Three answers, and only one of them is the badge row this column used to
+ * be (issue #523):
+ *
+ *   - governed: the tiers keeping it, exactly as before;
+ *   - no policy at all: what that MEANS, not what it is called. "No
+ *     retention policy" states a fact an operator then has to reason
+ *     about; "Nothing will delete this" is the reasoning, and it is the
+ *     thing that matters at a glance on a page of four hundred rows. It is
+ *     the CLI's own line, one register shorter;
+ *   - not reported: a server that did not answer, said as a gap in what
+ *     this page knows rather than resolved into either answer.
+ *
+ * The tier badges are deliberately NOT shown alongside the second answer.
+ * The journal still remembers which tier last selected such a backup, and
+ * rendering "Daily" beside a backup no daily chain will ever look at again
+ * is a stale claim dressed as a current one.
+ */
+function RetentionCell({ artifact }: { artifact: BackupArtifact }) {
+  if (artifact.retentionPolicy === "none") {
+    return (
+      <span title="This backup set's configuration was removed, so no retention chain selects or expires its backups.">
+        <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing will delete this</StatusBadge>
+      </span>
+    );
+  }
+  if (artifact.retentionPolicy === "unknown") {
+    return (
+      <span title="This server did not report which retention policy governs this backup, so this page cannot say whether anything will ever delete it.">
+        <StatusBadge tone="warn" glyph={"\u25b2"}>Retention not reported</StatusBadge>
+      </span>
+    );
+  }
+  return <RetentionBadges classes={artifact.retentionClasses} />;
 }
 
 /**
