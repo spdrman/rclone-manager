@@ -456,6 +456,38 @@ version is that nobody has gone back and captured any, per provider or otherwise
 it cannot be done. Provider logos are a separate question and a trademark one, so they are
 the project owner's call rather than mine.
 
+### What is left, and what each of them is waiting on
+
+Four epics have closed: the engine, the multi-NAS support model, the release and installer,
+and alternative storage mediums. What is open is open for reasons worth stating rather than
+leaving to be inferred from a quiet section.
+
+**EPIC C (UGOS platform runtime boundary) and EPIC D (UGOS UPK artifact lifecycle) both
+need real UGREEN hardware and neither has had it.** #92 is the UGOS authentication and
+trusted-proxy boundary gate, #93 is private state and backup-root separation, #83 is the
+UPK thin adapter over the canonical release, #91 is a minimal UPK proof on real hardware,
+#89 is resource and hardware certification on real devices, and #178 is signing, the release
+channel and the App Center submission. The UGOS column in the conformance matrix is sixteen
+`BLOCKED` cells for exactly that reason, and they are reported in full rather than left out
+of the totals. The support table above says the same thing in one line: UGOS Pro ships the
+frontend bridge and nothing else, no `.UPK` and no packaging.
+
+**#92 is not only EPIC C's problem.** It is the issue that owns opening the destructive-
+operation gate, so until it lands every deployment refuses every destructive HTTP operation,
+as [the API section](#the-api-and-the-web-ui-meet-in-the-middle) says. That is a
+product-wide consequence of an epic that looks provider-specific.
+
+**#264 is blocked on a credential, not on code.** The two production VPS this manager exists
+to back up are reached over SFTP on a port that is deliberately in no tracked file, and the
+reader account for them does not exist yet. The path itself is proven without them, against
+a real sshd in the machine tier, and pointing the installer at a real source is
+configuration rather than a code change. What is missing is the last acceptance criterion:
+a real backup run from each production host, with anything the account cannot read reported
+rather than worked around.
+
+**The provider acceptance procedures are still prose**, and the screenshots are still
+absent, both as the two sections above say.
+
 ## Installing it
 
 ### The canonical Compose runtime is the install path
@@ -930,8 +962,8 @@ how an operator acts on one by hand, in one of three ways (issue #277):
   storage medium rather than a local file, that is where it looks (issue #435), at the
   strongest verification class that costs nothing. **This is not `validate` under
   a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
-  (`COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE`) and refuses a `QUARANTINED` or
-  `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
+  (`COMMITTED`, `REMOTE_DELETE_PENDING`, `COMPLETE` or `REMOTE_RETAINED`) and refuses a
+  `QUARANTINED` or `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
   only ever accepts one of those two.
 - `quarantine retry <source/backup-set/artifact>` puts a `QUARANTINED` artifact back into
   `DISCOVERED` so the ordinary pipeline attempts it again from a fresh fetch.
@@ -1464,11 +1496,16 @@ sqlite3 /path/to/state.db "
 "
 ```
 
-Only three states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_PENDING`,
-`COMPLETE`**. That's not a convention, it's the exact set `core/internal/health` calls
-`knownGood`. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`, `QUARANTINED`,
-`QUARANTINED_LOST`, or any `.partial` file you find sitting on disk regardless of what the
-journal says, is not a restore point. Take the newest row in one of the three good states;
+Only four states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_PENDING`,
+`COMPLETE`, `REMOTE_RETAINED`**. That's not a convention, it's the exact set
+`core/internal/health` calls `knownGood`. This document said three for a long time, and it
+was wrong from #282 onward: `REMOTE_RETAINED` is a durable local restore point exactly like
+`COMPLETE`, just one whose remote copy this manager will never delete rather than one it
+already has, and a read-only backup set working exactly as declared reaches it and never
+reaches `COMPLETE` at all. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`,
+`QUARANTINED`, `QUARANTINED_LOST`, or any `.partial` file you find sitting on disk
+regardless of what the journal says, is not a restore point. Take the newest row in one of
+the four good states;
 its `local_path` is the file, already fsynced and atomically committed (see
 [Durable commit](#durable-commit)). Copy it wherever you're restoring to. Nothing here
 copies it back for you and nothing is meant to: restore execution is out of scope, so the
