@@ -36,7 +36,7 @@ machine can decide into tests rather than sentences (see
 ### The engine and the CLI are real
 
 `core/` is a working backup engine with a working command line. `backup-manager` registers
-fifteen commands, and the list below is checked against the dispatch table in
+nineteen commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
@@ -68,8 +68,11 @@ the way its predecessor did.
 <!-- END CLI-COMMANDS -->
 
 Every command except `version` takes `--config`, defaulting to
-`/etc/backup-manager/config.yaml`. `backup-manager` with no arguments prints that same list
-and exits 2.
+`/etc/backup-manager/config/config.yaml`. That default is a file inside the config
+DIRECTORY rather than a file mounted on its own, because #196 made the directory the
+writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
+pass the directory and it resolves `config.yaml` inside it. `backup-manager` with no
+arguments prints that same list and exits 2.
 
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, last-known-good protection, local prune,
@@ -79,6 +82,17 @@ real, implemented, unit- and integration-tested Go packages under `core/internal
 `core/service/`. Each of them is now reachable from the command line, from the web host, or
 from both, which is the gap the previous version of this section described honestly and
 which has since been filled.
+
+EPIC E closed on top of all of that, so a durable copy no longer has to be a file on the
+NAS. Storage mediums per retention tier, an S3 transport boundary, placement records, the
+verification ladder, a journaled three-phase move engine including a staged hop from one
+medium to another, retention planning that knows where an artifact lives, placements on the
+artifact surface and over HTTP, and archive storage classes with a restore an operator has
+to ask for are all merged and all in the gate.
+[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e) is the
+section on it, and the promise that matters most is the one FR-35 makes: a deployment that
+declares no medium is byte for byte the product it was before, which is a corpus in
+`core/tests/compat` rather than a sentence here.
 
 ### The API and the web UI meet in the middle
 
@@ -123,21 +137,40 @@ was green throughout. The suite is a real test of what the browser renders and o
 pages behave, and it is no evidence at all about the API. Do not read a green e2e run as an
 end-to-end proof.
 
-That is no longer only an argument. Suite C in `rclone-manager-tests` boots the real
-engine, serves the production bundle in front of it and drives the real pages, and four of
-the six pages cannot load: `ui/shared/src/api/client.ts` requests fourteen `/api/v1`
-operations that are in neither `api/v1/openapi.json` nor `apps/common/webhost/router.go`.
-Written up as #211. The contract gate does not catch it because it compares the generated
-bindings, and `client.ts` is hand-written on top of them.
+That was never only an argument, and Suite C in `rclone-manager-tests` is what proved it:
+it boots the real engine, serves the production bundle in front of it and drives the real
+pages, and when it was written four of the six pages could not load. The contract gate had
+not caught it because it compares the generated bindings and `client.ts` is hand-written on
+top of them. #211 closed the fourteen paths and `scripts/api/check-client-paths.sh` is what
+holds them closed; the suite is still the only thing here that watches a browser talk to a
+real backend, so it stays in the gate rather than being retired now that it is green.
+
+**Every destructive operation over HTTP is refused, by construction, in every deployment
+that exists today.** `apps/common/webhost/gate.go`'s `NotYetImplementedGate` is the only
+`DestructiveGate` this repository ships, its `Passed()` returns `false` unconditionally,
+and there is deliberately no flag, environment variable or config key that opens it: a
+production wiring that names no gate gets that one. So `POST /api/v1/backup-sets` with
+`run_immediately` set, retention apply, and everything else behind the gate answer 403
+`DESTRUCTIVE_OPERATIONS_DISABLED` no matter how the deployment is configured. Opening it is
+#92's job and #92's alone. This is worth reading twice before treating the API as the
+equal of the CLI, because the CLI has no such gate: it talks to `config.yaml` and the
+journal directly and will happily run a cycle.
 
 ### What is built but not exposed
 
 - `core/internal/metrics` renders an already-computed health report as Prometheus text
   exposition format, and nothing imports it. There is no `/metrics` endpoint on any
   listener. `docs/adr/0002-phase-5-scope.md` is the reasoning for stopping there.
-- Restore execution is out of scope by design, not by omission: there is no `restore`
-  command and no restore endpoint. [Recovery](#recovery-when-a-backup-did-not-arrive) below
-  is the manual procedure, and it is the whole of it.
+- Restore EXECUTION is still out of scope by design, not by omission: nothing here copies a
+  backup back onto the machine it came from.
+  [Recovery](#recovery-when-a-backup-did-not-arrive) below is the manual procedure, and it
+  is the whole of it. This bullet used to say there is no `restore` command and no restore
+  endpoint, and that has been wrong since #241: `backup-manager restore` and
+  `POST /api/v1/operations` with `action: restore_placement` both exist, and both mean
+  something narrower than the sentence above. They ask a storage provider to make an
+  ARCHIVED copy readable again, which is a precondition for the manual procedure rather
+  than a replacement for it. See
+  [Archive classes, and asking for a copy back](#archive-classes-and-asking-for-a-copy-back).
 - A release build does select a provider frontend, since #167 and #169. `serve-ui`
   resolves its bundle at run time (`--ui-dir`, then `--ui-root/<profile>`, then the
   compiled-in one) and fails to start rather than falling back to the generic bridge, and
@@ -330,48 +363,87 @@ operations `GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` exp
 same three the Web UI draws, all through one method in `core/service`. See [One backup set
 on its own retention policy](#one-backup-set-on-its-own-retention-policy).
 
-**What is not covered here: authentication and account management.** `/auth/enroll`,
-`/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
-undocumented. They are `apps/common/auth/local`'s session/cookie/CSRF/rate-limit subsystem,
-constructed fresh inside the running web server process (the single-use enrollment token
-itself lives in that process's memory, not on disk), so there is no config file or
-already-open state database a separate `backup-manager` invocation could act on the way
-every command above does. An operator who never intends to use the Web UI never needs any of
-this, since the CLI talks to `config.yaml` and the state database directly and never makes
-an HTTP request at all. An operator who does want the Web UI available later still has no
-way to provision that first administrator account without opening a browser at least once
-today; that is real, and it is #322 rather than something built here.
+**What is not covered by `backup-manager`: authentication and account management.**
+`/auth/enroll`, `/auth/login` and `/auth/password` are genuinely out of scope for the engine
+CLI, not merely undocumented. They are `apps/common/auth/local`'s
+session/cookie/CSRF/rate-limit subsystem, constructed fresh inside the running web server
+process (the single-use enrollment token itself lives in that process's memory, not on
+disk), so there is no config file or already-open state database a separate
+`backup-manager` invocation could act on the way every command above does. An operator who
+never intends to use the Web UI never needs any of this, since the CLI talks to
+`config.yaml` and the state database directly and never makes an HTTP request at all.
+
+The one piece of it that used to need a browser no longer does. This paragraph said, for a
+long time, that provisioning the first administrator meant opening a browser at least once
+and that #322 was the gap. #322 landed, and it landed on the web binary rather than on this
+one, which is why it is easy to miss:
+
+```bash
+printf '%s' "$PASS" | backup-manager-web auth create-admin --username admin --password-stdin
+```
+
+It calls `local.CreateAdmin` and writes the record straight to the auth store, with no HTTP
+request and no bootstrap token; the password comes from stdin only, never from a flag,
+because a flag's value is in this process's argument list for anyone who can run `ps`. The
+server started afterwards sees the account already exists and neither prints nor accepts an
+enrollment token. A store the running server holds open is refused with `ErrStoreLocked`
+rather than raced.
 
 ### What has actually been exercised on real hardware
 
-Nothing. Not one of the acceptance procedures in [`docs/acceptance/`](docs/acceptance/) has
-been executed, because nobody working on this repository has a TrueNAS, Unraid,
-OpenMediaVault, Synology or Proxmox VE machine to execute them on. The procedures are
-written, reviewed and specific, and they are prose until somebody runs them.
+This section used to open with one word, "Nothing", and that word is now wrong, so read
+what replaced it carefully rather than assuming it generalises.
+
+**One machine, one release, one real cycle.** #263 installed v0.2.0 on a UGREEN NAS
+(`x86_64`, Linux 6.12.30+, Docker 29.4.3, Compose v5.1.3, over SSH as a non-root uid in
+`docker` with no passwordless sudo) with `scripts/install/install_docker_host.py`, and then
+exercised the product on it rather than stopping at "the command exited 0": the engine's own
+Docker health status read back from the daemon, the Web UI serving the first-run flow, both
+containers surviving a restart, uninstall and re-install behaving as documented, and a real
+backup set running a full cycle whose artifacts came out `COMMITTED` with the set `HEALTHY`.
+Two refusals happened during that run and both were the product being right: the ancestry
+key-permission check refused a world-writable directory holding the SSH key and named the
+exact `chmod`, and the remote delete declined because the deletion-safety delay had not
+elapsed. [`docs/install.md`](docs/install.md) is the installer, and #263 carries the
+verbatim evidence.
+
+**Not one of the provider acceptance procedures in
+[`docs/acceptance/`](docs/acceptance/) has been executed**, because nobody working on this
+repository has a TrueNAS, Unraid, OpenMediaVault, Synology, Proxmox VE, CasaOS, ZimaOS,
+Portainer or Dockge machine to execute them on. The procedures are written, reviewed and
+specific, and they are prose until somebody runs them. A UGREEN NAS running a generic
+Docker install is not any of those platforms' packaging, so it certifies none of them.
 
 [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) is the generated
-record and it says the same thing from the other side: twenty cells across five providers
-report `PENDING_OPERATOR`, which is that matrix's word for "the automated half held and the
-hardware run has not happened". In section 68's own words, every one of those providers is
-**build-supported and uncertified**. A green conformance matrix proves the packaging
-metadata is well-formed and mutually consistent, and it proves nothing whatsoever about how
-any of these platforms behaves.
+record and it says the same thing from the other side: thirty-six cells across nine
+providers report `PENDING_OPERATOR`, which is that matrix's word for "the automated half
+held and the hardware run has not happened". In section 68's own words, every one of those
+providers is **build-supported and uncertified**. A green conformance matrix proves the
+packaging metadata is well-formed and mutually consistent, and it proves nothing whatsoever
+about how any of these platforms behaves.
 
-The image itself has never been published either. `ghcr.io/spdrman/backup-manager` is the
-settled target and `distribution/packaging/canonical.json` records `published: false`, so
-that reference resolves to nothing today and every acceptance procedure opens with a step 0
-covering how to make it resolvable in the meantime.
+The image is published now, which is the other thing this section used to deny. EPIC F cut
+v0.1.0 and then v0.2.0 to `ghcr.io/spdrman/backup-manager`, and
+`container/release-manifest.json` carries a real `index_digest` and a real
+`registry_digest` per architecture rather than the nulls it used to.
+`distribution/packaging/canonical.json`'s `published` flag and those digests move together,
+and a test refuses either one without the other, because a flag with no digest is a
+half-truth. Every acceptance procedure still keeps its step 0 for a deployment that cannot
+reach ghcr.io, and every profile keeps the reference substitutable.
 
 ### There are no screenshots in this document
 
-There should be, and issue #112 asks for them per provider. I did not add any, and I would
-rather say so than ship something that looks like evidence and is not. `docs/assets/` holds
-the two logo files and nothing else. The only screenshots I could produce from this tree
-would be of the mock API in a dev server, which is exactly the kind of picture that makes a
-reader believe a claim this document has just spent a section retracting. Real screenshots
-need a running packaged deployment, and a running packaged deployment needs #196 and #166
-first. Provider logos are a separate question and a trademark one, so they are the project
-owner's call rather than mine.
+There should be, and issue #112 asks for them per provider. There still are none, and I
+would rather say so than ship something that looks like evidence and is not. `docs/assets/`
+holds the two logo files and nothing else. The only screenshots this tree produces on its
+own are of the mock API in a dev server, which is exactly the kind of picture that makes a
+reader believe a claim this document has just spent a section retracting.
+
+What used to block them no longer does: this paragraph named #196 and #166, both of which
+landed, and #263 has now had a real packaged deployment up on a real NAS. So the honest
+version is that nobody has gone back and captured any, per provider or otherwise, not that
+it cannot be done. Provider logos are a separate question and a trademark one, so they are
+the project owner's call rather than mine.
 
 ## Installing it
 
