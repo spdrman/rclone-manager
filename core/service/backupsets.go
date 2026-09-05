@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +41,8 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -84,6 +85,31 @@ var ErrConfigNotFileBacked = errors.New("service: this backup service has no con
 // previously persisted.
 var ErrSSHKeyNotFound = errors.New("service: imported SSH key not found")
 
+// ErrRepointNotAcknowledged is UpdateBackupSet refusing to move a backup
+// set that already has artifacts on record to different data without
+// being told that is what was meant (issue #350). It is its own sentinel
+// rather than an ErrInvalidRequest because it is not a malformed request:
+// it is a well-formed one whose consequences a caller has to see first,
+// and a client has to be able to tell the two apart to offer the
+// operator anything better than "400". backupsetrepoint.go has the whole
+// argument.
+var ErrRepointNotAcknowledged = errors.New("service: this edit would point the backup set at different data")
+
+// ErrHistoryRepointNotAcknowledged is CreateBackupSet refusing the same
+// move on the way in: a backup set created over an id that already has
+// artifacts on record takes all of them, so creating it somewhere other
+// than where that history came from is the repoint above with no edit in
+// front of it (issue #411).
+//
+// Its own sentinel rather than ErrRepointNotAcknowledged, because the two
+// refusals are not interchangeable to a client. This one is about an id
+// rather than an existing resource, what it names is what the journal
+// remembers rather than what the configuration currently says, and the
+// way out of it is a different button: "create anyway", not "save
+// anyway". A client that could only see one code would have to guess
+// which of those it was looking at.
+var ErrHistoryRepointNotAcknowledged = errors.New("service: this would create the backup set somewhere other than where its history came from")
+
 // BackupSet is the plain, provider-agnostic shape of one configured
 // backup set (mirrors config.BackupSet the same way Operation mirrors
 // state.Operation): a caller outside core/ never sees a config.BackupSet
@@ -102,6 +128,22 @@ type BackupSet struct {
 	Include    []string
 
 	CompletionStrategy string // "rename", "marker" or "stable"
+	// StableFor is the window the "stable" strategy waits for, and is
+	// zero for every other strategy (config.Completion.StableFor; a
+	// non-stable set never carries one, see newBackupSetFor). It is
+	// reported because an edit surface that offers the strategy has to be
+	// able to offer the window with it: selecting "stable" on a set that
+	// has no window is a configuration validateCreateRequest refuses, so
+	// a UI that could not read or set the window could only ever produce
+	// a save that fails (issue #350).
+	StableFor time.Duration
+
+	// StaleAfter is FR-24's freshness budget for this set
+	// (config.BackupSet.StaleAfter). Reported for the same reason
+	// StableFor is: the update path can change it, and a surface that can
+	// write a field it cannot read back has no way to show an operator
+	// what they changed it from.
+	StaleAfter time.Duration
 
 	// ValidatorID is the registered application validator this backup set
 	// selected (validator.go), or "" for none. It is the id, never the
@@ -120,6 +162,19 @@ type BackupSet struct {
 	// default separately, and never needs to: it never has to reconstruct
 	// what a hand-edited config.yaml already answered.
 	ReadOnly bool
+
+	// RetentionIsOverride reports whether this backup set declares its own
+	// retention policy rather than being retained under the deployment's
+	// (issue #333, config.BackupSet.RetentionIsOverride).
+	//
+	// The policy itself is deliberately NOT here. It is a whole chain of
+	// arbitrary length, every list of backup sets would carry one copy per
+	// set, and the surface that shows a chain is the one page that can
+	// render it: BackupSetRetention (backupsetretention.go) serves the
+	// resolved chain, the deployment's chain beside it, and the raw
+	// override, on demand. What a LIST needs is which of the two policies
+	// is in force, which is exactly this bool.
+	RetentionIsOverride bool
 }
 
 // CreateBackupSetRequest is what a caller submits to persist one new
@@ -217,6 +272,20 @@ type CreateBackupSetRequest struct {
 	// run_cycle operation RunImmediately submits. Unused when
 	// RunImmediately is false or Disabled is true.
 	Actor string
+
+	// AcknowledgeRepoint confirms that the caller means to create this
+	// backup set somewhere other than where the history already on its id
+	// came from. It is not a field of the backup set and nothing persists
+	// it: it answers one refusal, for one request, exactly as
+	// UpdateBackupSetRequest.AcknowledgeRepoint does for an edit.
+	//
+	// It is required only when this id already has artifacts on record AND
+	// remote.host, remote_path or local_path differ from what is recorded
+	// for them, which after an ordinary removal-and-undo is nothing at
+	// all. backupsetrepoint.go carries the whole argument, including what
+	// "what is recorded" means on a path where there is no configuration
+	// entry left to compare against.
+	AcknowledgeRepoint bool
 }
 
 // CreateBackupSetResult is what CreateBackupSet returns: the persisted
@@ -379,6 +448,19 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
 	}
 
+	// Asked before newBackupSetFor, because that function writes this
+	// set's known_hosts file, and a refusal must leave nothing behind. It
+	// is asked at all only for an id the configuration does not already
+	// hold: creating over a set that is still configured is a duplicate
+	// id, which cfg.Validate below refuses on its own terms, and telling
+	// that caller about history they never asked to adopt would send them
+	// looking in the wrong place.
+	if findBackupSetPointer(cfg, sourceName, req.Name) == nil {
+		if err := b.requireCreateRepointAcknowledgement(ctx, sourceName, req); err != nil {
+			return CreateBackupSetResult{}, err
+		}
+	}
+
 	newSet, err := newBackupSetFor(b.configPath, sourceName, keyFile, req)
 	if err != nil {
 		return CreateBackupSetResult{}, err
@@ -471,32 +553,30 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// above, while nothing had been persisted yet.
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	// Alerting is re-decided from the config file this method just
-	// re-read, then carried across the swap. This is the one moment an
-	// edited alerts.enabled can take effect in a running process, so it
-	// is the one moment it must not be ignored: an administrator who set
-	// alerts.enabled: false and then added a backup set kept getting
-	// notified until the next restart, and one who turned it on stayed
-	// silent, while repeated_failure_threshold from the same block did
-	// hot-reload. AdoptAlerts re-reads the opt-in and carries the
-	// dispatcher only if it is still on, because the dispatcher holds
-	// which conditions are currently firing (internal/alert's
-	// de-duplication state) and rebuilding it would re-alert every
-	// still-unresolved condition the next time a cycle ran, purely
-	// because somebody added a backup set. When it declines (alerting was
-	// off before this reload, or has just been turned off), the question
-	// is settled from b.alertSink instead, which is what makes turning
-	// alerting ON take effect here too.
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	newRevision := computeConfigRevision(cfg)
-	b.state.Store(&configState{inner: newInner, revision: newRevision})
+	// The swap, alerting carried across, and the removal hold reconciled:
+	// a set created over a removed id is held no longer from this point
+	// (adoptConfig, and edithold.go for why the hold was there).
+	newRevision := b.adoptConfig(cfg)
 
 	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
+
+	// Issue #391: the adoption. A backup set is identified by its source
+	// and its name (model.NewArtifactID is source/set/name), so a set
+	// created under an id that already has journal rows takes all of
+	// them, plus their retention history, from the moment it exists. That
+	// is the right behaviour and the reason removal can be undone at all,
+	// but silence about it is what would make it a nasty surprise six
+	// months later, so it goes on the record here, at the moment it
+	// happens, with the number in it. Nothing about this can fail the
+	// creation: the set is already durably written by now.
+	if adopted := b.artifactCountFor(ctx, created.ID); adopted > 0 {
+		b.logger.Event(ctx, obs.LevelInfo, "backup_set_adopted_history",
+			"this backup set was created over artifacts already on record for its id, and now owns them",
+			slog.String("backup_set", created.ID),
+			slog.Int("adopted_artifacts", adopted),
+		)
+	}
 
 	if req.RunImmediately && !req.Disabled {
 		op, err := b.SubmitRunCycle(ctx, RunCycleRequest{
@@ -597,48 +677,58 @@ func validateCreateRequest(req CreateBackupSetRequest) error {
 			problems = append(problems, err.Error())
 		}
 	}
-	if req.Host == "" {
-		problems = append(problems, "host is required")
-	}
-	if req.User == "" {
-		problems = append(problems, "user is required")
-	}
+	problems = appendProblem(problems, requiredFieldProblem("host", req.Host))
+	problems = appendProblem(problems, requiredFieldProblem("user", req.User))
 	if req.SSHKeyID == "" {
 		problems = append(problems, "ssh_key_id is required (import an SSH key first)")
 	}
 	if req.KnownHostsLine == "" {
 		problems = append(problems, "known_hosts_line is required (probe and trust the host key first)")
 	}
-	if req.RemotePath == "" {
-		problems = append(problems, "remote_path is required")
+	problems = appendProblem(problems, requiredFieldProblem("remote_path", req.RemotePath))
+	problems = appendProblem(problems, requiredFieldProblem("local_path", req.LocalPath))
+	problems = append(problems, completionProblems(req.CompletionStrategy, req.StableFor)...)
+	problems = appendProblem(problems, validatorIDProblem(req.ValidatorID))
+	return joinProblems(problems)
+}
+
+// requiredFieldProblem, completionProblems and validatorIDProblem are the
+// individual field rules validateCreateRequest above is made of, pulled
+// out so UpdateBackupSet (backupsetupdate.go) can run the SAME checks
+// rather than a second list that happens to agree today. The issue that
+// asked for the update path asked for "validation equal to creation's"
+// specifically; sharing the checks is what makes that structural instead
+// of a claim in a comment.
+func requiredFieldProblem(field, value string) string {
+	if value == "" {
+		return field + " is required"
 	}
-	if req.LocalPath == "" {
-		problems = append(problems, "local_path is required")
-	}
-	switch req.CompletionStrategy {
+	return ""
+}
+
+func completionProblems(strategy string, stableFor time.Duration) []string {
+	var problems []string
+	switch strategy {
 	case "rename", "marker", "stable":
 	default:
 		problems = append(problems, `completion_strategy must be "rename", "marker" or "stable"`)
 	}
-	if req.CompletionStrategy == "stable" && req.StableFor <= 0 {
+	if strategy == "stable" && stableFor <= 0 {
 		problems = append(problems, `stable_for must be positive when completion_strategy is "stable"`)
 	}
-	if req.ValidatorID != "" && !isRegisteredValidator(req.ValidatorID) {
+	return problems
+}
+
+func validatorIDProblem(id ValidatorID) string {
+	if id != "" && !isRegisteredValidator(id) {
 		// Deliberately does not echo the value back. An unregistered id is
 		// refused structurally, whatever it looks like, and repeating a
 		// caller-supplied string that may well BE an attempted executable
 		// path into an error a UI renders is not worth the marginally
 		// better message.
-		problems = append(problems, "validator_id is not a registered validator; choose one the validator catalog lists")
+		return "validator_id is not a registered validator; choose one the validator catalog lists"
 	}
-	if len(problems) == 0 {
-		return nil
-	}
-	msg := problems[0]
-	for _, p := range problems[1:] {
-		msg += "; " + p
-	}
-	return errors.New(msg)
+	return ""
 }
 
 func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
@@ -653,6 +743,8 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.Completion.Strategy,
+		StableFor:          bs.Completion.StableFor.Duration(),
+		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
@@ -664,6 +756,12 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		// GetBackupSet read from a state built from an already-validated
 		// Config), so this is never the pre-resolution zero value.
 		ReadOnly: bs.ReadOnly,
+		// bs.RetentionIsOverride(), not a comparison of the resolved chain
+		// against the global one: a set that deliberately pinned a chain
+		// identical to the deployment's is NOT inheriting, and the whole
+		// point of pinning it is that a later edit to the deployment's
+		// policy will not move it.
+		RetentionIsOverride: bs.RetentionIsOverride(),
 	}
 }
 
@@ -973,6 +1071,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// No MaxConnections here, deliberately (#355). This is the pre-save
+	// wizard: there is no saved remote to read a ceiling off, and the form
+	// that feeds it has no field for one, so there is nothing to carry.
+	// Running uncapped is also not a gap in this particular case: the
+	// check is a single List, the adapter walks a tree one directory at a
+	// time (oneConnectionAtATime in internal/transport/rclone/adapter.go),
+	// so it opens exactly one connection, and no positive ceiling can
+	// change what one connection does. The saved-set version of this check
+	// DOES carry the ceiling, because there the remote exists and the
+	// operator has already spoken: see TestBackupSetConnection in
+	// backupsetenabled.go.
 	src := transport.Source{
 		ID:                   "connection-test",
 		Type:                 "sftp",

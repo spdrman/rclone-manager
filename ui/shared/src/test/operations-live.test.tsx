@@ -24,12 +24,9 @@ const SET: BackupSet = {
   remoteFolder: "/backups/postgresql/",
   includePatterns: ["*.dump.zst"],
   excludePatterns: ["*.tmp"],
-  completionMethod: "completion-marker",
+  completionMethod: "completion-marker", stableForSeconds: 0,
   destination: "/data/backups/production/postgres/",
-  retention: {
-    daily: 7, weekly: 13, monthly: 12,
-    timezone: "Europe/Berlin", weekStartsOn: "monday", protectLastKnownGood: true
-  },
+  retentionIsOverride: false,
   validations: ["transfer", "checksum"],
   state: "healthy",
   stateNote: "Verified nightly dump.",
@@ -85,6 +82,7 @@ const OPERATION: Operation = {
     bytesDone: 42,
     bytesTotal: 100
   },
+  cycle: null,
   nonDestructive: false,
   startedAt: "2026-08-29T00:00:00+02:00"
 };

@@ -1,0 +1,651 @@
+// Package conformance_test is EPIC E's composed end-to-end scenario:
+// job one of issue #242.
+//
+// Everything else in this repository that touches a storage medium proves
+// one piece. internal/placement proves the move engine against a double.
+// tests/miniointegration proves the engine over a real S3 API, one move at
+// a time, against a hand-built journal. tests/movecrash proves the engine
+// survives a real SIGKILL at every phase boundary, against a local
+// directory standing in for a bucket. tests/compat proves a medium-free
+// deployment did not move.
+//
+// None of those runs the thing an operator actually configures: a chain of
+// tiers, each naming a medium, deciding for itself which artifacts belong
+// where, over real time, against a real endpoint. This package does that.
+// It builds the three-tier chain FR-27 and the phase 2 exit gate name
+// (daily on local, monthly on `s3`, annual on a second `s3`), seeds a
+// backup set with artifacts spread over two years, and then advances the
+// clock and lets the product's own arithmetic decide what has to move.
+//
+// The gate line says the annual rung is an `s3` COLD class, and this
+// scenario's is not. That is a deliberate correction rather than a
+// convenience, and it is the honest reading of what the composed run
+// found: a retention tier on an archive class can never take delivery of
+// an artifact (#428). #437 made the engine refuse that move at plan time
+// for free instead of paying for it every cycle, and #442 moved the same
+// refusal one layer earlier still, to config load, where an operator meets
+// it before the daemon starts. A scenario whose third rung was archive
+// could therefore never demonstrate a third rung at all, which is most of
+// what the gate line is asking for; it could not even load. So the chain
+// keeps three tiers and three destinations, the archive pairing gets its
+// own cell that asserts the refusal (see
+// TestAnArchiveClassTierIsRefusedAtLoad), and the matrix says plainly that
+// "annual on a cold class, end to end" is not something this suite can
+// claim.
+//
+// # What is real here, and what is not
+//
+// Real: the config and its validation, the journal and its migrations, the
+// GFS chain evaluation, FR-27's home-medium rule, the move engine, the
+// rclone s3 backend, and a MinIO server in a container. The scenario never
+// tells the engine what to do; it asks retention where each artifact
+// belongs and hands the answer over unmodified.
+//
+// Not real, and said out loud rather than papered over:
+//
+//   - The daemon's own cycle loop does not drive this. The wiring from a
+//     retention pass to placement.Engine.RunCycle is #239's, and it is not
+//     in this tree. So this package composes the same pieces in the same
+//     order the daemon will, one layer below the scheduler. Every function
+//     it calls is the product's; the loop around them is this file's.
+//     See threetier_test.go's own comment for exactly which call is
+//     standing in for which.
+//   - MinIO cannot emulate an archive class. It refuses the storage-class
+//     header outright, and it implements no Glacier restore.
+//     archiveboundary_test.go establishes both of those as facts about the
+//     fixture, checked on every run rather than asserted in prose, so the
+//     day either stops being true this suite says so instead of quietly
+//     starting to certify something it never covered. That is a second,
+//     independent reason the annual rung cannot be a cold class here, and
+//     it would still bite even if the product refused nothing.
+//
+// # The invariant watcher is continuous
+//
+// FR-30's standing invariant, "a managed-complete artifact has at least
+// one ACTIVE placement at a sufficient verification class, at every
+// instant", is the property this whole EPIC is built to keep. Checking it
+// before a move and again after one proves almost nothing: the interesting
+// window is the middle, where a wrong ordering leaves both copies
+// disposable for a few milliseconds and then tidies up after itself.
+//
+// So watcher_test.go does not sample. It decorates every operation that
+// can change the invariant's truth value and evaluates it at each one:
+// after every journal write the engine makes, and before every call that
+// removes a copy. That set is complete, and the argument for why is the
+// same one tests/movecrash makes: the invariant is a function of the
+// durable journal and of which bytes exist, the journal only changes when
+// something writes it, and bytes only stop existing when something deletes
+// them. Time passing changes neither. Guarding every event that can
+// falsify a property is a stronger claim than any polling interval, not a
+// weaker one.
+//
+// That argument is only worth anything if the watcher has been watched to
+// catch something a sampler would miss, so sampler_test.go plants a
+// transient breach that opens and closes inside one move and runs both
+// against it. The sampler passes. The watcher fails. That comparison, in
+// the gate, is what "continuous" means here.
+package conformance_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
+)
+
+// The scenario's fixed points. They are constants rather than literals
+// scattered through the cells because the whole suite is one story and a
+// cell that spelled a tier name differently would be testing a different
+// chain.
+const (
+	scenarioSource = "production"
+	scenarioSet    = "postgres-primary"
+
+	// mediumOffsite is the monthly tier's home: an ordinary S3 bucket.
+	mediumOffsite = "offsite_s3"
+
+	// mediumAnnual is the annual tier's home, and it is an ordinary S3
+	// bucket too.
+	//
+	// It used to be the cold-class medium below, and that is the single
+	// biggest thing this scenario had wrong. A retention tier on an
+	// archive class can never take delivery of an artifact (#428), and
+	// since #442 a chain that spells that pairing does not load at all, so
+	// a scenario built on one could never show the third rung working.
+	// The chain the phase 2 exit gate names has three tiers and this suite
+	// has to be able to put an artifact on each of them. What an archive
+	// class does instead is its own cell, with its own config file, rather
+	// than a hole in the middle of the main scenario: see
+	// TestAnArchiveClassTierIsRefusedAtLoad.
+	mediumAnnual = "annual_s3"
+
+	// mediumDeepFreeze is a medium on a cold class that NO tier names in
+	// this scenario, and that no tier CAN name.
+	//
+	// It is still declared, deliberately. #442 draws its line at the
+	// tier-to-medium PAIRING and not at the declaration, because a
+	// declared archive-class medium holding objects an operator restores
+	// by hand is exactly what #241 is for. So the config carries one and
+	// nothing delivers to it, which is the shape that has to keep
+	// validating, and it is checked rather than assumed: see
+	// TestAnArchiveClassTierIsRefusedAtLoad, which asserts both halves
+	// against the same file.
+	mediumDeepFreeze = "deep_freeze_s3"
+
+	// mediumUnreachable points at a bucket that does not exist on the
+	// fixture's server, so a copy to it fails at the endpoint rather than
+	// at any gate this product owns. That is what
+	// TestAFailedCopyLeavesItsReasonOnTheMoveRow needs: a real upload
+	// that really fails, against a real S3 API, for a reason no double
+	// would have been written to produce.
+	mediumUnreachable = "misconfigured_s3"
+
+	// absentBucket is the bucket mediumUnreachable names, and nothing in
+	// this package ever creates it. The adapter never creates a bucket
+	// either (the machines harness makes them by hand for exactly that reason),
+	// so a PUT into this one is answered by the server.
+	absentBucket = "this-bucket-was-never-created"
+
+	tierDaily   = "daily"
+	tierMonthly = "monthly"
+	tierAnnual  = "annual"
+)
+
+// scenarioNow is the clock the story starts on. Everything is dated
+// relative to it, and it is a fixed date rather than time.Now so a run in
+// January decides what a run in July decides.
+var scenarioNow = time.Date(2026, 9, 4, 9, 0, 0, 0, time.UTC)
+
+// setID is the one backup set this scenario has.
+var setID = model.BackupSetID{Source: scenarioSource, Set: scenarioSet}
+
+// world is one composed scenario: a MinIO server with two buckets, a real
+// journal, a real config, and a backup set's worth of artifacts on local
+// disk.
+type world struct {
+	t   *testing.T
+	ctx context.Context
+
+	fixture *machines.Medium
+
+	// dir is the scenario's own temp directory; root is the backup set's
+	// local_path underneath it.
+	dir  string
+	root string
+
+	journal *state.Journal
+	cfg     *config.Config
+
+	// offsite, annual, deepFreeze and unreachable are the configured
+	// mediums at the transport boundary, exactly as internal/app would
+	// build them.
+	offsite     transport.Medium
+	annual      transport.Medium
+	deepFreeze  transport.Medium
+	unreachable transport.Medium
+
+	// annualHome is the medium id the annual tier names in this world's
+	// config, and it is the one thing the world variants differ by.
+	// Everything else, the cast, the dates, the chain shape and the two
+	// working mediums, is identical between them, so a cell about a
+	// destination that fails and a cell about the ordinary chain are
+	// comparable.
+	annualHome string
+
+	// offsiteBucket, annualBucket and deepBucket are the buckets this
+	// world's mediums were built over, kept so a cell can write the same
+	// config file again with one field changed. The archive cell needs
+	// that: what it asserts is a refusal at LOAD, so it cannot get its
+	// config through a world that stands up.
+	offsiteBucket, annualBucket, deepBucket string
+
+	// artifacts is every artifact this scenario seeded, oldest first,
+	// with the bytes each one holds.
+	artifacts []seeded
+}
+
+// seeded is one artifact the scenario planted, and what it holds.
+type seeded struct {
+	id model.ArtifactID
+	// discoveredAt is the producer-side date retention buckets it by.
+	discoveredAt time.Time
+	content      []byte
+	hash         string
+}
+
+// newWorld stands the scenario up: MinIO, two buckets, a validated config
+// with the three-tier chain, a journal, and every artifact seeded to
+// COMPLETE with its only copy on local disk.
+//
+// Every artifact starts local because that is where an artifact is when it
+// has just been ingested, which is the state FR-27's home rule is supposed
+// to move it out of. Seeding one already on a medium would be seeding the
+// answer.
+func newWorld(t *testing.T) *world {
+	t.Helper()
+	return newWorldWithAnnualHome(t, mediumAnnual)
+}
+
+// newWorldWithAnnualHome is newWorld with the annual tier pointed
+// somewhere else, which is the only axis this suite varies.
+//
+// One cell needs a third rung that does not work, and the reason is worth
+// a scenario rather than a unit fixture: a destination the endpoint
+// itself rejects, so the copy really fails against a real S3 API. Varying
+// one field of the same config is what keeps it comparable with the
+// working chain instead of being two unrelated setups.
+//
+// The archive pairing used to be the second variant here. It cannot be
+// one any more: #442 refuses that chain at LOAD, so a world built on it
+// never stands up, which is the whole of what its cell now asserts. See
+// writeConfig, which is the half of this function that cell does use.
+func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
+	t.Helper()
+
+	fixture := machines.Start(t).Medium(t)
+	offsiteBucket := fixture.NewBucket(t).Bucket
+	annualBucket := fixture.NewBucket(t).Bucket
+	deepBucket := fixture.NewBucket(t).Bucket
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "backups", scenarioSet)
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatalf("creating the backup set's local_path: %v", err)
+	}
+
+	w := &world{
+		t:             t,
+		ctx:           context.Background(),
+		fixture:       fixture,
+		dir:           dir,
+		root:          root,
+		annualHome:    annualHome,
+		offsiteBucket: offsiteBucket,
+		annualBucket:  annualBucket,
+		deepBucket:    deepBucket,
+	}
+	w.cfg = w.loadConfig()
+	w.offsite = w.mediumFromConfig(mediumOffsite)
+	w.annual = w.mediumFromConfig(mediumAnnual)
+	w.deepFreeze = w.mediumFromConfig(mediumDeepFreeze)
+	w.unreachable = w.mediumFromConfig(mediumUnreachable)
+	w.journal = w.openJournal()
+	w.seedArtifacts()
+	return w
+}
+
+// loadConfig writes the three-tier chain the phase 2 exit gate names as a
+// real config.yaml and loads it through the product's own
+// config.LoadAndValidate.
+//
+// A file rather than a struct literal, and LoadAndValidate rather than a
+// hand-built Config, because this scenario's premise is that an operator
+// can WRITE the chain and have it start. A chain this product refuses at
+// load is not a scenario, it is a fiction, and the refusal has to show up
+// here rather than in the middle of a move. Building the struct in Go
+// would skip exactly the check that says the premise is real.
+//
+// Four mediums are declared and three tiers name two of them. The two that
+// no tier names in the default world are there on purpose: a declared
+// archive-class medium that nothing delivers to is a configuration #442
+// says must keep validating (an operator restoring pre-existing objects by
+// hand is #241's whole subject), and the fourth is a misconfigured bucket
+// one cell points the annual tier at to make a copy really fail.
+func (w *world) loadConfig() *config.Config {
+	w.t.Helper()
+
+	path := w.writeConfig(w.annualHome)
+	cfg, err := config.LoadAndValidate(path)
+	if err != nil {
+		w.t.Fatalf("the three-tier chain this scenario is built on does not load with the annual tier on %q: %v",
+			w.annualHome, err)
+	}
+	return cfg
+}
+
+// writeConfig writes this world's config.yaml with the annual tier
+// pointed at annualHome, and returns the path.
+//
+// It is separate from loadConfig because one cell needs the file WITHOUT
+// the load succeeding: #442's refusal happens at load, so a world that
+// stood up could not carry it. See
+// TestAnArchiveClassTierIsRefusedAtLoad.
+func (w *world) writeConfig(annualHome string) string {
+	w.t.Helper()
+
+	yaml := fmt.Sprintf(`poll_interval: 15m
+
+state:
+  database: %[1]s/state.db
+
+sources:
+  - id: %[2]s
+    backup_sets:
+      - id: %[3]s
+        remote:
+          type: local
+        remote_path: %[1]s/exports
+        local_path: %[4]s
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+storage_mediums:
+  - id: %[5]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[8]s
+    credentials:
+      file: %[9]s
+  - id: %[10]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[11]s
+    credentials:
+      file: %[9]s
+  - id: %[12]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[13]s
+    storage_class: %[14]s
+    credentials:
+      file: %[9]s
+  - id: %[15]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[16]s
+    credentials:
+      file: %[9]s
+
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  tiers:
+    - name: %[17]s
+      granularity: day
+      keep: 7
+    - name: %[18]s
+      granularity: month
+      keep: 12
+      medium: %[5]s
+    - name: %[19]s
+      granularity: year
+      keep: 5
+      medium: %[20]s
+`,
+		w.dir, scenarioSource, scenarioSet, w.root,
+		mediumOffsite, w.fixture.Region, w.fixture.Endpoint, w.offsiteBucket, w.fixture.CredentialsFile,
+		mediumAnnual, w.annualBucket,
+		mediumDeepFreeze, w.deepBucket, config.StorageClassGlacier,
+		mediumUnreachable, absentBucket,
+		tierDaily, tierMonthly, tierAnnual, annualHome)
+
+	// A name derived from the tier's home, so a cell that writes a second
+	// variant does not overwrite the file the world is running on.
+	path := filepath.Join(w.dir, "config-"+annualHome+".yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		w.t.Fatalf("writing the scenario's config.yaml: %v", err)
+	}
+	return path
+}
+
+// mediumFromConfig is internal/app's own translation from a configured
+// medium to the transport boundary. Using it rather than hand-building a
+// transport.Medium is what makes the storage class, the endpoint and the
+// credential reference this scenario runs against the ones the daemon
+// would build from the same file.
+func (w *world) mediumFromConfig(id string) transport.Medium {
+	w.t.Helper()
+	medium, _, err := app.MediumFor(w.cfg, id)
+	if err != nil {
+		w.t.Fatalf("resolving medium %q out of the scenario's config: %v", id, err)
+	}
+	return medium
+}
+
+// chain is the retention chain, in chain order, which is the order
+// FR-27's home rule reads.
+func (w *world) chain() []config.RetentionTier { return w.cfg.Retention.Tiers }
+
+// backupSet is the set config the move engine resolves a local path
+// through.
+func (w *world) backupSet() config.BackupSet {
+	return config.BackupSet{Name: scenarioSet, ID: setID, LocalPath: w.root}
+}
+
+func (w *world) openJournal() *state.Journal {
+	w.t.Helper()
+	j, err := state.Open(w.ctx, filepath.Join(w.dir, "journal.db"))
+	if err != nil {
+		w.t.Fatalf("opening the journal: %v", err)
+	}
+	w.t.Cleanup(func() { _ = j.Close() })
+	return j
+}
+
+// scenarioArtifacts is the cast, and the dates are chosen so that each
+// tier of the chain owns a different one on day zero and so that advancing
+// the clock moves an artifact from one tier to the next.
+//
+// Relative to scenarioNow (2026-09-04), the chain resolves to:
+//
+//	daily   day granularity,   keep 7  -> 2026-08-29 .. 2026-09-04
+//	monthly month granularity, keep 12 -> 2025-10 .. 2026-09
+//	annual  year granularity,  keep 5  -> 2022 .. 2026
+//
+// so:
+//
+//	fresh    2026-09-03  daily selects it            -> home local
+//	summer   2026-07-15  monthly's July bucket       -> home offsite
+//	stale    2026-07-01  older sibling in July       -> nothing selects it
+//	ancient  2024-06-15  annual's 2024 bucket        -> home annual
+//
+// stale is deliberately in the cast. An artifact no tier selects has no
+// home, and FR-27 says such an artifact stays exactly where it is rather
+// than being moved somewhere on its way to being deleted. A scenario in
+// which every artifact has a home would never check that.
+func scenarioArtifacts() []struct {
+	name string
+	at   time.Time
+} {
+	return []struct {
+		name string
+		at   time.Time
+	}{
+		{"2024-06-15T02-00-00Z.dump", time.Date(2024, 6, 15, 2, 0, 0, 0, time.UTC)},
+		{"2026-07-01T02-00-00Z.dump", time.Date(2026, 7, 1, 2, 0, 0, 0, time.UTC)},
+		{"2026-07-15T02-00-00Z.dump", time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)},
+		{"2026-09-03T02-00-00Z.dump", time.Date(2026, 9, 3, 2, 0, 0, 0, time.UTC)},
+	}
+}
+
+func (w *world) seedArtifacts() {
+	w.t.Helper()
+	for _, a := range scenarioArtifacts() {
+		id := model.ArtifactID{Set: setID, Name: a.name}
+		content := []byte(fmt.Sprintf("artifact %s: %s", a.name,
+			"the durable bytes of one backup, long enough that a truncated copy is a different size"))
+		w.artifacts = append(w.artifacts, seeded{
+			id: id, discoveredAt: a.at, content: content, hash: sha256Hex(content),
+		})
+		w.seedOneOnLocal(id, content, a.at)
+	}
+}
+
+// seedOneOnLocal walks a real artifact to COMPLETE through the real
+// journal, leaving its only ACTIVE placement on local disk exactly where
+// lifecycle.Commit leaves one.
+func (w *world) seedOneOnLocal(id model.ArtifactID, content []byte, at time.Time) {
+	w.t.Helper()
+	seedOnLocal(w.t, w.ctx, w.journal, w.root, id, content, at)
+}
+
+// seedOnLocal is seedOneOnLocal without a world, because the crash matrix
+// builds a leaner one of its own (no config, no second medium) and a
+// second seeding function would be a second definition of what an
+// ingested artifact looks like. The two suites disagreeing about that is
+// how one of them ends up certifying a shape the product never produces.
+func seedOnLocal(t *testing.T, ctx context.Context, j *state.Journal, root string, id model.ArtifactID, content []byte, at time.Time) {
+	t.Helper()
+
+	localPath := filepath.Join(root, id.Name)
+	if err := os.WriteFile(localPath, content, 0o600); err != nil {
+		t.Fatalf("writing %s to the backup set's local_path: %v", id.Name, err)
+	}
+
+	size := int64(len(content))
+	hash := sha256Hex(content)
+	partial := localPath + ".partial"
+
+	if _, err := j.Discover(ctx, id, id.String()+":discover", "backups/"+id.Name,
+		state.RemoteIdentity{Size: &size, Hash: hash, HashAlg: "sha256"}, at); err != nil {
+		t.Fatalf("Discover %s: %v", id.Name, err)
+	}
+	verified := at
+	for _, tr := range []state.Transition{
+		{Artifact: id, Key: id.String() + ":transferring", From: "DISCOVERED", To: "TRANSFERRING", OccurredAt: at, LocalPath: &partial},
+		{Artifact: id, Key: id.String() + ":transferred", From: "TRANSFERRING", To: "TRANSFERRED", OccurredAt: at,
+			Transfer: &state.TransferResult{BytesTransferred: size, Checksummed: true}},
+		{Artifact: id, Key: id.String() + ":verifying", From: "TRANSFERRED", To: "VERIFYING", OccurredAt: at},
+		{Artifact: id, Key: id.String() + ":verified", From: "VERIFYING", To: "VERIFIED", OccurredAt: at,
+			Hashes:     &state.HashUpdate{Hash: hash, Alg: "sha256"},
+			Validation: &state.ValidationUpdate{Passed: true, Detail: "seeded"}},
+		{Artifact: id, Key: id.String() + ":committing", From: "VERIFIED", To: "COMMITTING", OccurredAt: at},
+		{Artifact: id, Key: id.String() + ":committed", From: "COMMITTING", To: "COMMITTED", OccurredAt: at, LocalPath: &localPath,
+			Placement: &state.PlacementUpdate{Medium: state.MediumLocal, Location: localPath, Size: &size,
+				Hash: hash, HashAlg: "sha256", VerificationClass: state.VerificationContent,
+				VerifiedAt: &verified, Status: state.PlacementActive}},
+		{Artifact: id, Key: id.String() + ":pending", From: "COMMITTED", To: "REMOTE_DELETE_PENDING", OccurredAt: at},
+		{Artifact: id, Key: id.String() + ":complete", From: "REMOTE_DELETE_PENDING", To: "COMPLETE", OccurredAt: at},
+	} {
+		if _, err := j.RecordTransition(ctx, tr); err != nil {
+			t.Fatalf("%s -> %s: %v", id.Name, tr.To, err)
+		}
+	}
+}
+
+// records reads every artifact in the backup set out of the journal, which
+// is what a retention pass is handed.
+func (w *world) records() []state.Record {
+	w.t.Helper()
+	out := make([]state.Record, 0, len(w.artifacts))
+	for _, a := range w.artifacts {
+		rec, err := w.journal.Get(w.ctx, a.id)
+		if err != nil {
+			w.t.Fatalf("reading %s out of the journal: %v", a.id.Name, err)
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// ids is every seeded artifact's id, which is what the watcher watches.
+func (w *world) ids() []model.ArtifactID {
+	out := make([]model.ArtifactID, 0, len(w.artifacts))
+	for _, a := range w.artifacts {
+		out = append(out, a.id)
+	}
+	return out
+}
+
+// mediumByID resolves an id the way internal/app.MediumFor does, which is
+// the translation the engine's resolver needs.
+func (w *world) mediumByID(id string) (transport.Medium, bool) {
+	switch id {
+	case mediumOffsite:
+		return w.offsite, true
+	case mediumAnnual:
+		return w.annual, true
+	case mediumDeepFreeze:
+		return w.deepFreeze, true
+	case mediumUnreachable:
+		return w.unreachable, true
+	}
+	return transport.Medium{}, false
+}
+
+func (w *world) localPath(id model.ArtifactID) string { return filepath.Join(w.root, id.Name) }
+
+func (w *world) localExists(id model.ArtifactID) bool {
+	_, err := os.Lstat(w.localPath(id))
+	return err == nil
+}
+
+// --- small shared helpers ---------------------------------------------
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// placementOn returns an artifact's placement on one medium, whatever its
+// status, and whether there is one at all.
+func placementOn(rec state.Record, medium string) (state.Placement, bool) {
+	for _, p := range rec.Placements {
+		if p.Medium == medium {
+			return p, true
+		}
+	}
+	return state.Placement{}, false
+}
+
+// activeMediumOf is where the journal says an artifact's one durable copy
+// is, for an assertion. It is deliberately NOT the planner's lookup: the
+// planner uses internal/app.ActiveMediumFromRecords, which is the product's
+// own, and a test that asserted with the same function it drove with would
+// be checking that a function agrees with itself.
+func activeMediumOf(rec state.Record) []string {
+	var out []string
+	for _, p := range rec.Placements {
+		if p.Status == state.PlacementActive {
+			out = append(out, p.Medium)
+		}
+	}
+	return out
+}
+
+// describe renders an artifact's placements for a failure message.
+func describe(rec state.Record) string {
+	if len(rec.Placements) == 0 {
+		return "no placements at all"
+	}
+	out := ""
+	for i, p := range rec.Placements {
+		if i > 0 {
+			out += ", "
+		}
+		class := p.VerificationClass
+		if class == "" {
+			class = "unverified"
+		}
+		out += fmt.Sprintf("%s=%s/%s", p.Medium, p.Status, class)
+	}
+	return out
+}
+
+// sufficientClass is the standard this scenario holds the invariant to.
+// Content, which is what FR-30 means by "read-back or better", and which
+// is what both mediums here are configured for: neither declares
+// upload_verification, so neither has opted into the weaker rung.
+var sufficientClass = []placement.Class{placement.Content}
+
+// writeFile is os.WriteFile at the mode this repository uses for anything
+// derived from a backup artifact.
+func writeFile(path string, body []byte) error { return os.WriteFile(path, body, 0o600) }

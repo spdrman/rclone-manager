@@ -1,3 +1,34 @@
+// The migration runner: how a database reaches the schema this binary
+// expects, and the two situations where it refuses to touch one at all.
+//
+// Schema changes are numbered files under core/migrations, embedded into
+// the binary, applied in order, each inside its own transaction, each
+// recorded alongside a sha256 of its own text. That checksum is not
+// bookkeeping, it is the mechanism behind the rule that makes the whole
+// scheme safe, and the rule is worth stating where somebody will hit it:
+//
+//	a migration file that has shipped can never be edited again,
+//	comments and whitespace included.
+//
+// The sum covers the whole file, so correcting a stale comment moves it,
+// and every deployment that already applied that version then refuses to
+// open with ErrSchemaDrift. Not warns. Refuses, because a journal whose
+// history this binary cannot account for is one it must not write to. Two
+// files in core/migrations say something about foreign keys that stopped
+// being true when suspendForeignKeys landed, and they are staying wrong
+// for exactly this reason: the correction goes in this file, or into a new
+// migration.
+//
+// TestShippedMigrationsAreImmutable pins the sum of every landed migration
+// and fails loudly if one moves. It deliberately does not print the sum it
+// computed, so the only way past it is to put the file back rather than to
+// paste the new number over the old one.
+//
+// The runner never reconciles, downgrades or reapplies anything. A
+// recorded version this binary does not carry means a different build has
+// been here (ErrUnknownSchemaVersion); a recorded version whose text no
+// longer matches means the rule above was broken (ErrSchemaDrift). Both
+// stop Open before it returns a Journal to anyone.
 package state
 
 import (
@@ -117,6 +148,17 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 // migration file's content changed after it was applied here). Both are
 // refusals: this package does not attempt to reconcile, downgrade, or
 // reapply anything in either case.
+//
+// The consequence worth stating out loud, because it is not obvious and it
+// has already been proposed once as a harmless tidy-up: a migration file that
+// has shipped can never be edited again, comments included. The checksum is
+// taken over the whole file, so correcting a stale comment moves it, and
+// every deployment that already applied that version then refuses to open
+// with ErrSchemaDrift. Two of the files in this directory say something about
+// foreign keys that stopped being true when suspendForeignKeys landed, and
+// they are staying exactly as they are for that reason. If a landed migration
+// needs a correction, the correction goes here or into a new migration.
+// TestShippedMigrationsAreImmutable enforces this.
 func migrate(ctx context.Context, db *sql.DB) error {
 	known, err := loadMigrations()
 	if err != nil {
@@ -148,10 +190,24 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	pending := make([]migration, 0, len(known))
 	for _, m := range known {
 		if _, ok := applied[m.version]; ok {
 			continue
 		}
+		pending = append(pending, m)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	restoreForeignKeys, err := suspendForeignKeys(ctx, db)
+	if err != nil {
+		return err
+	}
+	defer restoreForeignKeys()
+
+	for _, m := range pending {
 		if err := applyMigration(ctx, db, m); err != nil {
 			return err
 		}
@@ -160,6 +216,65 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// suspendForeignKeys turns foreign key enforcement off for the duration of
+// a migration run and returns the function that puts it back exactly as it
+// was, whatever that was.
+//
+// This is SQLite's own documented procedure for "making other kinds of
+// table schema changes" (sqlite.org/lang_altertable.html), and this schema
+// needs it because it cannot alter a CHECK constraint in place: widening
+// artifacts.state means creating a new table, copying the rows across,
+// dropping the old one and renaming, which 0002 and 0006 both do. DROP
+// TABLE runs an implicit DELETE FROM first, and with foreign keys on that
+// delete trips every row in state_transitions pointing at the table being
+// replaced.
+//
+// That is not hypothetical. Open (state.go) enables foreign_keys, v0.1.0
+// shipped schema version 4, and 0006 landed after it, so every deployment
+// that had ever discovered one artifact refused to migrate to the next
+// release with "FOREIGN KEY constraint failed" and no journal at all. An
+// empty database has no referencing rows and sails through, which is why
+// this package's whole migration suite was green while the upgrade was
+// broken; see TestMigrate_AppliesToAPopulatedDatabaseAtEveryShippedVersion.
+//
+// Correctness is not given up in exchange. applyMigration runs
+// PRAGMA foreign_key_check inside each migration's own transaction before
+// committing it, so a migration that really does leave a dangling
+// reference is refused and rolled back rather than quietly written down.
+// The pragma has to be toggled out here rather than inside that
+// transaction because SQLite makes it a no-op while one is open.
+func suspendForeignKeys(ctx context.Context, db *sql.DB) (restore func(), err error) {
+	var was int
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&was); err != nil {
+		return nil, fmt.Errorf("state: reading foreign_keys pragma: %w", err)
+	}
+	if was == 0 {
+		return func() {}, nil
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return nil, fmt.Errorf("state: suspending foreign key enforcement for migration: %w", err)
+	}
+	return func() {
+		// Best effort by necessity: there is nothing useful a caller
+		// could do with a failure here that it is not already doing with
+		// the migration error it is on its way to returning, and the
+		// handle is closed on that path anyway (see Open).
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	}, nil
+}
+
+// appliedMigrations reads schema_migrations into a version-to-checksum
+// map.
+//
+// Both halves of that pair are needed together, which is why this returns
+// the checksums rather than a set of version numbers: the runner has two
+// different questions to ask of the same row, whether this binary knows
+// the version at all and whether the file it knows still hashes to what
+// was recorded, and they produce two different refusals
+// (ErrUnknownSchemaVersion and ErrSchemaDrift).
+//
+// It is also called by PendingMigration, which never applies anything, so
+// it takes a *sql.DB rather than running inside a migration's transaction.
 func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version, checksum FROM schema_migrations`)
 	if err != nil {
@@ -198,6 +313,10 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("state: apply migration %d (%s): %w", m.version, m.name, err)
 		}
+	}
+
+	if err := checkForeignKeys(ctx, tx); err != nil {
+		return fmt.Errorf("state: apply migration %d (%s): %w", m.version, m.name, err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -314,4 +433,42 @@ func PendingMigration(ctx context.Context, path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// checkForeignKeys is the other half of suspendForeignKeys: enforcement is
+// off while a migration runs, so this asks SQLite to verify, inside the
+// migration's own transaction and before it commits, that the schema the
+// migration just built has no dangling references left in it.
+//
+// PRAGMA foreign_key_check returns one row per violation and no rows when
+// everything resolves, so an error here is "this migration would have left
+// the journal referentially broken" and the caller's rollback is the right
+// answer to it. Only the first violation is reported: a migration is
+// wrong or it is not, and a list of every orphan in a large journal is not
+// more actionable than the first one plus the table it is in.
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		// The pragma's columns are (table, rowid, parent, fkid). rowid is
+		// NULL for a WITHOUT ROWID table, so it is scanned as a nullable.
+		var (
+			table  string
+			rowID  sql.NullInt64
+			parent string
+			fkID   int
+		)
+		if err := rows.Scan(&table, &rowID, &parent, &fkID); err != nil {
+			return fmt.Errorf("foreign key check: %w", err)
+		}
+		return fmt.Errorf("would leave a dangling reference: a row in %s points at a missing row in %s", table, parent)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	return nil
 }

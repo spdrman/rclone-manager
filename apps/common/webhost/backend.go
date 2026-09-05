@@ -38,6 +38,14 @@ type BackupServiceClient interface {
 	// re-implementing.
 	SubmitRunCycle(ctx context.Context, req service.RunCycleRequest) (service.Operation, error)
 
+	// SubmitRestorePlacement persists and starts a restore of one archived
+	// copy (EPIC E, FR-34). Unlike SubmitRunCycle, nothing about the work
+	// it starts happens in this process: the provider carries on
+	// restoring across a restart, which is why its row is exempt from the
+	// startup sweep and why its status is re-derived on every read. See
+	// core/service.BackupService.SubmitRestorePlacement.
+	SubmitRestorePlacement(ctx context.Context, req service.RestorePlacementRequest) (service.RestoreSubmission, error)
+
 	// GetOperation returns the current state of a previously submitted
 	// operation, for authenticated polling (docs/EPIC-B-multi-nas.md
 	// §15.7).
@@ -73,6 +81,21 @@ type BackupServiceClient interface {
 	// issue #146. See service.BackupService.CreateBackupSet's own doc
 	// for the persist-then-hot-reload sequence this method performs.
 	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
+
+	// UpdateBackupSet backs PATCH /api/v1/backup-sets/{source}/{set}
+	// (issue #350): the edit half of backup-set CRUD, which #146 never
+	// built, so until now a configured set could only be changed by
+	// hand-editing config.yaml on the machine it runs on.
+	//
+	// The request is sparse (every field a pointer, nil means leave
+	// alone), which is what makes the Web UI's per-box Save write only
+	// that box at the layer that persists rather than as a promise the UI
+	// makes. State-changing but not destructive, so this package wraps
+	// the route in requireCSRF and NOT requireDestructiveGate, following
+	// POST /api/v1/backup-sets' own precedent; see
+	// core/service.UpdateBackupSet's own doc for the persist-then-reload
+	// sequence it shares with creation.
+	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
 
 	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
 	// key" step, persisting client-validated key material server-side
@@ -155,6 +178,59 @@ type BackupServiceClient interface {
 	// does and, in particular, does not undo.
 	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
 
+	// RemoveBackupSet backs DELETE
+	// /api/v1/backup-sets/{source}/{set} (issue #391): take one backup
+	// set out of the configuration, so nothing is collected for it from
+	// here on.
+	//
+	// Configuration only, and that is the contract rather than an
+	// implementation detail. Every artifact the set produced stays on
+	// storage and stays listed under GET /api/v1/backups, which is what
+	// the confirmation an operator accepts in the Web UI has always
+	// promised; see core/service/backupsetremove.go's own package doc for
+	// what it keeps, for what a re-created set with the same id re-adopts,
+	// and for the residue an interrupted transfer can leave.
+	//
+	// State-changing but NOT destructive under docs/EPIC-B-multi-nas.md
+	// §50, in the same tier as UpdateBackupSet and CreateBackupSet:
+	// nothing reachable from here touches, moves or deletes a byte of
+	// backup data. Deleting retained backups is a different operation
+	// with a different consent model (FR-20 and the destructive gate),
+	// and it is not this one.
+	RemoveBackupSet(ctx context.Context, id string) error
+
+	// BackupSetRetention, SetBackupSetRetention and
+	// ClearBackupSetRetention back GET/PUT/DELETE
+	// /api/v1/backup-sets/{source}/{set}/retention (issue #333): read
+	// which retention policy one backup set is retained under, give that
+	// set a whole policy of its own, or remove it so the set inherits the
+	// deployment's again.
+	//
+	// Three methods rather than one sparse update, because "give this set
+	// no policy of its own" cannot be a value on a request where a nil
+	// field already means "leave this alone" — see
+	// core/service/backupsetretention.go's own package doc. State-changing
+	// but not destructive: this writes configuration, and the retention
+	// apply it can change the outcome of stays behind the destructive gate
+	// and re-reads the policy at plan time.
+	BackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	SetBackupSetRetention(ctx context.Context, id string, o service.RetentionOverride) (service.BackupSetRetention, error)
+	ClearBackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	// BackupSetEditState, BeginBackupSetEdit, RenewBackupSetEdit and
+	// EndBackupSetEdit back the three /edit-hold routes (issue #350).
+	//
+	// A backup set being edited while a cycle runs against it is two
+	// writers on one definition, so entering edit mode holds that one
+	// set: the pass currently running against it stops, and the scheduler
+	// starts no new one until the hold is released or its lease lapses.
+	// The read is separate from the write precisely so an operator can be
+	// shown what they are about to stop and then decline; see
+	// core/service/edithold.go for the lease, and for why it is a lease
+	// rather than a flag.
+	BackupSetEditState(ctx context.Context, id string) (service.BackupSetEditState, error)
+	BeginBackupSetEdit(ctx context.Context, id string) (service.EditHold, error)
+	EndBackupSetEdit(ctx context.Context, id string) error
+
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same
 	// non-destructive reachability check TestConnection performs, against
@@ -181,7 +257,27 @@ type BackupServiceClient interface {
 	// core/internal/lifecycle.
 	RevalidateArtifact(ctx context.Context, id string) (service.ArtifactCheck, error)
 	RetryArtifactIngestion(ctx context.Context, id string) error
+
+	// RetryFailedArtifact backs POST /api/v1/backups/{id}/retry (issue
+	// #419): the same re-entry into the pipeline RetryArtifactIngestion
+	// performs, one state along, for a backup that is FAILED rather than
+	// quarantined. FAILED declares that exit and nothing in this product
+	// had ever taken it, so a backup that reached it stopped being worked
+	// on permanently.
+	RetryFailedArtifact(ctx context.Context, id, note string) error
 	ReinstateArtifact(ctx context.Context, id, note string) (service.ArtifactReinstatement, error)
+
+	// PreflightStorageMedium backs POST
+	// /api/v1/storage-mediums/{id}/preflight (issue #443): the medium
+	// equivalent of TestBackupSetConnection above, and deliberately a
+	// stronger check than that one. It writes a probe object, reads it
+	// back, compares the class it landed in against the class the
+	// configuration claims, asks whether the verification class the
+	// medium declares can actually be achieved there, and deletes the
+	// probe. A medium that does not work comes back as a report saying
+	// so, never as an error; the error is for an id this configuration
+	// does not declare.
+	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
 
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.

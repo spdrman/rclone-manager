@@ -136,6 +136,16 @@ type Operation struct {
 	Result string
 	Error  string
 
+	// Restore is everything that is true only of a restore operation, and
+	// nil for every other action.
+	//
+	// A nested object that is simply ABSENT rather than a handful of flat
+	// fields nobody else fills in, for the reason Progress's own doc gives
+	// about the same choice: absent and empty are different answers, and a
+	// client must be able to tell them apart without deciding what an
+	// empty string means about somebody's backup.
+	Restore *OperationRestore
+
 	// Progress is the live, ephemeral reading for an operation executing
 	// in THIS process right now, and nil for every other operation:
 	// finished, queued, or left behind "running" by a process that died.
@@ -147,6 +157,122 @@ type Operation struct {
 	// OperationProgress (progress.go) for why this is never persisted
 	// alongside the durable fields above it.
 	Progress *OperationProgress
+
+	// Cycle is what a FINISHED run cycle actually got done, read back off
+	// the summary this package recorded when it completed the operation.
+	// Nil for every other action, for a run cycle that has not finished,
+	// and for one whose summary this build cannot read.
+	//
+	// Nil is not a row of zeroes, and the pointer is what keeps those
+	// apart, exactly as Progress' own doc argues. A cycle that is still
+	// running has not walked nothing; it has not finished walking. A
+	// surface that rendered nil as "0 walked, 0 through" would report the
+	// most alarming possible outcome for the most ordinary possible
+	// state.
+	Cycle *CycleOutcome
+}
+
+// CycleOutcome is issue #361's two counts, on the read side.
+//
+// #368 put them into the summary a completed run_cycle records, because
+// "completed" on that row means something much narrower than a reader
+// assumes: the cycle ran to the end. An artifact's own quarantine is a
+// business outcome rather than an operation failure, which is a decision
+// this package makes deliberately and tests, so a cycle that backed
+// nothing up finishes looking exactly like one that backed everything up.
+// Nothing rendered these counts, which left that indistinguishable
+// everywhere except a CLI exit code. This type is what a surface reads
+// them from.
+type CycleOutcome struct {
+	BackupSetsProcessed int
+	// ArtifactsWalked is how many backups the cycle had a reason to touch.
+	ArtifactsWalked int
+	// ArtifactsThrough is how many of those ended the cycle with their
+	// bytes on durable storage.
+	ArtifactsThrough int
+
+	// Moves is FR-30's half of the same question, and it is nil for a
+	// cycle whose recorded summary does not carry it.
+	//
+	// Nil is a real answer here for the reason Operation.Cycle is a
+	// pointer: a run cycle recorded before this build has no move counts
+	// in its summary, and rendering that as "0 attempted, 0 landed" would
+	// tell an operator a cycle moved nothing when it may have moved
+	// plenty. It is also nil-safe in the ordinary direction: a deployment
+	// that declares no storage medium records a real pair of zeroes,
+	// which is the truth and reads as nothing to do.
+	Moves *CycleMoveOutcome
+}
+
+// CycleMoveOutcome is what a finished cycle's FR-30 move pass got done.
+//
+// It is a pair rather than two loose fields because they are only ever
+// meaningful together: Landed on its own cannot tell a cycle that moved
+// nothing from one with nothing to move, which is the whole distinction
+// issue #361 was filed about.
+//
+// There is no reason string on it, deliberately. The engine's own refusal
+// sentence is the most useful thing an operator can read and it is built
+// out of whatever the transport handed back, about an endpoint, a bucket
+// and a credential reference, by code that was never written to a
+// redaction contract. FR-33 draws the line here, so the terminal and the
+// event stream carry the sentence (app.MoveProgress.Reason) and the wire
+// carries the arithmetic.
+type CycleMoveOutcome struct {
+	// Attempted is how many artifacts the move pass took up: a move it
+	// resumed, a move it planned, or a plan it refused outright.
+	Attempted int
+	// Landed is how many of those reached their home medium with the
+	// source gone, which is the only outcome that is a move.
+	Landed int
+}
+
+// OperationRestore is a restore operation's own facts: what was asked for,
+// which never changes, and where it has actually got to, which is
+// re-derived from the provider on every read (EPIC E, FR-34).
+//
+// # What is not in here, and cannot be added
+//
+// No percentage, no completion time, no price. S3 reports a restore as
+// running or finished and nothing else, so a field for a percentage would
+// be a field somebody eventually fills with a guess; and this deployment
+// holds no price list, no region rates and no idea what the operator
+// negotiated, so an amount would be invented, and people budget against
+// invented numbers.
+type OperationRestore struct {
+	// Artifact is the backup this restore is about, as "source/set/name".
+	Artifact string
+
+	// Medium is the id of the medium holding the copy being restored, and
+	// Class is the storage class that medium writes with.
+	Medium string
+	Class  string
+
+	// WindowDays is how long the restored copy was asked to stay
+	// readable.
+	WindowDays int
+
+	// Access is what can be done with the copy right now, from the
+	// provider's own answer: immediate, requires_restore, restoring, or
+	// unreachable. Empty when the provider could not be asked at all.
+	Access string
+
+	// Detail is the plain-words sentence a surface prints beside Access.
+	Detail string
+
+	// RestoredUntil is when the provider says the restored copy stops
+	// being readable, or nil when it reports none. FR-34: shown when S3
+	// reports it, and nothing invented in its place until then.
+	RestoredUntil *time.Time
+
+	// Wait is the storage class's OWN published restore time, in plain
+	// words. A documented property of the class, never an estimate for
+	// this particular restore.
+	Wait string
+
+	// Billing is the plain statement that a bill exists, with no amount.
+	// Empty for a class the provider does not charge retrieval on.
+	Billing string
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
@@ -280,7 +406,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 		}
 		return Operation{}, fmt.Errorf("service: get operation: %w", err)
 	}
-	return b.withLiveProgress(toOperation(rec)), nil
+	op := b.withLiveProgress(toOperation(rec))
+	if op.Action == ActionRestorePlacement {
+		// The one action whose real state is not in its own row. A
+		// restore runs at the provider, so this read is what asks the
+		// provider where it got to, and what moves the row to completed
+		// when it says the copy is readable. See deriveRestore, and note
+		// that it is deliberately NOT done by ListOperations: that would
+		// be one round trip per row on a page nobody is watching.
+		op = b.deriveRestore(ctx, op)
+	}
+	return op, nil
 }
 
 // withLiveProgress attaches the in-memory reading for op, if this process
@@ -294,6 +430,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // to failed anyway). Anything else keeps Progress nil, which the client
 // renders as "no reading available" rather than as zero.
 func (b *BackupService) withLiveProgress(op Operation) Operation {
+	if op.Action == ActionRestorePlacement {
+		// A restore never has progress and never will (EPIC E, FR-34):
+		// S3 reports a restore as running or finished and nothing else,
+		// so there is no percentage to attach, no byte count to attach,
+		// and no finishing time to attach. This refusal is here rather
+		// than left implicit in "nothing registers a reading for it",
+		// because that implicit version is one careless registry write
+		// away from a UI drawing a progress bar over a number nobody
+		// measured.
+		return op
+	}
 	if op.Status != state.OperationRunning {
 		return op
 	}
@@ -339,6 +486,20 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	live := b.progress.begin(operationID)
 	defer b.progress.end(operationID)
 	defer b.runOnce.Unlock()
+	// The process-wide reading beside the operation-scoped one, so
+	// "what would entering edit mode for this set stop" can be answered
+	// for an API-submitted cycle and a scheduled one identically
+	// (edithold.go's cycleWatch).
+	//
+	// Registered AFTER b.runOnce.Unlock above, so that it runs BEFORE it:
+	// defers unwind in reverse, and releasing the single-flight lock
+	// first would let a scheduled tick take it, call cycleWatch.begin and
+	// publish its first reading, only for this deferred end() to wipe it.
+	// The window is microseconds and self-heals on the next reading, but
+	// it is the kind of thing that is free to get right here and
+	// expensive to diagnose later.
+	b.cycleWatch.begin()
+	defer b.cycleWatch.end()
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error(context.Background(), "execute-run-cycle-panic", fmt.Errorf("recovered panic: %v", r))
@@ -374,11 +535,19 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// rides on it because live progress is scoped to exactly this
 	// operation, and a field on the shared internal/app.Service would be
 	// one cycle's reading in a place a second cycle could overwrite.
-	report := runCycle(b.state.Load().inner, app.WithProgressObserver(b.ctx, live))
+	report := runCycle(b.state.Load().inner,
+		app.WithBackupSetHolds(
+			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch}),
+			b.holds))
 
+	// SystemicFailure, not Err != nil: a set whose pass was stopped
+	// because an operator entered edit mode (issue #350's hold) carries
+	// an error saying so, and failing this operation for it would put
+	// "a backup did not happen" in the activity feed for something the
+	// operator themselves asked for.
 	var failed string
 	for _, set := range report.Sets {
-		if set.Err != nil {
+		if set.SystemicFailure() {
 			failed = set.Err.Error()
 			break
 		}
@@ -407,19 +576,52 @@ var runCycle = func(inner *app.Service, ctx context.Context) app.CycleReport {
 }
 
 // cycleSummary is the opaque JSON blob stored in a completed run_cycle
-// operation's Result. It is deliberately narrow: a count and a duration,
+// operation's Result. It is deliberately narrow: counts and a duration,
 // nothing that reaches back into internal/discovery, internal/reconcile or
 // internal/retention's own report types, exactly as this package's own
 // doc requires (nothing from core/internal leaks past this boundary).
+//
+// ArtifactsWalked and ArtifactsThrough are issue #361's addition, and they
+// are here because "completed" on this row means something narrower than
+// anyone reading it is likely to assume. An operation completes when the
+// cycle ran, which is a deliberate decision this package already made and
+// tests: an artifact's own quarantine is a business outcome, not an
+// operation failure. That decision is defensible and this issue is not the
+// place to overturn it. What it does mean is that a cycle which backed
+// nothing up finishes here looking exactly like one that backed
+// everything up, which is the same lie `backup-manager run` was telling
+// its cron job, told to whoever is reading the Web UI instead. These two
+// numbers are what tell the two apart, in the same terms the CLI now
+// prints and exits on: how many artifacts the cycle had a reason to
+// touch, and how many of those ended it with their bytes on local disk.
 type cycleSummary struct {
 	BackupSetsProcessed int    `json:"backup_sets_processed"`
+	ArtifactsWalked     int    `json:"artifacts_walked"`
+	ArtifactsThrough    int    `json:"artifacts_through"`
+	MovesAttempted      int    `json:"moves_attempted"`
+	MovesLanded         int    `json:"moves_landed"`
 	DurationMillis      int64  `json:"duration_ms"`
 	StartedAt           string `json:"started_at"`
 }
 
 func summarizeCycle(report app.CycleReport) string {
+	walked, through := 0, 0
+	for _, set := range report.Sets {
+		progress := set.Verdict().Progress
+		walked += progress.Walked
+		through += progress.Durable
+	}
+	// FR-30's counts and nothing else off the move pass. MoveProgress
+	// also carries the engine's refusal text, which stays on the terminal
+	// and in the event stream; see CycleMoveOutcome for why it does not
+	// cross this boundary.
+	moves := report.MoveProgress()
 	b, err := json.Marshal(cycleSummary{
 		BackupSetsProcessed: len(report.Sets),
+		ArtifactsWalked:     walked,
+		ArtifactsThrough:    through,
+		MovesAttempted:      moves.Attempted,
+		MovesLanded:         moves.Landed,
 		DurationMillis:      report.Duration.Milliseconds(),
 		StartedAt:           report.StartedAt.Format(time.RFC3339Nano),
 	})
@@ -429,6 +631,53 @@ func summarizeCycle(report app.CycleReport) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// parseCycleSummary reads the counts back out of a completed run cycle's
+// recorded summary.
+//
+// It reports nothing rather than zeroes when the summary is not there, is
+// not this shape, or belongs to an operation that is not a finished run
+// cycle. That distinction is the whole value of the field: an unreadable
+// summary is a fact about this row, and a cycle that got nothing through
+// is a fact about the backups, and rendering the first as the second would
+// raise an alarm about a deployment that is fine.
+//
+// A summary recorded by an older build, before #368 added the counts,
+// parses with both counts zero and no error, which would say "walked
+// nothing, got nothing through" about a cycle that may have done plenty.
+// So the two counts are read as pointers and a summary missing them is
+// reported as no outcome at all.
+func parseCycleSummary(rec state.Operation) *CycleOutcome {
+	if rec.Action != ActionRunCycle || rec.Status != state.OperationCompleted || rec.Result == "" {
+		return nil
+	}
+	var raw struct {
+		BackupSetsProcessed int  `json:"backup_sets_processed"`
+		ArtifactsWalked     *int `json:"artifacts_walked"`
+		ArtifactsThrough    *int `json:"artifacts_through"`
+		MovesAttempted      *int `json:"moves_attempted"`
+		MovesLanded         *int `json:"moves_landed"`
+	}
+	if err := json.Unmarshal([]byte(rec.Result), &raw); err != nil {
+		return nil
+	}
+	if raw.ArtifactsWalked == nil || raw.ArtifactsThrough == nil {
+		return nil
+	}
+	out := &CycleOutcome{
+		BackupSetsProcessed: raw.BackupSetsProcessed,
+		ArtifactsWalked:     *raw.ArtifactsWalked,
+		ArtifactsThrough:    *raw.ArtifactsThrough,
+	}
+	// The move counts are read the same way and reported separately: a
+	// summary recorded before this build carries the two above and not
+	// these two, and that is a fact about the row rather than a cycle
+	// that moved nothing. See CycleOutcome.Moves.
+	if raw.MovesAttempted != nil && raw.MovesLanded != nil {
+		out.Moves = &CycleMoveOutcome{Attempted: *raw.MovesAttempted, Landed: *raw.MovesLanded}
+	}
+	return out
 }
 
 func toOperation(rec state.Operation) Operation {
@@ -443,6 +692,7 @@ func toOperation(rec state.Operation) Operation {
 		CreatedAt:      rec.CreatedAt,
 		Result:         rec.Result,
 		Error:          rec.Error,
+		Cycle:          parseCycleSummary(rec),
 	}
 	if rec.StartedAt != nil {
 		op.StartedAt = *rec.StartedAt

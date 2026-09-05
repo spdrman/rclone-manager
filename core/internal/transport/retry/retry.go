@@ -59,6 +59,18 @@ func DefaultPolicy() Policy {
 	}
 }
 
+// withDefaults fills in whatever a caller left at zero, and returns a COPY
+// rather than mutating the receiver, so a Policy value a caller keeps and
+// reuses never quietly acquires this function's opinions.
+//
+// It exists because a zero Policy is a perfectly reasonable thing to write
+// (retry.Do(ctx, retry.Policy{}, nil, op) reads as "retry this the usual
+// way"), and every field's zero value is a value that would be wrong to
+// take literally: a zero BaseDelay is a busy loop, a zero MaxDelay is
+// unbounded growth with a ceiling of nothing, and a Multiplier of 0 or 1
+// is not backoff at all. MaxAttempts is the one field deliberately NOT
+// defaulted, because zero there has a real meaning of its own, "keep
+// going until ctx says stop", which DefaultPolicy chooses on purpose.
 func (p Policy) withDefaults() Policy {
 	if p.BaseDelay <= 0 {
 		p.BaseDelay = 500 * time.Millisecond
@@ -97,11 +109,20 @@ func (p Policy) delay(attempt int, rnd *rand.Rand) time.Duration {
 }
 
 // IsTransient reports whether err is worth retrying at all.
+//
+// It is a parameter rather than a fixed rule so a caller can narrow the
+// set, never widen it: a test that wants exactly one retry, or a call site
+// that knows its own operation is not safe to repeat under some particular
+// Transient failure, can say so without this package growing an opinion
+// about it. Nothing in this repository passes anything but nil (which
+// means DefaultIsTransient) outside tests, and that is the intended
+// shape: the classification decision belongs to the adapter that produced
+// the error, and this is just the reader.
 type IsTransient func(err error) bool
 
 // DefaultIsTransient treats err as retryable exactly when it carries
 // transport.Transient, by way of transport.CategoryOf. A caller retrying
-// calls through transport/rclone needs no classifier of its own: Classify
+// calls through transport/rclone needs no classifier of its own: WrapCtx
 // already attached the category, and this just reads it back off.
 func DefaultIsTransient(err error) bool {
 	category, _ := transport.CategoryOf(err)

@@ -112,6 +112,7 @@
 package retention
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -119,6 +120,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -172,10 +174,31 @@ type PruneVerdict struct {
 
 	// Path is the artifact's final local path, computed the same way
 	// lifecycle's own Commit computes it (this backup set's LocalPath
-	// joined with the artifact's basename). It is always populated,
-	// regardless of Action, so a REFUSE verdict still names exactly which
-	// file was refused.
+	// joined with the artifact's basename). It is populated whenever this
+	// verdict is about a LOCAL copy, regardless of Action, so a REFUSE
+	// verdict still names exactly which file was refused.
+	//
+	// It is empty when Medium names something other than local. An
+	// artifact whose durable copy is an object has no local file this
+	// verdict is about, and rendering the path it WOULD have had would
+	// name a file that is not there and was never considered.
 	Path string
+
+	// Medium is where the copy this verdict is about lives (EPIC E FR-30,
+	// issue #239): config.MediumLocal, or the id of a configured storage
+	// medium. It is empty on exactly two verdicts, both REFUSE: a
+	// contested location (more than one ACTIVE placement, a move in
+	// flight), where there are genuinely two answers and this verdict
+	// declines to pick one, and an artifact whose final path could not be
+	// resolved at all, where nothing was established about it. A DELETE
+	// always names its medium. See localBranchMedium.
+	//
+	// FR-30 asks the mandatory dry-run to explain per-artifact WHERE a
+	// deletion would happen, not only whether, and this is that answer.
+	// It matters most on the surface an operator reads before confirming:
+	// "delete 40 artifacts" means something very different when half of
+	// them are objects in a bucket somebody else pays for.
+	Medium string
 
 	// Tiers lists every GFS tier, and/or TierLastKnownGood, that kept this
 	// artifact, each paired with which of FR-18's two placements selected
@@ -193,16 +216,143 @@ type PruneVerdict struct {
 	Reason string
 }
 
+// LocationStatus is how well an ArtifactLocator could answer "where is
+// this artifact's durable copy".
+//
+// There are three answers, not two, and collapsing the last two is a bug
+// this issue shipped once: "the journal says nothing about this artifact"
+// and "the journal says two contradictory things" are both failures to
+// name a single medium, and they are not the same claim. One is the
+// ordinary state of every artifact written before FR-29's placement table
+// existed. The other is a positive assertion that a move is operating on
+// this artifact's copies right now.
+type LocationStatus string
+
+const (
+	// LocationConfirmed: exactly one ACTIVE placement. Medium names it.
+	LocationConfirmed LocationStatus = "CONFIRMED"
+
+	// LocationUnrecorded: no ACTIVE placement row at all. That is the
+	// pre-EPIC-E artifact, the hand-built Record, and the artifact still
+	// transferring, and it takes nothing away from FR-20, whose proof was
+	// never a placement row: it is a canonicalized path, proven beneath
+	// the configured root, re-derived at the moment of the delete.
+	//
+	// It is emphatically NOT permission for the MOVE ENGINE, whose own
+	// standing invariant (FR-30, and the spec's "no copy confirmed, never
+	// no copy needed") is about deleting a source copy it never proved.
+	// The two rules differ because the proofs available to them differ,
+	// not because one of them is careless.
+	LocationUnrecorded LocationStatus = "UNRECORDED"
+
+	// LocationContested: more than one ACTIVE placement, which is FR-30's
+	// copy phase in flight. There are two answers to "where is this", and
+	// removing either copy is the race FR-30's journal exists to make
+	// unrepresentable.
+	LocationContested LocationStatus = "CONTESTED"
+)
+
+// Location is one artifact's answer from an ArtifactLocator.
+type Location struct {
+	// Medium is config.MediumLocal or a configured medium id, and is
+	// meaningful only when Status is LocationConfirmed. It is empty
+	// otherwise, deliberately, so a caller that ignores Status reads an
+	// empty string rather than a plausible-looking medium id.
+	Medium string
+
+	Status LocationStatus
+}
+
+// OnMedium reports whether this location is confirmed to be somewhere
+// other than the implicit local medium, which is the one question that
+// sends a prune down a different set of checks.
+func (l Location) OnMedium() bool {
+	return l.Status == LocationConfirmed && l.Medium != config.MediumLocal
+}
+
+// ArtifactLocator answers where one artifact's durable copy is right now.
+//
+// The status is the load-bearing part, and it means "I could confirm
+// this", never "it is there". A placement row records a DURABLE copy, so
+// an artifact mid-move has two ACTIVE rows and an artifact still
+// transferring has none. PlanHomeMoves takes the same shape for the same
+// reason; see its doc, and internal/app.ActiveMediumFromRecords for the
+// reading.
+//
+// It is a function rather than a placement lookup because internal/
+// retention may not read a placement row at all. FR-32 says nothing a
+// medium reported may reach a retention decision, and this package holds
+// that structurally: there is no medium-supplied value in scope here for a
+// future change to reach for, and placement.TestRetentionReadsNoMedium
+// SuppliedValue fails the build if one appears. The adapter that BUILDS
+// this function reads the rows, one package up, where it is not a
+// retention decision.
+type ArtifactLocator func(model.ArtifactID) Location
+
+// AllLocal is the locator for a deployment with no storage mediums: every
+// durable copy is a local file, which is exactly what every artifact in
+// every deployment written before EPIC E is.
+//
+// It exists as a named value rather than as a nil-means-local default,
+// because a nil locator on a delete path would have to mean something and
+// every meaning available is a guess about where a copy of a backup lives.
+// Written out, the assumption is greppable and a caller that should not be
+// making it is visible.
+func AllLocal(model.ArtifactID) Location {
+	return Location{Medium: config.MediumLocal, Status: LocationConfirmed}
+}
+
+// MediumPruner removes an artifact's copy from a storage medium, having
+// first re-proved that the object there is the one the journal recorded.
+//
+// FR-30 spells the obligation: "an FR-16-style identity re-check (stat the
+// object; compare size and, where available, checksum against the
+// placement record; refuse on mismatch and require reconciliation)". None
+// of that can happen in this package, which is the point of the seam: the
+// re-check reads a placement row and a transport.ObjectInfo, and FR-32
+// keeps both out of here. internal/placement.Reclaimer is the
+// implementation.
+//
+// The record is passed whole because the implementation needs the
+// placement row behind it, and because the re-check must derive its facts
+// from the journal at the moment of the delete rather than from anything
+// this package already decided. A non-nil error is a refusal and the
+// object is untouched.
+type MediumPruner interface {
+	DeleteFromMedium(ctx context.Context, rec state.Record, medium string) error
+}
+
 // pruneFinalPath computes the same final local path lifecycle's own
 // unexported finalPath (transfer.go) computes for the same (LocalDir,
-// Artifact) pair: the artifact's basename, joined directly under the
-// backup set's configured local directory. Duplicated here for the same
-// reason prunePartialSuffix is (this package cannot reach lifecycle's
-// unexported helper, and file scope keeps it that way): this formula, and
-// lifecycle's own copy of it, are the only two places in the whole
-// project allowed to compute it.
-func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) string {
-	return filepath.Join(bs.LocalPath, artifact.Name)
+// Artifact) pair: the artifact's basename, under the backup set's
+// configured local directory.
+//
+// It used to duplicate that join, with a comment here and another there
+// naming the two of them as the only places in the project allowed to
+// compute it. Both now ASK THE STORE, which is issue #334's deferred
+// conversion: internal/artifactstore landed the Store seam with no
+// production caller so the contract could be argued before anything
+// depended on it, and its package doc named this function and lifecycle's
+// finalPath as the two that would convert. Neither composes a path out of
+// LocalPath any more, so neither can drift from the other or from the
+// store that actually owns the answer.
+//
+// Those two, not every join of a root and an artifact name in this file:
+// pruneVerifySafeToDelete ends by joining that name onto the canonicalized
+// root EvalSymlinks handed back, which is deliberately a different
+// computation on a different input. See its own comment there.
+//
+// The error is what the conversion added. NewLocal refuses an empty root
+// rather than resolving under the process working directory, and Locator
+// refuses an artifact it cannot address. Both are refusals this function
+// could not previously make, and on a delete path a refusal is the answer
+// that costs nothing: see pruneEvaluate, which turns one into PruneRefuse.
+func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) (string, error) {
+	store, err := artifactstore.NewLocal(bs.LocalPath)
+	if err != nil {
+		return "", fmt.Errorf("retention: prune: backup set %s: %w", bs.ID, err)
+	}
+	return store.Locator(artifact)
 }
 
 // pruneVerifySafeToDelete runs every one of FR-20's checks against one
@@ -240,7 +390,10 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 			rec.Artifact, rec.State)
 	}
 
-	expected := pruneFinalPath(bs, rec.Artifact)
+	expected, err := pruneFinalPath(bs, rec.Artifact)
+	if err != nil {
+		return "", err
+	}
 	if strings.HasSuffix(expected, prunePartialSuffix) {
 		// Unreachable given model.NewArtifactID's own basename validation
 		// (an artifact name can never contain the separators that would
@@ -321,20 +474,67 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// joining the canonical directory back onto the artifact's own name
 	// is the fully canonical, safe-to-remove path: no further resolution
 	// of the final component is needed or wanted.
+	//
+	// This is deliberately NOT the store's own Locator, even though it has
+	// the same shape. That method answers "where does the configured root
+	// say this artifact goes"; this line answers "what is the
+	// resolved, symlink-free path this function just proved safe", and
+	// routing it back through the configured root would throw away the
+	// resolution the checks above exist to produce. Same shape, different
+	// question, and this one fails closed.
 	return filepath.Join(resolvedRoot, rec.Artifact.Name), nil
 }
 
 // pruneEvaluate is PruneDecide's per-artifact decision: given the composed
 // GFS/last-known-good verdict DecideKeep already produced for this
 // artifact, decide KEEP, DELETE or REFUSE.
-func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict, lkg LastKnownGoodResult) PruneVerdict {
-	path := pruneFinalPath(bs, rec.Artifact)
+func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict, lkg LastKnownGoodResult, where ArtifactLocator) PruneVerdict {
+	loc := where(rec.Artifact)
+
+	// An artifact whose durable copy is an object takes a different set of
+	// checks, because FR-20's list is about a PATH: canonicalization,
+	// containment beneath a root, symlinks, traversal. A key has none of
+	// those, and inventing checks shaped like them would read as a safety
+	// proof while proving nothing (internal/placement's own
+	// proveMediumSourceSafe says the same thing about the same question).
+	// What survives the move to a medium is FR-19, FR-18's own verdict,
+	// the "final managed artifact, never a .partial" guarantee, and the
+	// identity re-check, and those are what the branch below runs.
+	//
+	// Everything else, an unrecorded location included, takes FR-20's own
+	// path. See LocationUnrecorded for why the absence of a placement row
+	// takes nothing away from a proof that was never made of one.
+	if loc.OnMedium() {
+		return pruneEvaluateOnMedium(rec, keepVerdict, lkg, loc.Medium)
+	}
+
+	path, err := pruneFinalPath(bs, rec.Artifact)
+	if err != nil {
+		// A store that cannot say where this artifact belongs is a store
+		// this function must not guess on behalf of. REFUSE rather than
+		// KEEP, because the two are different claims: KEEP asserts a tier
+		// selected it, and this asserts nothing was decided at all. Path
+		// stays empty on purpose, so nothing downstream can act on a
+		// half-computed one.
+		//
+		// This runs before the Keep check below, so a kept artifact
+		// refuses here too. That is the ordering the claim demands: a
+		// resolution failure never comes out as KEEP, not even when a
+		// tier would have selected the artifact, because KEEP would then
+		// be reporting a tier decision about a file nothing can locate.
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Reason:   fmt.Sprintf("refusing to decide about %s: %v", rec.Artifact, err),
+		}
+	}
 
 	if keepVerdict.Keep {
 		return PruneVerdict{
 			Artifact: rec.Artifact,
 			Action:   PruneKeep,
 			Path:     path,
+			Medium:   localBranchMedium(loc),
 			Tiers:    append([]GFSTierSelection(nil), keepVerdict.Tiers...),
 			Reason:   pruneKeepReason(keepVerdict.Tiers),
 		}
@@ -358,8 +558,34 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneRefuse,
 			Path:     path,
+			Medium:   localBranchMedium(loc),
 			Reason: fmt.Sprintf(
 				"refusing to delete %s: it holds FR-19 last-known-good protection, but the GFS verdict passed in claims Keep=false; this contradiction means mismatched inputs were passed to this decision, not a real delete candidate",
+				rec.Artifact),
+		}
+	}
+
+	// Not kept, not protected, and the journal holds MORE than one ACTIVE
+	// placement for this artifact. That is FR-30's copy phase in flight,
+	// so something else is operating on this artifact's copies right now
+	// and removing one of them is the race FR-30's journal exists to make
+	// unrepresentable. REFUSE, which is a different claim from KEEP and is
+	// what makes the collision visible instead of quiet.
+	//
+	// It is checked here, after the KEEP branch, rather than first,
+	// because a contested placement is a reason not to DELETE and never a
+	// reason to report a tier's KEEP as something this pass refused. An
+	// artifact a tier selects is not being deleted, so there is nothing
+	// for the in-flight move to collide with.
+	//
+	// LocationUnrecorded deliberately does not land here: see its own doc.
+	if loc.Status == LocationContested {
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Path:     path,
+			Reason: fmt.Sprintf(
+				"refusing to delete %s: the journal records more than one ACTIVE placement for it, which is a move in flight; deleting a copy out from under a move is the race FR-30's journal exists to make unrepresentable",
 				rec.Artifact),
 		}
 	}
@@ -370,6 +596,7 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneRefuse,
 			Path:     path,
+			Medium:   localBranchMedium(loc),
 			Reason:   err.Error(),
 		}
 	}
@@ -378,7 +605,110 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 		Artifact: rec.Artifact,
 		Action:   PruneDelete,
 		Path:     safePath,
+		Medium:   localBranchMedium(loc),
 		Reason:   pruneDeleteReason(keepVerdict),
+	}
+}
+
+// localBranchMedium is what a verdict taken on FR-20's local path names as
+// its medium.
+//
+// It is config.MediumLocal for a confirmed local placement and for an
+// unrecorded one alike, and that is not a guess: this branch's verdict is
+// about the file at Path, under the backup set's own local_path, and
+// config.MediumLocal is exactly what that place is called. An empty string
+// here would say "nowhere" about a file this function just canonicalized.
+//
+// A contested location gets an empty medium, because there really are two
+// answers and this verdict declines to pick one. That verdict is always a
+// KEEP or a REFUSE (the DELETE branch above refuses a contested location
+// outright), so the empty string never travels beside a deletion.
+func localBranchMedium(loc Location) string {
+	if loc.Status == LocationContested {
+		return ""
+	}
+	return config.MediumLocal
+}
+
+// pruneEvaluateOnMedium is pruneEvaluate for an artifact whose durable
+// copy is an object on a storage medium (EPIC E FR-30, issue #239).
+//
+// It decides; it never deletes, exactly like the local branch. The actual
+// removal, and the FR-16 identity re-check that has to precede it, happen
+// in PruneApply through a MediumPruner, which is the only thing in this
+// product allowed to look at what the medium says.
+//
+// # What it re-derives rather than trusts
+//
+// The same two things the local branch re-derives at the point of the
+// dangerous action: that no tier and no last-known-good protection selects
+// the artifact, and that the record is a final managed artifact rather
+// than something still in flight. DecideKeep already filtered on both
+// before a candidate reached here, and both are checked again anyway, for
+// the reason lifecycle/remotedelete.go states for its own four
+// revalidations: a safety check worth having is worth re-running at the
+// point of the dangerous action, not just upstream of it.
+//
+// There is no containment or symlink check, and their absence is a
+// decision rather than an omission. Those checks answer "is this path the
+// one this backup set owns", and a key is not a path: it has no parent
+// directory, no symlink to follow and no ".." to escape through. The
+// question a key CAN get wrong is "is the object at it still the one the
+// journal recorded", and that is FR-16's, answered immediately before the
+// delete by the MediumPruner rather than here, where it would be answered
+// against a medium's state that can change before anything acts on it.
+func pruneEvaluateOnMedium(rec state.Record, keepVerdict GFSVerdict, lkg LastKnownGoodResult, medium string) PruneVerdict {
+	if keepVerdict.Keep {
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneKeep,
+			Medium:   medium,
+			Tiers:    append([]GFSTierSelection(nil), keepVerdict.Tiers...),
+			Reason:   pruneKeepReason(keepVerdict.Tiers),
+		}
+	}
+
+	if lkg.Protected && lkg.Artifact == rec.Artifact {
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Medium:   medium,
+			Reason: fmt.Sprintf(
+				"refusing to delete %s from %q: it holds FR-19 last-known-good protection, but the GFS verdict passed in claims Keep=false; this contradiction means mismatched inputs were passed to this decision, not a real delete candidate",
+				rec.Artifact, medium),
+		}
+	}
+
+	if !gfsIsManagedComplete(rec.State) {
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Medium:   medium,
+			Reason: fmt.Sprintf(
+				"retention: prune: refusing %s on %q: journal state %q is not a final managed artifact (must be COMMITTED, REMOTE_DELETE_PENDING or COMPLETE)",
+				rec.Artifact, medium, rec.State),
+		}
+	}
+	if strings.HasSuffix(rec.Artifact.Name, prunePartialSuffix) {
+		// Unreachable through model.NewArtifactID, kept for the reason the
+		// local branch keeps its own copy of this check: FR-20 asks for
+		// "never a .partial" as its own guarantee rather than as an
+		// implication of the state check above.
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Medium:   medium,
+			Reason:   fmt.Sprintf("retention: prune: refusing %s on %q: its name carries the %s marker", rec.Artifact, medium, prunePartialSuffix),
+		}
+	}
+
+	return PruneVerdict{
+		Artifact: rec.Artifact,
+		Action:   PruneDelete,
+		Medium:   medium,
+		Reason: fmt.Sprintf("%s; its durable copy is an object on %q, which is where the deletion would happen, "+
+			"after re-checking immediately beforehand that the object there is still the one this journal recorded",
+			pruneDeleteReason(keepVerdict), medium),
 	}
 }
 
@@ -449,6 +779,14 @@ func pruneKeepReason(tiers []GFSTierSelection) string {
 // directory FR-20's containment check needs, and must describe the same
 // backup set as set == bs.ID.
 //
+// where says, per artifact, which medium its durable copy is on (EPIC E
+// FR-30, issue #239). It decides which set of safety checks a delete
+// candidate faces: FR-20's path discipline for a local file, and FR-16's
+// identity re-check for an object. Pass AllLocal for a deployment with no
+// storage mediums, which is exactly the behaviour every caller had before
+// this parameter existed. It has no default, because the only defaults
+// available are guesses about where a copy of a backup lives.
+//
 // Artifacts outside GFS's own scope (still in flight, or in an
 // exceptional non-recoverable state: see GFSDecide's doc on
 // gfsManagedCompleteStates) never receive a verdict here, exactly as they
@@ -456,9 +794,13 @@ func pruneKeepReason(tiers []GFSTierSelection) string {
 // decide about a backup that has not yet succeeded. The returned slice is
 // sorted by artifact name, same as GFSDecide's own, so two calls over the
 // same inputs render identically.
-func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, records []state.Record) ([]PruneVerdict, error) {
+func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, records []state.Record, where ArtifactLocator) ([]PruneVerdict, error) {
 	if bs.ID.IsZero() {
 		return nil, fmt.Errorf("retention: PruneDecide needs a non-zero backup set id")
+	}
+	if where == nil {
+		return nil, fmt.Errorf("retention: PruneDecide needs a way to say where each artifact's durable copy is; " +
+			"pass AllLocal for a deployment with no storage mediums, and internal/app.ActiveMediumFromRecords otherwise")
 	}
 
 	verdicts, lkg, err := DecideKeep(now, cfg, bs.ID, records)
@@ -480,7 +822,7 @@ func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, recor
 			// evaluating a zero-value Record that was never real input.
 			return nil, fmt.Errorf("retention: prune: internal inconsistency: verdict for %s has no matching record", v.Artifact)
 		}
-		out = append(out, pruneEvaluate(bs, rec, v, lkg))
+		out = append(out, pruneEvaluate(bs, rec, v, lkg, where))
 	}
 	sortPruneVerdicts(out)
 	return out, nil
@@ -511,8 +853,19 @@ func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, recor
 // primitive available to this project closes that window completely; see
 // lifecycle/commit.go's own "honest accounting" section for the same kind
 // of limit acknowledged rather than hidden).
-func PruneApply(now time.Time, cfg config.Retention, bs config.BackupSet, records []state.Record) ([]PruneVerdict, error) {
-	verdicts, err := PruneDecide(now, cfg, bs, records)
+//
+// # The object half
+//
+// A verdict whose Medium is not local is not a local file, and it is
+// removed through medium (a MediumPruner) rather than os.Remove. That
+// call carries FR-16's identity re-check with it, for the same reason the
+// second pruneVerifySafeToDelete call above exists: the decision was taken
+// earlier, and an object can be replaced between the two. A nil
+// MediumPruner is a REFUSE and never a pass, the same direction #238 gave
+// its own nil TierGuard, because a delete this product cannot prove is a
+// delete it does not make.
+func PruneApply(ctx context.Context, now time.Time, cfg config.Retention, bs config.BackupSet, records []state.Record, where ArtifactLocator, medium MediumPruner) ([]PruneVerdict, error) {
+	verdicts, err := PruneDecide(now, cfg, bs, records, where)
 	if err != nil {
 		return nil, err
 	}
@@ -534,6 +887,26 @@ func PruneApply(now time.Time, cfg config.Retention, bs config.BackupSet, record
 			// strength of a verdict this call cannot re-derive.
 			verdicts[i].Action = PruneRefuse
 			verdicts[i].Reason = "internal inconsistency: no matching record at delete time"
+			continue
+		}
+
+		if verdicts[i].Medium != config.MediumLocal {
+			// The object half. Every fact this delete rests on is
+			// re-derived by the pruner from the journal and from the
+			// medium itself, at this moment, which is FR-16's whole
+			// point: the plan was made earlier, and an object can be
+			// replaced between the two.
+			if medium == nil {
+				verdicts[i].Action = PruneRefuse
+				verdicts[i].Reason = fmt.Sprintf(
+					"refusing to delete %s from %q: nothing here can re-check the object's identity before removing it, and an unproven delete is not a delete this product makes",
+					verdicts[i].Artifact, verdicts[i].Medium)
+				continue
+			}
+			if err := medium.DeleteFromMedium(ctx, rec, verdicts[i].Medium); err != nil {
+				verdicts[i].Action = PruneRefuse
+				verdicts[i].Reason = fmt.Sprintf("nothing was removed from %q: %v", verdicts[i].Medium, err)
+			}
 			continue
 		}
 

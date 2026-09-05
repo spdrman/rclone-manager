@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
@@ -134,6 +135,75 @@ type Manifest struct {
 	// artifact.
 	ValidationPassed *bool  `json:"validation_passed,omitempty"`
 	ValidationDetail string `json:"validation_detail,omitempty"`
+
+	// Placements is where this artifact's durable copies were when the
+	// manifest was written (EPIC E, FR-29), one entry per copy.
+	//
+	// # Why the format version did not go up for this
+	//
+	// The field is additive and omitempty, so a manifest written before
+	// EPIC E parses into a nil slice and a manifest written after it is
+	// read by an older binary as a manifest with one field it does not
+	// know about, which encoding/json ignores. That older binary then
+	// reconstructs exactly the row it reconstructs today, and in Phase 1
+	// it is right to: every placement is local, and a local placement
+	// says nothing the manifest did not already imply.
+	//
+	// Bumping CurrentFormatVersion would instead make every older binary
+	// refuse the whole manifest, for a field it has no need of, which is
+	// the opposite of what recovery metadata is for.
+	//
+	// The bump belongs to the change that makes this field load-bearing:
+	// once an artifact's only copy can be on a storage medium, a manifest
+	// read by a binary that ignores Placements reconstructs a row claiming
+	// a local copy that is not there, and THAT is a difference a version
+	// number has to stop.
+	Placements []ManifestPlacement `json:"placements,omitempty"`
+}
+
+// ManifestPlacement is one durable copy of an artifact, as recorded in a
+// recovery manifest.
+//
+// It mirrors internal/state.Placement without importing it: this package
+// depends on internal/model and the standard library and nothing else, so
+// that both internal/lifecycle (which writes manifests) and internal/app
+// (which reads them) can share it without either importing the other. That
+// is the same reason Manifest itself copies rather than embeds a
+// state.Record.
+//
+// # What is deliberately not here
+//
+// No endpoint, no bucket, no region, no credential reference of any kind.
+// A medium is named by its configured ID and nothing else, and the object
+// is named by its key. That is enough for a rebuild to say "this artifact
+// also lives on the medium you call offsite_s3, at this key" and to leave
+// the operator's own configuration to say what offsite_s3 is. It is also
+// the FR-33 rule applied to a file that, for a medium sidecar, is written
+// into the bucket itself: anything in here is readable by everyone who can
+// read the bucket.
+type ManifestPlacement struct {
+	// Medium is "local" or the id of a configured storage medium.
+	Medium string `json:"medium"`
+
+	// Location is an absolute path for a local placement and an object key
+	// for a medium placement.
+	Location string `json:"location"`
+
+	// SizeBytes is what this copy measures, or nil when nobody recorded
+	// it.
+	SizeBytes *int64 `json:"size_bytes,omitempty"`
+
+	// Checksum and ChecksumAlgorithm are the content hash recorded for
+	// this copy, spelled the way the manifest's own Checksum fields are.
+	Checksum          string `json:"checksum,omitempty"`
+	ChecksumAlgorithm string `json:"checksum_algorithm,omitempty"`
+
+	// VerificationClass is the class of verification this copy had
+	// ACHIEVED when the manifest was written, or empty for none.
+	VerificationClass string `json:"verification_class,omitempty"`
+
+	// Status is the copy's own status: ACTIVE, DELETE_PENDING or GONE.
+	Status string `json:"status"`
 }
 
 // ManifestPath computes the sidecar path for one artifact, exactly the
@@ -145,6 +215,53 @@ type Manifest struct {
 // lives.
 func ManifestPath(localDir, artifactName string) string {
 	return filepath.Join(localDir, artifactName+manifestSuffix)
+}
+
+// manifestObjectDir is the key namespace a medium's sidecar objects live
+// in, as FR-28 fixes the layout: <prefix>/<source>/<set>/.manifest/.
+const manifestObjectDir = ".manifest"
+
+// manifestObjectSuffix is appended to the artifact's own name to make its
+// sidecar object's key.
+//
+// It is ".json" and not the local sidecar's ".manifest.json", because the
+// two are disambiguated differently. A local sidecar sits in the same
+// directory as the artifact, so its name has to say what it is; an object
+// sidecar sits in its own .manifest/ namespace, where saying it twice
+// would just make the key longer.
+const manifestObjectSuffix = ".json"
+
+// ManifestObjectKey derives the key of an artifact's sidecar OBJECT from
+// the key of the artifact itself (EPIC E, FR-29).
+//
+// It is derived rather than composed independently, and that is the whole
+// point: the artifact's key is built in one place (the transport
+// boundary's own MediumKey, which owns FR-28's layout), and a sidecar
+// whose key was composed a second time from the same parts would be one
+// refactor away from pointing somewhere the artifact is not. Given the
+// artifact's key, this can only ever produce a sidecar beside it.
+//
+// It refuses a key it cannot derive from rather than guessing, for
+// MediumKey's own reason: a key is not only ever a key, since a restore
+// writes it to a local path derived from it.
+func ManifestObjectKey(artifactKey string) (string, error) {
+	if artifactKey == "" {
+		return "", fmt.Errorf("recovery: cannot derive a sidecar key from an empty artifact key")
+	}
+	if strings.HasSuffix(artifactKey, "/") {
+		return "", fmt.Errorf("recovery: %q names a directory, not an artifact", artifactKey)
+	}
+	dir, base := "", artifactKey
+	if i := strings.LastIndex(artifactKey, "/"); i >= 0 {
+		dir, base = artifactKey[:i], artifactKey[i+1:]
+	}
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("recovery: %q has no artifact name to derive a sidecar key from", artifactKey)
+	}
+	if dir == "" {
+		return manifestObjectDir + "/" + base + manifestObjectSuffix, nil
+	}
+	return dir + "/" + manifestObjectDir + "/" + base + manifestObjectSuffix, nil
 }
 
 // Validate checks that m carries everything ReadManifest and WriteManifest
@@ -209,9 +326,9 @@ func WriteManifest(localDir string, m Manifest) error {
 		return err
 	}
 	path := ManifestPath(localDir, m.ArtifactName)
-	data, err := json.MarshalIndent(m, "", "  ")
+	data, err := EncodeManifest(m)
 	if err != nil {
-		return fmt.Errorf("recovery: encode manifest for %s: %w", m.ArtifactName, err)
+		return err
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -229,12 +346,51 @@ func ReadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("recovery: read %s: %w", path, err)
 	}
+	m, err := DecodeManifest(data)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("recovery: %s: %w", path, err)
+	}
+	return m, nil
+}
+
+// EncodeManifest renders m as the bytes a sidecar carries, once m has been
+// checked.
+//
+// It exists beside WriteManifest because a sidecar does not always land on
+// a filesystem. FR-29 gives every artifact uploaded to a storage medium a
+// sidecar OBJECT, under the medium's own .manifest/ namespace, carrying
+// exactly these bytes, and an object is written through a MediumStore
+// rather than through os.Rename. Splitting the encoding from the writing
+// is what lets both sides share one format instead of growing a second,
+// almost-identical one for objects.
+//
+// Nothing in Phase 1 uploads anything, so nothing calls this with a medium
+// in mind yet; #238 is where the move engine does.
+func EncodeManifest(m Manifest) ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("recovery: encode manifest for %s: %w", m.ArtifactName, err)
+	}
+	return data, nil
+}
+
+// DecodeManifest parses and validates sidecar bytes, wherever they came
+// from: a file beside the artifact, or an object read back off a medium.
+//
+// Everything it returns is an untrusted PROPOSAL (FR-32). A sidecar found
+// on a medium was written by this product, but it sits in a bucket whose
+// contents this product does not control, so nothing downstream may treat
+// a value from here as authority over a journal row that already exists.
+func DecodeManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return Manifest{}, fmt.Errorf("recovery: parse %s: %w", path, err)
+		return Manifest{}, fmt.Errorf("parse manifest: %w", err)
 	}
 	if err := m.Validate(); err != nil {
-		return Manifest{}, fmt.Errorf("recovery: %s: %w", path, err)
+		return Manifest{}, err
 	}
 	return m, nil
 }

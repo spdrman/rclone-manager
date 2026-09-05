@@ -1,0 +1,21 @@
+# Load's KnownFields(true) refusal. This is the mechanism FR-33 leans on
+# to keep a literal S3 key out of the schema, so it must keep firing on
+# an ordinary typo too, not only on the credential shape.
+poll_interval: 15m
+polling_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: local
+        remote_path: /srv/exports/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h

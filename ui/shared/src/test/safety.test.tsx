@@ -57,7 +57,15 @@ const committed: BackupArtifact = {
   producedAt: "2026-08-28T02:00:11+02:00", receivedAt: "2026-08-28T02:00:53+02:00",
   sizeBytes: 10, checksum: "abc", checksumAlgorithm: "sha256",
   validation: "verified", retentionClasses: ["daily"],
-  remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
+  remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
+  placements: [
+    {
+      medium: "local", mediumType: "local", location: "/data/x.dump",
+      sizeBytes: 10, storageClass: "",
+      verificationClass: "content", verifiedAt: "2026-08-28T02:00:53+02:00",
+      access: "immediate", status: "ACTIVE"
+    }
+  ]
 };
 
 describe("lifecycle ordering", () => {
@@ -169,9 +177,26 @@ describe("storage pressure (\u00a756)", () => {
     expect(operations.filter((name) => /retention/i.test(name))).toContain("applyRetention");
   });
 
-  it("has no deletion or removal operation at all", () => {
-    const deletes = Object.keys(httpApi).filter((name) => /delete|remove/i.test(name));
-    expect(deletes).toEqual([]);
+  // This used to assert an empty list, and it was right to until issue
+  // #391 gave the API its first removal of any kind. What §56 forbids is
+  // an operation that frees disk space by deleting backup data, and the
+  // empty-list version was a proxy for that: cheap, and exactly right
+  // while nothing in the surface was called remove-anything.
+  //
+  // removeSet is not that operation. It removes one backup set's
+  // CONFIGURATION, and every backup that set already took stays on
+  // storage and stays listed under Backups, which is what the
+  // confirmation an operator accepts promises and what
+  // core/service's own TestRemoveBackupSet_StopsCollectionAndKeeps
+  // EverythingAlreadyCollected proves against a real journal and a real
+  // disk. Nothing here can prove that from the browser side, so what this
+  // asserts instead is that the list of removal-shaped operations is
+  // EXACTLY this one: a second one arriving fails here and has to be
+  // argued for on its own terms rather than sliding in under a pattern
+  // that had already been widened once.
+  it("has exactly one removal operation, and it removes configuration rather than backups", () => {
+    const removals = Object.keys(httpApi).filter((name) => /delete|remove/i.test(name));
+    expect(removals).toEqual(["removeSet"]);
   });
 
   // applyRetention is the one call in the whole surface that removes
@@ -231,6 +256,8 @@ describe("storage pressure (\u00a756)", () => {
             delete_count: 1,
             reclaim_bytes: 4096,
             operation_id: "op_1",
+            retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+            retention_is_override: false,
             verdicts: []
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }

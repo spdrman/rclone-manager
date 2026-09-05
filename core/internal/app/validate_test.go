@@ -105,7 +105,7 @@ func TestValidateArtifact_RemoteRetained_QuarantinesOnCorruption(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateArtifact: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestValidateArtifact_RemoteRetained_PassesOnUnchangedFile(t *testing.T) {
 	fx := newRetainedFixture(t)
 	ctx := context.Background()
 
-	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateArtifact: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestValidateArtifact_PassesOnUnchangedFile(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 
-	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateArtifact: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestValidateArtifact_QuarantinesOnCorruption(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateArtifact: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestValidateArtifact_RefusesArtifactNotYetDurable(t *testing.T) {
 
 	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
 
-	if _, err := svc.ValidateArtifact(ctx, rec.Artifact); err == nil {
+	if _, err := svc.ValidateArtifact(ctx, rec.Artifact, ValidateOptions{}); err == nil {
 		t.Error("ValidateArtifact on a DISCOVERED artifact = nil error, want a refusal")
 	}
 }
@@ -292,7 +292,7 @@ func TestValidateArtifact_RefusesWhenTheNamedValidatorWasNeverResolved(t *testin
 	fx := newCommittedFixture(t)
 	ctx := context.Background()
 
-	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("ValidateArtifact (control): %v", err)
 	}
@@ -309,7 +309,7 @@ func TestValidateArtifact_RefusesWhenTheNamedValidatorWasNeverResolved(t *testin
 		t.Fatalf("Get: %v", err)
 	}
 
-	result, err = fx.svc.ValidateArtifact(ctx, fx.artifact)
+	result, err = fx.svc.ValidateArtifact(ctx, fx.artifact, ValidateOptions{})
 	if err == nil {
 		t.Fatalf("ValidateArtifact reported %+v for a backup set whose validator was never resolved; want a refusal", result)
 	}

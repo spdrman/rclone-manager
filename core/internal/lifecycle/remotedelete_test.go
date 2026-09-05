@@ -1,3 +1,23 @@
+// These cover DeleteRemote, which is the one step in this product that
+// destroys something it cannot get back.
+//
+// Almost every test here asserts a REFUSAL plus one more thing: that
+// Transport.DeleteRemote was never reached. The transport double counts its
+// calls for exactly that, and the count is the assertion that matters,
+// because a gate that returned an error after issuing the delete would
+// satisfy every check on the return value while having already deleted the
+// operator's data.
+//
+// The fixtures walk the real journal edge by edge rather than writing a row
+// with the right State string. That is not fastidiousness: several of
+// FR-15's checks read evidence recorded by earlier transitions, and the
+// deletion-safety gate reads the append-only log rather than the artifacts
+// row, so a hand-built row has nothing for them to find and would pass or
+// fail for the wrong reason.
+//
+// The other double, deleteTransport, fails loudly on every method a given
+// test does not need. A quiet zero value from an unexpected call is how a
+// test stops covering the path it names.
 package lifecycle
 
 import (
@@ -19,6 +39,11 @@ import (
 
 // --- test fixtures ---
 
+// openTestJournal opens a real SQLite journal per test, in its own temp
+// directory. It is shared by most of the test files in this package, which
+// is why it lives in this one: the delete gate is the heaviest reader of
+// journal history, so its fixtures need the real thing, and everything else
+// then gets it for free.
 func openTestJournal(t *testing.T) *state.Journal {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "journal.db")
@@ -162,12 +187,23 @@ type deleteTransport struct {
 	deleteErr   error
 }
 
+// The compile-time check that this double still satisfies the interface. A
+// method added to transport.Transport otherwise surfaces as a build error
+// somewhere else entirely.
 var _ transport.Transport = (*deleteTransport)(nil)
 
+// List fails, because nothing in the delete path lists. See the type
+// comment for why an unused method refuses rather than answering.
 func (f *deleteTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	return nil, errors.New("deleteTransport: List not used")
 }
 
+// Stat is the only method the gate genuinely calls, and it delegates to a
+// per-test function so each case can stage the remote object it needs: the
+// same object, a different one, or a failure. An unconfigured statFn is an
+// error rather than a zero artifact, since a zero one would look like a
+// legitimate empty object and could accidentally satisfy an identity
+// comparison.
 func (f *deleteTransport) Stat(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 	if f.statFn == nil {
 		return transport.RemoteArtifact{}, errors.New("deleteTransport: Stat not configured")
@@ -175,19 +211,30 @@ func (f *deleteTransport) Stat(ctx context.Context, source transport.Source, rem
 	return f.statFn(ctx, source, remotePath)
 }
 
+// CopyToLocal fails: the delete path never transfers anything.
 func (f *deleteTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
 	return transport.TransferResult{}, errors.New("deleteTransport: CopyToLocal not used")
 }
 
+// RemoteHash fails. The identity re-check reads what Stat reports rather
+// than asking for a hash separately, so reaching this would mean the gate
+// had grown a request nobody accounted for.
 func (f *deleteTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
 	return "", errors.New("deleteTransport: RemoteHash not used")
 }
 
+// DeleteRemote counts its calls, which is the single most important
+// assertion surface in this file: nearly every test here checks it is still
+// zero after a refusal.
 func (f *deleteTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	f.deleteCalls++
 	return f.deleteErr
 }
 
+// testRemotePath is the remote path every fixture records at discovery. It
+// is a constant so a test asserting that the gate passed the EXACT path from
+// the journal, rather than one it recomposed, has something to compare
+// against.
 const testRemotePath = "backups/backup.dump.zst"
 
 // requireRefusal asserts err is a *RemoteDeleteRefusalError with the given

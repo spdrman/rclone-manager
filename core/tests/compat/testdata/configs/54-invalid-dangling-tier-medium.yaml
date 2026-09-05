@@ -1,0 +1,32 @@
+# A tier naming a medium nobody declared. The refusal is what stops a
+# typo in a medium id from silently resolving to local, which would put
+# artifacts somewhere the operator did not ask for.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: local
+        remote_path: /srv/exports/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7
+    - name: monthly
+      granularity: month
+      keep: 12
+      medium: offsite_s3

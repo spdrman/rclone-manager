@@ -99,6 +99,37 @@ type backupSetHealthResponse struct {
 	// StorageLevel is omitted, not "OK", when no reading could be taken.
 	TotalBytes   uint64 `json:"total_bytes,omitempty"`
 	StorageLevel string `json:"storage_level,omitempty"`
+
+	// The placement block (issue #444): not how fresh these backups are,
+	// which everything above answers, but whether they are on the storage
+	// medium this set's retention policy says they belong on, and whether
+	// this manager's attempts to get them there are getting anywhere.
+	//
+	// It reaches this endpoint from durable state rather than from the
+	// last pass, which is the whole point of the field existing. A
+	// relocation's outcome was already visible on an exit status, in the
+	// activity feed and on the dashboard's last-cycle panel, and every one
+	// of those describes ONE pass; a UI polling this endpoint on a
+	// deployment nobody has run a cycle in front of saw none of it, so
+	// moves that had been failing for a week rendered as a healthy
+	// deployment.
+	//
+	// The four counts are NOT omitempty, for the reason
+	// ReinstatedRemoteRetainedCount is not: zero is the resting value of
+	// every one of them, and an absent field would read as "this build
+	// does not know", which is precisely the state this issue ends. The
+	// three ages and the reason ARE omitted, and the polarity is the
+	// opposite one: an age only exists when there is something to be the
+	// age of, the count beside it always says whether there is, and a zero
+	// duration would read as "this happened just now".
+	AwayFromHome                 int    `json:"away_from_home"`
+	AwayFromHomeOldestAgeSeconds int64  `json:"away_from_home_oldest_age_seconds,omitempty"`
+	UnconfirmedLocation          int    `json:"unconfirmed_location"`
+	OpenMoves                    int    `json:"open_moves"`
+	OpenMoveOldestAgeSeconds     int64  `json:"open_move_oldest_age_seconds,omitempty"`
+	FailedMoves                  int    `json:"failed_moves"`
+	FailedMoveOldestAgeSeconds   int64  `json:"failed_move_oldest_age_seconds,omitempty"`
+	FailedMoveReason             string `json:"failed_move_reason,omitempty"`
 }
 
 type healthResponse struct {
@@ -153,5 +184,17 @@ func toBackupSetHealthResponse(bs service.BackupSetHealth) backupSetHealthRespon
 		FreeBytesKnown:                bs.FreeBytesKnown,
 		TotalBytes:                    bs.TotalBytes,
 		StorageLevel:                  bs.StorageLevel,
+
+		// Issue #444. The ages go over the wire in seconds, the way
+		// StaleAfterSeconds already does, rather than as a Go duration
+		// string that every non-Go client would have to parse.
+		AwayFromHome:                 bs.Placement.AwayFromHome,
+		AwayFromHomeOldestAgeSeconds: int64(bs.Placement.OldestAwayFromHomeAge.Seconds()),
+		UnconfirmedLocation:          bs.Placement.UnconfirmedLocation,
+		OpenMoves:                    bs.Placement.OpenMoves,
+		OpenMoveOldestAgeSeconds:     int64(bs.Placement.OldestOpenMoveAge.Seconds()),
+		FailedMoves:                  bs.Placement.FailedMoves,
+		FailedMoveOldestAgeSeconds:   int64(bs.Placement.OldestFailedMoveAge.Seconds()),
+		FailedMoveReason:             bs.Placement.FailedMoveReason,
 	}
 }

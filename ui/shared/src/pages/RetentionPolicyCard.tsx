@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
 import type {
@@ -7,17 +6,30 @@ import type {
   AppSettings,
   RetentionSchema,
   RetentionSettings,
-  RetentionTierSetting,
+  StorageMedium,
+  StorageSchema,
   UpdateRetentionSettings
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { FieldHelp, HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
-import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import {
+  chainKey,
+  defaultChain,
+  introducedMediumMappings,
+  MediumDisclosure,
+  settingsKey,
+  tierErrors,
+  toDraft,
+  toTierSetting,
+  TierRow,
+  WEEKDAYS
+} from "./retentionChain";
+import type { TierDraft } from "./retentionChain";
 
 /**
  * B3.7 (#140) — the retention policy form, the write half of what #111
@@ -59,6 +71,19 @@ import { WarningBanner } from "@shared/components/WarningBanner";
  * "Restore default chain" is the positive affordance for the operator who
  * wanted the default back. The backend refuses an explicitly emptied
  * chain too, so this is a second line, not the only one.
+ *
+ * # Where a tier's backups live, and the consent in front of it (#240)
+ *
+ * Each tier row carries a storage-medium picker when the configuration
+ * declares a medium (retentionChain's TierRow), and none at all when it
+ * declares none, which is FR-35's compatibility case: a deployment that
+ * never heard of storage mediums gets exactly the form it had. The first
+ * save that sends a tier's backups off this machine is FR-27's consent
+ * moment. The server refuses that write without an acknowledgment and
+ * its refusal carries the disclosure text, so the panel this card shows
+ * (MediumDisclosure, shared with the per-set editor) renders the
+ * backend's own words, and disabling Save until the box is ticked is a
+ * courtesy in front of a gate that holds either way.
  */
 export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
@@ -93,6 +118,8 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
             key={settingsKey(settings.data.retention)}
             loaded={settings.data.retention}
             schema={settings.data.schema.retention}
+            mediums={settings.data.mediums}
+            storage={settings.data.schema.storage}
             readOnly={readOnly}
           />
         ) : (
@@ -105,76 +132,25 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
   );
 }
 
-/** One tier being edited. The two numbers are held as strings so a
- *  half-typed value ("" while the operator clears the field, "1" on the
- *  way to "14") stays exactly what was typed instead of being coerced to
- *  a number and rendered back as something nobody entered. */
-interface TierDraft {
-  /** Stable across re-orders and removals, so React keeps the right DOM
-   *  node with the right focus; never sent anywhere. */
-  key: string;
-  name: string;
-  granularity: string;
-  keep: string;
-  periodDays: string;
-  windowUnit: string;
-}
 
-let nextTierKey = 0;
-function toDraft(t: RetentionTierSetting): TierDraft {
-  nextTierKey += 1;
-  return {
-    key: "tier-" + nextTierKey,
-    name: t.name,
-    granularity: t.granularity,
-    keep: String(t.keep),
-    periodDays: t.periodDays ? String(t.periodDays) : "",
-    windowUnit: t.windowUnit ?? ""
-  };
-}
 
-const CUSTOM_PERIOD = "days";
 
-/** The chain "Restore default chain" fills the form with, taken from the
- *  schema the server already serves alongside the values rather than
- *  written out here.
- *
- *  This used to be a literal 7/3/12 chain, which was a second spelling of
- *  something config.DefaultTierChain's own doc says has exactly one, and
- *  not a harmless one: restoring the default and saving writes an EXPLICIT
- *  tiers list, which clears the legacy scalars and permanently migrates a
- *  config that would have tracked the product's default onto whatever this
- *  file happened to say. A stale copy could therefore narrow a real
- *  retention window, silently, in the dangerous direction, with nothing
- *  comparing the two. Every other closed value set in this card is already
- *  served by the schema for the same reason. */
-function defaultChain(schema: RetentionSchema): TierDraft[] {
-  return schema.defaultTiers.map(toDraft);
-}
-
-const GRANULARITY_LABELS: Record<string, string> = {
-  day: "Day",
-  week: "Week",
-  month: "Month",
-  quarter: "Quarter",
-  half_year: "Half year",
-  year: "Year",
-  days: "Custom period"
-};
-
-function granularityLabel(value: string): string {
-  return GRANULARITY_LABELS[value] ?? value;
-}
-
-const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 function RetentionPolicyEditor({
   loaded,
   schema,
+  mediums,
+  storage,
   readOnly
 }: {
   loaded: RetentionSettings;
   schema: RetentionSchema;
+  /** Every storage medium the configuration declares. EMPTY is the
+   *  ordinary case and the compatibility one: with no medium configured
+   *  there is nowhere else for a tier's backups to go, so the picker is
+   *  not rendered at all and the form is exactly the form it was. */
+  mediums: StorageMedium[];
+  storage: StorageSchema;
   readOnly: boolean;
 }) {
   const api = useApi();
@@ -189,6 +165,10 @@ function RetentionPolicyEditor({
   const [protect, setProtect] = useState(loaded.protectLastKnownGood);
   const [tiers, setTiers] = useState<TierDraft[]>(() => loaded.tiers.map(toDraft));
 
+  // The operator's acknowledgment of the storage-medium disclosure
+  // (FR-27). It is reset by any edit that changes which mappings are new,
+  // so a tick given for one mapping cannot be spent on a different one.
+  const [acknowledged, setAcknowledged] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
@@ -213,8 +193,25 @@ function RetentionPolicyEditor({
   // front of the write, not a notice after it.
   const disablingProtection = baseline.protectLastKnownGood && !protect;
 
+  // Which tiers this save would newly send off local disk (FR-27's
+  // consent). Per tier, and matched by NAME against what the server says
+  // is currently in effect, which is the same rule core/service applies:
+  // a configuration that already sends monthly to a medium has consented
+  // to monthly leaving, and to nothing else.
+  //
+  // This decides what the form SHOWS. It does not decide whether the
+  // write is allowed: the server refuses an unacknowledged write with
+  // MEDIUM_DISCLOSURE_REQUIRED whatever this computes, which is what
+  // makes the disabled button below a courtesy rather than the gate.
+  const introduced = chainEdited ? introducedMediumMappings(tiers.map(toTierSetting), baseline.tiers) : [];
+  const needsDisclosure = introduced.length > 0;
+
   function update(i: number, patch: Partial<TierDraft>) {
     setSaved(false);
+    // Any edit to the chain can change WHICH mappings are new, so a tick
+    // given a moment ago was given for a different set of consequences.
+    // Clearing it is the safe direction and costs one click.
+    if (patch.medium !== undefined || patch.name !== undefined) setAcknowledged(false);
     setTiers((current) => current.map((t, n) => (n === i ? { ...t, ...patch } : t)));
   }
 
@@ -233,7 +230,9 @@ function RetentionPolicyEditor({
     setSaveError(null);
     setSaved(false);
     api
-      .updateSettings({ retention })
+      .updateSettings(
+        needsDisclosure ? { retention, acknowledgeMediumDisclosure: true } : { retention }
+      )
       .then((next) => {
         // Re-baseline against what the server says is now running, not
         // against the draft: defaults it resolved and values it
@@ -244,6 +243,7 @@ function RetentionPolicyEditor({
         setWeekStartsOn(next.retention.weekStartsOn);
         setProtect(next.retention.protectLastKnownGood);
         setTiers(next.retention.tiers.map(toDraft));
+        setAcknowledged(false);
         setSaved(true);
       })
       .catch((e: unknown) => {
@@ -262,6 +262,7 @@ function RetentionPolicyEditor({
 
   function onSave() {
     if (readOnly || invalid || !dirty || busy) return;
+    if (needsDisclosure && !acknowledged) return;
     if (disablingProtection) {
       setConfirming(true);
       return;
@@ -320,6 +321,7 @@ function RetentionPolicyEditor({
             index={i}
             tier={t}
             schema={schema}
+            mediums={mediums}
             errors={errors[i]}
             readOnly={readOnly}
             canRemove={tiers.length > 1}
@@ -404,6 +406,20 @@ function RetentionPolicyEditor({
         </WarningBanner>
       ) : null}
 
+      {needsDisclosure ? (
+        <MediumDisclosure
+          introduced={introduced}
+          mediums={mediums}
+          storage={storage}
+          acknowledged={acknowledged}
+          disabled={readOnly}
+          onChange={(next) => {
+            setSaved(false);
+            setAcknowledged(next);
+          }}
+        />
+      ) : null}
+
       {saveError ? (
         <ErrorState
           message={saveError.message}
@@ -427,7 +443,7 @@ function RetentionPolicyEditor({
           className="btn btn--primary"
           type="button"
           style={{ height: 40 }}
-          disabled={readOnly || invalid || !dirty || busy}
+          disabled={readOnly || invalid || !dirty || busy || (needsDisclosure && !acknowledged)}
           onClick={onSave}
         >
           {busy ? "Saving…" : "Save retention policy"}
@@ -460,257 +476,5 @@ function RetentionPolicyEditor({
   );
 }
 
-function TierRow({
-  index,
-  tier,
-  schema,
-  errors,
-  readOnly,
-  canRemove,
-  onChange,
-  onRemove
-}: {
-  index: number;
-  tier: TierDraft;
-  schema: RetentionSchema;
-  errors: TierErrors;
-  readOnly: boolean;
-  canRemove: boolean;
-  onChange(patch: Partial<TierDraft>): void;
-  onRemove(): void;
-}) {
-  const custom = tier.granularity === CUSTOM_PERIOD;
-  const position = index + 1;
 
-  return (
-    <div
-      role="group"
-      aria-label={"Tier " + position}
-      style={{
-        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-        gap: "10px 14px", alignItems: "start", padding: "12px 14px",
-        border: "1px solid var(--border)", borderRadius: "var(--radius-md)",
-        background: "var(--surface-2)"
-      }}
-    >
-      <Field label="Name" help={FIELD_HELP.tierName} error={errors.name}>
-        {(helpId) => (
-          <input
-            className="input input--mono"
-            aria-describedby={helpId}
-            value={tier.name}
-            disabled={readOnly}
-            onChange={(e) => onChange({ name: e.target.value })}
-          />
-        )}
-      </Field>
 
-      <Field label="Granularity" help={FIELD_HELP.tierGranularity}>
-        {(helpId) => (
-          <select
-            className="select"
-            aria-describedby={helpId}
-            value={tier.granularity}
-            disabled={readOnly}
-            onChange={(e) => onChange({ granularity: e.target.value })}
-          >
-            {schema.granularities.map((g) => (
-              <option key={g} value={g}>
-                {granularityLabel(g)}
-              </option>
-            ))}
-          </select>
-        )}
-      </Field>
-
-      {custom ? (
-        <Field label="Period (days)" help={FIELD_HELP.tierPeriodDays} error={errors.periodDays}>
-          {(helpId) => (
-            <input
-              className="input"
-              type="number"
-              aria-describedby={helpId}
-              min={1}
-              max={schema.periodDaysMax}
-              value={tier.periodDays}
-              disabled={readOnly}
-              onChange={(e) => onChange({ periodDays: e.target.value })}
-            />
-          )}
-        </Field>
-      ) : null}
-
-      <Field label="Keep" help={FIELD_HELP.tierKeep} error={errors.keep}>
-        {(helpId) => (
-          <input
-            className="input"
-            type="number"
-            aria-describedby={helpId}
-            min={1}
-            max={schema.keepMax}
-            value={tier.keep}
-            disabled={readOnly}
-            onChange={(e) => onChange({ keep: e.target.value })}
-          />
-        )}
-      </Field>
-
-      {/* A custom period measures its own window, so it never carries a
-          window unit — the server refuses that combination outright, so
-          the control is absent rather than present and ignored. */}
-      {custom ? null : (
-        <Field label="Window unit" help={FIELD_HELP.tierWindowUnit}>
-          {(helpId) => (
-            <select
-              className="select"
-              aria-describedby={helpId}
-              value={tier.windowUnit}
-              disabled={readOnly}
-              onChange={(e) => onChange({ windowUnit: e.target.value })}
-            >
-              <option value="">Same as granularity</option>
-              {schema.windowUnits.map((u) => (
-                <option key={u} value={u}>
-                  {granularityLabel(u)}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-      )}
-
-      <div style={{ alignSelf: "end" }}>
-        <button
-          className="btn btn--sm"
-          type="button"
-          aria-label={"Remove tier " + position}
-          disabled={readOnly || !canRemove}
-          onClick={onRemove}
-        >
-          Remove
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * One labelled control, its help pop-up (#278) and its validation message.
- *
- * The message is a SIBLING of the <label>, never inside it. A wrapping
- * label's accessible name is its whole text content, so an error rendered
- * inside it renames the control from "Keep" to "KeepKeep at least 1
- * look-back unit." — which breaks assistive technology and every
- * label-based query alike, silently, and only once the field is invalid.
- *
- * The help copy is kept out of the label for the same reason and reaches
- * the control the other way round, through its aria-describedby: a
- * description is announced after the name rather than becoming part of it,
- * which is exactly the difference between "Keep, edit, 7, how many
- * look-back units..." and a control whose name is three sentences long.
- * That is why `children` is a function: the control has to be handed the
- * id, and there is no honest way to attach a description to a control this
- * component cannot see.
- */
-function Field({
-  label,
-  help,
-  error,
-  children
-}: {
-  label: string;
-  help: FieldHelpCopy;
-  error?: string;
-  children: (helpId: string) => ReactNode;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      <HelpField label={label} help={help}>
-        {children}
-      </HelpField>
-      {error ? (
-        <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>{error}</span>
-      ) : null}
-    </div>
-  );
-}
-
-interface TierErrors {
-  name?: string;
-  keep?: string;
-  periodDays?: string;
-}
-
-/**
- * The same rules core/internal/config's validateRetentionTiers applies,
- * checked here against the schema the server itself served so the two
- * cannot drift. A duplicate is reported on the LATER tier only (the one
- * that claimed a name an earlier tier already holds), matching the
- * backend's own message and keeping one mistake to one message.
- */
-function tierErrors(
-  tier: TierDraft,
-  index: number,
-  all: TierDraft[],
-  schema: RetentionSchema,
-  namePattern: RegExp
-): TierErrors {
-  const errors: TierErrors = {};
-
-  const firstWithName = all.findIndex((t) => t.name === tier.name);
-  if (tier.name === "") {
-    errors.name = "Name this tier before saving.";
-  } else if (!namePattern.test(tier.name)) {
-    errors.name = "Tier names are lower_snake_case: letters, digits and underscores, starting with a letter.";
-  } else if (tier.name === schema.reservedTierName) {
-    errors.name = "“" + schema.reservedTierName + "” is reserved for last-known-good protection.";
-  } else if (firstWithName !== index) {
-    errors.name = "“" + tier.name + "” is already used by tier " + (firstWithName + 1) + ".";
-  }
-
-  const keep = Number(tier.keep);
-  if (tier.keep.trim() === "" || !Number.isInteger(keep) || keep < 1) {
-    errors.keep = "Keep at least 1 look-back unit.";
-  } else if (keep > schema.keepMax) {
-    errors.keep = "Keep must not exceed " + schema.keepMax + " look-back units.";
-  }
-
-  if (tier.granularity === CUSTOM_PERIOD) {
-    const period = Number(tier.periodDays);
-    if (tier.periodDays.trim() === "" || !Number.isInteger(period) || period < 1) {
-      errors.periodDays = "A custom period needs a length of at least 1 day.";
-    } else if (period > schema.periodDaysMax) {
-      errors.periodDays = "A custom period must not exceed " + schema.periodDaysMax + " days.";
-    }
-  }
-
-  return errors;
-}
-
-function toTierSetting(t: TierDraft): RetentionTierSetting {
-  const custom = t.granularity === CUSTOM_PERIOD;
-  return {
-    name: t.name,
-    granularity: t.granularity,
-    keep: Number(t.keep),
-    // period_days is legal only on the custom period, and a window unit
-    // only on everything else, so each is dropped rather than sent as a
-    // stray value the server refuses.
-    periodDays: custom ? Number(t.periodDays) : undefined,
-    windowUnit: custom || !t.windowUnit ? undefined : t.windowUnit
-  };
-}
-
-/** A stable string for "is this the same chain", used both to decide
- *  whether to send `tiers` at all and to remount the editor when the
- *  loaded policy changes. Built from a fixed field order, so it never
- *  depends on object key ordering. */
-function chainKey(tiers: RetentionTierSetting[]): string {
-  return tiers
-    .map((t) => [t.name, t.granularity, t.periodDays ?? 0, t.keep, t.windowUnit ?? ""].join(":"))
-    .join("|");
-}
-
-function settingsKey(r: RetentionSettings): string {
-  return [r.timezone, r.weekStartsOn, String(r.protectLastKnownGood), chainKey(r.tiers)].join("~");
-}

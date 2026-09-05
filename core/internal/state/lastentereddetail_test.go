@@ -1,3 +1,13 @@
+// LastEnteredDetail, the one read in this codebase that pulls a lifecycle
+// step's own words back out of state_transitions.detail.
+//
+// It is worth its own file because the column it reads is the only durable
+// place that text ever lands, and every other caller in the tree works
+// around not having it: quarantine.go reconstructs a reason from whatever
+// else is on the record instead of reading this. So a regression here would
+// not surface as a failure anywhere else, it would surface as an operator
+// asking why an artifact is QUARANTINED and being told a guess.
+
 package state
 
 import (

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -103,6 +104,18 @@ type RetentionArtifactVerdict struct {
 	// PruneAction's own three values, as plain strings.
 	Action string
 
+	// Medium is WHERE the copy this verdict is about lives (EPIC E
+	// FR-30, issue #239): "local", or the id of a configured storage
+	// medium. It is empty only when nothing could confirm the location,
+	// which internal/retention always reports as a REFUSE.
+	//
+	// FR-30 asks the mandatory dry-run to explain per-artifact where a
+	// deletion would happen, not only whether, and this is that answer
+	// on the surface an operator confirms from. "Delete 40 artifacts"
+	// means something very different when half of them are objects in a
+	// bucket somebody else pays for.
+	Medium string
+
 	Reason string
 
 	// Tiers lists which GFS tier(s) (and/or "LAST_KNOWN_GOOD") kept this
@@ -134,6 +147,44 @@ type RetentionTierSelection struct {
 	SelectedBy string
 }
 
+// RetentionMove is one artifact a retention pass worked out is not on
+// the medium its chain says it belongs on: internal/retention.HomeMove,
+// as three plain strings (see service.go's package doc — nothing from
+// that package's own vocabulary crosses this boundary).
+//
+// FR-27's home rule is the whole content of it: the first tier in chain
+// order that currently selects an artifact names its home. A move is a
+// statement about placement and nothing else — planning one never adds an
+// artifact to KEEP and never removes one — which is why it travels beside
+// the verdicts rather than inside them.
+type RetentionMove struct {
+	Artifact string
+
+	// FromMedium is where the artifact's one ACTIVE placement is today,
+	// and ToMedium is the medium its home tier names. They are always
+	// different: an artifact already at home is not a move.
+	FromMedium string
+	ToMedium   string
+}
+
+// OnStorageMedium reports whether the copy this verdict is about lives on
+// a configured storage medium rather than on the implicit local one.
+//
+// It is asked here rather than by a caller comparing Medium against the
+// literal "local", because that literal is a reserved id this package
+// owns: a caller that spells it has quietly acquired a second copy of an
+// identifier it was never told about, and one product has to decide what
+// local means (the same reasoning Placement.MediumType's own doc gives,
+// placements.go).
+//
+// It is false for the two REFUSE shapes that establish nothing at all, a
+// location the journal records twice and an artifact whose local path
+// could not be resolved, because neither of those is a copy on a medium
+// either. See RetentionArtifactVerdict.Medium.
+func (v RetentionArtifactVerdict) OnStorageMedium() bool {
+	return v.Medium != "" && v.Medium != config.MediumLocal
+}
+
 // RetentionPlan is docs/EPIC-B-multi-nas.md §15.6's own preview/apply
 // response shape. PreviewRetention returns one; so does ApplyRetentionPlan
 // on success, re-expressing the exact plan that was just applied the same
@@ -151,12 +202,61 @@ type RetentionPlan struct {
 	ReclaimBytes      int64
 	Verdicts          []RetentionArtifactVerdict
 
+	// Moves is every artifact this plan would relocate, in verdict order
+	// (EPIC E FR-27/FR-30, issue #239). It is empty for a deployment
+	// that declares no storage medium, which is every deployment before
+	// this EPIC, and that is asserted rather than argued from the chain:
+	// see omitPlacementInAMediumFreeDeployment.
+	//
+	// It is on the plan rather than behind a second call for the same
+	// reason Retention is: an apply is confirmed against a plan_id, and
+	// what that plan_id commits to has to be the whole of what was
+	// shown. A moves section fetched separately could be rendered beside
+	// verdicts it does not belong to.
+	Moves []RetentionMove
+
+	// UnconfirmedPlacements names every artifact whose current location
+	// could not be established, in verdict order. No move is planned for
+	// one, and that is exactly why the list exists rather than the
+	// artifact being quietly skipped: "I could not confirm where this
+	// is" and "this is already where it belongs" produce the same
+	// silence and are not the same claim.
+	//
+	// The two shapes that produce it are an artifact with no ACTIVE
+	// placement at all and one with more than one, which is a move
+	// already in flight.
+	//
+	// It is empty for a deployment that declares no storage medium, and
+	// that emptiness is the load-bearing half rather than a side effect
+	// of there being nothing to say: the first shape describes every
+	// artifact ingested before FR-29's placement table existed. See
+	// omitPlacementInAMediumFreeDeployment.
+	UnconfirmedPlacements []string
+
 	// OperationID names the durable operation row (ActionRetentionApply)
 	// this apply was recorded under, pollable through the same
 	// GetOperation/GET /api/v1/operations/{id} surface run_cycle already
 	// is. Empty on a plan PreviewRetention returns: a preview creates no
 	// operation, only an apply does.
 	OperationID string
+
+	// Retention is the policy these verdicts were decided under, and
+	// RetentionIsOverride says whether that policy is this backup set's
+	// own or the deployment's (issue #333).
+	//
+	// Both are on the plan rather than left to a second call because the
+	// question a preview is being read to answer is "why is this artifact
+	// about to be deleted", and that has a different answer, and a
+	// different fix, depending on which policy was in force. A client
+	// that fetched the attribution separately could render a chain beside
+	// the wrong source: a plan is pinned to the configuration revision it
+	// was computed against, and a second read is not.
+	//
+	// Retention is the RESOLVED policy (tiers expanded, calendar
+	// inherited), which is the only form that can be shown beside a
+	// verdict without the reader having to resolve it themselves.
+	Retention           RetentionSettings
+	RetentionIsOverride bool
 }
 
 // ApplyRetentionRequest is what a caller submits to ApplyRetentionPlan.
@@ -199,14 +299,15 @@ type retentionPlanRecord struct {
 	inventoryRevision string
 	configRevision    string
 
-	// verdictRevision fingerprints the verdict set PreviewRetention
-	// actually showed the administrator (computeVerdictRevision). This is
-	// the record's whole answer to "is what would run still what was
-	// reviewed": ApplyRetentionPlan re-derives the verdicts at apply time
+	// reviewedRevision fingerprints the whole plan PreviewRetention
+	// actually showed the administrator: the verdicts and, since EPIC E
+	// (#239), the moves section beside them (computeReviewedRevision).
+	// This is the record's whole answer to "is what would run still what
+	// was reviewed": ApplyRetentionPlan re-derives the plan at apply time
 	// and refuses unless the fingerprint still matches, so the guarantee
 	// is asserted rather than argued from the inputs it happens to have
 	// fingerprinted (this issue's own review, mandatory finding M1).
-	verdictRevision string
+	reviewedRevision string
 
 	createdAt time.Time
 	expiresAt time.Time
@@ -260,7 +361,7 @@ func (b *BackupService) PreviewRetention(ctx context.Context, source, set string
 		return RetentionPlan{}, fmt.Errorf("service: preview retention: an internal error occurred")
 	}
 
-	return b.newRetentionPlan(id, st.revision, previewedAt, plan), nil
+	return b.newRetentionPlan(id, st.revision, previewedAt, declaresAStorageMedium(st.inner.Config), plan), nil
 }
 
 // newRetentionPlan issues plan a fresh plan_id, records its bookkeeping
@@ -271,7 +372,7 @@ func (b *BackupService) PreviewRetention(ctx context.Context, source, set string
 // is guaranteed to be the revision of the exact configState whose inner
 // produced plan: see PreviewRetention's own doc for why re-reading would
 // reopen the mismatched-pair window.
-func (b *BackupService) newRetentionPlan(set model.BackupSetID, configRevision string, created time.Time, plan app.PrunePlan) RetentionPlan {
+func (b *BackupService) newRetentionPlan(set model.BackupSetID, configRevision string, created time.Time, mediumsDeclared bool, plan app.PrunePlan) RetentionPlan {
 	planID := "retplan_" + uuid.New().String()
 	inventoryRevision := computeInventoryRevision(plan.Records)
 	expiresAt := created.Add(retentionPlanTTL)
@@ -283,13 +384,13 @@ func (b *BackupService) newRetentionPlan(set model.BackupSetID, configRevision s
 		set:               set,
 		inventoryRevision: inventoryRevision,
 		configRevision:    configRevision,
-		verdictRevision:   computeVerdictRevision(plan.Verdicts),
+		reviewedRevision:  computeReviewedRevision(plan),
 		createdAt:         created,
 		expiresAt:         expiresAt,
 	}
 	b.retentionMu.Unlock()
 
-	return summarizeRetentionPlan(set, planID, inventoryRevision, configRevision, expiresAt, "", plan)
+	return summarizeRetentionPlan(set, planID, inventoryRevision, configRevision, expiresAt, "", mediumsDeclared, plan)
 }
 
 // evictRetentionPlansLocked makes room for one more plan: it drops every
@@ -334,7 +435,8 @@ func (b *BackupService) evictRetentionPlansLocked(nowT time.Time) {
 // no configuration change needed). PreviewRetention records a fingerprint
 // of all three: the inventory revision, the configuration revision, and —
 // the one that closes the gap — a fingerprint of the verdict set the
-// administrator was actually shown (computeVerdictRevision).
+// administrator was actually shown, moves included
+// (computeReviewedRevision).
 //
 // This method re-derives the verdicts through PrunePreviewAt, which
 // mutates nothing, and refuses with ErrRetentionPlanStale unless the
@@ -438,7 +540,7 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 		return RetentionPlan{}, fmt.Errorf("service: apply retention: an internal error occurred")
 	}
 	if computeInventoryRevision(current.Records) != stored.inventoryRevision ||
-		computeVerdictRevision(current.Verdicts) != stored.verdictRevision {
+		computeReviewedRevision(current) != stored.reviewedRevision {
 		return RetentionPlan{}, fmt.Errorf("%w: backup set %s changed since plan %s was previewed", ErrRetentionPlanStale, stored.set, req.PlanID)
 	}
 
@@ -481,7 +583,7 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 
 	b.invalidateRetentionPlansFor(stored.set)
 
-	result := summarizeRetentionPlan(stored.set, req.PlanID, stored.inventoryRevision, stored.configRevision, stored.expiresAt, opID, applied)
+	result := summarizeRetentionPlan(stored.set, req.PlanID, stored.inventoryRevision, stored.configRevision, stored.expiresAt, opID, declaresAStorageMedium(st.inner.Config), applied)
 
 	if err := b.journal.CompleteOperation(context.Background(), opID, now(), summarizeRetentionApply(result)); err != nil {
 		b.logger.Error(context.Background(), "complete-retention-apply", err)
@@ -529,29 +631,47 @@ func (b *BackupService) invalidateRetentionPlansFor(set model.BackupSetID) {
 	}
 }
 
-// computeVerdictRevision fingerprints the FR-20 verdict set a retention
-// plan showed, or would show: the answer to "is what would run still
-// exactly what was reviewed", independent of which input moved to change
-// it. Deliberately hashes every field of every verdict (the action, the
-// path, the tiers that kept it and the human reason each one carries), not
-// just the artifacts selected for deletion, for the same reason
+// computeReviewedRevision fingerprints everything a retention plan showed,
+// or would show: the answer to "is what would run still exactly what was
+// reviewed", independent of which input moved to change it. Deliberately
+// hashes every field of every verdict (the action, the path, the medium,
+// the tiers that kept it and the human reason each one carries), not just
+// the artifacts selected for deletion, for the same reason
 // computeInventoryRevision hashes whole records: a plan going stale too
 // often is the cheap failure, and a plan staying applyable while the
 // operator's reviewed reasoning no longer holds is the expensive one.
 //
+// # Why the moves section is in here (EPIC E FR-27, issue #239)
+//
+// Since this EPIC a plan is not only a list of deletions. It also says
+// which artifacts are not on the medium their chain says they belong on,
+// and an operator confirming a plan_id is confirming that too. Every
+// input the moves section is derived from is, today, also an input to one
+// of the other two revisions, so a divergence would probably be caught
+// transitively. "Probably, transitively" is exactly the argument this
+// function's own mandatory finding M1 rejected for the verdicts: the
+// guarantee is about the reviewed OUTPUT, so the reviewed output is what
+// gets hashed, and it keeps holding when a later change adds an input
+// nobody thought to fingerprint.
+//
 // Sorted by artifact id first, so this is a fingerprint of the verdict
 // SET and not of whatever order internal/retention happened to emit it in.
-func computeVerdictRevision(verdicts []retention.PruneVerdict) string {
-	sorted := append([]retention.PruneVerdict(nil), verdicts...)
+// The moves keep the order they were planned in, which is verdict order,
+// and is therefore already a function of the same sort.
+func computeReviewedRevision(plan app.PrunePlan) string {
+	sorted := append([]retention.PruneVerdict(nil), plan.Verdicts...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Artifact.String() < sorted[j].Artifact.String() })
 
-	b, err := json.Marshal(sorted)
+	b, err := json.Marshal(struct {
+		Verdicts []retention.PruneVerdict
+		Home     retention.HomePlan
+	}{sorted, plan.HomePlan})
 	if err != nil {
 		// See computeInventoryRevision's identical reasoning below:
-		// PruneVerdict is plain data, and a Marshal failure here is a
-		// programmer error to notice loudly rather than paper over with a
-		// fallback revision that would silently never change.
-		panic(fmt.Sprintf("service: computing verdict revision: %v", err))
+		// PruneVerdict and HomePlan are plain data, and a Marshal failure
+		// here is a programmer error to notice loudly rather than paper
+		// over with a fallback revision that would silently never change.
+		panic(fmt.Sprintf("service: computing reviewed revision: %v", err))
 	}
 	sum := sha256.Sum256(b)
 	return "vdt_" + hex.EncodeToString(sum[:])[:16]
@@ -571,7 +691,13 @@ func computeVerdictRevision(verdicts []retention.PruneVerdict) string {
 // result (defensive only: DecideKeep/PruneDecide never classify anything
 // outside the managed-complete states, which by construction cannot exist
 // without one) contributes zero rather than guessing.
-func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, configRevision string, expiresAt time.Time, operationID string, plan app.PrunePlan) RetentionPlan {
+//
+// mediumsDeclared says whether this deployment declares any storage
+// medium at all, and it decides whether the plan says anything about
+// PLACEMENT (Moves and UnconfirmedPlacements). See
+// omitPlacementInAMediumFreeDeployment for why a deployment with exactly
+// one place to put anything has nothing to say about where things are.
+func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, configRevision string, expiresAt time.Time, operationID string, mediumsDeclared bool, plan app.PrunePlan) RetentionPlan {
 	recByArtifact := make(map[model.ArtifactID]state.Record, len(plan.Records))
 	for _, r := range plan.Records {
 		recByArtifact[r.Artifact] = r
@@ -598,9 +724,31 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 		verdicts[i] = RetentionArtifactVerdict{
 			Artifact: v.Artifact.Name,
 			Action:   string(v.Action),
+			Medium:   v.Medium,
 			Reason:   v.Reason,
 			Tiers:    tiers,
 		}
+	}
+
+	// FR-27's moves, rendered the same way every other name on this
+	// boundary is: the artifact's own name, not its fully-qualified id.
+	// A plan is already scoped to one backup set (BackupSetID above), so
+	// re-spelling the set on every row would be noise a client has to
+	// strip to render a table.
+	var moves []RetentionMove
+	for _, m := range plan.HomePlan.Moves {
+		moves = append(moves, RetentionMove{
+			Artifact:   m.Artifact.Name,
+			FromMedium: m.From,
+			ToMedium:   m.To,
+		})
+	}
+	var unconfirmed []string
+	for _, a := range plan.HomePlan.Unconfirmed {
+		unconfirmed = append(unconfirmed, a.Name)
+	}
+	if !mediumsDeclared {
+		moves, unconfirmed = omitPlacementInAMediumFreeDeployment()
 	}
 
 	return RetentionPlan{
@@ -613,8 +761,57 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 		DeleteCount:       deleteCount,
 		ReclaimBytes:      reclaimBytes,
 		Verdicts:          verdicts,
-		OperationID:       operationID,
+
+		Moves:                 moves,
+		UnconfirmedPlacements: unconfirmed,
+		OperationID:           operationID,
+		// Issue #333: taken from the plan the decision was actually made
+		// on, not re-read from the running config here. A hot reload
+		// between the two would attribute these verdicts to a policy that
+		// did not decide them.
+		Retention:           toRetentionSettings(plan.Retention),
+		RetentionIsOverride: plan.RetentionIsOverride,
 	}
+}
+
+// declaresAStorageMedium answers the one question
+// omitPlacementInAMediumFreeDeployment turns on: does this deployment
+// have anywhere other than local to put a backup at all.
+//
+// It reads the configuration rather than the plan's own chain, because
+// the question is about the DEPLOYMENT and not about one backup set's
+// policy. A set whose own chain is all-local can still hold artifacts on
+// a medium an earlier chain sent there, and those really do have a
+// placement worth reporting; a deployment that declares nothing cannot.
+func declaresAStorageMedium(cfg *config.Config) bool {
+	return cfg != nil && len(cfg.StorageMediums) > 0
+}
+
+// omitPlacementInAMediumFreeDeployment is what a plan says about PLACEMENT
+// in a deployment that declares no storage medium: nothing.
+//
+// A deployment with exactly one place to put anything has nothing to say
+// about where things are, and saying it anyway is actively misleading. A
+// placement row records a DURABLE copy (internal/app.
+// ActiveMediumFromRecords), so nothing ingested before FR-29's table
+// existed has one, and every artifact an upgrade inherits reads as "I
+// could not confirm where this is" while there is nowhere else it could
+// possibly be. An operator opening the first preview after an upgrade
+// would find every backup they already had listed under a heading that
+// reads like a fault.
+//
+// `backup-manager retention` already refuses to print exactly this, for
+// exactly this reason (printPlacementPlan, core/cmd/backup-manager/
+// retention.go). This is the same rule on the second surface, so the two
+// tell the same story about the same deployment rather than two.
+//
+// Moves is empty here anyway (config validation refuses a tier naming a
+// medium the deployment does not declare, so every home a medium-free
+// chain names is local), and it is cleared alongside Unconfirmed rather
+// than left to that argument: the rule is "no medium, no placement
+// section", and a reader should not have to re-derive half of it.
+func omitPlacementInAMediumFreeDeployment() ([]RetentionMove, []string) {
+	return nil, nil
 }
 
 // computeInventoryRevision fingerprints records: the exact journal

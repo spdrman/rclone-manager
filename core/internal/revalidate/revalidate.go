@@ -55,7 +55,9 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // Journal is the slice of internal/state that revalidation needs: the two
@@ -70,14 +72,45 @@ type Journal interface {
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 }
 
-// Deps is what Run is handed. Unlike internal/reconcile.Deps and
-// lifecycle.Deps, there is deliberately no Transport field here:
-// revalidation only ever re-checks the durable local copy already on
-// disk, never the remote (which, for a COMPLETE artifact, is already
-// confirmed gone; see the package doc), so nothing in this package ever
-// needs one.
+// Mediums resolves a placement's medium id into the descriptor a
+// MediumStore needs, out of whatever configuration the caller holds.
+//
+// It is an interface rather than a map because this package must not
+// import internal/config: config is where medium truth lives, and a
+// package that read it directly would be a second place deciding what a
+// medium is. A caller that has no mediums configured supplies nothing,
+// and this package then has nothing to check a medium placement with,
+// which it reports honestly rather than papering over.
+type Mediums interface {
+	MediumFor(id string) (transport.Medium, bool)
+}
+
+// Deps is what Run is handed.
+//
+// There is still no Transport here, and the reason has not changed:
+// revalidation never re-checks a remote SOURCE, which for a COMPLETE
+// artifact is already confirmed gone. What EPIC E adds is the other
+// direction, a DESTINATION an artifact's durable copy may now live on, and
+// that arrives as a MediumStore plus a way to resolve a medium id.
+//
+// Both are optional, and both being absent is the ordinary case for every
+// deployment that configures no medium: with no store, a medium placement
+// is reported as not checked rather than as passed, which is exactly the
+// checked-versus-passed distinction this package already draws.
 type Deps struct {
+	// Journal is both the source of what to consider and the destination
+	// for what is found. It is the wider interface rather than
+	// lifecycle.Journal because this package has to enumerate a backup set
+	// before it can decide anything, which lifecycle never needs to do.
 	Journal Journal
+
+	// Store reaches storage mediums. Nil means this deployment cannot
+	// reach one, which is true of every deployment that configures none.
+	Store placement.Store
+
+	// Mediums resolves a placement's medium id. Nil has the same effect
+	// as a nil Store.
+	Mediums Mediums
 
 	// Now is injectable so a test can control both what a recorded
 	// transition's OccurredAt is stamped with and, transitively through
@@ -85,6 +118,15 @@ type Deps struct {
 	Now func() time.Time
 }
 
+// now resolves the clock once per pass, in UTC whichever branch it takes.
+//
+// Run calls this once and hands the instant to SelectDue, rather than
+// letting each artifact ask again. That matters more here than it looks:
+// due-ness is a comparison against UpdatedAt, so a clock read per artifact
+// would make the interval boundary land in a different place for the first
+// record in a batch than for the last, and an artifact sitting exactly on
+// the boundary would be selected or not depending on how long the pass had
+// been running.
 func (d Deps) now() time.Time {
 	if d.Now == nil {
 		return time.Now().UTC()
@@ -99,9 +141,17 @@ func (d Deps) lifecycleDeps() lifecycle.Deps {
 
 // Finding is one artifact Run examined.
 type Finding struct {
+	// Artifact is which one was examined.
 	Artifact model.ArtifactID
-	From     lifecycle.State
-	To       lifecycle.State
+
+	// From and To are the states either side of what this pass recorded.
+	// They are equal for a pass and for a not-checked artifact alike, so
+	// they are not on their own a way to tell those two apart: Checked is.
+	// To is read back out of the journal's own answer rather than assumed
+	// from the requested edge, so a Finding reports where the artifact
+	// actually ended up.
+	From lifecycle.State
+	To   lifecycle.State
 
 	// Checked is false when nothing cfg enables could actually produce a
 	// verdict for this specific artifact (see runChecks's doc). When
@@ -116,6 +166,20 @@ type Finding struct {
 	// Reason is a short, human-readable explanation, suitable for a log
 	// line or an audit trail.
 	Reason string
+
+	// Class is the verification class this pass actually ACHIEVED, never
+	// the strongest one configured (EPIC E, FR-31). It is empty when
+	// Checked is false.
+	//
+	// It exists because "revalidated" stopped being one thing. An
+	// artifact whose durable copy is a local file is re-read and
+	// re-hashed, which is placement.Content. An artifact whose durable
+	// copy is on a storage medium is HEADed, which is
+	// placement.Existence, proves nothing about the bytes, and must never
+	// be reported to an operator as the artifact having been revalidated
+	// in the sense the local check means. Carrying the class is what lets
+	// every surface downstream say which one happened.
+	Class placement.Class
 }
 
 // ArtifactError is a per-artifact problem that stopped Run from reaching a
@@ -123,17 +187,39 @@ type Finding struct {
 // the same convention internal/reconcile.ArtifactError already
 // established.
 type ArtifactError struct {
+	// Artifact names which one could not be given a verdict. Without it a
+	// batch of these is unactionable.
 	Artifact model.ArtifactID
-	Err      error
+
+	// Err is the infrastructure problem, never a verdict. A check that ran
+	// and said "this artifact is corrupt" is a Finding with Passed false;
+	// only a check that could not run at all lands here.
+	Err error
 }
 
+// Error renders as "artifact: reason".
 func (e ArtifactError) Error() string { return fmt.Sprintf("%s: %v", e.Artifact, e.Err) }
+
+// Unwrap keeps the cause reachable through errors.Is. Run uses that itself,
+// through isCancelled, to tell a pass that was stopped from a pass where one
+// artifact went wrong, and a caller reading a Report needs the same ability
+// for the same reason.
 func (e ArtifactError) Unwrap() error { return e.Err }
 
 // Report is everything one Run call found and did.
 type Report struct {
+	// Findings is one entry per artifact that reached a conclusion,
+	// including the not-checked ones. A not-checked artifact belongs here
+	// rather than in Errors because nothing went wrong: the configuration
+	// simply enabled nothing that could produce a verdict for it, and
+	// reporting that as an error every cycle would train an operator to
+	// ignore the list.
 	Findings []Finding
-	Errors   []ArtifactError
+
+	// Errors is one entry per artifact that could not be given a verdict
+	// at all. An empty Errors with a short Findings list is the shape of a
+	// pass bounded by MaxPerCycle, not the shape of a pass that failed.
+	Errors []ArtifactError
 }
 
 // Run performs one scheduled-revalidation pass over set: it loads set's
@@ -207,7 +293,7 @@ func Run(ctx context.Context, deps Deps, set model.BackupSetID, cfg config.Reval
 func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (Finding, error) {
 	cur := lifecycle.State(rec.State)
 
-	checked, passed, reason, err := runChecks(ctx, cfg, rec)
+	checked, passed, class, reason, err := runChecks(ctx, deps, cfg, rec)
 	if err != nil {
 		return Finding{}, err
 	}
@@ -221,11 +307,17 @@ func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec 
 			Key:      revalidateKey(rec.Artifact, "pass", cur, cur, rec.UpdatedAt),
 			From:     string(cur),
 			To:       string(cur),
-			Detail:   "Phase 4: scheduled revalidation passed: " + reason,
+			// The class is named in the audit trail, not just in the
+			// returned Finding, because the journal is what an operator
+			// reads six months later when they want to know when this
+			// artifact was last actually looked at. "Revalidation passed"
+			// on its own would let an existence check masquerade there as
+			// the content check the same words used to mean.
+			Detail: fmt.Sprintf("Phase 4: scheduled revalidation passed at %s class: %s", class, reason),
 		}); err != nil {
 			return Finding{}, fmt.Errorf("recording a passed revalidation for %s: %w", rec.Artifact, err)
 		}
-		return Finding{Artifact: rec.Artifact, From: cur, To: cur, Checked: true, Passed: true, Reason: reason}, nil
+		return Finding{Artifact: rec.Artifact, From: cur, To: cur, Checked: true, Passed: true, Reason: reason, Class: class}, nil
 	}
 
 	// A failed recheck: route through the exact same edges reconcile.go
@@ -246,12 +338,12 @@ func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec 
 		Key:      revalidateKey(rec.Artifact, "fail", cur, to, rec.UpdatedAt),
 		From:     string(cur),
 		To:       string(to),
-		Detail:   "Phase 4: scheduled revalidation found the durable local copy invalid: " + reason,
+		Detail:   fmt.Sprintf("Phase 4: scheduled revalidation at %s class found the artifact's durable copy invalid: %s", class, reason),
 	})
 	if err != nil {
 		return Finding{}, fmt.Errorf("quarantining %s after a failed revalidation: %w", rec.Artifact, err)
 	}
-	return Finding{Artifact: rec.Artifact, From: cur, To: lifecycle.State(out.Record.State), Checked: true, Passed: false, Reason: reason}, nil
+	return Finding{Artifact: rec.Artifact, From: cur, To: lifecycle.State(out.Record.State), Checked: true, Passed: false, Reason: reason, Class: class}, nil
 }
 
 // revalidateKey mirrors internal/reconcile's own reconcileKey exactly: an
@@ -273,6 +365,22 @@ func revalidateKey(artifact model.ArtifactID, tag string, from, to lifecycle.Sta
 // package's own context handling both need a way to tell "the caller
 // asked us to stop" apart from every other kind of failure, which must
 // still fall through to a real business verdict.
+//
+// It mirrors that function's ordering too, and for the reason spelled out
+// there: a transport.Error keeps its cause reachable through Unwrap, so an
+// error already classified as anything other than Cancelled can still
+// answer errors.Is(err, context.DeadlineExceeded), and a connect timeout
+// rclone imposed on itself is that exact shape (issue #388). Nothing on
+// this package's current call graph hands it one, because runChecks
+// reaches the local filesystem and the restore-test hook rather than a
+// Transport, but the two predicates disagreeing is not a difference worth
+// leaving here for the first remote check to discover.
 func isCancelled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if category, ok := transport.CategoryOf(err); ok {
+		return category == transport.Cancelled
+	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -1,3 +1,19 @@
+// These cover the graph, and most of them are written as properties of the
+// TABLE rather than as scenarios.
+//
+// That follows from machine.go's central choice. Because legality is data
+// and not code, a test can walk every state and every edge and make a
+// complete statement, which is a stronger thing than a list of examples:
+// TestFailedIsUnreachableOnceCommitted, say, is not three cases that happen
+// to be refused, it is the claim that there is no way at all to fail out of
+// a committed backup.
+//
+// Several tests exist to catch the failure that a table makes easy, which is
+// a state or an edge added without anyone thinking about the rest of the
+// graph. TestEveryStateParticipatesInTheGraph and
+// TestTransitionsTableIsWellFormed are that guard, and the entry-point and
+// exit tests below pin the individual answers so a new edge into
+// QUARANTINED, say, has to be argued rather than merely appended.
 package lifecycle
 
 import (
@@ -16,6 +32,14 @@ func stateSet(states []State) map[State]bool {
 	return m
 }
 
+// sortedStrings renders a state slice for a failure message.
+//
+// The sort is for the message only, never for the comparison: these
+// assertions are about set membership, and sorting the two sides and
+// comparing them would additionally pin an order the graph does not
+// promise. What it buys is that two failures of the same test print the same
+// way, so a diff between runs is about the states and not about their
+// order.
 func sortedStrings(states []State) []string {
 	out := make([]string, len(states))
 	for i, s := range states {
@@ -25,6 +49,16 @@ func sortedStrings(states []State) []string {
 	return out
 }
 
+// assertStateSet compares two state slices as sets and reports every
+// difference, in both directions, in one run.
+//
+// Reporting both directions matters more than it looks. An edge added to the
+// table and an edge removed from it are different mistakes with different
+// fixes, and a helper that stopped at the first discrepancy would make a
+// change that did both look like only one of them. The duplicate check is
+// separate for the same reason: a duplicated member makes the set smaller
+// than the slice, which would otherwise hide a genuinely missing state
+// behind a coincidentally matching count.
 func assertStateSet(t *testing.T, label string, got []State, want ...State) {
 	t.Helper()
 	gotSet, wantSet := stateSet(got), stateSet(want)
@@ -45,6 +79,16 @@ func assertStateSet(t *testing.T, label string, got []State, want ...State) {
 
 // --- the table itself is well formed ---
 
+// TestTransitionsTableIsWellFormed checks the table's own hygiene before
+// any test reads meaning out of it.
+//
+// The self-loop refusal is the one carrying a decision rather than a
+// sanity check. Validate treats current == target as an idempotent no-op
+// whether or not the pair is declared, because a crash matrix that kills the
+// process after every state means a step routinely retries a move that
+// already landed. Declaring self-loops as well would be a second statement
+// of the same rule, and the two would drift the first time somebody added a
+// state and remembered only one of them.
 func TestTransitionsTableIsWellFormed(t *testing.T) {
 	seen := map[Transition]bool{}
 	for _, tr := range Transitions {
@@ -74,6 +118,12 @@ func TestDeclaredTransitionsValidate(t *testing.T) {
 	}
 }
 
+// TestEveryStateParticipatesInTheGraph catches a state constant that was
+// declared and then never wired up. Such a state is not inert: Valid reports
+// true for it, so the journal would accept it in a row and ParseState would
+// read it back, while nothing could ever legally enter or leave it. An
+// artifact that reached it would be stuck with no way forward, which is the
+// one outcome this machine is built to make impossible.
 func TestEveryStateParticipatesInTheGraph(t *testing.T) {
 	touched := map[State]bool{}
 	for _, tr := range Transitions {
@@ -134,6 +184,15 @@ func TestIllegalTransitionsFail(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsUnknownStates checks both argument positions, because
+// they fail for different reasons and one implementation could easily
+// validate only the target.
+//
+// An unknown CURRENT state is the more important half: that is what a
+// corrupted or drifted journal row looks like, and treating it as merely
+// "not in the table" would report an illegal transition when the real
+// problem is that the row does not say anything this build understands. The
+// error type is asserted for that reason, since callers route on it.
 func TestValidateRejectsUnknownStates(t *testing.T) {
 	if err := Validate(State("BOGUS"), Discovered); err == nil {
 		t.Error("Validate with an unknown current state accepted")
@@ -210,6 +269,13 @@ func TestOnlyCompletePrecedesQuarantinedLost(t *testing.T) {
 
 // --- FAILED: defined entry points, defined exits ---
 
+// TestFailedEntryPoints pins the exact set, not just that some states can
+// fail.
+//
+// Pinning the whole set is what makes the companion test below meaningful:
+// together they say FAILED is reachable from precisely the six states before
+// COMMITTED and from nowhere else, which is a claim about the entire graph
+// rather than about six examples.
 func TestFailedEntryPoints(t *testing.T) {
 	assertStateSet(t, "Predecessors(Failed)", Predecessors(Failed),
 		Discovered, Transferring, Transferred, Verifying, Verified, Committing)
@@ -225,6 +291,11 @@ func TestFailedIsUnreachableOnceCommitted(t *testing.T) {
 	}
 }
 
+// TestFailedHasExits checks for emptiness first and then for the exact set,
+// and the order is deliberate: an empty result would satisfy the set
+// comparison's "no unexpected members" half, so without the length check the
+// worst possible outcome, a FAILED artifact with nowhere to go, would pass
+// half of this test.
 func TestFailedHasExits(t *testing.T) {
 	exits := Successors(Failed)
 	if len(exits) == 0 {
@@ -235,6 +306,11 @@ func TestFailedHasExits(t *testing.T) {
 
 // --- QUARANTINED: defined entry points, defined exits, no shortcut back to success ---
 
+// TestQuarantinedEntryPoints pins which states may quarantine, with the
+// reasoning for each written out inline because the absences carry as much
+// weight as the presences: COMPLETE is excluded here on purpose, since by
+// then the remote is confirmed gone and that case has to route to
+// QUARANTINED_LOST instead.
 func TestQuarantinedEntryPoints(t *testing.T) {
 	// VERIFYING: a validator found the content itself invalid.
 	// COMMITTED / REMOTE_DELETE_PENDING: reconciliation found the durable,
@@ -408,12 +484,25 @@ func TestNoStateIsALeak(t *testing.T) {
 
 // --- Machine: the ergonomic, stateful wrapper ---
 
+// TestNewMachineRejectsUnknownState pins that a Machine cannot be built
+// around a state name nobody defined. The constructor is where a value read
+// out of the journal becomes a walkable position, so accepting an
+// unrecognised one would mean every later Apply reasoned about a state the
+// table has no rows for and refused everything for the wrong reason.
 func TestNewMachineRejectsUnknownState(t *testing.T) {
 	if _, err := NewMachine(State("BOGUS")); err == nil {
 		t.Fatal("NewMachine accepted an unknown state")
 	}
 }
 
+// TestMachineWalksTheNominalPath drives DISCOVERED to COMPLETE one step at
+// a time, which is the happy path FR-11 describes.
+//
+// The changed flag is asserted on every step, not just the final state. That
+// is what separates this from the idempotence test below it: a genuinely new
+// move must report changed, and a repeat must not, and an implementation
+// that always reported one or the other would satisfy exactly one of the two
+// tests.
 func TestMachineWalksTheNominalPath(t *testing.T) {
 	m, err := NewMachine(Discovered)
 	if err != nil {

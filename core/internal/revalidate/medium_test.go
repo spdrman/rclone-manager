@@ -1,0 +1,984 @@
+// These cover what revalidation does when an artifact's durable copy is on
+// a storage medium rather than on local disk, which is FR-31.
+//
+// Two things make this file's fixtures unusual and they are worth knowing
+// before reading any individual test.
+//
+// The placements are written straight through the journal. Nothing in Phase
+// 1 moves an artifact anywhere, so the states these tests need, an artifact
+// whose only ACTIVE copy is on a medium, or one mid-move with both, cannot
+// be reached by driving the real pipeline. A test that waited for the mover
+// would be a test that never runs.
+//
+// The store double counts requests rather than just answering them. Most of
+// FR-31 is a claim about what a pass does NOT do: it does not download, it
+// does not ask for an attestation, it does not spend money on a schedule an
+// operator set when checking was free. None of that is observable from the
+// verdict, so the fixture has to be able to say how many of each request
+// were made, and several tests assert on those counters instead of on the
+// Finding.
+package revalidate
+
+import (
+	"context"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
+// countingStore records what a revalidation pass actually asked the medium
+// for. The counters are the point: FR-31's "automatic medium revalidation
+// never downloads" is only checkable if the fixture can say whether a
+// download happened, which is the same request-accounting the issue's
+// INTEGRATION step asks for.
+type countingStore struct {
+	size    int64
+	statErr error
+
+	stats  int
+	opens  int
+	digest int
+}
+
+// StatObject is the one call an existence check is supposed to make. The
+// size it reports comes from the fixture rather than from the placement, so
+// a test can stage a size mismatch, and statErr is how a test makes the
+// medium refuse to answer at all.
+func (s *countingStore) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
+	s.stats++
+	if s.statErr != nil {
+		return transport.ObjectInfo{}, s.statErr
+	}
+	return transport.ObjectInfo{Key: key, Size: s.size}, nil
+}
+
+// OpenObject succeeds and hands back nothing, which is deliberate: this
+// method exists to be COUNTED, not to be used. An automatic pass that
+// reached it has already broken FR-31 by starting a download, so returning
+// an empty reader rather than an error keeps the failure showing up as the
+// counter it is rather than as a confusing verification error.
+func (s *countingStore) OpenObject(_ context.Context, _ transport.Medium, _ string) (io.ReadCloser, error) {
+	s.opens++
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+// ObjectChecksum counts, then refuses with the refusal a real S3 backend
+// gives: rclone v1.75.0's s3 backend reports MD5 and nothing else, so a
+// full-object SHA-256 attestation is unavailable in this build no matter
+// what a medium opted into. Answering an attestation here would let a test
+// pass against a capability the product does not actually have.
+func (s *countingStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	s.digest++
+	return transport.ChecksumAttestation{}, transport.NewError(transport.UnsupportedCapability, "object_checksum", errors.New("this backend exposes md5 and nothing else"))
+}
+
+// fixedMediums is a Mediums with one entry.
+type fixedMediums struct {
+	id string
+}
+
+// MediumFor resolves only its one id and reports false for everything else,
+// which is what makes it useful in both directions: the same fixture stages
+// a reachable medium and, by naming a different id in the placement, a
+// medium this deployment was never configured to reach.
+func (m fixedMediums) MediumFor(id string) (transport.Medium, bool) {
+	if id != m.id {
+		return transport.Medium{}, false
+	}
+	return transport.Medium{ID: id, Type: transport.MediumTypeS3, Bucket: "nas-backups"}, true
+}
+
+// moveToMedium takes an artifact that already has a durable local copy and
+// makes its only ACTIVE placement a medium one, which is the state an
+// artifact is in after the move engine (#238) finishes with it.
+//
+// It writes the placements directly through the journal, because that is
+// the only writer there is: nothing in Phase 1 moves anything, and a test
+// that waited for a mover would be a test that never runs.
+func moveToMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, mediumID string, content []byte, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	size := int64(len(content))
+
+	if _, err := j.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":gone-local", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: state.MediumLocal, Location: "/backups/pg/" + artifact.Name,
+			Status: state.PlacementGone,
+		},
+	}); err != nil {
+		t.Fatalf("retiring the local placement: %v", err)
+	}
+	if _, err := j.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":on-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the medium placement: %v", err)
+	}
+}
+
+// addLocalPlacement records the ACTIVE local placement that lifecycle's
+// own Commit records in production.
+//
+// The helpers in revalidate_test.go predate placements and record none, so
+// a record they build answers ReadableLocalPath out of the LocalPath
+// fallback. That is a real Phase 1 shape and worth keeping, but it is not
+// the shape a test about ACTIVE local placements can be written against.
+func addLocalPlacement(t *testing.T, j *state.Journal, artifact model.ArtifactID, localPath string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":local-placement", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: state.MediumLocal, Location: localPath, Size: &size,
+			Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the local placement: %v", err)
+	}
+}
+
+// addMediumPlacement records a medium placement WITHOUT retiring the local
+// one, which is the state an artifact is in mid-move: the copy has been
+// uploaded and the source has not been deleted yet, so both placements are
+// ACTIVE at once. FR-30 is why that window exists at all, since the source
+// copy survives every uncertainty.
+func addMediumPlacement(t *testing.T, j *state.Journal, artifact model.ArtifactID, mediumID string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":also-on-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the second placement: %v", err)
+	}
+}
+
+// TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo is the issue's
+// own behavioural contract: the placement is existence-checked, the
+// recorded and reported class is existence, and no bytes are downloaded.
+func TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes that now live in a bucket")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	store := &countingStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+
+	if !f.Checked {
+		t.Fatalf("the artifact was not checked at all: %s", f.Reason)
+	}
+	if !f.Passed {
+		t.Fatalf("the existence check failed against an object that is there: %s", f.Reason)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q; a HEAD proves nothing about the bytes and must not be reported as anything stronger", f.Class, placement.Existence)
+	}
+	if store.opens != 0 {
+		t.Errorf("the automatic pass downloaded the object %d times; FR-31 makes anything that costs egress operator-initiated, because a surprise bill is how a safety feature gets turned off", store.opens)
+	}
+	if store.digest != 0 {
+		t.Errorf("the automatic pass asked for %d attestations; the ceiling is existence", store.digest)
+	}
+	if store.stats != 1 {
+		t.Errorf("the medium was statted %d times, want exactly 1", store.stats)
+	}
+
+	// And the durable record says the same thing the Finding does. This is
+	// the half that matters six months later, when nobody has the Finding
+	// any more and an operator is reading the journal to find out when
+	// this artifact was last actually looked at.
+	// Read out of the append-only transition log rather than through
+	// LastEnteredDetail, which deliberately ignores a same-state write:
+	// a revalidation pass IS a same-state write, which is exactly why it
+	// does not count as the artifact having freshly "entered" anything.
+	activity, err := j.RecentActivity(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	detail := ""
+	for _, a := range activity {
+		if a.Artifact == artifact && strings.Contains(a.Detail, "revalidation") {
+			detail = a.Detail
+			break
+		}
+	}
+	if detail == "" {
+		t.Fatalf("no revalidation transition was recorded for the pass; the log holds %+v", activity)
+	}
+	if !strings.Contains(detail, string(placement.Existence)) {
+		t.Errorf("the recorded detail %q does not name the class that ran", detail)
+	}
+	if strings.Contains(detail, string(placement.Content)) {
+		t.Errorf("the recorded detail %q names content verification for a pass that only HEADed the object", detail)
+	}
+}
+
+// TestAMediumPlacementThisDeploymentCannotReachIsNotAPass is the
+// checked-versus-passed distinction extended to mediums, and it is the
+// case that protects the due-ness clock. An unreachable bucket must leave
+// the artifact selectable next cycle rather than looking freshly checked.
+func TestAMediumPlacementThisDeploymentCannotReachIsNotAPass(t *testing.T) {
+	ctx := context.Background()
+	content := []byte("bytes in a bucket nobody here can reach")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	for _, tc := range []struct {
+		name string
+		deps func(j *state.Journal) Deps
+	}{
+		{
+			name: "no store at all",
+			deps: func(j *state.Journal) Deps { return Deps{Journal: j} },
+		},
+		{
+			name: "a medium the configuration does not name",
+			deps: func(j *state.Journal) Deps {
+				return Deps{Journal: j, Store: &countingStore{}, Mediums: fixedMediums{id: "some_other_medium"}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j := openJournal(t)
+			artifact := artifactNamed(t, "on-medium.dump")
+			completeArtifact(t, j, artifact, content, long)
+			moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+			before, err := j.Get(ctx, artifact)
+			if err != nil {
+				t.Fatalf("Get before: %v", err)
+			}
+
+			report, err := Run(ctx, tc.deps(j), artifact.Set, cfg)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(report.Findings) != 1 {
+				t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+			}
+			if report.Findings[0].Checked {
+				t.Errorf("the pass reported itself as having checked something: %s", report.Findings[0].Reason)
+			}
+			if report.Findings[0].Class != "" {
+				t.Errorf("an unchecked pass reported class %q", report.Findings[0].Class)
+			}
+
+			after, err := j.Get(ctx, artifact)
+			if err != nil {
+				t.Fatalf("Get after: %v", err)
+			}
+			if !after.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing checked; it would then look freshly verified until the interval elapsed again",
+					before.UpdatedAt, after.UpdatedAt)
+			}
+			if after.State != before.State {
+				t.Errorf("an unreachable medium changed the artifact's state from %q to %q", before.State, after.State)
+			}
+		})
+	}
+}
+
+// TestAMediumThatDoesNotAnswerIsReportedAsAnError is the other half of
+// the same distinction. A medium this deployment was never configured to
+// reach is a configuration fact, which an operator reads past; a medium
+// that was there to ask and did not answer is a backup nobody could check,
+// which somebody should find out about. So the first is an unchecked
+// finding and the second is an error, and neither touches the journal.
+func TestAMediumThatDoesNotAnswerIsReportedAsAnError(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes in a bucket that did not answer")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	deps := Deps{
+		Journal: j,
+		Store:   &countingStore{statErr: transport.NewError(transport.Transient, "stat_object", errors.New("connection reset"))},
+		Mediums: fixedMediums{id: "offsite_s3"},
+	}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, want exactly one; a bucket that did not answer is a backup nobody could check", report.Errors)
+	}
+	if len(report.Findings) != 0 {
+		t.Errorf("Findings = %+v, want none: an artifact nothing could check has no verdict", report.Findings)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing checked", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.State != before.State {
+		t.Errorf("an unreachable medium changed the artifact's state from %q to %q", before.State, after.State)
+	}
+}
+
+// TestAMissingObjectOnAMediumQuarantines is the failing half: existence is
+// a weak check, but a weak check that FAILS is still a real verdict about
+// the artifact, and it routes exactly where a failed local recheck routes.
+func TestAMissingObjectOnAMediumQuarantines(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes that are no longer in the bucket")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	store := &countingStore{statErr: transport.NewError(transport.NotFound, "stat_object", errors.New("object not found"))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || f.Passed {
+		t.Fatalf("an object that is gone was not reported as a failed check: %+v", f)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Existence)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != "QUARANTINED_LOST" {
+		t.Errorf("state = %q, want QUARANTINED_LOST: a COMPLETE artifact whose only copy is gone has already had its remote source deleted", rec.State)
+	}
+}
+
+// TestALocalPlacementStillGetsTodaysCheck is the regression half of FR-31
+// stated positively: local placements keep today's behaviour exactly, and
+// the class they achieve is the content check they have always run.
+//
+// The record it builds has no placement rows at all, which is the ordinary
+// Phase 1 shape and the one ReadableLocalPath answers out of its LocalPath
+// fallback. It is NOT the case where an ACTIVE local placement competes
+// with an ACTIVE medium one; that is TestAnArtifactMidMoveIsStillCheckedLocally,
+// and it exists because without it the rule that a local placement wins
+// the fork could be deleted with this whole file staying green.
+func TestALocalPlacementStillGetsTodaysCheck(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "still-local.dump")
+	content := []byte("bytes still on the NAS")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+
+	store := &countingStore{}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("a local artifact did not pass its own content check: %+v", f)
+	}
+	if f.Class != placement.Content {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Content)
+	}
+	if store.stats != 0 || store.opens != 0 || store.digest != 0 {
+		t.Errorf("a local artifact's revalidation touched the medium store: %d stats, %d opens, %d digests", store.stats, store.opens, store.digest)
+	}
+}
+
+// TestAnArtifactMidMoveIsStillCheckedLocally is FR-31's "local placements
+// keep today's behaviour exactly" for the one case where the sentence has
+// any content: an artifact that has BOTH an ACTIVE local placement and an
+// ACTIVE medium placement, which is where a move leaves it between the
+// upload and the source delete.
+//
+// Without this, the local fork is untestable: every other case in this
+// file has exactly one active placement, so removing the rule that a local
+// placement wins changes nothing and the rule is a comment rather than a
+// behaviour. Getting it wrong is not cosmetic either. Checking the medium
+// copy instead would downgrade a mid-move artifact from the content check
+// it got yesterday to a HEAD, silently, for as long as the move takes.
+func TestAnArtifactMidMoveIsStillCheckedLocally(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "mid-move.dump")
+	content := []byte("bytes that are in two places at once")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	localPath := completeArtifact(t, j, artifact, content, long)
+	addLocalPlacement(t, j, artifact, localPath, content, long)
+	addMediumPlacement(t, j, artifact, "offsite_s3", content, long)
+
+	// The fixture has to actually be in the state this test is named for,
+	// or it is another single-placement test wearing a longer name.
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, hasLocal := rec.LocalPlacement(); !hasLocal {
+		t.Fatalf("the fixture has no ACTIVE local placement, so it is not mid-move: %+v", rec.Placements)
+	}
+	medium := 0
+	for _, p := range rec.Placements {
+		if !p.IsLocal() && p.Status == state.PlacementActive {
+			medium++
+		}
+	}
+	if medium != 1 {
+		t.Fatalf("the fixture has %d ACTIVE medium placements, want exactly 1: %+v", medium, rec.Placements)
+	}
+
+	store := &countingStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("a mid-move artifact did not pass: %+v", f)
+	}
+	if f.Class != placement.Content {
+		t.Errorf("Class = %q, want %q: an artifact that still has its local copy is checked the way it was checked yesterday, not downgraded to a HEAD for the duration of a move", f.Class, placement.Content)
+	}
+	if store.stats != 0 || store.opens != 0 || store.digest != 0 {
+		t.Errorf("the medium was consulted for an artifact whose local copy is still there: %d stats, %d opens, %d digests", store.stats, store.opens, store.digest)
+	}
+}
+
+// TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium is the other half of
+// "report the verification that happened".
+//
+// A restore test opens the artifact, so running one against a bucket is a
+// download, and FR-31 makes anything that costs egress operator-initiated.
+// Skipping it is right. Skipping it silently is not: the operator asked
+// for two tiers, one of them stopped running the day the bytes moved, and
+// a green pass that says nothing about it is how a safety feature becomes
+// decorative.
+func TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes that now live in a bucket")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	// A hook that would pass loudly if anything ever ran it, so a silent
+	// skip cannot be mistaken for a silent pass.
+	hook := mustScript(t, "exit 0")
+	store := &countingStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{
+		Interval:    config.Duration(24 * time.Hour),
+		MaxPerCycle: 10,
+		Hash:        true,
+		Command:     &config.Command{Executable: hook, Timeout: config.Duration(30 * time.Second)},
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("the existence check did not pass: %+v", f)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Existence)
+	}
+	if !strings.Contains(f.Reason, "restore-test hook did not run") {
+		t.Errorf("a pass with a configured restore test says nothing about it not having run: %q", f.Reason)
+	}
+	if store.opens != 0 {
+		t.Errorf("the restore-test hook downloaded the object %d times", store.opens)
+	}
+
+	// And the journal says it too, because the Finding is gone in an hour
+	// and the audit trail is what somebody reads in six months.
+	activity, err := j.RecentActivity(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	found := false
+	for _, a := range activity {
+		if a.Artifact == artifact && strings.Contains(a.Detail, "restore-test hook did not run") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no recorded transition says the restore test did not run; the log holds %+v", activity)
+	}
+}
+
+// namedMediums is a Mediums holding a set of ids, for the two-medium cases
+// where the one-entry fixedMediums cannot say which of them is configured.
+type namedMediums map[string]bool
+
+// MediumFor answers for any id in the set. The two-medium tests need to
+// configure one copy's medium and not the other's, which one entry cannot
+// express.
+func (m namedMediums) MediumFor(id string) (transport.Medium, bool) {
+	if !m[id] {
+		return transport.Medium{}, false
+	}
+	return transport.Medium{ID: id, Type: transport.MediumTypeS3, Bucket: "nas-backups"}, true
+}
+
+// perMediumStore answers differently per medium, which is what a test about
+// one copy being gone and another being fine needs.
+type perMediumStore struct {
+	statErrs map[string]error
+	size     int64
+
+	stats  int
+	opens  int
+	digest int
+}
+
+// StatObject answers per medium, which is what the placement-scoped
+// quarantine tests need: one bucket says the object is gone, another says it
+// is fine, and the artifact's fate depends on combining the two rather than
+// on whichever was asked first.
+func (s *perMediumStore) StatObject(_ context.Context, m transport.Medium, key string) (transport.ObjectInfo, error) {
+	s.stats++
+	if err := s.statErrs[m.ID]; err != nil {
+		return transport.ObjectInfo{}, err
+	}
+	return transport.ObjectInfo{Key: key, Size: s.size}, nil
+}
+
+// OpenObject fails unconditionally. Unlike countingStore's, this double has
+// no counter, so a refusal is the only way a stray download shows up as a
+// test failure rather than as silence.
+func (s *perMediumStore) OpenObject(_ context.Context, _ transport.Medium, _ string) (io.ReadCloser, error) {
+	s.opens++
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+// ObjectChecksum fails unconditionally, for the same reason OpenObject
+// does: an automatic pass has no business asking for an attestation, so the
+// double refuses rather than making one up.
+func (s *perMediumStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, _ transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	s.digest++
+	return transport.ChecksumAttestation{}, transport.NewError(transport.UnsupportedCapability, "object_checksum", errors.New("this backend exposes md5 and nothing else"))
+}
+
+// addSecondMedium puts a second ACTIVE medium placement on an artifact that
+// already has one, which is the state a tier-to-tier move leaves behind
+// while the first copy has not been retired yet.
+func addSecondMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, mediumID string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":on-" + mediumID, From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the placement on %s: %v", mediumID, err)
+	}
+}
+
+// twoMediumArtifact drives an artifact to COMPLETE with its local copy
+// retired and ACTIVE placements on two mediums.
+func twoMediumArtifact(t *testing.T, j *state.Journal, content []byte, at time.Time) model.ArtifactID {
+	t.Helper()
+	artifact := artifactNamed(t, "two-mediums.dump")
+	completeArtifact(t, j, artifact, content, at)
+	moveToMedium(t, j, artifact, "offsite_s3", content, at)
+	addSecondMedium(t, j, artifact, "archive_s3", content, at)
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	active := 0
+	for _, p := range rec.Placements {
+		if !p.IsLocal() && p.Status == state.PlacementActive {
+			active++
+		}
+	}
+	if active != 2 {
+		t.Fatalf("the fixture has %d ACTIVE medium placements, want 2: %+v", active, rec.Placements)
+	}
+	return artifact
+}
+
+// TestOneGoodCopyIsNotAQuarantine is FR-31's placement-scoped quarantine:
+// a failing check is a verdict about ONE placement, and the ARTIFACT is
+// quarantined only when no other ACTIVE verified placement remains.
+//
+// Without the rule, whichever medium sorted first decided the artifact's
+// fate, so a copy going missing off one of two buckets would quarantine a
+// backup that is sitting intact in the other one.
+func TestOneGoodCopyIsNotAQuarantine(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("bytes in two buckets, one of which lost them")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	// "archive_s3" sorts before "offsite_s3", so the gone copy is also the
+	// one a first-wins implementation would have looked at.
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found"))},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with an intact second copy did not pass: %+v", f)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Existence)
+	}
+	if store.stats != 2 {
+		t.Errorf("the pass statted %d placements, want 2: a verdict about the artifact has to have asked every ACTIVE copy", store.stats)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != "COMPLETE" {
+		t.Errorf("state = %q, want COMPLETE: one copy going missing is a verdict about that placement, not about the artifact", rec.State)
+	}
+}
+
+// TestEveryCopyGoneIsAQuarantine is the other side of the same rule. When
+// no ACTIVE verified placement remains, the artifact routes exactly where a
+// failed local recheck routes it.
+func TestEveryCopyGoneIsAQuarantine(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("bytes that are in neither bucket any more")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	gone := transport.NewError(transport.NotFound, "stat_object", errors.New("object not found"))
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": gone, "offsite_s3": gone},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	if f := report.Findings[0]; !f.Checked || f.Passed {
+		t.Fatalf("an artifact whose every copy is gone was not reported as a failed check: %+v", f)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != "QUARANTINED_LOST" {
+		t.Errorf("state = %q, want QUARANTINED_LOST", rec.State)
+	}
+}
+
+// TestACopyThatCouldNotBeAskedIsNotEvidenceOfLoss is the safety direction,
+// and it is the one that would lose an operator's trust rather than their
+// data. One copy is confirmed gone and the other bucket did not answer.
+// "No verified copy remains" is not something that pass knows, so it must
+// not quarantine.
+func TestACopyThatCouldNotBeAskedIsNotEvidenceOfLoss(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy gone, one bucket silent")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size: int64(len(content)),
+		statErrs: map[string]error{
+			"archive_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found")),
+			"offsite_s3": transport.NewError(transport.Transient, "stat_object", errors.New("connection reset")),
+		},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, findings = %+v, want exactly one error", report.Errors, report.Findings)
+	}
+	if len(report.Findings) != 0 {
+		t.Errorf("Findings = %+v, want none", report.Findings)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if after.State != before.State {
+		t.Errorf("state moved from %q to %q on the strength of a bucket that did not answer", before.State, after.State)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing could decide about", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// TestAPassSaysWhichCopiesItDidNotHearFrom is the reporting half of
+// placement-scoped quarantine. One copy answered and passed, so the
+// artifact is fine and the pass is real. The other bucket went quiet, and
+// a green tick that does not mention it lets an operator believe both
+// copies were checked.
+func TestAPassSaysWhichCopiesItDidNotHearFrom(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy answered, one bucket went quiet")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": transport.NewError(transport.Transient, "stat_object", errors.New("connection reset"))},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with one copy that answered and passed did not pass: %+v", f)
+	}
+	if !strings.Contains(f.Reason, "archive_s3") {
+		t.Errorf("the pass does not name the copy it never heard from: %q", f.Reason)
+	}
+	if !strings.Contains(f.Reason, "not checked") {
+		t.Errorf("the pass does not say that copy went unchecked: %q", f.Reason)
+	}
+}
+
+// TestAPassSaysWhichCopiesTheConfigurationCannotReach is the same rule for
+// the other way a copy goes unasked.
+func TestAPassSaysWhichCopiesTheConfigurationCannotReach(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy answered, one medium is not configured")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with a configured copy that passed did not pass: %+v", f)
+	}
+	if !strings.Contains(f.Reason, "archive_s3") || !strings.Contains(f.Reason, "not in the configuration") {
+		t.Errorf("the pass does not name the copy the configuration cannot reach: %q", f.Reason)
+	}
+	if store.stats != 1 {
+		t.Errorf("the pass statted %d placements, want 1: a medium that is not configured cannot be asked", store.stats)
+	}
+}
+
+// TestACopyProvedMissingIsNotReportedAsNothingHavingBeenChecked is an
+// honesty hole this package had, found while writing the operator-triggered
+// twin of these checks (issue #435).
+//
+// One copy was asked and the medium answered that it is not there. The
+// other sits on a medium the configuration does not name, so it could not
+// be asked. The pass used to report that as an unchecked finding reading
+// "none of them is in the configuration, so nothing was checked", which is
+// two untrue statements: one of them IS in the configuration, and it was
+// checked, and it is gone.
+//
+// Nothing may quarantine on the strength of it, because the copy nobody
+// could ask may be perfectly fine, and that part was always right. What
+// was wrong is where it lands and what it says: a copy proved missing is
+// exactly the thing an operator has to hear about, so this goes to
+// Report.Errors, which is where this package puts "somebody should find
+// out why", rather than to a finding an operator reads past.
+func TestACopyProvedMissingIsNotReportedAsNothingHavingBeenChecked(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy gone, one medium forgotten")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size: int64(len(content)),
+		statErrs: map[string]error{
+			"offsite_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found")),
+		},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, findings = %+v, want exactly one error: one copy is provably gone and the other could not be asked",
+			report.Errors, report.Findings)
+	}
+	msg := report.Errors[0].Error()
+	if !strings.Contains(msg, "offsite_s3") || !strings.Contains(msg, "not present") {
+		t.Errorf("the error does not say that the copy on offsite_s3 is gone: %q", msg)
+	}
+	if !strings.Contains(msg, "archive_s3") {
+		t.Errorf("the error does not name the copy that could not be asked: %q", msg)
+	}
+	if strings.Contains(msg, "nothing was checked") {
+		t.Errorf("the report still claims nothing was checked, while a copy was checked and found missing: %q", msg)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if after.State != before.State {
+		t.Errorf("state moved from %q to %q while one copy was never asked about", before.State, after.State)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing could decide about", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// TestNoCopyAskedAtAllIsStillAnUncheckedFinding is the control that keeps
+// the change above from swallowing the case it must not touch. When NO
+// copy could be asked, there is no evidence in either direction and no
+// failure to report: that really is a configuration fact, and it stays an
+// unchecked finding rather than becoming an alarm every cycle.
+func TestNoCopyAskedAtAllIsStillAnUncheckedFinding(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("two copies, neither medium configured")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	deps := Deps{Journal: j, Store: &perMediumStore{size: int64(len(content))}, Mediums: namedMediums{}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none: nothing failed, nothing could be asked", report.Errors)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	if f := report.Findings[0]; f.Checked {
+		t.Errorf("finding = %+v, want Checked false: no copy of this artifact was asked about", f)
+	}
+}

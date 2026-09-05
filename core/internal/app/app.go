@@ -76,6 +76,15 @@ type Journal interface {
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 	ListByState(ctx context.Context, st string) ([]state.Record, error)
+
+	// ListBackupSetIDs is every backup set this journal holds history
+	// for, which stopped being the same list as "every backup set the
+	// configuration names" the moment a set's configuration could be
+	// removed (issue #391). ListArtifacts needs it so an unfiltered
+	// backups list still carries the artifacts of a removed set, which is
+	// what the removal confirmation promises; see that method's own doc
+	// for why this is the only read that widens.
+	ListBackupSetIDs(ctx context.Context) ([]model.BackupSetID, error)
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
 
@@ -127,12 +136,59 @@ var _ Journal = (*state.Journal)(nil)
 // sequentially (see cycle.go and daemon.go). An unbounded retry against one
 // unreachable source would starve every other configured backup set for as
 // long as the outage lasts, which is exactly the failure this bound exists
-// to prevent. Six attempts with this schedule spans a little over two
-// minutes worst case (1s, 2s, 4s, 8s, 16s, capped at 30s), long enough to
-// ride out a genuine blip without holding a whole cycle hostage to a
-// genuinely down source; a source still unreachable after that is picked up
-// again next cycle, which for `daemon` is a bounded wait of its own
-// (poll_interval), not a lost recovery opportunity.
+// to prevent.
+//
+// # The budget, counting the attempts and not only the gaps
+//
+// A source that is DOWN, in the sense an operator means when they say a NAS
+// is off, costs a little over two minutes before the set reports FAILED,
+// and both halves of that are real:
+//
+//   - the waiting BETWEEN attempts, at most 31 seconds, since full jitter
+//     never exceeds the cap for its step (1s, 2s, 4s, 8s, 16s, and the
+//     30s ceiling is never reached with only five gaps);
+//   - the attempts THEMSELVES, at most six times
+//     transport/rclone.ConnectTimeout, because an attempt against a source
+//     that never answers ends at the connect deadline.
+//
+// The second half used to be worth nothing, because a connect timeout
+// classified as a cancellation and retry.DefaultIsTransient would not
+// retry it: the loop gave up after the first dial. Issue #388 corrected
+// the classification, which made those six dials real, and #415 is what
+// that cost at rclone's own 60s default: about six and a half minutes,
+// against the two this doc claimed. transport/rclone.ConnectTimeout is
+// the ceiling that puts it back; TestUnreachableSourceBudgetIsPinned holds
+// the arithmetic so neither number can move without this sentence moving
+// too.
+//
+// Two minutes is long enough to ride out a genuine blip without holding a
+// whole cycle hostage to a genuinely down source; a source still
+// unreachable after that is picked up again next cycle, which for `daemon`
+// is a bounded wait of its own (poll_interval), not a lost recovery
+// opportunity.
+//
+// # What two minutes is NOT
+//
+// It is not a bound on every way an attempt can fail, and saying so plainly
+// is the whole point of #415: the doc this replaced claimed a number the
+// code had stopped keeping, and a replacement that overreached in a
+// different direction would be the same defect wearing a newer date.
+//
+// ConnectTimeout bounds a DIAL. An attempt that gets past the dial and then
+// stalls is bounded by rclone's --timeout instead, an idle timeout on the
+// transfer itself, which nothing here overrides and which defaults to five
+// minutes. Six of those is half an hour, and that is the real worst case
+// for a source that answers, accepts the session, and then goes quiet
+// partway through a read.
+//
+// That number is deliberately left alone. --timeout is a bound on a
+// transfer that is making no progress, and shortening it to make this
+// paragraph tidier would start failing slow-but-live links, which is a
+// behaviour change about transfers rather than about reachability. The two
+// numbers bound two different failures and only the first one is what an
+// operator means by "the source is down".
+// TestAStalledSourceIsBoundedByADifferentNumber pins the distinction so it
+// cannot quietly become one number again.
 var DefaultRetryPolicy = retry.Policy{
 	BaseDelay:   time.Second,
 	MaxDelay:    30 * time.Second,
@@ -199,6 +255,22 @@ type Service struct {
 	// opt-in is honoured.
 	Alerts *alert.Dispatcher
 
+	// MediumStore is EPIC E's FR-28 storage-medium boundary: how this
+	// manager reaches an object on a configured medium. Nil means no
+	// medium can be reached, which every caller treats as a refusal
+	// rather than as a reason to skip a check.
+	//
+	// New fills it in from Transport when the transport adapter is also a
+	// MediumStore, which the embedded rclone one is. That is not a
+	// coincidence to be tidied away: FR-28 says outright that the s3
+	// medium IS the embedded rclone registered inside internal/transport/
+	// rclone, behind the same FR-3 boundary, with no second SDK entering
+	// the tree. One adapter serving both is the decision, so reading it
+	// off the transport this Service was built with is what keeps a
+	// deployment from having to wire the same object twice and get it
+	// wrong once.
+	MediumStore transport.MediumStore
+
 	mu            sync.Mutex
 	lastPoll      map[model.BackupSetID]time.Time
 	lastRetention map[model.BackupSetID]time.Time
@@ -237,13 +309,23 @@ func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *ob
 	if sj, ok := journal.(*state.Journal); ok {
 		sj.SetRedactor(redactor)
 	}
-	return &Service{
+	s := &Service{
 		Config:    cfg,
 		Journal:   journal,
 		Transport: tr,
 		Logger:    logger,
 		Capacity:  thresholdsFrom(cfg),
 	}
+	// FR-28's medium boundary, off the transport adapter that already
+	// carries it. See MediumStore's own doc for why the two are the same
+	// object by design rather than by accident. A transport that is not
+	// one (every test double, and the nil Transport the read-only use
+	// cases are built with) leaves this nil, which every caller reads as
+	// "no medium can be reached".
+	if ms, ok := tr.(transport.MediumStore); ok {
+		s.MediumStore = ms
+	}
+	return s
 }
 
 // sensitiveEndpoints collects the obs.Endpoint for every configured Remote
@@ -333,6 +415,10 @@ func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) trans
 		Host: r.Host,
 		Port: r.Port,
 		User: r.User,
+		// #264: a host that caps concurrent connections rejects the
+		// surplus, so this has to reach the adapter or the cap is only
+		// enforced by the remote refusing us.
+		MaxConnections: r.MaxConnections,
 		// All three key sources have to travel, not just the file one.
 		// config.Validate has already refused anything but exactly one of
 		// them, and normalized the deprecated key_file into Key.File, so

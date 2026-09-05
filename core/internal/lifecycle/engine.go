@@ -10,6 +10,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the one door between a lifecycle step and the journal.
+//
+// It is three declarations and almost no code, and the point of all three is
+// to make a rule mechanical that would otherwise only be a convention. The
+// interface narrows what a step can reach for, the Deps struct makes every
+// step take its collaborators as arguments so a test can replace them, and
+// Advance joins the two halves of the transition rule that live in different
+// packages so neither can be bypassed.
+//
+// Advance's doc has the long argument. The short version is that this is the
+// difference between "nothing reaches REMOTE_DELETE_PENDING without passing
+// through COMMITTED" being something the tests believe and something the
+// running process enforces.
+
 // Journal is the slice of internal/state that lifecycle steps need.
 //
 // It is an interface rather than a concrete *state.Journal so a step can be
@@ -42,7 +56,15 @@ type Journal interface {
 // Deps is what every lifecycle step is handed. Steps take this rather than
 // reaching for globals, so a test can substitute any part of it.
 type Deps struct {
-	Journal   Journal
+	// Journal is required by every step: this package's entire output is
+	// journal transitions.
+	Journal Journal
+
+	// Transport is only needed by the steps that touch the remote, which is
+	// Transfer, Verify's remote hash lookup and DeleteRemote. The rest
+	// leave it nil, and a step that needs it says so by checking rather
+	// than by panicking, so a caller that forgot gets a sentence instead of
+	// a stack trace.
 	Transport transport.Transport
 
 	// Now is injectable because several steps stamp times that tests need to
@@ -50,6 +72,15 @@ type Deps struct {
 	Now func() time.Time
 }
 
+// now resolves the clock, normalising to UTC on both branches.
+//
+// The UTC applies to the injected function too, and that is the part worth
+// stating. Every timestamp this package writes goes into the journal and is
+// later compared against another one, by the deletion-safety gate and by
+// revalidation's due-ness check among others. A test clock returning a time
+// in a named location would still compare correctly, but the values stored
+// would not match what production writes, and a fixture whose stored form
+// differs from production's is how a comparison bug survives its own test.
 func (d Deps) now() time.Time {
 	if d.Now == nil {
 		return time.Now().UTC()

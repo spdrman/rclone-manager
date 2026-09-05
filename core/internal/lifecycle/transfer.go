@@ -86,8 +86,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"strings"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -158,10 +159,19 @@ type TransferParams struct {
 // apart from the real thing. Only an operator, looking at the collision by
 // hand, can decide what the existing file actually is.
 type FinalNameCollisionError struct {
+	// Artifact is which transfer was refused, and Path is the file already
+	// sitting where its final copy would go. Both are needed: the artifact
+	// says what did not happen, and the path is what an operator has to go
+	// and look at, since deciding what that file actually is is the whole
+	// reason this refuses rather than resolving it.
 	Artifact model.ArtifactID
 	Path     string
 }
 
+// Error names the path, which is the actionable half. This refusal is
+// resolved by a person looking at a specific file and deciding whether it is
+// a real backup or residue, so a message that named only the artifact would
+// leave them searching for it.
 func (e *FinalNameCollisionError) Error() string {
 	return fmt.Sprintf(
 		"lifecycle: transfer: refusing to overwrite an existing final-name file for %s at %s",
@@ -170,15 +180,79 @@ func (e *FinalNameCollisionError) Error() string {
 }
 
 // finalPath and partialPath compute FR-12's two destination names for one
-// artifact under one backup set's local directory. Artifact.Name is already
-// validated as a plain basename (model.NewArtifactID refuses "/", "\\", and
-// "." / ".."), so joining it directly is safe.
-func finalPath(localDir string, artifact model.ArtifactID) string {
-	return filepath.Join(localDir, artifact.Name)
+// artifact under one backup set's local directory.
+//
+// # This asks a Store, and that is issue #334's deferred conversion
+//
+// internal/artifactstore landed the Store seam with no production caller at
+// all, deliberately, so the contract could be argued in review before
+// anything depended on it. Its package doc named the two call sites that
+// would convert to it, and this is one of them (internal/retention's
+// pruneFinalPath is the other). Both used the package-level LocalLocator
+// function, which takes a filesystem path and therefore hard-codes the
+// assumption the seam exists to remove.
+//
+// So this now builds the backup set's Local store and asks it where the
+// artifact belongs. The store is constructed per call rather than held,
+// because a Local is one string and constructing it is free; what matters
+// is that the ANSWER comes from the store rather than from a join composed
+// here.
+//
+// # Why this grew an error, and what that changed
+//
+// Because the conversion is not a no-op, and #334 said so in advance:
+// keeping LocalLocator was what let that change be a pure refactor, and
+// the behaviour it was deferring is exactly this. NewLocal refuses an
+// empty root, and Locator refuses an artifact it cannot address.
+//
+// Before, finalPath("", artifact) returned the artifact's bare name, which
+// is a path relative to the process working directory: a backup set with no
+// configured local_path would have written its artifact into whatever
+// directory the daemon happened to start in, silently, and nothing would
+// have been backing that directory up. config.Validate refuses an empty
+// local_path so no configuration that got as far as running a cycle could
+// reach it, which is why this was safe to defer and not safe to leave.
+//
+// Artifact.Name is already validated as a plain basename
+// (model.NewArtifactID refuses "/", "\\", and "." / ".."), so the join the
+// store performs on the far side is safe.
+func finalPath(localDir string, artifact model.ArtifactID) (string, error) {
+	store, err := artifactstore.NewLocal(localDir)
+	if err != nil {
+		return "", err
+	}
+	return store.Locator(artifact)
 }
 
-func partialPath(localDir string, artifact model.ArtifactID) string {
-	return finalPath(localDir, artifact) + partialSuffix
+// IsPartialPath reports whether path carries FR-12's non-restorable
+// temporary-name marker.
+//
+// It is exported because the rule "a .partial is never a restore point"
+// has to be checkable by a caller that is about to remove a file, and the
+// suffix itself must not be spelled a second time anywhere: a constant
+// copied into another package is a constant that drifts, and the failure
+// mode of that drift here is a final-name backup deleted by something
+// that thought it was clearing residue. internal/app's #418 sweep is the
+// caller (unconfigured.go's clearOne).
+func IsPartialPath(path string) bool {
+	return strings.HasSuffix(path, partialSuffix)
+}
+
+// partialPath is the final path with FR-12's non-restorable suffix on the
+// end.
+//
+// It is derived from finalPath rather than composed independently, which is
+// the same reason recovery's ManifestObjectKey derives a sidecar key from
+// the artifact's own key: the two names have to be siblings in the same
+// directory for the commit step's hard link to work at all, and two
+// independent joins are one refactor away from disagreeing about which
+// directory that is.
+func partialPath(localDir string, artifact model.ArtifactID) (string, error) {
+	final, err := finalPath(localDir, artifact)
+	if err != nil {
+		return "", err
+	}
+	return final + partialSuffix, nil
 }
 
 // FinalArtifactPath is finalPath exported for callers outside this
@@ -188,7 +262,7 @@ func partialPath(localDir string, artifact model.ArtifactID) string {
 // #102), which has to compute the same LocalPath a normal commit would
 // have recorded for a journal row it is reconstructing from a sidecar
 // recovery manifest rather than from a live Commit call.
-func FinalArtifactPath(localDir string, artifact model.ArtifactID) string {
+func FinalArtifactPath(localDir string, artifact model.ArtifactID) (string, error) {
 	return finalPath(localDir, artifact)
 }
 
@@ -231,8 +305,14 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: looking up %s: %w", p.Artifact, err)
 	}
 
-	final := finalPath(p.LocalDir, p.Artifact)
-	partial := partialPath(p.LocalDir, p.Artifact)
+	final, err := finalPath(p.LocalDir, p.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: resolving where %s belongs: %w", p.Artifact, err)
+	}
+	partial, err := partialPath(p.LocalDir, p.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: resolving the .partial destination for %s: %w", p.Artifact, err)
+	}
 
 	// The collision guard runs before anything else, every time, including
 	// on a resumed call: it is cheap, and re-checking on every attempt

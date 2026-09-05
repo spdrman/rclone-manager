@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -100,6 +101,26 @@ func (b *BackupService) catalogPass(ctx context.Context, dryRun bool) (CatalogRe
 					out.Reconstructed++
 				case app.CatalogRebuildAlreadyPresent:
 					out.AlreadyPresent++
+				case app.CatalogRebuildConflict:
+					// A conflicting sidecar is a manifest this pass could
+					// not apply, which is what Failures means, and it must
+					// not be silently absent: FR-32's whole point is that a
+					// disagreement between a sidecar and a journal row is
+					// reported rather than resolved. It is deliberately NOT
+					// counted as AlreadyPresent, which reads as "the
+					// journal already had this and all is well".
+					//
+					// The response shape does not change for it: a conflict
+					// travels the failures[] channel the catalog routes
+					// already have, so nothing downstream needs
+					// regenerating. A dedicated count belongs with the
+					// issue that owns the artifact surface.
+					out.Failures = append(out.Failures, CatalogFailure{
+						BackupSetID: bs.ID.String(),
+						Path:        f.ManifestPath,
+						Reason: fmt.Sprintf("%s already has a journal row and this sidecar disagrees with it; nothing was changed: %s",
+							f.Artifact, strings.Join(f.Conflicts, "; ")),
+					})
 				}
 			}
 			for _, e := range report.Errors {

@@ -205,6 +205,13 @@ export const FIELD_HELP = {
       "Separates how often a backup is kept from how far back keeping goes. A week tier with Keep 3 and window unit Month keeps one backup per week across three calendar months, which is roughly thirteen survivors rather than the three you would get counting in weeks. This is exactly how the default weekly tier is defined, so a chain without it cannot express the product's own default."
   },
 
+  tierMedium: {
+    what: "Where this tier's backups live: the local backup root, or a storage medium the configuration declares.",
+    example: "offsite_s3 (STANDARD_IA)",
+    effect:
+      "A backup that only this tier keeps is uploaded to that medium, verified there, and then its copy on this machine is deleted. That deletion is what the setting is for. A medium on an archive storage class cannot be read on demand at all: getting a backup back from one means asking for a restore and waiting hours, and the provider reports no progress while it waits. Reading anything back off a medium is billed by your provider, and Backup Manager holds no price list, so it will not show you a figure."
+  },
+
   protectLastKnownGood: {
     what: "FR-19's protection for the newest backup this system has actually verified and committed.",
     example: "leave it on",
@@ -237,11 +244,61 @@ export const FIELD_HELP = {
 
   // -------------------------------------------------------------- sets
 
-  editSetName: {
-    what: "The display name for this backup set. The set's real identity is its source and set pair, which this does not change.",
-    example: "Production PostgreSQL",
+  // Issue #350: the inline edit mode's fields. The dialog these replaced
+  // had one field, `editSetName`, whose whole help copy was an apology
+  // for the fact that nothing was written. There is a real update path
+  // now, so each of these says what saving the box actually does, and the
+  // set's NAME is deliberately not among them: a backup set's identity
+  // keys every journal row, artifact id and recovery manifest it has ever
+  // produced, so renaming one is a migration rather than an edit.
+  editSetHost: {
+    what: "The hostname or address Backup Manager connects to for this backup set's source.",
+    example: "prod-db-01.internal",
     effect:
-      "Nothing is written. Backup Manager has no endpoint yet for saving an edited backup set, so Save changes reports that plainly instead of appearing to succeed. What the form does still do is check, at save, whether the set changed while this dialog was open, and refuse rather than overwrite someone else's change."
+      "Saving this box writes only the host, and the next cycle connects to the new one. The trusted host key is NOT re-fetched: pointing a set at a different machine without re-verifying its fingerprint would be trusting a host nobody looked at, so a genuinely different server needs its host key re-trusted through the wizard."
+  },
+  editSetPort: {
+    what: "The SSH port on that host. 0 means the default, which is 22.",
+    example: "22",
+    effect:
+      "Saving this box writes only the port. The set's own backups on this NAS are untouched; only where the next cycle connects changes."
+  },
+  editSetUser: {
+    what: "The account Backup Manager authenticates as on that host.",
+    example: "backup-agent",
+    effect:
+      "Saving this box writes only the user. The private key is unchanged and never leaves this NAS, so a new account has to already trust the same key for the next cycle to connect."
+  },
+  editSetRemotePath: {
+    what: "The absolute folder on the source that Backup Manager reads backups out of.",
+    example: "/var/backups/postgresql",
+    effect:
+      "Saving this box writes only the remote folder, and the next cycle discovers artifacts there instead. Backups already retained on this NAS stay exactly where they are, and nothing on the source is moved or deleted."
+  },
+  editSetLocalPath: {
+    what: "The absolute folder on this NAS that Backup Manager writes this set's backups into.",
+    example: "/mnt/tank/backups/production/postgres",
+    effect:
+      "Saving this box writes only the destination, and the next cycle writes new backups there. Backups already written to the old folder are NOT moved, and Backup Manager will keep listing them from where they are."
+  },
+  editSetInclude: {
+    what: "A comma-separated list of filename patterns to back up. Matched against the artifact's own name, not its path.",
+    example: "*.dump, *.tar.zst",
+    effect:
+      "Saving this box writes only the include list. Widening it means the next cycle discovers files it was ignoring; narrowing it means it stops discovering some, and clearing the box entirely means no pattern filters discovery at all. Nothing already backed up is deleted either way."
+  },
+  editSetCompletion: {
+    what: "How Backup Manager decides a file on the source has finished being written and is safe to copy.",
+    example: "Atomic rename",
+    effect:
+      "Saving this box writes only the completion method. Stable file size infers completion rather than being told about it, which is materially less assurance than a producer-provided rename or marker, and the page says so beside the value."
+  },
+
+  editSetStableFor: {
+    what: "How long a file's size and timestamp have to stay unchanged before Backup Manager treats it as finished. Only used by the stable file size method.",
+    example: "300",
+    effect:
+      "Saving this box writes only the window. Too short and a slow write can be copied half-finished; too long and every backup waits that much longer before it is collected. This is the setting that makes the stable-size method usable at all, which is why it appears the moment you choose that method."
   },
 
   // ------------------------------------------------------------- wizard

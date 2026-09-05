@@ -46,19 +46,29 @@ func (s *Service) discoverOne(ctx context.Context, source transport.Source, bs c
 // so an unqualified key would risk colliding across two different
 // artifacts) plus rec.RetryCount.
 //
-// RetryCount is what makes this the right "attempt" boundary. Nothing in
-// today's codebase increments it while an artifact moves forward through
-// DISCOVERED -> ... -> COMPLETE (see internal/lifecycle/quarantine.go's
-// package doc: only QUARANTINED's release back to DISCOVERED bumps it
-// today, and FR-22's own FAILED -> DISCOVERED retry policy, which is
-// expected to share this same counter, has not been built yet). So calling
-// this again for the same rec, after a crash mid-cycle left it exactly
-// where it was, reproduces exactly the same key, and every lifecycle step
-// below can resume the same logical attempt it left off on. The moment an
-// artifact is genuinely sent back to DISCOVERED (a quarantine release, and
-// eventually a FAILED retry), RetryCount has already advanced by then, so
-// the very next attemptKey call computes a fresh base for what is,
-// correctly, a new logical attempt.
+// RetryCount is what makes this the right "attempt" boundary. Nothing
+// increments it for an artifact that is MAKING PROGRESS through
+// DISCOVERED -> ... -> COMPLETE, so calling this again for the same rec,
+// after a crash mid-cycle left it exactly where it was, reproduces exactly
+// the same key, and every lifecycle step below can resume the same logical
+// attempt it left off on. The moment an artifact is genuinely given
+// another go from an exceptional state, RetryCount has already advanced by
+// then, so the very next attemptKey call computes a fresh base for what
+// is, correctly, a new logical attempt.
+//
+// Two things move it, and both mean exactly that (see
+// internal/lifecycle/quarantine.go's package doc, which asked for the
+// counter to be shared rather than duplicated): an operator's release back
+// out of QUARANTINED, and, since issue #419, a verification that could not
+// be COMPLETED at all recording the stalled attempt against its budget.
+// The second one moves it while the artifact sits at VERIFYING, which is
+// new. processArtifact still computes the base once, on entry, and that
+// stays correct because a stall ends the call: verifyOne returns an error
+// on the bounded stall and a QUARANTINED record on the exhausted one, and
+// neither leaves anything downstream of the verify step to key. A future
+// step that both moves the counter AND carries on has to recompute the
+// base, or it will key its own writes against an attempt number the
+// journal has already left behind.
 func attemptKey(rec state.Record) string {
 	return fmt.Sprintf("app:%s:attempt-%d", rec.Artifact, rec.RetryCount)
 }
@@ -126,19 +136,50 @@ func attemptKey(rec state.Record) string {
 //
 // # Return value
 //
-// final is rec's lifecycle.State exactly as this call leaves it: whatever
-// state the artifact reached, or was already sitting in, when this call
-// stopped advancing it. Callers that only care about forward progress
-// (which is all of them, before issue #283) can ignore it; processArtifacts
-// below uses it to tell a business outcome (FAILED, QUARANTINED) from
-// everything else, which the two other things that can stop this
-// function early -- an infrastructure error, or ctx being done -- never
-// change rec to reflect, since only a successful Advance call ever
-// reassigns rec.
+// final is the artifact's lifecycle.State exactly as this call leaves it,
+// read back from the journal rather than from whatever this call happened
+// to observe last. processArtifacts below uses it to tell a business
+// outcome (FAILED, QUARANTINED) from everything else.
+//
+// Reading it back is load-bearing, and issue #361 is what it cost not to.
+// A step can record a terminal state and still return an error: both of
+// lifecycle.Transfer's refusal paths (failCopy for a copy that exhausted
+// its retry budget, failCollision for a final-name collision) record
+// FAILED and then return the underlying error. Every error path in this
+// function returns without reassigning rec, because only a successful
+// Advance ever does, so what this function used to report back for a
+// refused transfer was DISCOVERED -- the state the record carried before
+// the step ran -- while the journal already said FAILED. The cycle
+// counted no failed artifact, and `run` exited 0 for a backup set whose
+// own journal said its only artifact had failed. Asking the journal is
+// the answer that cannot be reintroduced by a future step recording a
+// verdict on a path this function treats as an error.
+//
+// The read deliberately outlives ctx (context.WithoutCancel): a shutdown
+// arriving mid-cycle must not turn "what does the journal say" into "no
+// idea". If the read fails anyway, the state this call last observed is
+// the honest fallback.
+//
+// It costs one indexed point read per artifact per cycle, against a
+// journal the same cycle has already listed in full. That is real and it
+// is small, and it buys a property that does not depend on every future
+// caller remembering which of its own early returns left rec behind. I
+// considered reading back only where a step reported an error and decided
+// against it: it is the same cost on every cycle that has anything wrong
+// with it, which is the cycle that matters, and it puts the correctness
+// back in the hands of whoever adds the next early return.
 func (s *Service) processArtifact(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record) (final lifecycle.State) {
 	artifact := rec.Artifact
 	base := attemptKey(rec)
-	defer func() { final = lifecycle.State(rec.State) }()
+	defer func() {
+		final = lifecycle.State(rec.State)
+		current, err := s.Journal.Get(context.WithoutCancel(ctx), artifact)
+		if err != nil {
+			s.logger().Error(ctx, "artifact-state", fmt.Errorf("reading back %s's state after this cycle's own work: %w", artifact, err))
+			return
+		}
+		final = lifecycle.State(current.State)
+	}()
 
 	// Live progress (progress.go). Each stage is announced immediately
 	// before the step that performs it, so an observer learns what is
@@ -204,7 +245,28 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		rec = out.Record
 	}
 
-	if lifecycle.State(rec.State) == lifecycle.Verified {
+	// COMMITTING as well as VERIFIED, and that is issue #372. Every other
+	// in-progress state is already an entry point here: the transfer step
+	// above is reached from TRANSFERRING as well as DISCOVERED, and the
+	// verify step from VERIFYING. COMMITTING was the one that was not, so
+	// an artifact whose process died between lifecycle.Commit's
+	// VERIFIED -> COMMITTING journal write and the COMMITTED one that
+	// closes it was never handed back to the function that knows how to
+	// finish it. lifecycle.Commit has handled being called again in that
+	// state since it was written, with a comment saying so; nothing called
+	// it. Reconciliation deliberately leaves these rows alone and says it
+	// is letting normal processing resume from wherever the journal says
+	// (reconcile.go), which is exactly right and exactly what did not
+	// happen. So the row sat at COMMITTING, every cycle, forever, with its
+	// bytes in a .partial file that may well have been renamed into place
+	// already.
+	//
+	// attemptKey is what makes this safe rather than a guess: the key
+	// lifecycle.Commit gets here is the same one the dead process used, so
+	// the first Advance replays instead of re-applying and Commit takes
+	// its own documented resume branch. See attemptKey's doc for why
+	// RetryCount is the right attempt boundary.
+	if st := lifecycle.State(rec.State); st == lifecycle.Verified || st == lifecycle.Committing {
 		if ctx.Err() != nil {
 			return
 		}
@@ -288,9 +350,21 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 }
 
 // processArtifacts drives every one of records forward via processArtifact
-// and reports how many ended this call in FAILED, QUARANTINED or
+// and reports two different things about the walk.
+//
+// failed is how many ended this call in FAILED, QUARANTINED or
 // QUARANTINED_LOST: a business outcome, not the systemic reconcile/
 // discover failure a caller's own Err field already tracks separately.
+//
+// progress is issue #361's arithmetic: how many of these records this
+// cycle was still trying to turn into a durable backup, and how many of
+// those moved. It exists because failed alone cannot tell a cycle that
+// had nothing to do from one where nothing got through. A refused
+// transfer that leaves an artifact pre-durable for the next cycle is
+// correctly not a failure, and a cycle in which every artifact was
+// refused that way is correctly not a success either, and only the
+// second count can see the difference. See CycleProgress and acquiring
+// for what is counted and, just as deliberately, what is not.
 //
 // records is always listed fresh from the journal after this cycle's own
 // FR-17 reconcile pass has already run and written whatever it decided
@@ -319,17 +393,114 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 // own copy, is what makes "run and fetch agree on what a failed cycle is"
 // a structural property instead of two definitions that happen to match
 // today.
-func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) (failed int) {
+func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) artifactWalk {
+	walk := artifactWalk{coveredPaths: map[string]bool{}}
 	for _, rec := range records {
 		if ctx.Err() != nil {
 			break
 		}
-		switch s.processArtifact(ctx, source, bs, rec) {
-		case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
-			failed++
+		before := lifecycle.State(rec.State)
+		after := s.processArtifact(ctx, source, bs, rec)
+		if terminalFailure(after) {
+			walk.Failed++
+		}
+		// Every row's remote path, not only the ones counted below: the
+		// question a discovery error asks is "is this object already
+		// under management", and a COMPLETE row at that path answers yes
+		// just as firmly as a DISCOVERED one does.
+		walk.coveredPaths[rec.RemotePath] = true
+		if !acquiring(before) {
+			continue
+		}
+		walk.Progress.Walked++
+		if durable(after) {
+			walk.Progress.Durable++
 		}
 	}
-	return failed
+	return walk
+}
+
+// artifactWalk is what one walk over a backup set's journal rows tells the
+// cycle around it. Nothing else builds one.
+type artifactWalk struct {
+	// Failed is how many rows ended the walk in FAILED, QUARANTINED or
+	// QUARANTINED_LOST (issue #283).
+	Failed int
+
+	// Progress is issue #361's denominator and numerator over these rows
+	// alone. The caller adds the discovery candidates that never became
+	// rows.
+	Progress CycleProgress
+
+	// coveredPaths is every remote path this walk saw a journal row for,
+	// in any state, so a caller folding in discovery's own per-candidate
+	// errors can tell an object nothing here knows about from one that is
+	// already under management.
+	//
+	// Both halves of that matter. An object with a row in flight would
+	// otherwise be counted twice, once by the walk and once by discovery,
+	// which changes no verdict but puts a number in front of an operator
+	// that does not match what is on the remote. An object with a
+	// FINISHED row is worse than double counting: a read-only backup set
+	// keeps its remote objects forever by design, so discovery re-reads
+	// them every cycle, and one transient identity-capture failure
+	// against an artifact that was safely backed up weeks ago must not
+	// read as work this cycle failed to do.
+	coveredPaths map[string]bool
+}
+
+// terminalFailure names the three states an artifact ends in when it did
+// not get through: this cycle's own transfer/verify/commit failure, or a
+// loss reconciliation found on its own.
+func terminalFailure(st lifecycle.State) bool {
+	switch st {
+	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
+		return true
+	}
+	return false
+}
+
+// durable names the states in which an artifact's bytes are on local disk,
+// verified and fsynced, which is what a backup is (see internal/lifecycle's
+// state doc). Everything before COMMITTED is either still in flight or not
+// yet proven; everything after it is either finished or a failure.
+func durable(st lifecycle.State) bool {
+	switch st {
+	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.RemoteRetained, lifecycle.Complete:
+		return true
+	}
+	return false
+}
+
+// acquiring names the states an artifact is still trying to get out of on
+// its way to being a durable local backup, which is exactly the work
+// issue #361 asks "did any of it land". It is deliberately narrower than
+// "not terminal", in both directions:
+//
+//   - COMMITTING is in, since issue #372. It used to be left out on the
+//     grounds that processArtifact could not act on it, so counting it
+//     would report a stall the cycle had no move for. processArtifact
+//     acts on it now, which turns that reasoning around completely: a
+//     COMMITTING row is work this cycle tried and did not land, exactly
+//     like a TRANSFERRED one, and leaving it out would mean a set whose
+//     commits keep failing reports a clean cycle every time. That is the
+//     invisibility issue #372 is about, one layer up from the resume
+//     itself.
+//   - COMMITTED and REMOTE_DELETE_PENDING are left out because by then
+//     the bytes are durably on local disk and the backup has already
+//     succeeded. What is left is the remote cleanup, and FR-16's
+//     identity re-check refusing that is the documented, expected steady
+//     state against a hardened source (see remotedelete.go) rather than
+//     a backup that did not happen. A set sitting there forever is a
+//     healthy set, and calling it a failed cycle every poll interval
+//     would be exactly the false alarm this count exists to avoid.
+func acquiring(st lifecycle.State) bool {
+	switch st {
+	case lifecycle.Discovered, lifecycle.Transferring, lifecycle.Transferred,
+		lifecycle.Verifying, lifecycle.Verified, lifecycle.Committing:
+		return true
+	}
+	return false
 }
 
 // transferOne runs lifecycle.Transfer with a bounded retry policy (see
@@ -351,17 +522,41 @@ func (s *Service) transferOne(ctx context.Context, source transport.Source, bs c
 	})
 }
 
-// verifyOne runs lifecycle.Verify. VerifyParams has no caller-configurable
-// retry policy (its one network-facing call, a remote hash lookup, is
-// already internally bounded by lifecycle's own hardcoded policy; see
-// verify.go's remoteHashRetryPolicy), so there is nothing for this package
-// to configure here.
+// verifyOne runs lifecycle.Verify. Its one network-facing call, a remote
+// hash lookup, is already internally bounded by lifecycle's own policy
+// (verify.go's remoteHashRetryPolicy), so there is no per-call retry
+// policy for this package to configure.
+//
+// StallBudget is the one number it does hand down, and it is DERIVED
+// rather than picked (issue #419). It bounds how many consecutive cycles
+// an artifact's verification may fail to complete against a backend that
+// cannot be reached, before the artifact stops being retried
+// automatically and is handed to an operator. The value is
+// retryPolicy().MaxAttempts, which is the same number, from the same
+// place, that already answers "how many times is a transient failure
+// worth trying" one level down, inside a single attempt. There is exactly
+// one such number in this product and it is the operator's, through
+// Service.RetryPolicy; inventing a second one here would be a second
+// answer to the same question, and the one an operator changed would not
+// be the one that fired.
+//
+// DefaultRetryPolicy makes it 6. Its own doc derives that from FR-1 ("a
+// little over two minutes worst case ... long enough to ride out a
+// genuine blip without holding a whole cycle hostage"), and the same
+// reasoning carries up a level unchanged: six cycles of a source that
+// cannot be reached is well past a blip, and the right answer at that
+// point is a person, not a seventh attempt. A policy with MaxAttempts 0
+// (retry.Policy's "unbounded") lands here as no tolerance at all rather
+// than as infinite tolerance, which is the safe direction: an artifact
+// reaches an operator immediately instead of stalling forever with
+// nothing watching it.
 func (s *Service) verifyOne(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record, base string) (state.Outcome, error) {
 	return lifecycle.Verify(ctx, s.lifecycleDeps(), lifecycle.VerifyParams{
-		Artifact:   rec.Artifact,
-		Source:     source,
-		Validation: bs.Validation,
-		AttemptKey: base + ":verify",
+		Artifact:    rec.Artifact,
+		Source:      source,
+		Validation:  bs.Validation,
+		AttemptKey:  base + ":verify",
+		StallBudget: s.retryPolicy().MaxAttempts,
 	})
 }
 

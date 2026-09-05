@@ -19,17 +19,17 @@
 // indistinguishable from a first-time failure.
 //
 // RetryCount already exists in the FR-9 schema for exactly this shape of
-// bookkeeping ("how many times has this artifact been sent back for a
-// fresh attempt"; see state.RetryUpdate's doc), and nothing in this
-// codebase writes to it yet: FR-22's own bounded-backoff retry loop, for
-// the FAILED -> DISCOVERED exit, has not been built. That is a deliberate
-// reuse, not a coincidence: releasing from QUARANTINED and retrying out of
-// FAILED are the same underlying question, "how many times has this
-// artifact been sent back to try again from an exceptional state",
-// answered from two different starting states. When FR-22 lands, its
-// FAILED -> DISCOVERED exit is expected to increment this same counter
-// rather than invent a second one; internal/quarantine's repeat-visibility
-// report reads it with that combined meaning already in mind.
+// bookkeeping ("how many attempts has this artifact already spent from an
+// exceptional state"; see state.RetryUpdate's doc). That is a deliberate
+// reuse, not a coincidence, and part of FR-22 has since landed on it:
+// issue #419's stalled verification (verify.go's recordStall) counts each
+// attempt it could not complete against the same counter and against a
+// budget derived from the operator's own retry policy. So there are two
+// writers now, releasing from QUARANTINED and stalling at VERIFYING, and
+// they are the same underlying question asked from two different states.
+// internal/quarantine's repeat-visibility report reads the counter with
+// that combined meaning, which is what its own doc anticipated and what
+// its field names now say.
 //
 // # QUARANTINED_LOST has no release
 //
@@ -94,6 +94,11 @@ type NotQuarantinedError struct {
 	Current  State
 }
 
+// Error says "this quarantine action" rather than naming the operation,
+// because both quarantine exits raise it and the caller knows which one it
+// asked for. What it does spell out is the state the artifact is actually
+// in, which is the part an operator needs: this refusal almost always means
+// somebody acted on a stale screen.
 func (e *NotQuarantinedError) Error() string {
 	return fmt.Sprintf("lifecycle: refusing this quarantine action on %s: its journal state is %s, not %s", e.Artifact, e.Current, Quarantined)
 }
@@ -111,6 +116,16 @@ type QuarantinedLostIsTerminalError struct {
 	Artifact model.ArtifactID
 }
 
+// Error is long on purpose, and it is the one message in this file that
+// explains rather than reports.
+//
+// Every other refusal here is something the operator can fix and retry.
+// This one is not: it means the only copy was corrupt and the source was
+// already gone before anyone found out, so no action inside this state
+// machine helps. An operator who reads a short refusal will try the other
+// exit, then the API, then the database, so the message says up front what
+// the situation is and points at the kind of recovery that could actually
+// work.
 func (e *QuarantinedLostIsTerminalError) Error() string {
 	return fmt.Sprintf(
 		"lifecycle: %s is QUARANTINED_LOST: the only copy was corrupt and the remote source was already confirmed gone before that was found, so there is no copy anywhere left to recover from; this needs operator action outside the state machine (for example restoring from a different backup-set generation), not a release",
@@ -230,9 +245,38 @@ func QuarantineReason(rec state.Record) string {
 			orUnknownAlg(rec.LocalHashAlg), rec.LocalHash,
 		)
 	}
+	// Issue #419: an artifact held because its verification could never be
+	// COMPLETED, not because anything was found wrong with it. It is the
+	// one shape here that does have its reason durably on the row, in the
+	// FR-22 retry bookkeeping the stall itself wrote, so this reports that
+	// rather than inventing a content verdict nobody reached.
+	//
+	// It is last, and that ordering is what keeps it from masking a real
+	// finding. Every path that quarantines an artifact for something it
+	// actually measured leaves that measurement on the row: a validator's
+	// rejection sets ValidationPassed, and every content check
+	// (verify.go's hash comparison, internal/reconcile's and
+	// internal/revalidate's re-reads) works against a recorded LocalHash
+	// and therefore has one. A row with neither cannot have been
+	// quarantined by any of them, so LastError here is this quarantine's
+	// own reason and not a stale one left by an earlier release.
+	if rec.LastError != "" {
+		return fmt.Sprintf(
+			"%s (this is not a finding about the backup's contents: %d attempt(s) were spent and none of them completed, so nothing has been proved about these bytes either way)",
+			rec.LastError, rec.RetryCount,
+		)
+	}
 	return "content found invalid; no further detail is persisted on this record (see the journal's transition log for the transition that caused it)"
 }
 
+// orUnknownAlg renders an empty algorithm name as something readable.
+//
+// An empty one is reachable: a hash mismatch found by a path that recorded
+// the digest without recording which algorithm produced it leaves the field
+// blank, and the quarantine reason is built from whatever the row happens to
+// carry. Rendering that as an empty gap would produce a sentence about
+// comparing a hash with no algorithm, which reads as a broken message rather
+// than as missing data.
 func orUnknownAlg(alg string) string {
 	if alg == "" {
 		return "unknown-algorithm"
@@ -336,6 +380,10 @@ type InsufficientEvidenceError struct {
 	Reason   string
 }
 
+// Error carries the caller-supplied Reason rather than a fixed message,
+// because there are several ways evidence can fall short (nothing ran, a
+// check failed, the check that ran does not address why the artifact was
+// distrusted) and the operator's next move differs for each.
 func (e *InsufficientEvidenceError) Error() string {
 	return fmt.Sprintf("lifecycle: refusing to reinstate %s from quarantine: %s", e.Artifact, e.Reason)
 }
@@ -364,6 +412,12 @@ type NeverHeldTargetStateError struct {
 	Target   State
 }
 
+// Error names the remedy, which is unusual for a refusal here and
+// deliberate: this one fires for an artifact quarantined before it ever had
+// a durable copy, and the operator's instinct on seeing a reinstatement
+// refused is to gather stronger evidence and try again. No amount of
+// evidence helps, because there is nothing to re-trust, so the message
+// points at re-ingesting instead.
 func (e *NeverHeldTargetStateError) Error() string {
 	return fmt.Sprintf(
 		"lifecycle: refusing to reinstate %s to %s: the transition log has no record of this artifact ever reaching %s, so there is no durable local copy to re-trust; re-ingest it instead",
@@ -378,70 +432,6 @@ func AsNeverHeldTargetState(err error) (*NeverHeldTargetStateError, bool) {
 	return e, errors.As(err, &e)
 }
 
-// ReinstateFromQuarantine returns a quarantined artifact to the durable
-// state it already held (QUARANTINED -> COMMITTED, QUARANTINED_LOST ->
-// COMPLETE), on evidence the caller gathered in this same call.
-//
-// # What this is for
-//
-// The other exit, ReleaseFromQuarantine, throws the local copy away and
-// re-fetches from the remote. That is right when the local copy is bad and
-// the source is still there, and useless when the local copy is fine or
-// the source is gone. This one keeps the local copy. See machine.go's
-// "Reinstatement" section for the full argument.
-//
-// # The rules, and why each one is here
-//
-//  1. The artifact is QUARANTINED or QUARANTINED_LOST, else
-//     *NotQuarantinedError. Unlike ReleaseFromQuarantine, QUARANTINED_LOST
-//     is NOT refused: that state means the remote is confirmed gone, which
-//     is exactly the case where re-ingesting cannot help and keeping the
-//     local copy is the only recovery there is.
-//
-//  2. Nothing that ran failed. A mixed verdict is a failing verdict; see
-//     ReinstatementEvidence.AnyCheckFailed.
-//
-//  3. The evidence is conclusive: at least one check that could have
-//     failed on content actually ran and passed. See
-//     ReinstatementEvidence.
-//
-//  4. If the artifact's own record carries a FAILED validator verdict,
-//     the validator itself has to have run and passed now. Hash evidence
-//     cannot answer a validator's rejection: it proves the bytes are
-//     unchanged, and the unchanged bytes are precisely what the validator
-//     refused. The evidence has to address the reason for the distrust,
-//     not merely be strong in the abstract.
-//
-//  5. The append-only transition log records which state this specific
-//     artifact was quarantined FROM (issue #315: see quarantineOrigins and
-//     reinstatementTargetForArtifact), and that state is one this package
-//     knows how to reinstate at all, else *NeverHeldTargetStateError. This
-//     is also what decides the target: QUARANTINED no longer reinstates to
-//     one fixed state, since an artifact quarantined out of REMOTE_RETAINED
-//     must return there, never to COMMITTED.
-//
-// Every refusal happens before any write, so a refused reinstatement
-// leaves no mark at all.
-//
-// # Why the caller may not check first and write later
-//
-// The evidence has to be gathered in the same call that writes, not handed
-// in from an earlier one. A caller that re-checked an artifact, showed an
-// operator a verdict, and then asked for the reinstatement in a second
-// request would be writing on the strength of a fact that was true when it
-// was measured and may not be now. That is why this takes an evidence
-// value rather than reading a stored verdict, and why the only caller in
-// this repository (internal/app.ReinstateQuarantined) runs the checks
-// immediately above its call to this.
-//
-// # What it costs the artifact
-//
-// Taking either edge permanently forfeits the artifact's remote delete:
-// DeleteRemote refuses any artifact whose transition log contains a
-// reinstatement edge, before it records intent and before it touches the
-// transport. That is what makes this edge safe to have at all, and it is
-// not a cooling-off period; there is no way back to delete eligibility.
-// See remotedelete.go.
 // quarantineOrigin pairs one state that may precede QUARANTINED
 // (machine.go's Predecessors(Quarantined)) with the state
 // ReinstateFromQuarantine returns an artifact to when that is where it was
@@ -521,6 +511,70 @@ func reinstatementTargetForArtifact(ctx context.Context, d Deps, artifact model.
 	return target, nil
 }
 
+// ReinstateFromQuarantine returns a quarantined artifact to the durable
+// state it already held (QUARANTINED -> COMMITTED, QUARANTINED_LOST ->
+// COMPLETE), on evidence the caller gathered in this same call.
+//
+// # What this is for
+//
+// The other exit, ReleaseFromQuarantine, throws the local copy away and
+// re-fetches from the remote. That is right when the local copy is bad and
+// the source is still there, and useless when the local copy is fine or
+// the source is gone. This one keeps the local copy. See machine.go's
+// "Reinstatement" section for the full argument.
+//
+// # The rules, and why each one is here
+//
+//  1. The artifact is QUARANTINED or QUARANTINED_LOST, else
+//     *NotQuarantinedError. Unlike ReleaseFromQuarantine, QUARANTINED_LOST
+//     is NOT refused: that state means the remote is confirmed gone, which
+//     is exactly the case where re-ingesting cannot help and keeping the
+//     local copy is the only recovery there is.
+//
+//  2. Nothing that ran failed. A mixed verdict is a failing verdict; see
+//     ReinstatementEvidence.AnyCheckFailed.
+//
+//  3. The evidence is conclusive: at least one check that could have
+//     failed on content actually ran and passed. See
+//     ReinstatementEvidence.
+//
+//  4. If the artifact's own record carries a FAILED validator verdict,
+//     the validator itself has to have run and passed now. Hash evidence
+//     cannot answer a validator's rejection: it proves the bytes are
+//     unchanged, and the unchanged bytes are precisely what the validator
+//     refused. The evidence has to address the reason for the distrust,
+//     not merely be strong in the abstract.
+//
+//  5. The append-only transition log records which state this specific
+//     artifact was quarantined FROM (issue #315: see quarantineOrigins and
+//     reinstatementTargetForArtifact), and that state is one this package
+//     knows how to reinstate at all, else *NeverHeldTargetStateError. This
+//     is also what decides the target: QUARANTINED no longer reinstates to
+//     one fixed state, since an artifact quarantined out of REMOTE_RETAINED
+//     must return there, never to COMMITTED.
+//
+// Every refusal happens before any write, so a refused reinstatement
+// leaves no mark at all.
+//
+// # Why the caller may not check first and write later
+//
+// The evidence has to be gathered in the same call that writes, not handed
+// in from an earlier one. A caller that re-checked an artifact, showed an
+// operator a verdict, and then asked for the reinstatement in a second
+// request would be writing on the strength of a fact that was true when it
+// was measured and may not be now. That is why this takes an evidence
+// value rather than reading a stored verdict, and why the only caller in
+// this repository (internal/app.ReinstateQuarantined) runs the checks
+// immediately above its call to this.
+//
+// # What it costs the artifact
+//
+// Taking either edge permanently forfeits the artifact's remote delete:
+// DeleteRemote refuses any artifact whose transition log contains a
+// reinstatement edge, before it records intent and before it touches the
+// transport. That is what makes this edge safe to have at all, and it is
+// not a cooling-off period; there is no way back to delete eligibility.
+// See remotedelete.go.
 func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateParams) (state.Outcome, error) {
 	if d.Journal == nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: ReinstateFromQuarantine needs a Journal")
@@ -614,6 +668,13 @@ func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateP
 	return out, nil
 }
 
+// summarySuffix appends the evidence summary to a recorded detail, or
+// nothing at all when there is none.
+//
+// The empty case is the reason this is a function rather than a
+// concatenation: an unconditional suffix would leave "What was checked:"
+// followed by nothing in the journal, which reads as a truncated record of
+// exactly the write an auditor is most likely to be reading.
 func summarySuffix(summary string) string {
 	if summary == "" {
 		return ""

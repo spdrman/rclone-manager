@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7"
+const ContractSHA256 = "6b0057869a2a43b1b87656b7c0cf46ca30e3da4169982c31a666b9a941bb5a97"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -36,42 +36,50 @@ type ErrorCode string
 // here, and ui/shared reads the same registry through the TypeScript half of
 // these bindings, so the two can never hold different lists.
 const (
-	ErrorCodeAuthenticationFailed          ErrorCode = "authentication-failed"
-	ErrorCodeSSHHostKeyChanged             ErrorCode = "ssh-host-key-changed"
-	ErrorCodePermissionDenied              ErrorCode = "permission-denied"
-	ErrorCodeRemotePathMissing             ErrorCode = "remote-path-missing"
-	ErrorCodeChecksumMismatch              ErrorCode = "checksum-mismatch"
-	ErrorCodeBackupStale                   ErrorCode = "backup-stale"
-	ErrorCodeStorageCritical               ErrorCode = "storage-critical"
-	ErrorCodeVersionMismatch               ErrorCode = "version-mismatch"
-	ErrorCodeOperationConflict             ErrorCode = "operation-conflict"
-	ErrorCodeUnknown                       ErrorCode = "unknown"
-	ErrorCodeUnauthenticated               ErrorCode = "UNAUTHENTICATED"
-	ErrorCodeRateLimited                   ErrorCode = "RATE_LIMITED"
-	ErrorCodeInvalidRequest                ErrorCode = "INVALID_REQUEST"
-	ErrorCodeEnrollmentClosed              ErrorCode = "ENROLLMENT_CLOSED"
-	ErrorCodeBootstrapTokenInvalid         ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
-	ErrorCodeInternalError                 ErrorCode = "INTERNAL_ERROR"
-	ErrorCodeCSRFTokenMissing              ErrorCode = "CSRF_TOKEN_MISSING"
-	ErrorCodeCSRFTokenMismatch             ErrorCode = "CSRF_TOKEN_MISMATCH"
-	ErrorCodeRetentionPlanStale            ErrorCode = "RETENTION_PLAN_STALE"
-	ErrorCodeRetentionPlanNotFound         ErrorCode = "RETENTION_PLAN_NOT_FOUND"
-	ErrorCodeRetentionApplyBusy            ErrorCode = "RETENTION_APPLY_BUSY"
-	ErrorCodeBackupSetNotFound             ErrorCode = "BACKUP_SET_NOT_FOUND"
-	ErrorCodeOperationNotFound             ErrorCode = "OPERATION_NOT_FOUND"
-	ErrorCodeOperationAlreadyRunning       ErrorCode = "OPERATION_ALREADY_RUNNING"
-	ErrorCodeIdempotencyKeyConflict        ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
-	ErrorCodeConfigRevisionStale           ErrorCode = "CONFIG_REVISION_STALE"
-	ErrorCodeSSHKeyNotFound                ErrorCode = "SSH_KEY_NOT_FOUND"
-	ErrorCodeHostKeyProbeFailed            ErrorCode = "HOST_KEY_PROBE_FAILED"
-	ErrorCodeDestructiveOperationsDisabled ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
-	ErrorCodeInternal                      ErrorCode = "INTERNAL"
-	ErrorCodeAlreadyConfigured             ErrorCode = "ALREADY_CONFIGURED"
-	ErrorCodeNotConfigured                 ErrorCode = "NOT_CONFIGURED"
-	ErrorCodeArtifactNotFound              ErrorCode = "ARTIFACT_NOT_FOUND"
-	ErrorCodeArtifactNotQuarantined        ErrorCode = "ARTIFACT_NOT_QUARANTINED"
-	ErrorCodeArtifactIrrecoverable         ErrorCode = "ARTIFACT_IRRECOVERABLE"
-	ErrorCodeReinstatementRefused          ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeAuthenticationFailed                   ErrorCode = "authentication-failed"
+	ErrorCodeSSHHostKeyChanged                      ErrorCode = "ssh-host-key-changed"
+	ErrorCodePermissionDenied                       ErrorCode = "permission-denied"
+	ErrorCodeRemotePathMissing                      ErrorCode = "remote-path-missing"
+	ErrorCodeChecksumMismatch                       ErrorCode = "checksum-mismatch"
+	ErrorCodeBackupStale                            ErrorCode = "backup-stale"
+	ErrorCodeStorageCritical                        ErrorCode = "storage-critical"
+	ErrorCodeVersionMismatch                        ErrorCode = "version-mismatch"
+	ErrorCodeOperationConflict                      ErrorCode = "operation-conflict"
+	ErrorCodeUnknown                                ErrorCode = "unknown"
+	ErrorCodeUnauthenticated                        ErrorCode = "UNAUTHENTICATED"
+	ErrorCodeRateLimited                            ErrorCode = "RATE_LIMITED"
+	ErrorCodeInvalidRequest                         ErrorCode = "INVALID_REQUEST"
+	ErrorCodeEnrollmentClosed                       ErrorCode = "ENROLLMENT_CLOSED"
+	ErrorCodeBootstrapTokenInvalid                  ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
+	ErrorCodeInternalError                          ErrorCode = "INTERNAL_ERROR"
+	ErrorCodeCSRFTokenMissing                       ErrorCode = "CSRF_TOKEN_MISSING"
+	ErrorCodeCSRFTokenMismatch                      ErrorCode = "CSRF_TOKEN_MISMATCH"
+	ErrorCodeRetentionPlanStale                     ErrorCode = "RETENTION_PLAN_STALE"
+	ErrorCodeRetentionPlanNotFound                  ErrorCode = "RETENTION_PLAN_NOT_FOUND"
+	ErrorCodeRetentionApplyBusy                     ErrorCode = "RETENTION_APPLY_BUSY"
+	ErrorCodeBackupSetNotFound                      ErrorCode = "BACKUP_SET_NOT_FOUND"
+	ErrorCodeOperationNotFound                      ErrorCode = "OPERATION_NOT_FOUND"
+	ErrorCodeOperationAlreadyRunning                ErrorCode = "OPERATION_ALREADY_RUNNING"
+	ErrorCodeIdempotencyKeyConflict                 ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
+	ErrorCodeConfigRevisionStale                    ErrorCode = "CONFIG_REVISION_STALE"
+	ErrorCodeSSHKeyNotFound                         ErrorCode = "SSH_KEY_NOT_FOUND"
+	ErrorCodeHostKeyProbeFailed                     ErrorCode = "HOST_KEY_PROBE_FAILED"
+	ErrorCodeDestructiveOperationsDisabled          ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
+	ErrorCodeInternal                               ErrorCode = "INTERNAL"
+	ErrorCodeAlreadyConfigured                      ErrorCode = "ALREADY_CONFIGURED"
+	ErrorCodeNotConfigured                          ErrorCode = "NOT_CONFIGURED"
+	ErrorCodeArtifactNotFound                       ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrorCodeArtifactNotQuarantined                 ErrorCode = "ARTIFACT_NOT_QUARANTINED"
+	ErrorCodeArtifactIrrecoverable                  ErrorCode = "ARTIFACT_IRRECOVERABLE"
+	ErrorCodeReinstatementRefused                   ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeBackupSetRepointNotAcknowledged        ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged ErrorCode = "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeMediumDisclosureRequired               ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
+	ErrorCodeRestoreRefused                         ErrorCode = "RESTORE_REFUSED"
+	ErrorCodeRestoreUnavailable                     ErrorCode = "RESTORE_UNAVAILABLE"
+	ErrorCodeCopyNotFound                           ErrorCode = "COPY_NOT_FOUND"
+	ErrorCodeMediumNotFound                         ErrorCode = "MEDIUM_NOT_FOUND"
+	ErrorCodeArtifactNotFailed                      ErrorCode = "ARTIFACT_NOT_FAILED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -102,6 +110,14 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeMediumDisclosureRequired,
+	ErrorCodeRestoreRefused,
+	ErrorCodeRestoreUnavailable,
+	ErrorCodeCopyNotFound,
+	ErrorCodeMediumNotFound,
+	ErrorCodeArtifactNotFailed,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -156,6 +172,14 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeMediumDisclosureRequired,
+	ErrorCodeRestoreRefused,
+	ErrorCodeRestoreUnavailable,
+	ErrorCodeCopyNotFound,
+	ErrorCodeMediumNotFound,
+	ErrorCodeArtifactNotFailed,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -163,12 +187,12 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeArtifactNotFailed},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
-	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
+	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
 	"unavailable":    {ErrorCodeNotConfigured},
-	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed},
+	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed, ErrorCodeMediumDisclosureRequired},
 }
 
 // Endpoint is one operation of the contract, with the requirements a
@@ -273,6 +297,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
+			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
 		},
@@ -300,6 +325,63 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "removeBackupSet", Method: "DELETE", Path: "/backup-sets/{source}/{set}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "updateBackupSet", Method: "PATCH", Path: "/backup-sets/{source}/{set}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getBackupSetEditHold", Method: "GET", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHoldState", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "takeBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHold", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "releaseBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold/release",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{source}/{set}/enabled",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "SetEnabledRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
@@ -321,6 +403,43 @@ var Endpoints = []Endpoint{
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "clearBackupSetRetention", Method: "DELETE", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "getBackupSetRetention", Method: "GET", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "setBackupSetRetention", Method: "PUT", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "RetentionOverride", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest, ErrorCodeMediumDisclosureRequired},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -370,6 +489,18 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "retryFailedIngestion", Method: "POST", Path: "/backups/{id}/retry",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "RetryFailedRequest", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
+			409: {ErrorCodeArtifactNotFailed},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "rebuildCatalog", Method: "POST", Path: "/catalog/rebuild",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "CatalogReportResponse", SuccessStatus: 200,
@@ -406,9 +537,10 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeCopyNotFound},
+			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning, ErrorCodeRestoreRefused},
 			500: {ErrorCodeInternal},
-			503: {ErrorCodeNotConfigured},
+			503: {ErrorCodeRestoreUnavailable},
 		},
 	},
 	{
@@ -438,7 +570,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeReinstatementRefused},
 			500: {ErrorCodeInternal},
 		},
@@ -450,7 +582,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable},
 			500: {ErrorCodeInternal},
 		},
@@ -462,7 +594,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined},
 			500: {ErrorCodeInternal},
 		},
@@ -482,7 +614,7 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "UpdateSettingsRequest", ResponseSchema: "SettingsResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeMediumDisclosureRequired},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			500: {ErrorCodeInternal},
@@ -508,6 +640,17 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeHostKeyProbeFailed},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "preflightStorageMedium", Method: "POST", Path: "/storage-mediums/{id}/preflight",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -612,26 +755,27 @@ type ApplyRetentionRequest struct {
 // here names an implementation: the fields describe a backup's
 // identity, freshness and trustworthiness, never how it is stored.
 type Artifact struct {
-	BackupSetID             string `json:"backup_set_id"`
-	Checksum                string `json:"checksum,omitempty"`
-	ChecksumAlgorithm       string `json:"checksum_algorithm,omitempty"`
-	DiscoveredAt            string `json:"discovered_at"`
-	ID                      string `json:"id"`
-	LocalPath               string `json:"local_path"`
-	Name                    string `json:"name"`
-	QuarantineIrrecoverable bool   `json:"quarantine_irrecoverable"`
-	QuarantineReason        string `json:"quarantine_reason,omitempty"`
-	Quarantined             bool   `json:"quarantined"`
-	RemotePath              string `json:"remote_path"`
-	RemoteSourceRemovedAt   string `json:"remote_source_removed_at,omitempty"`
-	RetentionTier           string `json:"retention_tier,omitempty"`
-	SetName                 string `json:"set_name"`
-	SizeBytes               int64  `json:"size_bytes"`
-	SourceName              string `json:"source_name"`
-	State                   string `json:"state"`
-	UpdatedAt               string `json:"updated_at"`
-	Validation              string `json:"validation"`
-	ValidationDetail        string `json:"validation_detail,omitempty"`
+	BackupSetID             string      `json:"backup_set_id"`
+	Checksum                string      `json:"checksum,omitempty"`
+	ChecksumAlgorithm       string      `json:"checksum_algorithm,omitempty"`
+	DiscoveredAt            string      `json:"discovered_at"`
+	ID                      string      `json:"id"`
+	LocalPath               string      `json:"local_path"`
+	Name                    string      `json:"name"`
+	Placements              []Placement `json:"placements"`
+	QuarantineIrrecoverable bool        `json:"quarantine_irrecoverable"`
+	QuarantineReason        string      `json:"quarantine_reason,omitempty"`
+	Quarantined             bool        `json:"quarantined"`
+	RemotePath              string      `json:"remote_path"`
+	RemoteSourceRemovedAt   string      `json:"remote_source_removed_at,omitempty"`
+	RetentionTier           string      `json:"retention_tier,omitempty"`
+	SetName                 string      `json:"set_name"`
+	SizeBytes               int64       `json:"size_bytes"`
+	SourceName              string      `json:"source_name"`
+	State                   string      `json:"state"`
+	UpdatedAt               string      `json:"updated_at"`
+	Validation              string      `json:"validation"`
+	ValidationDetail        string      `json:"validation_detail,omitempty"`
 }
 
 // ArtifactCheckResponse is the verdict of re-checking one quarantined backup. Nothing is
@@ -672,33 +816,69 @@ type AuthErrorResponse struct {
 
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	ID                 string   `json:"id"`
-	Include            []string `json:"include"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	ReadOnly           bool     `json:"read_only"`
-	RemotePath         string   `json:"remote_path"`
-	SourceName         string   `json:"source_name"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	CompletionStrategy  string   `json:"completion_strategy"`
+	Disabled            bool     `json:"disabled"`
+	Host                string   `json:"host"`
+	ID                  string   `json:"id"`
+	Include             []string `json:"include"`
+	LocalPath           string   `json:"local_path"`
+	Name                string   `json:"name"`
+	Port                int      `json:"port"`
+	ReadOnly            bool     `json:"read_only"`
+	RemotePath          string   `json:"remote_path"`
+	RetentionIsOverride bool     `json:"retention_is_override"`
+	SourceName          string   `json:"source_name"`
+	StableForSeconds    int      `json:"stable_for_seconds"`
+	User                string   `json:"user"`
+	ValidatorID         string   `json:"validator_id"`
 }
 
-// BackupSetHealth is one backup set's freshness verdict. This is the backup half of
+// BackupSetEditHold is POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
+// or renewed, plus what taking it interrupted. `stopped` is null
+// when nothing was running, so a client never claims to have stopped
+// something it did not.
+type BackupSetEditHold struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at"`
+	Stopped     *RunningWork `json:"stopped"`
+}
+
+// BackupSetEditHoldState is GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode
+// for this backup set would interrupt, and whether a hold is already
+// in force. `running` is null when no cycle is currently inside this
+// set, which is what lets a client open edit mode with no prompt for
+// a risk that does not exist.
+type BackupSetEditHoldState struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at,omitempty"`
+	Held        bool         `json:"held"`
+	Running     *RunningWork `json:"running"`
+}
+
+// BackupSetHealth is one backup set's health verdict: whether its backups are fresh and
+// trustworthy, and whether they are on the storage medium its
+// retention policy says they belong on. This is the backup half of
 // health, and it deliberately carries no process or build fact: a
-// running service is not evidence that backups are landing.
+// running service is not evidence that backups are landing. The
+// placement figures come from durable state rather than from the
+// last pass, so a deployment nobody has run a cycle in front of
+// still reports relocations that have been failing for weeks.
 type BackupSetHealth struct {
+	AwayFromHome                  int    `json:"away_from_home"`
+	AwayFromHomeOldestAgeSeconds  int64  `json:"away_from_home_oldest_age_seconds,omitempty"`
 	BackupSetID                   string `json:"backup_set_id"`
 	CurrentTransfers              int    `json:"current_transfers"`
+	FailedMoveOldestAgeSeconds    int64  `json:"failed_move_oldest_age_seconds,omitempty"`
+	FailedMoveReason              string `json:"failed_move_reason,omitempty"`
+	FailedMoves                   int    `json:"failed_moves"`
 	Failures                      int    `json:"failures"`
 	FreeBytes                     uint64 `json:"free_bytes,omitempty"`
 	FreeBytesKnown                bool   `json:"free_bytes_known"`
 	HaltReason                    string `json:"halt_reason,omitempty"`
 	LastCompletedBackupAt         string `json:"last_completed_backup_at,omitempty"`
 	NewestGoodBackupAt            string `json:"newest_good_backup_at,omitempty"`
+	OpenMoveOldestAgeSeconds      int64  `json:"open_move_oldest_age_seconds,omitempty"`
+	OpenMoves                     int    `json:"open_moves"`
 	PendingDeletes                int    `json:"pending_deletes"`
 	QuarantinedCount              int    `json:"quarantined_count"`
 	QuarantinedLostCount          int    `json:"quarantined_lost_count"`
@@ -711,6 +891,21 @@ type BackupSetHealth struct {
 	State                         string `json:"state"`
 	StorageLevel                  string `json:"storage_level,omitempty"`
 	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
+	UnconfirmedLocation           int    `json:"unconfirmed_location"`
+}
+
+// BackupSetRetention is which retention policy one backup set is retained under, and where
+// that policy came from. All of it is served together because 'what
+// is deciding' and 'is that this set's own or the deployment's' are
+// one question for an operator reading a preview that is about to
+// delete something, and answering it in two calls is how a surface
+// shows a chain beside the wrong attribution.
+type BackupSetRetention struct {
+	BackupSetID string             `json:"backup_set_id"`
+	Deployment  RetentionSettings  `json:"deployment"`
+	Effective   RetentionSettings  `json:"effective"`
+	IsOverride  bool               `json:"is_override"`
+	Override    *RetentionOverride `json:"override"`
 }
 
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
@@ -811,11 +1006,13 @@ type ConfigRevisionStaleResponse struct {
 	Error          ErrorBody `json:"error"`
 }
 
-// CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the one thing only a
-// create can ask for: that the new set also runs at once.
+// CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the two things only a
+// create can ask for: that the new set also runs at once, and that
+// it may take over history already on its id.
 type CreateBackupSetRequest struct {
 	BackupSetSpec
-	RunImmediately bool `json:"run_immediately"`
+	AcknowledgeRepoint bool `json:"acknowledge_repoint"`
+	RunImmediately     bool `json:"run_immediately"`
 }
 
 // CreateBackupSetResponse is POST /backup-sets. The created set, plus at most one of operation
@@ -835,6 +1032,35 @@ type CreateBackupSetResponse struct {
 type CredentialsRequest struct {
 	Password string `json:"password"`
 	Username string `json:"username"`
+}
+
+// CycleMoveOutcome is what a finished cycle's move pass got done: how many artifacts
+// were due to move to the medium their retention tier names, and how
+// many arrived. Without these, a cycle in which every move was
+// refused is indistinguishable from one in which every move landed,
+// which is the same defect artifacts_walked and artifacts_through
+// exist to remove one layer down. There is no reason string here,
+// deliberately: the engine's own refusal sentence is built from
+// whatever the transport handed back, about an endpoint, a bucket
+// and a credential reference, so it stays on the terminal and in the
+// event stream and never on this boundary.
+type CycleMoveOutcome struct {
+	Attempted int `json:"attempted"`
+	Landed    int `json:"landed"`
+}
+
+// CycleOutcome is what a finished run cycle actually got done, read off the
+// operation's own recorded summary. A cycle "completed" when it ran
+// to the end, which is a narrower statement than anyone reading it
+// assumes: an artifact's own quarantine is a business outcome and
+// not an operation failure, so a cycle that backed nothing up
+// finishes looking exactly like one that backed everything up. These
+// counts are what tell the two apart.
+type CycleOutcome struct {
+	ArtifactsThrough    int               `json:"artifacts_through"`
+	ArtifactsWalked     int               `json:"artifacts_walked"`
+	BackupSetsProcessed int               `json:"backup_sets_processed"`
+	Moves               *CycleMoveOutcome `json:"moves,omitempty"`
 }
 
 // ErrorBody is the nested error body every operation outside /auth returns. code
@@ -966,6 +1192,46 @@ type ManagerStorage struct {
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 }
 
+// MediumPreflightCheck is one step of a storage-medium preflight. There is deliberately no
+// field here for key material of any kind, and there never will be
+// (FR-33): `detail` is one of the engine's own sentences, never the
+// text of what actually came back, because that names a path on the
+// host or the name of an environment variable. The classified cause
+// goes to this manager's log instead.
+type MediumPreflightCheck struct {
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail"`
+	Outcome  string `json:"outcome"`
+	Step     string `json:"step"`
+}
+
+// MediumPreflightResponse is the result of proving one storage medium works. The preflight
+// writes a small probe object to the medium, reads it back byte for
+// byte, checks the storage class it landed in against the one the
+// configuration claims, asks whether the verification class the
+// medium declares can actually be achieved there, and deletes the
+// probe. That is deliberately more than a reachability ping: a wrong
+// region, a policy that denies PutObject and an endpoint that
+// silently ignores storage_class all answer a ping perfectly well
+// and then fail a move, in the middle of a cycle, after an artifact
+// has already been chosen to leave local disk. A medium that does
+// not work is a 200 with `ok` false, not an error: a bucket that is
+// not there is what an operator did, not what broke, exactly as a
+// failed backup-set connection test reports itself. The operation
+// takes an id and never a candidate medium, unlike that connection
+// test: a medium is declared in the configuration file and nowhere
+// else, and the only fields that would make a candidate one
+// meaningful are the three credential references, so a request body
+// for one would make a path on this host into something an API
+// caller sends (FR-33). Nothing schedules this; it is a real side
+// effect on somebody's bucket and it runs only because a person
+// asked.
+type MediumPreflightResponse struct {
+	Checks []MediumPreflightCheck `json:"checks"`
+	Medium string                 `json:"medium"`
+	OK     bool                   `json:"ok"`
+}
+
 // Operation is one durable operation record. Timestamp fields are omitted, not
 // zero-valued, until the event they name has happened. progress is
 // the separate, ephemeral thing: see OperationProgress for why it is
@@ -977,10 +1243,12 @@ type Operation struct {
 	BackupSetID    string             `json:"backup_set_id,omitempty"`
 	ConfigRevision string             `json:"config_revision,omitempty"`
 	CreatedAt      string             `json:"created_at,omitempty"`
+	Cycle          *CycleOutcome      `json:"cycle,omitempty"`
 	Error          string             `json:"error,omitempty"`
 	FinishedAt     string             `json:"finished_at,omitempty"`
 	OperationID    string             `json:"operation_id"`
 	Progress       *OperationProgress `json:"progress,omitempty"`
+	Restore        *OperationRestore  `json:"restore,omitempty"`
 	Result         string             `json:"result,omitempty"`
 	StartedAt      string             `json:"started_at,omitempty"`
 	Status         string             `json:"status"`
@@ -1018,19 +1286,112 @@ type OperationProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// OperationRestore is A restore operation's own facts: what was asked for, which never
+// changes, and where it has actually got to, which is re-derived
+// from the storage provider on every read rather than remembered.
+// Absent on every other action. There is no percentage field, no
+// completion-time field and no cost field: S3 reports a restore as
+// running or finished and nothing else, and this product holds no
+// price list, so any of the three would be invented.
+type OperationRestore struct {
+	Access        string `json:"access,omitempty"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	Billing       string `json:"billing,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Medium        string `json:"medium,omitempty"`
+	RestoredUntil string `json:"restored_until,omitempty"`
+	StorageClass  string `json:"storage_class,omitempty"`
+	Wait          string `json:"wait,omitempty"`
+	WindowDays    int    `json:"window_days,omitempty"`
+}
+
+// Placement is one DURABLE copy of one backup, and where it actually is (EPIC E,
+// FR-29). A placement exists because the journal recorded a finished
+// copy, so the ABSENCE of a placement is the absence of a copy: a
+// transfer still in flight has no placement at all, and neither does
+// a copy this deployment has released. That is deliberate, and it is
+// what lets a surface tell "there is no copy here" apart from "there
+// is a copy here nobody can confirm", which is what the access and
+// verification_class fields are for. Nothing here is a price, a bill
+// or an estimate of how long a restore will take; see access.
+type Placement struct {
+	Access            string `json:"access"`
+	Location          string `json:"location"`
+	Medium            string `json:"medium"`
+	MediumType        string `json:"medium_type"`
+	SizeBytes         *int64 `json:"size_bytes,omitempty"`
+	Status            string `json:"status"`
+	StorageClass      string `json:"storage_class,omitempty"`
+	VerificationClass string `json:"verification_class,omitempty"`
+	VerifiedAt        string `json:"verified_at,omitempty"`
+}
+
+// RestoreOperationRequest is the restore_placement action's own parameters. Present only when
+// action is restore_placement, and refused when it is not: a body
+// carrying restore parameters for a run_cycle is a request that has
+// confused two operations, and answering it cheerfully is how the
+// expensive version of the same mistake gets made later.
+type RestoreOperationRequest struct {
+	Acknowledged bool   `json:"acknowledged"`
+	ArtifactID   string `json:"artifact_id"`
+	Medium       string `json:"medium"`
+	WindowDays   int    `json:"window_days"`
+}
+
+// RetentionMove is one backup this plan would relocate, and both ends of the move
+// (EPIC E, FR-27). A move is a statement about PLACEMENT and nothing
+// else: planning one never adds a backup to the keep set and never
+// removes one, which is why moves travel beside the verdicts rather
+// than inside them. There is deliberately no field here for what a
+// provider would charge to run this, how long a provider might take,
+// or the key material that reaches either end, and there never will
+// be: this product holds none of those three, so a field for one
+// could only be filled with a guess.
+type RetentionMove struct {
+	Artifact   string `json:"artifact"`
+	FromMedium string `json:"from_medium"`
+	ToMedium   string `json:"to_medium"`
+}
+
+// RetentionOverride is one backup set's OWN retention policy, exactly as its
+// configuration file carries it: unresolved, with every omitted
+// field still omitted. An override names the WHOLE chain (a tiers
+// list, or all three of daily_days, weekly_months and
+// monthly_months) and half a chain is refused, because completing
+// the missing half from the product defaults is how a set silently
+// ends up retaining less than the operator who wrote the
+// deployment's policy believes. Everything that is not the chain
+// inherits from the deployment's resolved policy when omitted, so an
+// override that names no timezone is reckoned in the deployment's,
+// not in UTC.
+type RetentionOverride struct {
+	AcknowledgeMediumDisclosure bool            `json:"acknowledge_medium_disclosure,omitempty"`
+	DailyDays                   int             `json:"daily_days,omitempty"`
+	MonthlyMonths               int             `json:"monthly_months,omitempty"`
+	ProtectLastKnownGood        *bool           `json:"protect_last_known_good"`
+	Tiers                       []RetentionTier `json:"tiers,omitempty"`
+	Timezone                    string          `json:"timezone,omitempty"`
+	WeekStartsOn                string          `json:"week_starts_on,omitempty"`
+	WeeklyMonths                int             `json:"weekly_months,omitempty"`
+}
+
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
 // id; it never proposes what to delete.
 type RetentionPlan struct {
-	BackupSetID       string             `json:"backup_set_id"`
-	ConfigRevision    string             `json:"config_revision"`
-	DeleteCount       int                `json:"delete_count"`
-	ExpiresAt         string             `json:"expires_at"`
-	InventoryRevision string             `json:"inventory_revision"`
-	KeepCount         int                `json:"keep_count"`
-	OperationID       string             `json:"operation_id,omitempty"`
-	PlanID            string             `json:"plan_id"`
-	ReclaimBytes      int64              `json:"reclaim_bytes"`
-	Verdicts          []RetentionVerdict `json:"verdicts"`
+	BackupSetID           string             `json:"backup_set_id"`
+	ConfigRevision        string             `json:"config_revision"`
+	DeleteCount           int                `json:"delete_count"`
+	ExpiresAt             string             `json:"expires_at"`
+	InventoryRevision     string             `json:"inventory_revision"`
+	KeepCount             int                `json:"keep_count"`
+	Moves                 []RetentionMove    `json:"moves,omitempty"`
+	OperationID           string             `json:"operation_id,omitempty"`
+	PlanID                string             `json:"plan_id"`
+	ReclaimBytes          int64              `json:"reclaim_bytes"`
+	Retention             RetentionSettings  `json:"retention"`
+	RetentionIsOverride   bool               `json:"retention_is_override"`
+	UnconfirmedPlacements []string           `json:"unconfirmed_placements,omitempty"`
+	Verdicts              []RetentionVerdict `json:"verdicts"`
 }
 
 // RetentionSchema is the closed value sets and bounds a retention chain is validated
@@ -1056,10 +1417,14 @@ type RetentionSettings struct {
 
 // RetentionTier is one link in the retention chain, on the wire. The same shape is
 // read and written, so a client round-trips exactly what it was
-// served.
+// served. That round trip is why every field a tier can carry is
+// here: a chain write REPLACES the whole chain, so a field this
+// shape omits is a field the save deletes from the operator's
+// configuration file.
 type RetentionTier struct {
 	Granularity string `json:"granularity"`
 	Keep        int    `json:"keep"`
+	Medium      string `json:"medium,omitempty"`
 	Name        string `json:"name"`
 	PeriodDays  int    `json:"period_days,omitempty"`
 	WindowUnit  string `json:"window_unit,omitempty"`
@@ -1082,9 +1447,20 @@ type RetentionTierSelection struct {
 type RetentionVerdict struct {
 	Action         string                   `json:"action"`
 	Artifact       string                   `json:"artifact"`
+	Medium         string                   `json:"medium,omitempty"`
 	Reason         string                   `json:"reason"`
 	TierSelections []RetentionTierSelection `json:"tier_selections,omitempty"`
 	Tiers          []string                 `json:"tiers,omitempty"`
+}
+
+// RetryFailedRequest is POST /backups/{id}/retry's optional body. Everything about the
+// retry is decided by the backup's own recorded state, so there is
+// nothing here that changes what happens: the note is recorded
+// alongside the transition so a later failure of the same backup
+// carries the context of what was tried last time, rather than only
+// that something was.
+type RetryFailedRequest struct {
+	Note string `json:"note,omitempty"`
 }
 
 // RotatePasswordRequest is POST /auth/password. Requires an already-authenticated session AND
@@ -1092,6 +1468,17 @@ type RetentionVerdict struct {
 type RotatePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
+}
+
+// RunningWork is what a run cycle is doing for one backup set right now (issue
+// #350). It is the content of the warning shown before edit mode
+// opens: discarding a partial transfer of a named artifact is a
+// materially different cost from cancelling a scheduler tick that
+// has not started work, and only a message saying which one it is
+// lets an operator decide.
+type RunningWork struct {
+	Artifact string `json:"artifact"`
+	Stage    string `json:"stage"`
 }
 
 // SessionResponse is GET /auth/session.
@@ -1118,14 +1505,42 @@ type SetReadOnlyRequest struct {
 // SettingsResponse is GET and PATCH /settings both return this: the settings now in
 // effect plus the rules they were validated against.
 type SettingsResponse struct {
-	Capacity  CapacitySettings  `json:"capacity"`
-	Retention RetentionSettings `json:"retention"`
-	Schema    SettingsSchema    `json:"schema"`
+	Capacity  CapacitySettings       `json:"capacity"`
+	Mediums   []StorageMediumSummary `json:"mediums"`
+	Retention RetentionSettings      `json:"retention"`
+	Schema    SettingsSchema         `json:"schema"`
 }
 
 // SettingsSchema is the schema half of the settings response.
 type SettingsSchema struct {
 	Retention RetentionSchema `json:"retention"`
+	Storage   StorageSchema   `json:"storage"`
+}
+
+// StorageMediumSummary is one configured storage medium, as the settings surface reports it:
+// what it is called, what kind of place it is, which bucket and
+// region, and which storage class artifacts are written with. There
+// is deliberately no field here for key material of any kind, and
+// there never will be (FR-33). A credential reaches this product
+// only as a reference to a file, an environment variable or a
+// command, and none of those three has a spelling on this boundary
+// at all.
+type StorageMediumSummary struct {
+	Bucket              string `json:"bucket"`
+	ID                  string `json:"id"`
+	ReadsRequireRestore bool   `json:"reads_require_restore"`
+	Region              string `json:"region,omitempty"`
+	StorageClass        string `json:"storage_class"`
+	Type                string `json:"type"`
+}
+
+// StorageSchema is the closed value sets and the consent text a storage-medium
+// mapping is written against, served rather than transcribed into a
+// frontend.
+type StorageSchema struct {
+	MediumDisclosure    string                  `json:"medium_disclosure"`
+	RetrievalDisclosure string                  `json:"retrieval_disclosure"`
+	VerificationClasses []VerificationClassInfo `json:"verification_classes"`
 }
 
 // StorageStatus is one backup set's capacity assessment.
@@ -1143,10 +1558,13 @@ type StorageStatus struct {
 }
 
 // SubmitOperationRequest is POST /operations. The idempotency key is a header, not a body
-// field: it is a property of the retry, not of the operation.
+// field: it is a property of the retry, not of the operation. action
+// selects which of the parameter objects below is read;
+// restore_placement reads restore, and run_cycle reads none.
 type SubmitOperationRequest struct {
-	Action         string `json:"action"`
-	ConfigRevision string `json:"config_revision"`
+	Action         string                   `json:"action"`
+	ConfigRevision string                   `json:"config_revision"`
+	Restore        *RestoreOperationRequest `json:"restore,omitempty"`
 }
 
 // TestConnectionRequest is POST /backup-sets/test-connection. A reachability and
@@ -1173,6 +1591,31 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
+// already-persisted backup set (issue #350): every property is
+// optional, and a property this body omits is left exactly as it is
+// rather than cleared. That is what lets the Web UI's per-box Save
+// persist only the box it belongs to. It deliberately carries no
+// name/source_name (a backup set's identity keys every journal row,
+// artifact id and recovery manifest it has ever produced, so a
+// rename is a migration rather than an edit) and no
+// ssh_key_id/known_hosts_line (those are the results of the import
+// and probe steps, and re-trusting a host is a trust decision rather
+// than an edit).
+type UpdateBackupSetRequest struct {
+	AcknowledgeRepoint bool      `json:"acknowledge_repoint"`
+	CompletionStrategy *string   `json:"completion_strategy"`
+	Host               *string   `json:"host"`
+	Include            *[]string `json:"include"`
+	LocalPath          *string   `json:"local_path"`
+	Port               *int      `json:"port"`
+	RemotePath         *string   `json:"remote_path"`
+	StableForSeconds   *int      `json:"stable_for_seconds"`
+	StaleAfterSeconds  *int      `json:"stale_after_seconds"`
+	User               *string   `json:"user"`
+	ValidatorID        *string   `json:"validator_id"`
+}
+
 // UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the
 // running configuration has it. An explicit 0 is a request, not an
 // omission: on this block zero means "no cap" and "no warning line",
@@ -1197,8 +1640,9 @@ type UpdateRetentionSettings struct {
 // UpdateSettingsRequest is PATCH /settings. An enumerated request type, never a configuration
 // passthrough.
 type UpdateSettingsRequest struct {
-	Capacity  *UpdateCapacitySettings  `json:"capacity"`
-	Retention *UpdateRetentionSettings `json:"retention"`
+	AcknowledgeMediumDisclosure bool                     `json:"acknowledge_medium_disclosure,omitempty"`
+	Capacity                    *UpdateCapacitySettings  `json:"capacity"`
+	Retention                   *UpdateRetentionSettings `json:"retention"`
 }
 
 // Validator is one registered application validator. An id and a sentence, and
@@ -1207,6 +1651,18 @@ type UpdateSettingsRequest struct {
 type Validator struct {
 	ID      string `json:"id"`
 	Summary string `json:"summary"`
+}
+
+// VerificationClassInfo is one rung of the verification ladder (FR-31), with what it proves
+// and what achieving it takes, in the engine's own words. Served
+// rather than transcribed into a frontend, for the reason the
+// retention schema is served: a surface holding its own copy of what
+// "existence" proves eventually says something the engine does not.
+type VerificationClassInfo struct {
+	Class           string `json:"class"`
+	DownloadsObject bool   `json:"downloads_object"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
 }
 
 // VersionResponse is GET /system/version. Nothing here names an implementation: no
@@ -1234,7 +1690,10 @@ var SchemaTypes = map[string]any{
 	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
+	"BackupSetEditHold":           BackupSetEditHold{},
+	"BackupSetEditHoldState":      BackupSetEditHoldState{},
 	"BackupSetHealth":             BackupSetHealth{},
+	"BackupSetRetention":          BackupSetRetention{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
 	"CapacitySettings":            CapacitySettings{},
@@ -1245,6 +1704,8 @@ var SchemaTypes = map[string]any{
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
 	"CreateBackupSetResponse":     CreateBackupSetResponse{},
 	"CredentialsRequest":          CredentialsRequest{},
+	"CycleMoveOutcome":            CycleMoveOutcome{},
+	"CycleOutcome":                CycleOutcome{},
 	"ErrorBody":                   ErrorBody{},
 	"ErrorResponse":               ErrorResponse{},
 	"FirstRunStatusResponse":      FirstRunStatusResponse{},
@@ -1260,27 +1721,40 @@ var SchemaTypes = map[string]any{
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
 	"ManagerStorage":              ManagerStorage{},
+	"MediumPreflightCheck":        MediumPreflightCheck{},
+	"MediumPreflightResponse":     MediumPreflightResponse{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
+	"OperationRestore":            OperationRestore{},
+	"Placement":                   Placement{},
+	"RestoreOperationRequest":     RestoreOperationRequest{},
+	"RetentionMove":               RetentionMove{},
+	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
 	"RetentionSettings":           RetentionSettings{},
 	"RetentionTier":               RetentionTier{},
 	"RetentionTierSelection":      RetentionTierSelection{},
 	"RetentionVerdict":            RetentionVerdict{},
+	"RetryFailedRequest":          RetryFailedRequest{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
+	"RunningWork":                 RunningWork{},
 	"SessionResponse":             SessionResponse{},
 	"SetEnabledRequest":           SetEnabledRequest{},
 	"SetReadOnlyRequest":          SetReadOnlyRequest{},
 	"SettingsResponse":            SettingsResponse{},
 	"SettingsSchema":              SettingsSchema{},
+	"StorageMediumSummary":        StorageMediumSummary{},
+	"StorageSchema":               StorageSchema{},
 	"StorageStatus":               StorageStatus{},
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},
 	"UpdateSettingsRequest":       UpdateSettingsRequest{},
 	"Validator":                   Validator{},
+	"VerificationClassInfo":       VerificationClassInfo{},
 	"VersionResponse":             VersionResponse{},
 }

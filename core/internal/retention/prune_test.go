@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -130,7 +131,7 @@ func TestPruneApplyDeletesGenuineCandidate(t *testing.T) {
 	bs := pruneBackupSet(set, root)
 	cfg := pruneTodayOnlyChain()
 
-	verdicts, err := PruneApply(pruneNow, cfg, bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, cfg, bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestPruneAllowsDeletionWhenBackupRootItselfIsASymlink(t *testing.T) {
 	bs := pruneBackupSet(set, rootLink)
 	cfg := pruneTodayOnlyChain()
 
-	verdicts, err := PruneApply(pruneNow, cfg, bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, cfg, bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestPruneDecideKeepsArtifactSelectedByGFSTier(t *testing.T) {
 	off := false
 	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 7, ProtectLastKnownGood: &off}
 
-	verdicts, err := PruneDecide(pruneNow, cfg, bs, records)
+	verdicts, err := PruneDecide(pruneNow, cfg, bs, records, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -229,7 +230,7 @@ func TestPruneDecideKeepsLastKnownGoodArtifact(t *testing.T) {
 	on := true
 	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 7, WeeklyMonths: 3, MonthlyMonths: 12, ProtectLastKnownGood: &on}
 
-	verdicts, err := PruneDecide(pruneNow, cfg, bs, records)
+	verdicts, err := PruneDecide(pruneNow, cfg, bs, records, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestPruneRefusesPartialArtifactEvenWhenToldToDeleteIt(t *testing.T) {
 	lyingVerdict := GFSVerdict{Artifact: artifact, Keep: false} // "no tier keeps it"
 	bs := pruneBackupSet(set, root)
 
-	got := pruneEvaluate(bs, rec, lyingVerdict, LastKnownGoodResult{})
+	got := pruneEvaluate(bs, rec, lyingVerdict, LastKnownGoodResult{}, AllLocal)
 	if got.Action != PruneRefuse {
 		t.Fatalf("Action = %s, want %s: a .partial artifact must never be deleted regardless of what the GFS verdict claims", got.Action, PruneRefuse)
 	}
@@ -276,7 +277,7 @@ func TestPruneRefusesPartialArtifactEvenWhenToldToDeleteIt(t *testing.T) {
 
 	// Also confirm the public entry point never even surfaces this record
 	// as a decision at all, matching GFSDecide's own scope.
-	verdicts, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, []state.Record{rec})
+	verdicts, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, []state.Record{rec}, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestPruneNeverConsidersAFileTheJournalDoesNotKnowAbout(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), trackedPath)}
 
 	bs := pruneBackupSet(set, root)
-	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -339,7 +340,7 @@ func TestPruneRefusesWhenJournalPathDisagreesWithComputedPath(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), wrongPath)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -383,7 +384,7 @@ func TestPruneRefusesSymlinkAtFinalPath(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), linkPath)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -420,7 +421,7 @@ func TestPruneRejectsPathTraversalViaCraftedArtifactName(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), computed)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -465,7 +466,7 @@ func TestPruneRejectsSiblingPrefixDirectory(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), computed)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -495,7 +496,7 @@ func TestPruneRefusesLastKnownGoodEvenIfGFSVerdictLies(t *testing.T) {
 	lkg := LastKnownGoodResult{Set: set, Enabled: true, Protected: true, Artifact: artifact, Reason: "the newest eligible restore point"}
 	bs := pruneBackupSet(set, root)
 
-	got := pruneEvaluate(bs, rec, lyingVerdict, lkg)
+	got := pruneEvaluate(bs, rec, lyingVerdict, lkg, AllLocal)
 	if got.Action != PruneRefuse {
 		t.Fatalf("Action = %s, want %s: last-known-good protection must hold even against a contradicting GFS verdict", got.Action, PruneRefuse)
 	}
@@ -517,13 +518,13 @@ func TestPruneDecideRejectsRecordFromAnotherBackupSet(t *testing.T) {
 	}
 	bs := pruneBackupSet(setA, root)
 
-	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, records); err == nil {
+	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, records, AllLocal); err == nil {
 		t.Fatal("expected an error for a record belonging to a different backup set (FR-7 isolation would be silently broken)")
 	}
 }
 
 func TestPruneDecideRejectsZeroBackupSet(t *testing.T) {
-	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), config.BackupSet{}, nil); err == nil {
+	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), config.BackupSet{}, nil, AllLocal); err == nil {
 		t.Fatal("expected an error for a zero backup set id, got nil")
 	}
 }
@@ -571,7 +572,7 @@ func TestPruneDryRunAndApplyAgree(t *testing.T) {
 	on := true
 	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 7, ProtectLastKnownGood: &on}
 
-	dryRun, err := PruneDecide(pruneNow, cfg, bs, records)
+	dryRun, err := PruneDecide(pruneNow, cfg, bs, records, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -580,7 +581,7 @@ func TestPruneDryRunAndApplyAgree(t *testing.T) {
 	pruneMustExist(t, deletablePath)
 	pruneMustExist(t, refusedWrongPath)
 
-	applied, err := PruneApply(pruneNow, cfg, bs, records)
+	applied, err := PruneApply(context.Background(), pruneNow, cfg, bs, records, AllLocal, nil)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -640,7 +641,7 @@ func TestPruneDeleteReasonNamesASiblingCollision(t *testing.T) {
 	bs := pruneBackupSet(set, root)
 	cfg := pruneTodayOnlyChain()
 
-	verdicts, err := PruneDecide(pruneNow, cfg, bs, records)
+	verdicts, err := PruneDecide(pruneNow, cfg, bs, records, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -660,4 +661,79 @@ func TestPruneDeleteReasonNamesASiblingCollision(t *testing.T) {
 	if !strings.Contains(deleted.Reason, winner.Name) {
 		t.Errorf("%s: Reason = %q, want it to name %s, the sibling it tied with", loser.Name, deleted.Reason, winner.Name)
 	}
+}
+
+// --- a store that cannot say where an artifact belongs ---
+
+// TestPruneRefusesWhenItCannotResolveWhereTheArtifactBelongs is issue #390's
+// heart. The prune path asks internal/artifactstore where an artifact lives
+// instead of composing the path itself, and when the store refuses to answer,
+// that refusal has to come out as PruneRefuse.
+//
+// REFUSE and KEEP are different claims. KEEP says a retention tier selected
+// this artifact and the engine decided about it. REFUSE says nothing was
+// decided at all. Collapsing the second into the first is how a prune reports
+// a decision it never made, and an operator reading a dry run cannot tell the
+// two apart from the Action alone.
+//
+// The fixture is one backup set with an empty local_path and two records: one
+// old enough that no tier selects it, and one dated today that the daily tier
+// keeps. Running those same two records against a real root first is the
+// positive control, and it is what makes the empty-root half mean anything:
+// it proves this fixture really does produce a KEEP and a DELETE, so a REFUSE
+// in the other half is the missing root talking rather than some unrelated
+// safety check refusing everything in sight.
+//
+// Both rows refuse at the empty root, the kept one included, and that is
+// deliberate rather than incidental: pruneEvaluate resolves the path before
+// it looks at the verdict, so a store that cannot answer stops the decision
+// instead of being papered over by a keep. Path stays empty on a refusal so
+// nothing downstream can act on a half-computed one.
+func TestPruneRefusesWhenItCannotResolveWhereTheArtifactBelongs(t *testing.T) {
+	root := t.TempDir()
+	set := gfsMustSet(t, "prune-unresolvable", "set")
+
+	kept := gfsMustArtifact(t, set, "todays-backup.zst")
+	doomed := gfsMustArtifact(t, set, "ancient-backup.zst")
+	keptPath := filepath.Join(root, "todays-backup.zst")
+	doomedPath := filepath.Join(root, "ancient-backup.zst")
+	pruneWriteFile(t, keptPath, "kept by the daily tier")
+	pruneWriteFile(t, doomedPath, "old enough that no tier selects it")
+
+	records := []state.Record{
+		pruneRecord(kept, lifecycle.Complete, pruneNow, keptPath),
+		pruneRecord(doomed, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), doomedPath),
+	}
+	cfg := pruneTodayOnlyChain()
+
+	control, err := PruneDecide(pruneNow, cfg, pruneBackupSet(set, root), records, AllLocal)
+	if err != nil {
+		t.Fatalf("PruneDecide against a real root: %v", err)
+	}
+	if v := pruneFindVerdict(t, control, "todays-backup.zst"); v.Action != PruneKeep {
+		t.Fatalf("control: todays-backup.zst = %s, want %s (reason: %s); the positive control is broken, so the empty-root half below proves nothing", v.Action, PruneKeep, v.Reason)
+	}
+	if v := pruneFindVerdict(t, control, "ancient-backup.zst"); v.Action != PruneDelete {
+		t.Fatalf("control: ancient-backup.zst = %s, want %s (reason: %s); the positive control is broken, so the empty-root half below proves nothing", v.Action, PruneDelete, v.Reason)
+	}
+
+	verdicts, err := PruneDecide(pruneNow, cfg, pruneBackupSet(set, ""), records, AllLocal)
+	if err != nil {
+		t.Fatalf("PruneDecide against an unrooted store: %v", err)
+	}
+	for _, name := range []string{"ancient-backup.zst", "todays-backup.zst"} {
+		v := pruneFindVerdict(t, verdicts, name)
+		if v.Action != PruneRefuse {
+			t.Errorf("with no configured local_path, %s = %s, want %s: a store that cannot say where the artifact belongs has decided nothing, and reporting that as %s claims a tier selected it (reason: %s)", name, v.Action, PruneRefuse, v.Action, v.Reason)
+		}
+		if v.Path != "" {
+			t.Errorf("%s: Path = %q, want empty: nothing downstream may act on a path the store refused to compute", name, v.Path)
+		}
+		if !strings.Contains(v.Reason, "local_path") {
+			t.Errorf("%s: Reason = %q, which does not name the missing local_path an operator has to fix", name, v.Reason)
+		}
+	}
+
+	pruneMustExist(t, keptPath)
+	pruneMustExist(t, doomedPath)
 }

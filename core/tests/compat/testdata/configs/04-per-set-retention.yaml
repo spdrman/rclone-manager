@@ -1,0 +1,44 @@
+# Issue #333's per-set override, medium-free. The set that overrides and
+# the set that inherits both have to keep resolving the way they do today.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: local
+        remote_path: /srv/exports/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+      - id: media-archive
+        remote:
+          type: local
+        remote_path: /srv/exports/media
+        local_path: /backups/production/media
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+        retention:
+          timezone: UTC
+          week_starts_on: monday
+          protect_last_known_good: false
+          tiers:
+            - name: monthly
+              granularity: month
+              keep: 24
+
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  daily_days: 14
+  weekly_months: 2
+  monthly_months: 6
+  protect_last_known_good: true

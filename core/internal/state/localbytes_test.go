@@ -28,6 +28,11 @@ var holdsLocalCopy = []string{
 	"QUARANTINED", "QUARANTINED_LOST",
 }
 
+// discoverSized records an artifact whose REMOTE size is known and whose
+// transfer has not happened. That is the interesting starting point for
+// every test here: the two sizes LocalBytesInUse chooses between are set
+// separately, so a fixture that populated both at once could not tell which
+// one the query preferred.
 func discoverSized(t *testing.T, j *Journal, name string, size int64) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres")
@@ -45,6 +50,10 @@ func discoverSized(t *testing.T, j *Journal, name string, size int64) model.Arti
 	return artifact
 }
 
+// advance moves an artifact one state and optionally attaches a transfer
+// result. transfer is a pointer so a test can move an artifact WITHOUT
+// recording bytes, which is the case where the query has to fall back to
+// the remote size.
 func advance(t *testing.T, j *Journal, artifact model.ArtifactID, from, to string, transfer *TransferResult) {
 	t.Helper()
 	if _, err := j.RecordTransition(context.Background(), Transition{

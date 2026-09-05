@@ -91,6 +91,12 @@ fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-perf.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Neither capture below runs under -race, and neither ever may. Every other
+# `go test` in this repository does since #417, so this is the one place
+# where the consistent-looking edit is the wrong one: the race detector
+# slows an instrumented binary by several times, and a baseline captured
+# from one would set a number no uninstrumented run could ever be compared
+# against. scripts/perf/check-baseline.sh reads what these write.
 echo "==> runtime harness (apps/generic/tests/perfbaseline), ${REPEAT} capture(s)"
 runtime_files=()
 for i in $(seq 1 "$REPEAT"); do

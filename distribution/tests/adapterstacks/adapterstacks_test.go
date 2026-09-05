@@ -91,13 +91,19 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
+// requireDocker decides whether an absent docker takes this suite out of
+// the run quietly or loudly. Both arms are docker-availability checks, so
+// both go through dockergate_test.go's verdict (#456): a skip on a laptop
+// with no docker, and an INFRA: failure inside the gate, where docker is a
+// declared prerequisite and skipping would empty this suite while the gate
+// still printed ok.
 func requireDocker(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker CLI not available on PATH; skipping the adapter stack suite")
+		dockerUnavailable(t, "%q not available on PATH: %v", "docker", err)
 	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon not reachable; skipping the adapter stack suite")
+		dockerUnavailable(t, "docker daemon not reachable: %v", err)
 	}
 }
 

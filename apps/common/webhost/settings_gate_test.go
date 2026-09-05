@@ -368,13 +368,16 @@ func TestAPlanApprovedWithNoSettingsWriteInBetweenStillApplies(t *testing.T) {
 // present. Adding a field to this surface means adding a line here, and
 // the line is where the gate-tier question gets re-answered.
 var settingsWriteSurface = map[string]string{
-	"Retention.Timezone":             "names the calendar a retention plan's buckets are computed in. Read at plan time, by a plan the operator previews and applies; the scheduler's own cycle never calls retention apply.",
-	"Retention.WeekStartsOn":         "same as Timezone: a bucket-boundary input read at plan time.",
-	"Retention.Tiers.Name":           "a tier label. config.Validate refuses the one reserved name (last_known_good) and holds the rest to an anchored pattern.",
-	"Retention.Tiers.Granularity":    "a closed value set (config.RetentionGranularities), read at plan time.",
-	"Retention.Tiers.PeriodDays":     "a bounded look-back, read at plan time.",
-	"Retention.Tiers.Keep":           "a bounded count, read at plan time.",
-	"Retention.Tiers.WindowUnit":     "a closed value set, read at plan time.",
+	"Retention.Timezone":          "names the calendar a retention plan's buckets are computed in. Read at plan time, by a plan the operator previews and applies; the scheduler's own cycle never calls retention apply.",
+	"Retention.WeekStartsOn":      "same as Timezone: a bucket-boundary input read at plan time.",
+	"Retention.Tiers.Name":        "a tier label. config.Validate refuses the one reserved name (last_known_good) and holds the rest to an anchored pattern.",
+	"Retention.Tiers.Granularity": "a closed value set (config.RetentionGranularities), read at plan time.",
+	"Retention.Tiers.PeriodDays":  "a bounded look-back, read at plan time.",
+	"Retention.Tiers.Keep":        "a bounded count, read at plan time.",
+	"Retention.Tiers.WindowUnit":  "a closed value set, read at plan time.",
+	"Retention.Tiers.Medium":      "the storage medium a tier's artifacts live on (EPIC E, FR-27). Empty means the local backup root, and config.Validate refuses any value that is not a declared storage_mediums id. Nothing reads it yet: no scheduler path, no planner and no delete consults it, so today it can only ever be accepted or refused at save time. When it does acquire a reader it will be the retention planner (#239), and the argument this list exists to make has to be re-made THERE, because a tier pointed at a medium is what eventually authorises deleting the local copy after a verified upload. That is why the disclosure in front of that first save is its own requirement (FR-27's consent rule, #240) rather than something this entry can wave through.",
+	"AcknowledgeMediumDisclosure": "the operator's acknowledgment of FR-27's storage-medium disclosure (#240). The scheduler does nothing with it: it is not written to config.yaml, it is not read by any cycle, and it survives only long enough for core/service.UpdateSettings to decide whether to REFUSE the write in front of it. Its only effect is to permit a save that was otherwise refused, so the direction it moves the product in is bounded by whatever that save contains, which is Retention.Tiers.Medium above and its own entry's argument. Setting it on a write that introduces no new tier-to-medium mapping changes nothing at all, and it can never be the thing that authorises a deletion: what does that is the mapping, saved and then read by the planner, and that entry says where the argument has to be re-made.",
+
 	"Retention.ProtectLastKnownGood": "FR-19's protection. The dangerous one, and the reason #171 was asked in the first place: turning it off WIDENS what a later retention apply may delete. That apply is plan-bound (see this file's doc comment), and the scheduler never performs one.",
 
 	// FR-21's capacity block (issue #286). Every one of these four is an

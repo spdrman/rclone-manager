@@ -145,6 +145,16 @@ type DeleteRemoteRequest struct {
 	DeleteSafetyDelay time.Duration
 }
 
+// The three suffixes DeleteRemote appends to a caller's AttemptKey, one per
+// durable write it can make.
+//
+// They exist because the journal replays a repeated key as the same logical
+// attempt, so the three writes of one delete attempt have to be told apart
+// by something. Deriving them from the caller's key rather than generating
+// them means a retry of the same attempt lands on the same three keys and
+// converges, which is what makes a crash anywhere in this sequence safe to
+// resume. They are constants rather than inline strings so a refusal write
+// and the test asserting on it cannot drift.
 const (
 	deleteAttemptTagIntent   = "remote-delete-pending"
 	deleteAttemptTagRefused  = "remote-delete-refused"
@@ -161,6 +171,11 @@ const stableSafetyDelayCheck = "stable completion safety delay"
 // on it and the tests asserting it cannot drift apart.
 const reinstatementCheck = "quarantine reinstatement"
 
+// key derives one of this attempt's three journal keys from the caller's
+// AttemptKey. It is a method rather than a bare concatenation at each call
+// site so the separator and the ordering are stated once: a key built the
+// other way round, or with a different separator, would not be recognised as
+// a replay of the attempt it belongs to.
 func (r DeleteRemoteRequest) key(tag string) string {
 	return r.AttemptKey + ":" + tag
 }
@@ -203,6 +218,15 @@ type RemoteDeleteRefusalError struct {
 	Confidence    model.Confidence
 }
 
+// Error renders the comparison fields only when there was a comparison.
+//
+// The two forms exist because a verdict and a confidence attached to a
+// refusal that never compared anything would be zero values printed as if
+// they meant something, and this is the one refusal in the product an
+// operator is expected to see routinely rather than during an incident. A
+// line reading verdict= and confidence= with empty values on every cycle
+// against a hardened SFTP account is how a message people should read
+// becomes one they filter out.
 func (e *RemoteDeleteRefusalError) Error() string {
 	if e.HasComparison {
 		return fmt.Sprintf(
@@ -607,16 +631,44 @@ func checkStableSafetyDelay(ctx context.Context, d Deps, req DeleteRemoteRequest
 // file was correct at the moment it was durably renamed, not that it still
 // is now.
 func verifyLocalFinal(rec state.Record) error {
-	if rec.LocalPath == "" {
+	// The path comes from the artifact's own ACTIVE local placement (EPIC
+	// E, FR-29), not from rec.LocalPath directly. In Phase 1 the two are
+	// the same value for every artifact that has one, so this changes
+	// nothing; what it changes is where the answer comes from when an
+	// artifact's only copy is on a storage medium, which is a state this
+	// check must refuse rather than misread as a missing file.
+	localPath, ok := rec.ReadableLocalPath()
+	if !ok {
+		// A refusal either way, because this gate authorises destroying
+		// the remote source and FR-15 requires the local copy to be
+		// CONFIRMED, not assumed. What differs is what the refusal says.
+		// An artifact whose copy is on a medium is not an artifact whose
+		// file went missing, and an operator reading "no local final path
+		// is recorded" would go looking for a lost file that was never
+		// lost. FR-30 makes only COMPLETE artifacts move-eligible, so this
+		// shape should not reach a delete at all; if it does, the reason
+		// has to say so rather than misread it.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			ids := make([]string, 0, len(mediums))
+			for _, p := range mediums {
+				ids = append(ids, fmt.Sprintf("%q", p.Medium))
+			}
+			return fmt.Errorf(
+				"this artifact's durable copy is on storage medium %s, not on local disk; FR-15's pre-delete check confirms the LOCAL copy and cannot read a medium, and a source is never deleted against a copy this gate cannot read (FR-30 moves only COMPLETE artifacts, so a %s artifact on a medium needs an operator to look)",
+				strings.Join(ids, ", "), rec.State)
+		}
+		if len(rec.Placements) > 0 {
+			return fmt.Errorf("no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING")
+		}
 		return fmt.Errorf("no local final path is recorded for this artifact")
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("expected local final file %s: %w", rec.LocalPath, err)
+		return fmt.Errorf("expected local final file %s: %w", localPath, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("expected local final file %s is a directory, not a file", rec.LocalPath)
+		return fmt.Errorf("expected local final file %s is a directory, not a file", localPath)
 	}
 
 	expected, source, err := expectedLocalSize(rec)
@@ -624,19 +676,19 @@ func verifyLocalFinal(rec state.Record) error {
 		return err
 	}
 	if info.Size() != expected {
-		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)
+		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", localPath, info.Size(), expected, source)
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return fmt.Errorf("cannot revalidate local identity: unsupported recorded local hash algorithm %q", rec.LocalHashAlg)
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(localPath)
 		if err != nil {
-			return fmt.Errorf("hashing local final file %s: %w", rec.LocalPath, err)
+			return fmt.Errorf("hashing local final file %s: %w", localPath, err)
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)
+			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", localPath, sum, rec.LocalHashAlg, rec.LocalHash)
 		}
 	}
 
@@ -667,6 +719,14 @@ func expectedLocalSize(rec state.Record) (size int64, source string, err error) 
 	}
 }
 
+// sha256File reads path in full and returns its SHA-256, in hex.
+//
+// This is the same ten lines internal/reconcile's sha256File and
+// internal/revalidate's recomputeLocalHash already have, kept as a third
+// copy on the convention this tree already follows: a package that needs to
+// hash a file keeps its own reader rather than growing a dependency on
+// another package for it. See recomputeLocalHash's comment, which is where
+// that convention is written down.
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

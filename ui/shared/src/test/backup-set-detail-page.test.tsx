@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import { BackupManagerError } from "@shared/api/contracts";
-import { createMockApi } from "@shared/api/mock";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
-import { graph, resetGraphForTests } from "@shared/state/graph";
-import { currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
+import { resetGraphForTests } from "@shared/state/graph";
 import { backupSetPath } from "@shared/utilities/routes";
 
 // Two segments (source, set), not one flat id: a real backup set id
@@ -110,78 +109,134 @@ describe("backup set detail page reads the set", () => {
   });
 });
 
+// #97's acceptance criterion, "stale edits are rejected", re-pointed at
+// the surface it now lives on. Issue #350 replaced the edit dialog with
+// an inline mode on this page, and the criterion did not go away with it:
+// inline editing holds the page open LONGER than a dialog did, so it is
+// more exposed to a concurrent save landing first, not less.
+//
+// The positive case (a concurrent commit is refused) lives in
+// backup-set-inline-edit.test.tsx beside the rest of the mode. What is
+// here is the two ways this check can be wrong in the other direction,
+// each of which turns a working editor into one that refuses everything.
 describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", () => {
   afterEach(() => {
     resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
   });
 
-  it("opens an edit form prefilled with the current set's name", async () => {
-    const api = createMockApi();
-    const sets = await createMockApi().listSets();
-    const target = sets[0];
-
+  async function enterEditMode(api: BackupManagerApi, target: BackupSet) {
     renderDetail(target.source, target.set, api);
     await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
+    await screen.findByRole("button", { name: "SAVE ALL & EXIT EDIT" });
+  }
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  it("does not falsely reject a save as stale when nothing else has changed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = (await createMockApi().listSets())[0];
+    await enterEditMode(api, target);
 
-    expect(await screen.findByRole("dialog", { name: "Edit backup set" })).toBeTruthy();
-    expect(screen.getByLabelText("Name")).toHaveValue(target.name);
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "first-change.internal" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save host" }));
+    });
+
+    expect(screen.queryByText(/changed since you opened/i)).toBeNull();
+    expect(update).toHaveBeenCalledTimes(1);
   });
 
-  it("GIVEN the edit form is open, WHEN another commit updates that same set before submit, THEN the submit is rejected as stale rather than silently overwriting", async () => {
+  // The trap this page walks straight into if the staleness snapshot is
+  // taken only once, when edit mode opens. A successful per-box Save puts
+  // the persisted set back on the very node isSetEditStale watches, which
+  // bumps the version counter it compares against, so the SECOND save of
+  // a session would report a concurrent edit that never happened and
+  // every box after the first would be unsavable.
+  it("does not report a concurrent edit for the second per-box save of a session", async () => {
     const api = createMockApi();
-    const sets = await createMockApi().listSets();
-    const target = sets[0];
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = (await createMockApi().listSets())[0];
+    await enterEditMode(api, target);
 
-    renderDetail(target.source, target.set, api);
-    await screen.findByText(target.name);
-
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await screen.findByRole("dialog", { name: "Edit backup set" });
-
-    // Someone else's commit lands on the graph before this form submits —
-    // the same shape as a concurrent editor saving first.
-    const changed: BackupSet = { ...target, name: target.name + " (renamed elsewhere)" };
-    graph.commit("test/concurrent-set-edit", (tx) =>
-      tx.set(currentSetDetailNode, { data: changed, error: null, loading: false })
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "first.internal" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save host" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save host" }).textContent).toBe("Save")
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.change(screen.getByLabelText("User"), { target: { value: "second-user" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save user" }));
+    });
 
-    expect(await screen.findByText(/changed since you opened this form/i)).toBeTruthy();
-    // Rejected, not silently overwritten: the graph still holds the value
-    // the concurrent commit set, not anything this form tried to save.
-    expect(graph.read(currentSetDetailNode).data?.name).toBe(changed.name);
-  });
-
-  it("does not falsely reject a submit as stale when nothing else has changed", async () => {
-    const api = createMockApi();
-    const sets = await createMockApi().listSets();
-    const target = sets[0];
-
-    renderDetail(target.source, target.set, api);
-    await screen.findByText(target.name);
-
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await screen.findByRole("dialog", { name: "Edit backup set" });
-
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-
-    expect(screen.queryByText(/changed since you opened this form/i)).toBeNull();
-    // No backend endpoint exists yet to persist a backup-set edit (#146) —
-    // the honest outcome of a non-stale submit is a clear "not saved"
-    // notice, never a silent no-op that looks like success.
-    expect(await screen.findByText(/doesn.t yet support saving/i)).toBeTruthy();
+    expect(screen.queryByText(/changed since you opened/i)).toBeNull();
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({ username: "second-user" });
   });
 });
 
 // Issue #316's RED case for this page: before this control existed,
 // there was no way to declare an already-persisted backup set read-only
 // (or withdraw it) anywhere in the UI — only by hand-editing config.yaml.
+describe("the overview's enabled/read-only cells", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+  });
+
+  // The overview carried a cell labelled "Remote cleanup" whose value was
+  // `s.enabled`. Those are two different facts: `enabled` is
+  // config.BackupSet.Disabled inverted, which excludes a set from
+  // RunCycle and says nothing about deleting anything from the source.
+  // So a disabled set's own page announced "Remote cleanup: Disabled",
+  // which reads as a safety property the set does not have. Enable it
+  // again and it deletes from the source exactly as before.
+  it("says a disabled set is not COLLECTED, and claims nothing about remote cleanup", async () => {
+    const api = createMockApi();
+    const target = (await createMockApi().listSets())[0];
+    await api.setEnabled(target.source, target.set, false);
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText("Collection")).toBeTruthy();
+    expect(screen.getByText(/Disabled/)).toBeTruthy();
+    expect(screen.queryByText("Remote cleanup")).toBeNull();
+  });
+
+  it("still reports the read-only axis separately, which is the one that decides deletion", async () => {
+    // The control. Without it, a page that dropped both cells would pass
+    // the assertion above.
+    const api = createMockApi();
+    const readOnlySet = (await createMockApi().listSets()).find((x) => x.readOnly);
+    if (!readOnlySet) throw new Error("fixture setup: no read-only set in the mock data");
+
+    renderDetail(readOnlySet.source, readOnlySet.set, api);
+    await screen.findByText(readOnlySet.name);
+
+    expect(screen.getByText("Read-only source")).toBeTruthy();
+    expect(screen.getByText(/Yes.*retained/)).toBeTruthy();
+    expect(screen.getByText("Collection")).toBeTruthy();
+  });
+});
+
 describe("declaring a backup set read-only (issue #316)", () => {
   afterEach(() => {
     resetGraphForTests();
+    // The mock's setReadOnly used to resolve and change nothing, so the
+    // first test here could flip a set read-only and the second could
+    // still go looking for "the mock's one read-only set" and find the
+    // one the literal declares. It applies the change now (mock.ts says
+    // why), which makes these two tests share state unless the fixture
+    // is put back, exactly as resetMockFixtures' own doc requires of any
+    // test that drives a mutating method.
+    resetMockFixtures();
   });
 
   it("shows 'No' for a set that is not read-only, and flips it on with a call to api.setReadOnly", async () => {

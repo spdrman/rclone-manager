@@ -44,20 +44,25 @@ func run(args []string) int {
 }
 
 var commands = map[string]func([]string) int{
-	"run":        cmdRun,
-	"daemon":     cmdDaemon,
-	"check":      cmdCheck,
-	"status":     cmdStatus,
-	"sources":    cmdSources,
-	"artifacts":  cmdArtifacts,
-	"fetch":      cmdFetch,
-	"retention":  cmdRetention,
-	"reconcile":  cmdReconcile,
-	"validate":   cmdValidate,
-	"catalog":    cmdCatalog,
-	"quarantine": cmdQuarantine,
-	"settings":   cmdSettings,
-	"version":    cmdVersion,
+	"run":          cmdRun,
+	"daemon":       cmdDaemon,
+	"check":        cmdCheck,
+	"status":       cmdStatus,
+	"sources":      cmdSources,
+	"backup-set":   cmdBackupSet,
+	"artifacts":    cmdArtifacts,
+	"fetch":        cmdFetch,
+	"retention":    cmdRetention,
+	"reconcile":    cmdReconcile,
+	"validate":     cmdValidate,
+	"catalog":      cmdCatalog,
+	"quarantine":   cmdQuarantine,
+	"unconfigured": cmdUnconfigured,
+	"medium":       cmdMedium,
+	"retry":        cmdRetry,
+	"restore":      cmdRestore,
+	"settings":     cmdSettings,
+	"version":      cmdVersion,
 }
 
 func usage() {
@@ -69,24 +74,85 @@ commands:
   check                                          validate config and the state database, then exit
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
+  backup-set create <source/backup-set> --host H --user U --remote-path P --local-path P
+                    --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
+                    --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
+                    [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
+                                                  create a backup set, the same operation POST /api/v1/backup-sets
+                                                  performs and through the same service layer. On an instance with
+                                                  no config.yaml yet this writes the first one (#176), and
+                                                  --state-database names the journal it points at
+  backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
+                    [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
+                                                  change one configured backup set in place; only the flags you pass are
+                                                  changed, and the change is persisted and hot-reloaded (#350)
+  backup-set remove <source/backup-set>          take one backup set out of the configuration, the same operation
+                                                  DELETE /api/v1/backup-sets/{source}/{set} performs. Configuration
+                                                  only: the backups it collected stay on storage and stay listed by
+                                                  artifacts, and creating the set again with the same source and
+                                                  name takes them back (#391)
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
-                                                  preview GFS/last-known-good retention decisions; each retention flag
-                                                  overrides the loaded config's own resolved value for this preview only
+                                                  preview GFS/last-known-good retention decisions. It deletes nothing in
+                                                  either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
+                                                  through the API's retention preview/apply pair, against a reviewed plan_id.
+                                                  Each retention flag overrides the loaded config's own resolved value for
+                                                  this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
+  validate <source/backup-set/artifact> [--content]
+                                                  where that copy is on a storage medium instead, check it there: the
+                                                  strongest class that costs nothing, by default, and with --content a
+                                                  full download and re-hash, which costs egress, so FR-31 makes it
+                                                  something an operator asks for rather than something that happens
+                                                  (#435)
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
                                                   act on one quarantined artifact: revalidate re-checks it and moves
                                                   nothing; retry re-enters the pipeline from DISCOVERED; reinstate
                                                   trusts it again in place and forfeits any future remote delete
+  unconfigured                                   list the backup sets the journal remembers and the configuration no
+                                                  longer names, what they still hold on storage, and the retention
+                                                  policy governing them, which is none (#418)
+  unconfigured clear <source/backup-set> [--acknowledge]
+                                                  clear the .partial residue a removal stranded mid-transfer, and end
+                                                  the journal rows nothing will ever advance. It never touches a
+                                                  retained backup; without --acknowledge it only prints what it would do
+  medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
+                                                  carrying a real backup does: it writes a probe object with the
+                                                  medium's own storage class, reads it back byte for byte, checks
+                                                  the class it landed in against the one the configuration claims,
+                                                  asks whether the medium's declared upload_verification can
+                                                  actually be achieved there, and deletes the probe. Exits non-zero
+                                                  when any check fails (#443)
+  retry <source/backup-set/artifact> [--note T]   put one FAILED backup back into the pipeline so it is attempted
+                                                  again. FAILED means an attempt did not finish, which is not the
+                                                  same thing as quarantine, so this is its own command and not a
+                                                  fourth quarantine verb. Nothing does this automatically: a blind
+                                                  re-transfer for a cause nothing has classified is a cost this
+                                                  manager does not take on its own (#419)
+  restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
+                                                  ask the storage provider to make one archived copy readable again
+                                                  (EPIC E, FR-34). --acknowledge is required rather than a --force
+                                                  to skip, because a restore is billed and takes hours; --days
+                                                  defaults to 7 and is bounded to 1..30. artifacts <id> lists
+                                                  which medium each copy is on
   settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
                                                   report the live retention/capacity settings, or change one in place;
                                                   a full retention tier-chain replacement is still a config-file edit
+  backup-set retention <source/backup-set> [--inherit] [--policy-file F]
+                       [--timezone T] [--week-starts-on D]
+                       [--daily-days N] [--weekly-months N] [--monthly-months N]
+                       [--protect-last-known-good=BOOL]
+                                                  report which retention policy this backup set is retained under and
+                                                  where it came from; with a policy flag, give the set a whole policy of
+                                                  its own; with --inherit, remove that policy so it is retained under the
+                                                  deployment's again. An override replaces the deployment's whole chain
+                                                  and is never merged with it, so it has to name a whole one
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;

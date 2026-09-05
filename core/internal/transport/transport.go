@@ -14,6 +14,20 @@ import "context"
 // HashAlgorithm names a checksum the manager may ask a backend for.
 type HashAlgorithm string
 
+// SHA256 is the only algorithm this boundary speaks, and the absence of a
+// second constant is the enforcement rather than an omission. FR-32 holds
+// only if there is no way to ask a backend for the weaker checksum it
+// would otherwise hand back, and config.Validation accepts "" or "sha256"
+// and nothing else, so a second value here would be a capability no
+// configuration could reach and a comparison nothing should make.
+//
+// MediumStore.ObjectChecksum in medium.go names the weaker checksum FR-32
+// is about and explains why nothing here carries one. This file cannot
+// repeat that explanation and does not try: internal/placement has a guard
+// that keeps the word itself out of production code, precisely so there is
+// nothing anywhere to compare a content hash against, and it admits only
+// the four files that exist to say why they hold none. Writing this
+// paragraph the obvious way is what turned that guard red.
 const SHA256 HashAlgorithm = "sha256"
 
 // Source identifies one configured remote.
@@ -73,7 +87,39 @@ type Source struct {
 	KeyEncryptionCommand []string
 
 	KnownHosts string
-	Root       string
+
+	// MaxConnections caps how many simultaneous SFTP connections ONE
+	// OPERATION against this source may open, mapping to rclone's sftp
+	// `connections` option. Zero means unset, which is rclone's own
+	// default of unlimited and is what every Source built before #264
+	// existed means.
+	//
+	// Per operation, not per host, and the wording is deliberate (#355).
+	// rclone's token dispenser lives on an Fs, and internal/transport/rclone
+	// builds one Fs per operation, so two operations against one host are
+	// two independent budgets. The daemon and the web API's own
+	// reachability check are exactly that case.
+	//
+	// This is not the same setting as the per-file request window (rclone's
+	// `concurrency`, which internal/transport/rclone pins at 64). That one
+	// governs how many requests are outstanding inside one connection and
+	// says nothing about how many connections get opened, which is exactly
+	// the confusion that let this go unnoticed: a source can look
+	// thoroughly tuned for concurrency and still open an unbounded number
+	// of connections.
+	//
+	// It exists because a hardened host can refuse the connection rather
+	// than queue it. Both production sources this manager pulls from carry
+	// an iptables rule rejecting a third simultaneous SSH connection from
+	// one address with a TCP reset, so an unbounded transfer does not run
+	// slowly, it fails, and it fails as a bare "connection refused" that
+	// names nothing an operator could act on. What actually holds this
+	// manager under such a cap is the adapter's own bound of one connection
+	// per operation (oneConnectionAtATime in adapter.go); this is the
+	// belt over that, enforced by rclone itself.
+	MaxConnections int
+
+	Root string
 }
 
 // RemoteArtifact is the identity of a remote object at a point in time.
@@ -92,8 +138,26 @@ type RemoteArtifact struct {
 
 // TransferResult reports what a copy actually did.
 type TransferResult struct {
+	// BytesTransferred is what the destination reports it holds after the
+	// copy, read off the written object rather than counted on the way
+	// past, so it is a statement about what landed and not about what was
+	// sent.
 	BytesTransferred int64
-	Checksummed      bool
+
+	// Checksummed says the copy itself compared a hash, which rclone's
+	// operations.Copy does whenever source and destination share one. It
+	// matters because internal/lifecycle/verify.go treats it as a
+	// verification already performed and skips its own RemoteHash call.
+	//
+	// The rclone adapter never sets it. operations.Copy does not report
+	// which hash type it settled on (or whether it found one at all), and
+	// CopyToLocal does not go looking, so this is false out of every
+	// production copy and verify.go's shortcut is unreachable in practice.
+	// That is the safe direction of the two, since it means verification
+	// asks the backend itself rather than trusting a claim nobody made,
+	// and it is written down here so the next reader does not conclude
+	// from the field's existence that the shortcut is live.
+	Checksummed bool
 }
 
 // Transport is the only surface lifecycle code is allowed to depend on.

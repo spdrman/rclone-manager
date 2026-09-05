@@ -1,0 +1,43 @@
+# FR-18's explicit chain spelling, with no medium key on any tier. An
+# operator who adopted tiers before EPIC E existed has exactly this, and
+# EPIC E must not change a single verdict it produces.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: sftp
+          host: production.example.internal
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backup-manager/known_hosts
+        remote_path: /backups/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+retention:
+  timezone: Europe/Paris
+  week_starts_on: sunday
+  protect_last_known_good: true
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7
+    - name: weekly
+      granularity: week
+      keep: 3
+      window_unit: month
+    - name: monthly
+      granularity: month
+      keep: 12
+    - name: annual
+      granularity: year
+      keep: 7

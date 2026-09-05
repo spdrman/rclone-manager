@@ -110,6 +110,75 @@ export interface Operation {
   /** True for read-only passes; the UI says so explicitly. */
   nonDestructive: boolean;
   startedAt: string;
+  /**
+   * What a FINISHED run cycle actually got done, or null.
+   *
+   * Null for anything that is not a finished run cycle, and null rather
+   * than a pair of zeroes for the same reason `progress` above is null
+   * rather than 0%: a cycle that is still running has not walked nothing,
+   * it has not finished walking. "0 got through" is the loudest thing
+   * this object can say, and a renderer that produced it for an operation
+   * nobody has measured would raise an alarm about a deployment that is
+   * fine.
+   */
+  cycle: CycleOutcome | null;
+}
+
+/**
+ * The two counts that tell a barren run cycle from a good one.
+ *
+ * An operation "completed" when the cycle ran to the end, which is
+ * deliberately narrower than it reads: a backup's own quarantine is a
+ * business outcome rather than an operation failure, so a cycle that
+ * backed nothing up finishes with exactly the same status as one that
+ * backed everything up. Issue #361 was that lie told to a cron job; #368
+ * put these two numbers into the record, and this is what renders them.
+ */
+export interface CycleOutcome {
+  backupSetsProcessed: number;
+  /** How many backups the cycle had a reason to touch. */
+  artifactsWalked: number;
+  /** How many of those ended it with their bytes on durable storage. */
+  artifactsThrough: number;
+  /**
+   * What the cycle's move pass got done, or null when the recorded
+   * summary does not carry it.
+   *
+   * Null is not a pair of zeroes, and the distinction is the same one
+   * `cycle` itself draws one level up: a cycle recorded by a build that
+   * did not write these counts has not moved nothing, it has not said.
+   * A renderer that drew zeroes for it would report the worst outcome it
+   * can express about a cycle nobody measured.
+   */
+  moves: CycleMoveOutcome | null;
+}
+
+/**
+ * What a cycle's move pass got done.
+ *
+ * A retention tier with a `medium` says where those backups belong. A
+ * deployment where every move is refused, which is what one unset
+ * credential produces, completes a cycle that backed everything up and
+ * left every artifact somewhere else. Without these two numbers that
+ * cycle is indistinguishable from a perfect one on every surface.
+ *
+ * There is no reason string, and there is not going to be one: the
+ * engine's own refusal sentence is assembled out of transport errors
+ * about an endpoint, a bucket and a credential reference, so FR-33 keeps
+ * it off this boundary. It reaches an operator on a terminal and in the
+ * event stream instead.
+ */
+export interface CycleMoveOutcome {
+  /**
+   * How many artifacts the move pass took up: a move it resumed, a move
+   * it planned, or a plan it refused outright.
+   */
+  attempted: number;
+  /**
+   * How many of those reached their home medium with the source gone,
+   * which is the only outcome that is a move.
+   */
+  landed: number;
 }
 
 /**

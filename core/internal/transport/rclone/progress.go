@@ -12,6 +12,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is issue #221's live transfer progress, and it is the
+// translation layer that keeps rclone's own accounting from travelling any
+// further than this package.
+//
+// It wraps both copies this adapter performs, the Transport half's
+// CopyToLocal and the MediumStore half's UploadFromLocal, and with no
+// transport.ProgressReporter on the context it does nothing at all beyond
+// calling the closure it was given. That is the ordinary case: nothing in
+// this repository requires progress to work, so the file has to be a
+// no-op for every caller that never asked, which is why copyWithProgress
+// is a wrapper rather than a second copy path.
+//
+// The three decisions inside it are worth reading before changing
+// anything: a statistics group per call rather than a shared one, a
+// sampling goroutine rather than a callback rclone does not offer, and a
+// rate computed here rather than read off rclone's own moving average.
+// copyWithProgress argues each of them where it makes them.
+
 // progressSampleInterval is how often a copy in flight is sampled for
 // transport.ByteProgress.
 //

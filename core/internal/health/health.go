@@ -62,8 +62,11 @@
 //     "stopped" if nothing ever started), a set whose first backup looks to
 //     still be in progress, a set with a fresh known-good backup but a
 //     quarantined newest arrival (something did arrive, but it is not
-//     trustworthy, so this is not HEALTHY either), or a fresh known-good
-//     backup alongside a failure that is still being retried.
+//     trustworthy, so this is not HEALTHY either), a fresh known-good
+//     backup alongside a failure that is still being retried, or a fresh
+//     known-good backup that is not where the operator's retention chain
+//     says it belongs because the relocation meant to move it there keeps
+//     failing (issue #444, see mediums.go).
 //
 //   - HEALTHY requires positive evidence: a known-good backup inside the
 //     stale window, with nothing else needing attention. Silence is never
@@ -152,6 +155,12 @@ func NewProcessHealth(in ProcessInputs) ProcessHealth {
 // ComputeBackupSetHealth takes them as explicit input rather than reaching
 // for them, and none of the three is ever passed to decideState: they
 // describe the set, but they never decide its State.
+//
+// PlacementEvidence (mediums.go) is deliberately NOT one of these and is
+// a separate argument. Everything here is a reading that can legitimately
+// be unavailable, where nil means "unknown" and the report says so, and
+// nothing here is allowed to reach a verdict. That is the opposite of
+// what the placement evidence is for on both counts.
 type BackupSetInputs struct {
 	// LastSuccessfulPollAt is when discovery last completed successfully
 	// for this set. It is a liveness signal, not evidence of freshness: a
@@ -326,6 +335,21 @@ type BackupSetHealth struct {
 	// amount), and it is never omitted, because zero is a real, common
 	// reading here (every backup set with no read_only flag set).
 	ReadOnlyRetainedCount int
+
+	// Placement is FR-24's medium half (issue #444): how many of this
+	// set's artifacts are not on the medium its retention chain says they
+	// belong on, and whether the relocations meant to fix that are
+	// getting anywhere. See mediums.go, which holds both the type and the
+	// argument for why health had to grow a second question.
+	//
+	// Unlike the four injected display-only facts below it, one number in
+	// here DOES reach decideState: a relocation that has been tried and
+	// has not worked turns an otherwise-HEALTHY set DEGRADED. That is the
+	// whole point of the field. It is durable journal evidence, the same
+	// kind as everything else State is decided from, and a week of
+	// failing moves that could not change any verdict was the defect this
+	// field exists to end.
+	Placement PlacementHealth
 
 	// LastRetentionRunAt, FreeBytes and HaltReason are injected; see
 	// BackupSetInputs.

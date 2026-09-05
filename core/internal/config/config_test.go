@@ -1,3 +1,23 @@
+// Load: what the parser does, and just as importantly what it refuses and
+// what it deliberately leaves undone.
+//
+// Load and Validate are two steps on purpose, so the tests here assert the
+// seam as much as the parsing. A backup set's ID is still zero after Load,
+// because building it is Validate's job through model.NewBackupSetID, and a
+// test that let Load populate it would be blessing a second place where
+// identities get built.
+//
+// The parsing cases run against the checked-in YAML under testdata rather
+// than against strings written inline. full.yaml is the example an operator
+// copies, so a change that stopped it parsing is a documentation bug as
+// much as a code one, and minimal.yaml is what proves the defaults are
+// reachable without writing every key.
+//
+// An unknown field is a hard error rather than a warning, which is the case
+// worth keeping. A misspelled key that decodes to nothing leaves the
+// deployment running on a default the operator believes they overrode, and
+// silence is exactly what makes that survive to an incident.
+
 package config
 
 import (
@@ -46,6 +66,9 @@ func TestLoadParsesFullExample(t *testing.T) {
 	}
 	if !bs.Remote.Sensitive {
 		t.Fatalf("Remote.Sensitive = false, want true (full.yaml sets sensitive_endpoint: true)")
+	}
+	if bs.Remote.MaxConnections != 2 {
+		t.Fatalf("Remote.MaxConnections = %d, want 2 (full.yaml sets max_connections: 2)", bs.Remote.MaxConnections)
 	}
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)

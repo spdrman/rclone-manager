@@ -398,6 +398,44 @@ the fields above. It defaults to false: most deployments would rather a
 connection failure said what it couldn't reach, so this is something a
 config asks for, not something backup-manager decides on its own.
 
+### Hosts that cap simultaneous connections
+
+A hardened host often refuses a third simultaneous SSH connection from one
+address rather than queueing it, whether through `sshd_config`'s
+`MaxStartups` or an iptables `connlimit` rule. Against a host like that,
+opening one connection too many is not slow, it is a failed backup, and it
+surfaces as a bare `connection refused` that points at nothing (issue #264).
+
+backup-manager stays under such a limit on its own: every operation it
+performs (list, stat, copy, hash, delete) opens one connection and hands it
+back when the operation finishes. That is not rclone's default behaviour and
+it is not free, so it is worth knowing what it costs and where it came from:
+rclone walks a directory tree it cannot list recursively with one goroutine
+per `--checkers` (eight), and splits a download above 256MiB across
+`--multi-thread-streams` (four) concurrent readers. On sftp each of those is
+its own connection, so out of the box a plain listing of a nested tree and a
+copy of a large dump are eight and four connections respectively. Both are
+pinned to one here.
+
+If you want the limit stated to rclone directly as well, add a ceiling to
+the remote:
+
+```yaml
+        remote:
+          type: sftp
+          # ... the fields above ...
+          max_connections: 2
+```
+
+Two things to know before you rely on it. It bounds one *operation*, not the
+host: a scheduled cycle and someone clicking "test connection" in the web UI
+are two operations against one host, and each gets its own budget. And it is
+a different setting from rclone's `concurrency`, which is how many requests
+are in flight *inside* one connection (backup-manager pins that at 64, and it
+is what keeps a single connection fast). Omit it, or set `0`, for rclone's
+own unlimited default, which is what every config that predates this field
+means.
+
 ## 6. Verify it end to end before pointing it at anything real
 
 Before trusting this setup with production data, do a manual sanity check

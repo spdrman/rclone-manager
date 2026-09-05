@@ -114,6 +114,7 @@ func TestNoAPIRequestCanNameAnExecutable(t *testing.T) {
 
 	requests := []any{
 		CreateBackupSetRequest{},
+		UpdateBackupSetRequest{},
 		ConnectionTestRequest{},
 		RunCycleRequest{},
 	}

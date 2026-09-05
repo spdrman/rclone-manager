@@ -63,6 +63,26 @@ type ValidateResult struct {
 // already established), so `validate` can prove an artifact still actually
 // restores, not merely that its bytes are unchanged.
 //
+// # An artifact whose copy is on a storage medium (issue #435)
+//
+// Since EPIC E a durable copy can be an object on a storage medium
+// instead of a local file, which is what a completed move leaves. There
+// is nothing for the local check above to open, and that is a fact about
+// WHERE the copy is rather than a verdict about the artifact: reading it
+// as a verdict is what marked the first successfully moved artifact
+// QUARANTINED_LOST (#434).
+//
+// So the check forks. With no ACTIVE local placement and at least one
+// ACTIVE medium placement, the copies on the mediums are verified through
+// Service.MediumStore, at the strongest class the medium can give for
+// free, and at placement.Content when ValidateOptions.Content asks for it.
+// FR-31 makes a content check of a medium copy operator-initiated because
+// it downloads the object, and this command is the operator initiating it.
+// checkMediumCopies (validatemedium.go) is that fork, and its doc carries
+// the rules; the one worth repeating here is that a medium which could not
+// be asked comes back as an error rather than as a failed verdict, because
+// an unreachable bucket is not evidence that a backup is gone.
+//
 // # Which artifacts this accepts
 //
 // Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or (issue #315)
@@ -97,7 +117,7 @@ type ValidateResult struct {
 // reset that package's own due-ness clock, a concept `validate` has no
 // use for since it is not on any schedule), there is no due-ness clock
 // here to reset, so a clean result has no side effect to record.
-func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (ValidateResult, error) {
+func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID, opts ValidateOptions) (ValidateResult, error) {
 	rec, err := s.Journal.Get(ctx, id)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
@@ -117,7 +137,7 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		return ValidateResult{}, fmt.Errorf("app: validate: %s has no configured backup set", id.Set)
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, opts)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
 	}
@@ -166,7 +186,14 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 // of damage. The caller gets a refusal and the artifact is left exactly
 // as it was, which is how the restore-test hook's own error is already
 // handled below.
-func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation) (checkOutcome, error) {
+//
+// opts is what the operator asked for beyond the defaults, and today that
+// is only whether a copy on a storage medium may be downloaded and
+// re-hashed (issue #435). The two quarantine actions that also call this
+// pass the zero value: `quarantine revalidate` and `quarantine reinstate`
+// name no artifact-specific cost the operator has authorised, so neither
+// spends egress, and neither can reach the one class that would.
+func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation, opts ValidateOptions) (checkOutcome, error) {
 	cmd, err := validation.ResolvedCommand()
 	if err != nil {
 		return checkOutcome{}, err
@@ -175,12 +202,36 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	var reasons []string
 	out := checkOutcome{Passed: true}
 
-	if rec.LocalPath == "" {
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly; in Phase 1 they are the same
+	// value, and the difference is what happens once an artifact's only
+	// copy can live on a storage medium.
+	localPath, hasLocal := rec.ReadableLocalPath()
+	if !hasLocal {
+		// An artifact whose durable copy is on a storage medium has no
+		// local copy for this command to open, and that is a fact about
+		// where the copy is rather than a verdict about the artifact.
+		// Reading it as a verdict routed a COMPLETE artifact into
+		// QUARANTINED_LOST the first time an operator ran `validate`
+		// against a moved one, over a copy that was there and verified
+		// (#434).
+		//
+		// So the copy is checked where it actually is (#435). The
+		// restore-test hook below is not attempted against it: that hook
+		// opens the artifact, which off local disk means downloading it,
+		// and checkMediumCopies says so rather than quietly reporting a
+		// pass for a tier that stopped running.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			return s.checkMediumCopies(ctx, rec, mediums, opts, cmd != nil)
+		}
+		if len(rec.Placements) > 0 {
+			return checkOutcome{Checked: true, Reason: "no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING"}, nil
+		}
 		return checkOutcome{Checked: true, Reason: "no local final path is recorded in the journal"}, nil
 	}
-	info, statErr := os.Stat(rec.LocalPath)
+	info, statErr := os.Stat(localPath)
 	if statErr != nil {
-		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", rec.LocalPath, statErr)}, nil
+		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", localPath, statErr)}, nil
 	}
 	out.Checked = true
 
@@ -188,15 +239,15 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return checkOutcome{Checked: true, Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}, nil
 		}
-		sum, hashErr := sha256File(rec.LocalPath)
+		sum, hashErr := sha256File(localPath)
 		if hashErr != nil {
-			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, hashErr)}, nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", localPath, hashErr)}, nil
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
 			out.Passed = false
 			reasons = append(reasons, fmt.Sprintf(
 				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash))
+				localPath, sum, rec.LocalHashAlg, rec.LocalHash))
 		} else {
 			out.HashMatched = true
 			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
@@ -206,7 +257,7 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	}
 
 	if cmd != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, localPath)
 		if hookErr != nil {
 			return checkOutcome{Checked: out.Checked}, fmt.Errorf("restore-test hook: %w", hookErr)
 		}

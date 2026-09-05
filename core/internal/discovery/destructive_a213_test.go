@@ -1,3 +1,14 @@
+// This file is one test, and it exists as its own file because of where it
+// came from: it is the destructive-testing sweep of issue A213, which went
+// looking for inputs the rest of the suite had not thought to stage.
+//
+// Keeping that provenance visible is the point. The two shapes here, an
+// absolute path and an embedded control character, are not things a POSIX
+// filesystem produces on its own, so they cannot arrive through the
+// real-adapter tests in discovery_test.go and would look like paranoia
+// sitting next to them. They belong to the contract instead: any future
+// transport.Transport is forbidden from smuggling either past discovery,
+// and this is where that obligation is written down as a test.
 package discovery
 
 import (

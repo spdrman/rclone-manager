@@ -1,3 +1,28 @@
+// The read side: decoding artifact rows back into Records, and the
+// questions the rest of the product asks this journal.
+//
+// Reads take a querier rather than the *sql.DB, so one helper serves both
+// a standalone read and the read RecordTransition runs inside its own open
+// transaction. That is what lets a write return the record it just made
+// without a second round trip and without seeing anything else's
+// half-finished work.
+//
+// Every list attaches placements in one further query for the whole result
+// set rather than one query per record. The N+1 that shape would create is
+// not theoretical: these lists are what a retention cycle walks over every
+// backup set on every pass. loadPlacementsFor (placements.go) explains why
+// that second query re-runs the caller's predicate instead of naming the
+// row ids it already holds, and that one is a measured limit rather than a
+// stylistic preference.
+//
+// The queries that read state_transitions rather than the artifacts row
+// (LastEnteredAt, LastEnteredDetail, LastTransition,
+// ArtifactsWithAnyTransition) all exist for one reason worth knowing up
+// front. The artifacts row is overwritten by every write, so it can say
+// what an artifact IS and never how it got there. An artifact reinstated
+// out of quarantine and one that was never distrusted both read COMMITTED,
+// and the append-only log is the only place left that tells them apart.
+// Anything about to do something destructive asks the log.
 package state
 
 import (
@@ -19,6 +44,15 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// selectColumns is every column of the artifacts table, spelled once
+// because scanRecord decodes it by position.
+//
+// Positional scanning is what makes that sharing load-bearing rather than
+// tidy. A read that listed its own columns and got one out of order would
+// not fail: it would put a hash into a validation detail, or a retry count
+// into a byte count, on that one code path, and the types line up often
+// enough that a test would have to be looking for it. Every read of this
+// table goes through this constant and that one scanner.
 const selectColumns = `
 	id, source, backup_set, artifact_name, remote_path, local_path, state,
 	discovered_at, updated_at,
@@ -143,6 +177,18 @@ func scanRecord(row scanRow) (Record, int64, error) {
 	return rec, rowID, nil
 }
 
+// scanOptionalInt64, scanOptionalBool and scanOptionalTime are the read
+// side of journal.go's optionalInt64 and optionalTimeText: a NULL column
+// comes back as a nil pointer, never as a zero.
+//
+// Keeping NULL and zero apart all the way out to the caller is the whole
+// reason those Record fields are pointers. A backend that reported no size
+// and an object that really is zero bytes are different facts, a
+// validation that has not run and one that failed are different facts, and
+// a caller downstream decides real things on the difference.
+//
+// Each returns a pointer to a fresh local rather than into the sql.Null
+// value, which would alias a variable the next row's Scan reuses.
 func scanOptionalInt64(v sql.NullInt64) *int64 {
 	if !v.Valid {
 		return nil
@@ -170,6 +216,16 @@ func scanOptionalTime(v sql.NullString) (*time.Time, error) {
 	return &t, nil
 }
 
+// getByRowID reads one record by the artifacts table's own primary key,
+// which is the read RecordTransition uses to return the record it just
+// wrote from inside its still-open transaction.
+//
+// By row id rather than by artifact identity because the identity is not
+// always the right key at that moment: an insert has the row id back from
+// LastInsertId and nothing else, and re-deriving the row from three
+// identity columns would be a second lookup for a row the caller is
+// holding. Get is the identity-keyed form, for callers outside a
+// transaction.
 func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE id = ?`, rowID)
 	rec, _, err := scanRecord(row)
@@ -179,6 +235,11 @@ func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, q, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -188,13 +249,18 @@ func (j *Journal) Get(ctx context.Context, artifact model.ArtifactID) (Record, e
 		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? AND artifact_name = ?`,
 		artifact.Set.Source, artifact.Set.Set, artifact.Name,
 	)
-	rec, _, err := scanRecord(row)
+	rec, rowID, err := scanRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, artifact)
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, j.db, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -340,39 +406,103 @@ func (j *Journal) LastTransition(ctx context.Context, artifact model.ArtifactID,
 // ListByState returns every artifact currently recorded in the given state.
 // Reconciliation (FR-17) and retry scheduling are the expected callers.
 func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, error) {
-	rows, err := j.db.QueryContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE state = ? ORDER BY id`, state)
-	if err != nil {
-		return nil, fmt.Errorf("state: list by state: %w", err)
-	}
-	return scanRecords(rows)
+	return j.listRecords(ctx, "list by state", "a.state = ?", state)
 }
 
 // ListByBackupSet returns every artifact recorded for one backup set (FR-7):
 // retention and health calculations must never cross this boundary.
 func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]Record, error) {
-	rows, err := j.db.QueryContext(ctx,
-		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? ORDER BY id`,
-		set.Source, set.Set,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("state: list by backup set: %w", err)
-	}
-	return scanRecords(rows)
+	return j.listRecords(ctx, "list by backup set", "a.source = ? AND a.backup_set = ?", set.Source, set.Set)
 }
 
-func scanRecords(rows *sql.Rows) ([]Record, error) {
+// ListBackupSetIDs returns every backup set id the journal holds at least
+// one artifact for, in a stable order.
+//
+// It reads the JOURNAL rather than the configuration, and that is the
+// whole reason it exists (issue #391): once a backup set's configuration
+// can be removed, the set of ids with history on record and the set of
+// ids currently configured stop being the same thing, and the backups
+// list has to keep showing the first one. See app.ListArtifacts for what
+// it is used for and what deliberately still walks the configuration
+// instead.
+func (j *Journal) ListBackupSetIDs(ctx context.Context) ([]model.BackupSetID, error) {
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT DISTINCT source, backup_set FROM artifacts ORDER BY source, backup_set`)
+	if err != nil {
+		return nil, fmt.Errorf("state: list backup set ids: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.BackupSetID
+	for rows.Next() {
+		var source, set string
+		if err := rows.Scan(&source, &set); err != nil {
+			return nil, fmt.Errorf("state: scan backup set id: %w", err)
+		}
+		id, err := model.NewBackupSetID(source, set)
+		if err != nil {
+			// A row the journal wrote can only carry a valid pair, so
+			// this is corruption rather than a query result to skip past
+			// quietly.
+			return nil, fmt.Errorf("state: list backup set ids: %q/%q: %w", source, set, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: list backup set ids: %w", err)
+	}
+	return out, nil
+}
+
+// listRecords reads every artifact matching one predicate, with its
+// placements.
+//
+// The predicate is a parameter rather than inlined into each caller's SQL
+// because it is used twice, once for the artifact rows and once for their
+// placements (see loadPlacementsFor for why the placement read re-runs it
+// rather than listing the ids it already has). Writing it once here is what
+// stops the two halves drifting into asking about different sets of
+// artifacts, which is a failure that would show up as records silently
+// missing their placements rather than as an error.
+func (j *Journal) listRecords(ctx context.Context, what, artifactWhere string, args ...any) ([]Record, error) {
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT `+selectColumns+` FROM artifacts a WHERE `+artifactWhere+` ORDER BY a.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("state: %s: %w", what, err)
+	}
+	return scanRecords(ctx, j.db, rows, artifactWhere, args...)
+}
+
+// scanRecords decodes a whole result set and then attaches every record's
+// placements in ONE further query rather than one per record.
+//
+// The N+1 it avoids is not hypothetical: the list paths are what a
+// retention cycle runs over every backup set on every pass, and a NAS with
+// a few thousand artifacts would pay a round trip per artifact per cycle
+// for a table that is almost always tiny.
+func scanRecords(ctx context.Context, q querier, rows *sql.Rows, artifactWhere string, args ...any) ([]Record, error) {
 	defer rows.Close()
 
 	var out []Record
+	var rowIDs []int64
 	for rows.Next() {
-		rec, _, err := scanRecord(rows)
+		rec, rowID, err := scanRecord(rows)
 		if err != nil {
 			return nil, fmt.Errorf("state: scan artifact: %w", err)
 		}
 		out = append(out, rec)
+		rowIDs = append(rowIDs, rowID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("state: list artifacts: %w", err)
+	}
+
+	byArtifact, err := loadPlacementsFor(ctx, q, artifactWhere, args...)
+	if err != nil {
+		return nil, err
+	}
+	for i, rowID := range rowIDs {
+		out[i].Placements = byArtifact[rowID]
 	}
 	return out, nil
 }
