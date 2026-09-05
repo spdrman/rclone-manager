@@ -525,12 +525,12 @@ it.
 
 <!-- END SUPPORT-MODEL -->
 
-The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`
-for the four container profiles it declares, and from `conformance.json`, which declares all
-seven targets with their tiers. The gate checks every row of this table against those two
-files rather than trusting the table, and it checks in both directions: a row here that
-neither file declares is a failure, and so is a target they declare that this table has
-dropped.
+The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`,
+which declares nine platforms and the seven runtime profiles behind them, and from
+`conformance.json`, which declares all eleven targets with their tiers. The gate checks
+every row of this table against those two files rather than trusting the table, and it
+checks in both directions: a row here that neither file declares is a failure, and so is a
+target they declare that this table has dropped.
 
 Two things about the Proxmox row are worth saying out loud. Its paths are inside the guest,
 not on the PVE host: the supported model is a dedicated container-host guest with one host
@@ -554,16 +554,23 @@ The Synology line reads like a contradiction and is not one. #85 shipped an `.sp
 adds a Container Manager Compose path alongside the shipped package rather than replacing
 it. Retiring shipped packaging would be a product decision and nobody has made one.
 
-Portainer, CasaOS, ZimaOS and Dockge appear in EPIC B's Phase 6 support model as targets
-that get a documented deployment profile. None of them exists in this tree yet, so this
-document does not list them as installable.
+Portainer, CasaOS, ZimaOS and Dockge were the four EPIC B's Phase 6 support model named as
+targets that get a documented deployment profile, and this paragraph used to say none of
+them was in the tree. All four are, they are rows in the table above, and the gate would
+fail if they were not: `apps/portainer/` is an App Template plus its Compose stack,
+`apps/casaos/` and `apps/zimaos/` are the same `x-casaos` Compose file for two stores, and
+`apps/dockge/` deliberately ships no packaging because Dockge imports
+`container/compose.yaml` itself. What none of them has is a hardware run, which is the
+[conformance matrix's](#what-has-actually-been-exercised-on-real-hardware) business, not
+this section's.
 
 ## Who owns what
 
-rclone owns the data plane: SFTP and local backends, listing, copying, hashing, deletion
-primitives, transfer accounting. This project owns the control plane: backup-set config,
-artifact discovery, the durable lifecycle journal, copy/verify/commit/delete sequencing,
-GFS retention, validation and quarantine, and reconciliation after a crash.
+rclone owns the data plane: the SFTP, local and s3 backends, listing, copying, hashing,
+deletion primitives, transfer accounting. This project owns the control plane: backup-set
+config, artifact discovery, the durable lifecycle journal, copy/verify/commit/delete
+sequencing, GFS retention, where a copy lives and what proves it is good, validation and
+quarantine, and reconciliation after a crash.
 
 ```text
 rclone:
@@ -623,16 +630,26 @@ decision away from the lifecycle manager.
 
 ### The pinned version, and the backend count that surprised us
 
-`core/go.mod` pins `github.com/rclone/rclone v1.75.0`. `core/internal/transport/rclone/adapter.go`
-blank-imports exactly two backend packages, `backend/local` and `backend/sftp`. But the
-adapter also needs `operations.Copy` from `fs/operations`, and that package itself imports
-`backend/crypt` for an unrelated feature (decrypting filenames for `--show-encrypted`).
-Backends self-register via `init()`, so importing `fs/operations` registers `crypt` too,
-silently, as a side effect nothing in a casual read of the blank imports would reveal. So
-importing two backends registers three. This is measured, traced to the exact import chain,
-and pinned by `TestRegisteredBackendsExactSet` in
-`core/internal/transport/rclone/backends_test.go`, so the registered set can't widen again
-without the build failing.
+`core/go.mod` pins `github.com/rclone/rclone v1.75.0`.
+`core/internal/transport/rclone/adapter.go` blank-imports exactly three backend packages,
+`backend/local`, `backend/s3` and `backend/sftp`. But the adapter also needs
+`operations.Copy` from `fs/operations`, and that package itself imports `backend/crypt` for
+an unrelated feature (decrypting filenames for `--show-encrypted`). Backends self-register
+via `init()`, so importing `fs/operations` registers `crypt` too, silently, as a side effect
+nothing in a casual read of the blank imports would reveal. So importing three backends
+registers four. This is measured, traced to the exact import chain, and pinned by
+`TestRegisteredBackendsExactSet` in `core/internal/transport/rclone/backends_test.go`, so
+the registered set can't widen again without the build failing.
+
+`backend/s3` is EPIC E's addition, and it is the whole S3 implementation: no AWS SDK is
+imported by any file in this repository, in Go or in TypeScript. It was recorded as an
+explicit architecture decision in `backends.go` rather than left as an import line somebody
+has to notice, with the cost measured the way `crypt`'s was, on a linux/arm64,
+`CGO_ENABLED=0` build with the flags `container/Dockerfile` actually ships: 19.25 MiB
+without it, 28.25 MiB with, a delta of 9.00 MiB or +46.8%. The flags are part of the
+measurement rather than a footnote, because the same two builds unstripped give a smaller
+percentage against a much larger binary, which is a number about something this product
+does not ship.
 
 If you need to confirm what's actually registered in a built binary rather than trust this
 paragraph: `go mod why github.com/rclone/rclone/backend/crypt` shows the chain, and
@@ -1879,17 +1896,21 @@ conformance module (#85/B4.4), which ships no product binary of its own and inst
 the release binaries unchanged and checks their digest against
 `container/release-manifest.json`.
 
-Four providers carry packaging metadata next to their bridge: `apps/truenas/` (a custom-app
-Compose file plus a TrueNAS Apps catalog entry), `apps/unraid/` (two Community Applications
-Docker templates), `apps/openmediavault/` (a Compose deployment profile) and
-`apps/proxmox/` (the same Compose profile again, for a dedicated container-host guest,
-because Proxmox VE has no application store to package into at all). All four are metadata
-and templates only, wrapping the exact canonical OCI image with no lifecycle code of their
-own, and `distribution/packaging/` holds them to that on every commit: one shared source of
-truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are decidable from
-the repository alone.
+Eight providers carry packaging metadata next to their bridge and no lifecycle code at all:
+`apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
+`apps/unraid/` (two Community Applications Docker templates), `apps/openmediavault/` (a
+Compose deployment profile), `apps/proxmox/` (the same Compose profile again, for a
+dedicated container-host guest, because Proxmox VE has no application store to package into
+at all), `apps/portainer/` (a version 3 App Template and the stack it deploys),
+`apps/casaos/` and `apps/zimaos/` (one `x-casaos` Compose file that is both the runtime
+definition and the store submission, for two stores), and `apps/dockge/` (no packaging at
+all, on purpose, because Dockge imports `container/compose.yaml` itself). All of them are
+metadata and templates wrapping the exact canonical OCI image, and
+`distribution/packaging/` holds them to that on every commit: one shared source of truth in
+`canonical.json`, plus scanners for the gate checks that are decidable from the repository
+alone.
 
-The same package runs the cross-provider conformance matrix (§63A) across all seven
+The same package runs the cross-provider conformance matrix (§63A) across all eleven
 providers at once, reporting an outcome per provider per capability rather than one
 verdict per run, with `UNSUPPORTED`, `NOT_APPLICABLE` and `BLOCKED` as first-class
 results a provider has to declare rather than reach by omission. The recorded run is
@@ -1899,10 +1920,10 @@ not decidable here, installing and updating and removing on the real platform, l
 [`docs/acceptance/`](docs/acceptance/) as prewritten operator procedures, and until one
 is executed its provider is build-supported and uncertified.
 
-EPIC B's Phase 6 reorganises this into explicit core, runtime-platform and distribution
-layers and reduces every platform package to a thin adapter. That work is #184, #194, #199
-and #169, none of them merged as this document is written, so the layout above is what is
-here today rather than what it is becoming.
+EPIC B's Phase 6 reorganised this into explicit core, runtime-platform and distribution
+layers and reduced every platform package to a thin adapter. This paragraph used to name
+#184, #194, #199 and #169 as unmerged, which stopped being true a long time ago: all four
+are in, and the layout above is what that refactor left rather than what it is becoming.
 
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
@@ -1916,7 +1937,10 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/rclone-upgrade.md`](docs/rclone-upgrade.md) – the pinned-version upgrade procedure and its CI gate
 - [`docs/ssh-setup.md`](docs/ssh-setup.md) – the dedicated key, the restricted SFTP account, host-key verification
 - [`docs/recovery.md`](docs/recovery.md) – recovery and the restore procedure, in full
+- [`docs/recovery-without-a-terminal.md`](docs/recovery-without-a-terminal.md) – the same emergency, for an administrator who has the web interface and nothing else, which is the normal case on a NAS appliance
+- [`docs/install.md`](docs/install.md) – the Python installer: one command on a bare host, what it generates, what it still refuses, and the network doctor
 - [`docs/storage-mediums.md`](docs/storage-mediums.md) – configuring an S3 medium per retention tier, what the disclosure commits you to, what each verification class proves and costs, and what an archive class means for the day you need the file back
+- [`docs/EPIC-E-alternative-storage.md`](docs/EPIC-E-alternative-storage.md) – the alternative-storage specification the section above is built against
 - [`docs/conformance/epic-e-matrix.md`](docs/conformance/epic-e-matrix.md) – which of EPIC E's gate lines are checked by something that has been watched to fail, which are checked by nothing, and which issue owns each gap
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
@@ -1927,6 +1951,10 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
 - [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written and not yet executed
 - [`docs/architecture/layers.md`](docs/architecture/layers.md) – the three layers (core, runtime platform, distribution), what each owns, the dependency direction, and the checks that enforce it
+- [`docs/architecture/test-tiers.md`](docs/architecture/test-tiers.md) – which tests get a machine and which only a fake can prove, the guard that decides it, and what the tiers cost measured
+- [`docs/adr/0004-reinstating-a-quarantined-backup.md`](docs/adr/0004-reinstating-a-quarantined-backup.md) – why a quarantined backup can be trusted again, and why that forfeits the remote delete for ever
+- [`docs/runtime-contract.md`](docs/runtime-contract.md) – `container/compose.yaml` as the authoritative runtime definition every deployment artifact derives from
+- [`docs/release-branch.md`](docs/release-branch.md) – what the `release` branch is, and the policy the rest of the release path assumes
 - [`docs/perf/README.md`](docs/perf/README.md) – the Phase 6 performance baselines, the benchmark host and workload, and the concrete regression thresholds
 - [`distribution/README.md`](distribution/README.md) – the distribution layer: what makes an adapter an adapter, and where the rest of that layer still lives
 - [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
