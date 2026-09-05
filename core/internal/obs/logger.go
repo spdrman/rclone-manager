@@ -6,6 +6,21 @@ import (
 	"log/slog"
 )
 
+// This file is the sink itself: the type other packages hold, and the one
+// funnel every line this package writes goes through.
+//
+// Two things about it carry weight that the signatures do not show. A nil
+// *Logger is silent on every method rather than a panic on one, and that is
+// what let this package arrive without touching every construction site in
+// the repository in the same change: a Deps struct that grew a *Logger
+// field keeps working for callers that never set it, the way a nil map
+// keeps working for a reader.
+//
+// And emit is the only place a string is actually written down. Redaction
+// (#295) hooks in there and nowhere else, so a rule applied once covers
+// every event events.go declares today and every one it declares later,
+// without a single helper or caller needing to know redaction exists.
+
 // fieldEvent is the attribute key every line this package emits carries.
 // Its value is one of the Event* constants declared in events.go: the
 // couple between "which method was called" and "what string shows up in

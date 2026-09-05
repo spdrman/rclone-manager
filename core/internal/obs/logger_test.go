@@ -10,6 +10,21 @@ import (
 	"testing"
 )
 
+// Two properties take up most of the room below, and both are about a
+// Logger nobody configured.
+//
+// A nil *Logger has to be silent across the whole surface rather than on
+// the three methods somebody remembered, because a Deps struct that grew a
+// *Logger field is relying on it: a fourth method free to panic is a
+// production crash in the one deployment that never wired logging up. So
+// the nil case is driven method by method instead of spot-checked.
+//
+// Redaction is exercised through the Logger even though redact_test.go
+// already covers the filter on its own. What emit promises is that the rule
+// reaches the message and every string-valued attribute, and that With does
+// not quietly drop it on the way. Neither of those is a claim about
+// Redactor, and no amount of testing Redactor would catch either.
+
 // decodeLines parses buf as a stream of newline-delimited JSON objects, the
 // format New produces, and fails the test on the first line that doesn't
 // parse. An empty buffer decodes to zero lines, not an error.

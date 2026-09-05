@@ -7,6 +7,23 @@ import (
 	"strings"
 )
 
+// This file and secret.go are the two halves of "a secret is never logged",
+// and they are built differently because the project owns different amounts
+// of the two problems.
+//
+// secret.go acts on values this project constructs, so it can wrap them in
+// a type that refuses to render. This file acts on strings the project
+// never built. A dial failure's text arrives fully assembled from Go's net
+// stack by way of rclone, with the host and the port wherever that library
+// chose to put them, so there is no call site here to wrap and no format
+// string to fix. The only place left to act is the finished line, in the
+// instant before it is written.
+//
+// Which is also why the needles are literal values rather than patterns.
+// This process knows its own endpoints exactly and knows nothing about the
+// shape of an error it did not write, so matching literally only ever
+// removes bytes that provably belong to a configured endpoint.
+
 // Endpoint identifies one configured remote's network location and account
 // identity: exactly the three values issue #295 says a deployment must be
 // able to ask never appear in a log line or a journal detail, once that
