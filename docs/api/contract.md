@@ -375,12 +375,51 @@ not know what an operator negotiated, and gets no progress report from the
 provider while a restore runs. What it serves instead is the bytes, the storage
 class, whether reads require a restore, and the two disclosure sentences, in the
 engine's own words. `apps/common/webhost/placements_contract_test.go` holds this
-structurally: it walks everything reachable from `Artifact` and
-`SettingsResponse` and refuses a number named for money or metered bandwidth, a
-field shaped like a prediction, and any property a credential could travel
-under. The same file pins the closed vocabularies to the engine's constants, so
+structurally: it walks everything reachable from `Artifact`,
+`SettingsResponse`, `UpdateSettingsRequest`, `Operation` and `RetentionPlan`
+and refuses a number named for money or metered bandwidth, a field shaped like
+a prediction, and any property a credential could travel under. The same file pins the closed vocabularies to the engine's constants, so
 the generated TypeScript unions cannot drift from the strings the journal
 stores.
+
+## Recorded decision: on a retention verdict, no medium means local
+
+Issue #430 (EPIC E, FR-27 and FR-30). The retention preview carries three
+placement facts: `RetentionPlan.moves`, `RetentionPlan.unconfirmed_placements`,
+and `medium` on every verdict. Two of the three are spelled by absence, and I
+want the reason on the record rather than inferred from a diff.
+
+**A verdict on the implicit local medium carries no `medium` key.** The obvious
+alternative was to serve `"medium": "local"` everywhere, the way
+`Placement.medium` already does, and I did not take it. Every deployment
+written before EPIC E holds every copy locally, so that spelling would have put
+a new key on every verdict of every response those deployments serve, to say
+the only thing that was ever true of them. Absence says the same thing and
+leaves them byte for byte as they were. `backup-manager retention` made the
+same call for the same reason (`mediumSuffix`), so the two operator surfaces
+now read alike instead of each having its own convention.
+
+A move is the other way round: `from_medium` and `to_medium` are both verbatim,
+`"local"` included. A verdict answers "where would this happen", which has an
+implicit default, and a move answers "from where to where", which has none.
+
+**A deployment with no storage medium carries neither placement array.** This
+one is not a wire decision at all, it is `core/service` declining to compute
+them, and the boundary just carries the answer through with `omitempty`. A
+placement row records a DURABLE copy, so nothing ingested before FR-29's table
+existed has one, and the move planner reads a missing row as "I could not
+confirm where this is" rather than as absence, which is the only reading that
+cannot lose data. Serve that unfiltered and the first preview after an upgrade
+greets an operator with every backup they already had, listed under a heading
+that reads like a fault, in a deployment where there is nowhere else a copy
+could possibly be.
+
+**The moves array is inside the plan, not behind a second call.** An apply is
+confirmed against a `plan_id`, and what that id commits to has to be the whole
+of what was shown. A moves section fetched separately could be rendered beside
+verdicts it does not belong to. All three facts are already inside the plan's
+staleness fingerprint, so an apply naming a plan whose moves have changed since
+the operator read them is refused like any other stale plan.
 
 ## Recorded decision: the settings write carries a consent, not a setting
 
