@@ -1,3 +1,25 @@
+// Proving that no shipped lifecycle script can delete anything outside the
+// package's own footprint.
+//
+// This is a shell reader, which is an uncomfortable thing to have in a Go
+// package, and the alternative was worse. These scripts run as root on
+// somebody's NAS during install, upgrade and uninstall, and a wrong path
+// in one of them removes a shared folder. Nothing else in the toolchain
+// looks at them at all, so the choice was between a partial static
+// analysis and nothing.
+//
+// It is partial on purpose and errs towards refusing. Anything it cannot
+// resolve to a path inside the allowed prefixes is a finding rather than
+// an assumed-safe line, so a script written in a way this reader does not
+// understand fails the check and has to be rewritten in a way it does.
+// That is the correct direction for a check whose false negative is a
+// deleted volume.
+//
+// The prefix list is short and each absence from it is argued at the list
+// itself, because the tempting additions are the dangerous ones: a
+// variable Synology does not document expands to empty on a build that
+// does not export it, and a delete rooted at an empty string is a delete
+// rooted at /.
 package spk
 
 import (
@@ -101,6 +123,22 @@ var deletingCommands = map[string]bool{
 // wrong path rather than merely wrong.
 var recursiveFlags = map[string]bool{"-R": true, "-r": true, "--recursive": true}
 
+// The shell patterns the scanner recognises.
+//
+// This is deliberately a small set of regexps rather than a parser. A real
+// shell grammar would be more accurate and would also be a second
+// implementation of sh living in this repository, which is far more code
+// to get wrong than the scripts it is checking. What makes the trade-off
+// safe is the direction of failure: a line these do not decompose into a
+// verb and its operands is reported rather than skipped, so the inaccuracy
+// costs a rewrite of a script and never a missed deletion.
+//
+// Several of them exist to REMOVE structure rather than to find it.
+// Arithmetic expansions, command substitutions and file-descriptor
+// duplications are stripped before the line is split into words, because
+// each of them contains characters that would otherwise be read as
+// operands, and an operand this scanner invents is a finding nobody can
+// act on.
 var (
 	assignmentRE   = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
 	fieldAssignRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)

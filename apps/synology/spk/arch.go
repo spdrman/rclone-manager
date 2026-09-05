@@ -1,3 +1,19 @@
+// The architecture table: one row per DSM arch family, tying it to the Go
+// build target the release produces and to the DSM platforms Synology's
+// own mapping table says the family covers.
+//
+// The ELF machine field is the reason this is a table rather than a pair
+// of strings. Hash parity proves the file in the package is the file the
+// release manifest recorded, which is a strong claim about provenance and
+// says nothing at all about architecture: a manifest that recorded the
+// arm64 binary under the amd64 key produces a package that verifies
+// perfectly and cannot run on the machine it claims to target. Reading the
+// ELF header is the only check that catches that, and it is cheap.
+//
+// The platform list is here rather than in the README because the
+// supported-model matrix and the acceptance procedure are generated from
+// it. A list maintained in prose beside a list the code validates against
+// is two lists, and the prose one is the one that goes stale.
 package spk
 
 import (

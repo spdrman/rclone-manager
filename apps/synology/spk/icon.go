@@ -1,3 +1,18 @@
+// The launcher icon, drawn in code rather than checked in as PNG files.
+//
+// Three things follow from generating it. A reviewer can read what ships
+// from this file instead of opening a binary nobody can diff; the output
+// is byte-identical on every machine, which a hand-exported PNG is not,
+// and byte-identical output is the whole point of a package that claims to
+// be reproducible; and there is no opaque blob in the tree.
+//
+// Several sizes ship because the launcher config references its images
+// through a templated name and Synology's documentation does not say which
+// sizes DSM asks for. Guessing one and being wrong renders nothing at all,
+// so the package carries the common set instead.
+//
+// The mark is deliberately plain. It is a placeholder, and nothing about
+// it imitates a Synology icon.
 package spk
 
 import (

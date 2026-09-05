@@ -1,3 +1,15 @@
+// Reading container/release-manifest.json, which is the only place the
+// release binary digests exist.
+//
+// The type models the fields this package needs and deliberately ignores
+// the OCI image id the manifest also records: an SPK contains no image, so
+// an image id is not evidence about one, and modelling it would invite a
+// later check that compares something meaningless.
+//
+// SourcePath is not a field of the file. It is filled in on load so a
+// verification report can name the input its parity verdict was decided
+// against, because a green line about an unnamed file is a green line
+// nobody can act on when it turns red.
 package spk
 
 import (

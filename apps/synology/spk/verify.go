@@ -1,3 +1,17 @@
+// The conformance check: open a finished `.spk` and re-derive every claim
+// the build made about it.
+//
+// It reads the package rather than the build's own bookkeeping, and that
+// separation is the entire value. A verifier that trusted anything Build
+// recorded would be checking Build against itself, and the specific claim
+// at stake here, that this package carries the exact release binaries, is
+// one an operator has to be able to re-derive from the artifact alone.
+//
+// The checks are named as exported constants so the CLI's output, the
+// tests and this file all use the same strings rather than three copies
+// that drift. Each check appends its own result rather than returning
+// early, so one failure never hides the others: an operator debugging a
+// bad package wants the whole list, not the first thing that went wrong.
 package spk
 
 import (
@@ -83,6 +97,17 @@ func (r *Report) CheckNames() []string {
 	return out
 }
 
+// String renders the whole report, failures and passes together.
+//
+// Printing the passes is not padding. An operator looking at a red line
+// needs to know which of the other nine checks ran and were satisfied,
+// because "one check failed" and "one check failed and eight never ran"
+// call for different next steps, and a report that showed only failures
+// cannot tell them apart.
+//
+// The manifest identity is printed even when there is nothing to print,
+// spelled out as an explicit absence rather than an empty field, so a
+// verdict is never attributed to an input nobody can name.
 func (r *Report) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", r.SPKPath)
@@ -110,6 +135,14 @@ func (r *Report) String() string {
 
 func (r *Report) pass(name, detail string) { r.Checks = append(r.Checks, Check{name, true, detail}) }
 func (r *Report) fail(name, detail string) { r.Checks = append(r.Checks, Check{name, false, detail}) }
+
+// record turns a list of findings into one check result: no findings is a
+// pass, and any number of them is a single failure carrying all of them.
+//
+// Collapsing them into one check rather than one per finding keeps the
+// check list stable. A report whose number of lines depends on how broken
+// the package is cannot be compared against a previous run, and the check
+// names are what the CLI and the tests agree on.
 func (r *Report) record(name string, findings []string) {
 	if len(findings) == 0 {
 		r.pass(name, "")
@@ -367,6 +400,15 @@ func orElse(value, fallback string) string {
 	return value
 }
 
+// unsafeMode names the first dangerous bit set on a file mode, or the
+// empty string.
+//
+// Only three are dangerous in a package that DSM unpacks as root: setuid
+// and setgid because they create a privilege escalation out of an ordinary
+// file, and world-writable because anybody on the NAS can then replace
+// something that runs as root. It reports the first rather than all of
+// them because the caller's job is to refuse the package, and one reason
+// is enough to do that.
 func unsafeMode(mode int64) string {
 	switch {
 	case mode&0o4000 != 0:

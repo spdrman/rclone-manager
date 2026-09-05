@@ -1,3 +1,18 @@
+// Every conformance check, exercised in both directions.
+//
+// The pattern throughout is a good package that must pass and a
+// deliberately damaged one that must fail, with the failure required to
+// mention something specific. Requiring the substring matters more than it
+// looks: a check that failed for an unrelated reason would satisfy a bare
+// "this failed" assertion, and then the test would be green while the
+// check it names had quietly stopped working.
+//
+// The ELF machine cases are the ones that would be easiest to leave out
+// and hardest to do without. Hash parity proves the file is the file the
+// manifest recorded and says nothing about which architecture it is for,
+// so a manifest that recorded the wrong binary under an architecture key
+// produces a package that passes parity and cannot run. Both the verifier
+// and the builder are held to that here.
 package spk
 
 import (

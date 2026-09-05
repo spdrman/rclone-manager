@@ -1,3 +1,17 @@
+// Archive surgery, so a test can produce a package that is wrong in one
+// specific way.
+//
+// Verification is mostly about detecting damage, and a test can only prove
+// detection by damaging something. Building a broken package from scratch
+// would mean a second, divergent implementation of the builder; these
+// helpers instead take a real package apart, change exactly one thing and
+// put it back, so what the verifier sees differs from a good package only
+// in the way the test intends.
+//
+// That is also why the mutators reach into the inner payload as well as
+// the outer archive. Several checks look at one and not the other, and a
+// helper that could only touch the outer tar would leave the inner ones
+// untested while looking like it covered them.
 package spk
 
 import (
