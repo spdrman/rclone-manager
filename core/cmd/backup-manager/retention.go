@@ -15,18 +15,31 @@ import (
 // --dry-run`: FR-20's mandatory dry-run, wired to internal/retention's
 // classification (GFS + last-known-good) via internal/app.
 //
-// # Both flags behave identically today, and this says so
+// # Both modes are previews, and the note says so
 //
-// internal/retention contains no deletion function at all as of this PR:
-// FR-20 (the actual, positively-identified local file removal these
-// verdicts would drive) is issue #21, open and being worked concurrently.
-// So `retention` and `retention --dry-run` print the exact same
-// KEEP/DELETE preview either way, and this command says that explicitly
-// rather than let the absence of --dry-run silently imply a destructive
-// action that does not exist in this codebase yet. Once issue #21 lands a
-// real delete function, wiring `retention` (without --dry-run) to actually
-// call it is a small, well-scoped follow-up this comment is deliberately
-// easy to find and delete.
+// This command computes and prints. It deletes nothing with --dry-run and
+// nothing without it, so the flag is accepted and inert here, and the note
+// printed when it is absent says exactly that rather than letting the
+// missing flag imply a destructive run.
+//
+// That is a decision, not a gap, and the note has to be read that way
+// (issue #431). FR-20's deletion is real and has been since issue #21
+// landed: internal/retention.PruneApply removes the positively identified
+// local file, and since #239 the object on a storage medium beside it,
+// driven by internal/app's PruneApply/PruneApplySnapshot. What runs that
+// is core/service's preview/apply envelope over HTTP, where
+// PreviewRetention issues a plan_id and ApplyRetentionPlan refuses to
+// delete anything unless the plan it re-derives still fingerprints as the
+// one that plan_id was issued for.
+//
+// Wiring `retention` without --dry-run to PruneApply would put a second
+// authorisation path beside that one, and a weaker one: a bare
+// `retention` would start deleting backups with no plan for anyone to
+// have read and nothing to compare against at the moment of deletion.
+// FR-20's whole design is that a deletion is authorised against a plan
+// somebody reviewed, so this command staying a preview is the answer
+// rather than an unfinished follow-up. If a CLI apply is ever wanted, it
+// needs a confirmation story of its own first.
 //
 // # Retention override flags (issue #111, B3.6)
 //
@@ -47,7 +60,7 @@ import (
 // accident.
 func cmdRetention(args []string) int {
 	fs, cfgPath := newFlagSet("retention")
-	dryRun := fs.Bool("dry-run", false, "preview only; see this command's note below about the other mode")
+	dryRun := fs.Bool("dry-run", false, "accepted and inert: this command previews in both modes, and says so on its own output")
 	rf := registerRetentionFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -133,8 +146,13 @@ func cmdRetention(args []string) int {
 		printPlacementPlan(cfg, r)
 	}
 
+	// Printed only when --dry-run is absent, because that is the only
+	// invocation whose shape suggests something else happened. An
+	// operator who typed --dry-run already knows what they asked for.
+	// See this command's doc for why both modes preview and why that is
+	// a decision rather than a gap (issue #431).
 	if !*dryRun {
-		fmt.Println("\nnote: local deletion (FR-20) is not implemented anywhere in this codebase yet (issue #21 is open); this is a preview only, identical to --dry-run.")
+		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed.")
 	}
 	return 0
 }

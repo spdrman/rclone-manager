@@ -93,8 +93,11 @@ commands:
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
-                                                  preview GFS/last-known-good retention decisions; each retention flag
-                                                  overrides the loaded config's own resolved value for this preview only
+                                                  preview GFS/last-known-good retention decisions. It deletes nothing in
+                                                  either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
+                                                  through the API's retention preview/apply pair, against a reviewed plan_id.
+                                                  Each retention flag overrides the loaded config's own resolved value for
+                                                  this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
