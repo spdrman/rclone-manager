@@ -36,6 +36,7 @@ import argparse
 import ast
 import contextlib
 import io
+import json
 import os
 import socket
 import sys
@@ -50,6 +51,7 @@ import install_docker_host as installer  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_COMPOSE = REPO_ROOT / "container" / "compose.yaml"
+RELEASE_MANIFEST = REPO_ROOT / "container" / "release-manifest.json"
 
 
 class Fixture:
@@ -2571,7 +2573,7 @@ class TestSubcommandFlagScoping(unittest.TestCase):
         port or a puid/pgid/timezone override. status, uninstall,
         network-doctor and network-undo never construct a Preflight and
         never stage a deployment, so they no longer declare any of this."""
-        install_prereqs = {"--ssh-key", "--known-hosts", "--compose-file", "--image",
+        install_prereqs = {"--ssh-key", "--known-hosts", "--compose-file", "--image", "--release",
                            "--image-archive", "--no-pull", "--listen-port", "--public-base-url",
                            "--profile", "--timezone", "--puid", "--pgid", "--timeout"}
         for command in ("status", "uninstall", "network-doctor", "network-undo"):
@@ -3371,6 +3373,347 @@ class TestReplacingTheStagedComposeIsAnnounced(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             installer.stage_payload(args)
         self.assertNotIn("compose.yaml", out.getvalue())
+
+
+class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
+    """Issue #484: there used to be two, and they disagreed.
+
+    image_tag() read the tag properly, out of the last path segment, so a
+    registry port was never mistaken for one. resolve() carried its own
+    inline `ref.rsplit(":", 1)[-1] ... else "latest"` and got both hard
+    cases wrong: a tagless reference became "latest", and a digest
+    reference became the bare hex, which then went into the .env as
+    VERSION=<hex> as though a digest were a version. Neither answer is
+    orderable, so the downgrade guard was blind in exactly the case
+    container/compose.yaml's own deploy-by-digest advice produces.
+    """
+
+    def test_a_digest_is_not_a_tag(self):
+        ref = "ghcr.io/spdrman/backup-manager@sha256:" + "ab" * 32
+        self.assertEqual(installer.image_tag(ref), "")
+        self.assertEqual(installer.image_digest(ref), "sha256:" + "ab" * 32)
+        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backup-manager")
+
+    def test_a_tag_and_a_digest_together_are_read_apart(self):
+        ref = "ghcr.io/spdrman/backup-manager:0.1.0@sha256:" + "cd" * 32
+        self.assertEqual(installer.image_tag(ref), "0.1.0")
+        self.assertEqual(installer.image_digest(ref), "sha256:" + "cd" * 32)
+        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backup-manager")
+
+    def test_a_registry_port_is_still_not_a_tag(self):
+        """The case the old image_tag() got right, kept."""
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
+        self.assertEqual(installer.image_name("localhost:5000/backup-manager"), "localhost:5000/backup-manager")
+        self.assertEqual(installer.image_digest("localhost:5000/backup-manager"), "")
+
+    def test_a_reference_with_no_version_in_it_says_so_rather_than_guessing(self):
+        self.assertEqual(installer.reference_version("localhost:5000/backup-manager"), "")
+        self.assertEqual(installer.reference_version("ghcr.io/spdrman/backup-manager@sha256:" + "ef" * 32), "")
+
+    def test_the_digest_this_release_recorded_names_this_release(self):
+        """A pinned digest IS answerable when it is the one recorded, and
+        that is not a guess: it is the same identity check_release holds
+        the tag to."""
+        ref = "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST
+        self.assertEqual(installer.reference_version(ref), installer.CARRIED_RELEASE)
+        self.assertEqual(
+            installer.compare_versions(installer.reference_version(ref), installer.CARRIED_RELEASE),
+            "same",
+            "a digest-pinned host has to be orderable, or the downgrade guard is blind on it")
+
+    def test_the_env_of_a_digest_pinned_install_names_the_release(self):
+        fx = Fixture(self)
+        args = fx.args("--image", "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST)
+        rendered = installer.render_env(args)
+        self.assertIn(f"VERSION={installer.CARRIED_RELEASE}", rendered)
+        self.assertNotIn("VERSION=sha256", rendered)
+        self.assertNotIn(f"VERSION={installer.CARRIED_RELEASE_DIGEST.split(':')[1]}", rendered,
+                         "the bare digest hex is not a version, and writing it as one is what "
+                         "issue #484 found")
+
+    def test_a_tagless_reference_never_writes_latest_into_the_env(self):
+        """The one-way door. _semver("latest") is None, so a host whose
+        .env says latest cannot be version-ordered by any later installer,
+        and the old inline expression wrote exactly that for any reference
+        carrying no tag."""
+        fx = Fixture(self)
+        rendered = installer.render_env(fx.args("--image", "localhost:5000/backup-manager"))
+        self.assertIn("VERSION=unknown", rendered)
+        self.assertNotIn("VERSION=latest", rendered)
+        self.assertIsNone(installer._semver("latest"),
+                          "if latest ever became orderable this test would be pinning nothing")
+
+    def test_an_installed_digest_reference_is_ordered_rather_than_shrugged_at(self):
+        """installed_image_tag reads the same question off a running
+        container and off the override, so both go through the one
+        implementation."""
+        containers = [{"Service": installer.ENGINE_SERVICE,
+                       "Image": "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST}]
+        tag, source = installer.installed_image_tag(containers, Path("/nonexistent"))
+        self.assertEqual(tag, installer.CARRIED_RELEASE)
+        self.assertIn(installer.ENGINE_SERVICE, source)
+
+    # image_tag and image_name are the two halves of the one reference
+    # reader, and reference_version is built out of them rather than out
+    # of its own splitting. _image_from_override chops a YAML `image:`
+    # line, which is a different question about a different kind of
+    # string, and it is named here rather than left looking like an
+    # oversight.
+    MAY_SPLIT_ON_A_COLON = {"image_tag", "image_name", "_image_from_override"}
+
+    @staticmethod
+    def _splits_on_a_colon(node) -> bool:
+        """Does this function chop a string on a literal ":" itself?
+
+        Matched on the syntax tree rather than in the text, because the
+        text of image_tag's own docstring quotes the expression this
+        replaced, on purpose. A control that its own explanation defeats
+        is not a control.
+        """
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr in ("split", "rsplit") and sub.args
+                    and isinstance(sub.args[0], ast.Constant) and sub.args[0].value == ":"):
+                return True
+        return False
+
+    def test_the_installer_holds_exactly_one_reference_splitter(self):
+        """The control. Everything above is satisfied by a correct
+        image_tag() sitting beside a second, wrong copy of the same
+        question, which is precisely the state this replaced: resolve()
+        carried its own and nothing compared the two."""
+        src = Path(installer.__file__).read_bytes().decode("utf-8")
+        offenders = sorted(node.name for node in ast.walk(ast.parse(src))
+                           if isinstance(node, ast.FunctionDef)
+                           and node.name not in self.MAY_SPLIT_ON_A_COLON
+                           and self._splits_on_a_colon(node))
+        self.assertEqual(offenders, [],
+                         "these read a version out of a string themselves instead of asking "
+                         "image_tag. There is one question here and it has one implementation; "
+                         "two is how the one nobody looks at goes wrong (issue #484).")
+
+    def test_resolve_asks_for_the_version_rather_than_working_it_out(self):
+        src = Path(installer.__file__).read_bytes().decode("utf-8")
+        body = src[src.index("def resolve(args):"):src.index("\ndef main(")]
+        self.assertIn("reference_version(", body)
+
+
+class TestNamingAPreviousRelease(unittest.TestCase):
+    """--release, and the four ways it refuses (issue #484).
+
+    The ask was a flag for installing a previous release. The shape it
+    landed in is narrower than that on purpose: it fills a tag, it never
+    overrules one an operator typed, and it never floats. A floating
+    default cannot verify what it installs, because the proof is a digest
+    this installer carries and a future release has none.
+
+    Not --version, either: that name belongs to "print your own version",
+    and this program's documented identity is the release it carries.
+    """
+
+    def args(self, *extra, command="preflight"):
+        return Fixture(self).args(*extra, command=command)
+
+    def test_it_fills_the_tag_of_the_reference_nobody_named(self):
+        args = self.args("--release", "0.1.0")
+        self.assertEqual(installer.image_tag(args.image), "0.1.0")
+        self.assertEqual(installer.image_name(args.image),
+                         f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}",
+                         "--release moves the tag and nothing else; the registry is not its to change")
+        self.assertIn("VERSION=0.1.0", installer.render_env(args))
+        self.assertIn(args.image, installer.render_image_override(args))
+
+    def test_leaving_it_alone_changes_nothing(self):
+        """The positive control for every refusal below: the flag has a
+        default, and the default has to be a no-op for every command line
+        that predates it."""
+        default = _subparser(installer.build_parser(), "install").get_default("image")
+        self.assertEqual(self.args().image, default)
+        self.assertEqual(self.args("--image", "localhost:5000/backup-manager").image,
+                         "localhost:5000/backup-manager",
+                         "a tagless --image with no --release is left exactly as typed")
+        self.assertEqual(self.args("--release", installer.CARRIED_RELEASE).image, default)
+
+    def test_it_fills_a_tagless_reference_an_operator_did_name(self):
+        args = self.args("--image", "registry.example:5000/backup-manager", "--release", "0.1.0")
+        self.assertEqual(args.image, "registry.example:5000/backup-manager:0.1.0")
+
+    def test_an_image_that_already_agrees_is_not_a_conflict(self):
+        args = self.args("--image", "ghcr.io/spdrman/backup-manager:0.1.0", "--release", "0.1.0")
+        self.assertEqual(args.image, "ghcr.io/spdrman/backup-manager:0.1.0")
+
+    def test_two_flags_naming_different_versions_refuse_rather_than_pick_one(self):
+        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backup-manager:0.1.0",
+                           "--release", "0.3.0")
+        self.assertIsNotNone(exc, "installing a version other than the one that was named, quietly, "
+                                  "is the whole failure this flag exists to prevent")
+        self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
+        self.assertIn("0.1.0", exc.message)
+        self.assertIn("0.3.0", exc.message)
+
+    def test_a_digest_is_not_weakened_into_a_tag(self):
+        exc = refusal_from(self.args,
+                           "--image", "ghcr.io/spdrman/backup-manager@sha256:" + "ab" * 32,
+                           "--release", "0.1.0")
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
+        self.assertIn("sha256:", exc.message)
+
+    def test_it_refuses_under_no_pull(self):
+        exc = refusal_from(self.args, "--no-pull", "--release", "0.1.0")
+        self.assertIsNotNone(exc, "the offline paths resolve nothing against a registry")
+        self.assertEqual(exc.code, installer.EXIT_RELEASE_OFFLINE)
+        self.assertIn("--no-pull", exc.message)
+        self.assertIn("--image-archive", exc.remedy, "the remedy has to name the offline way to do this")
+
+    def test_it_refuses_under_an_image_archive(self):
+        fx = Fixture(self)
+        archive = fx.prefix / "backup-manager-0.1.0.tar"
+        archive.write_bytes(b"not really a tarball")
+        exc = refusal_from(fx.args, "--image-archive", str(archive), "--release", "0.1.0")
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_RELEASE_OFFLINE)
+        self.assertIn("--image-archive", exc.message)
+
+    def test_it_refuses_a_moving_name(self):
+        """The one-way door, refused at the door. A host installed from
+        :latest writes VERSION=latest, which orders against nothing, so no
+        later installer can ever tell whether it is moving that host
+        forwards or backwards."""
+        exc = refusal_from(self.args, "--release", "latest")
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_USAGE)
+        self.assertIn("latest", exc.remedy)
+
+    def test_it_refuses_something_that_is_not_a_version(self):
+        for bad in ("0.2", "v0.2.0", "main", "0.2.0-"):
+            with self.subTest(release=bad):
+                exc = refusal_from(self.args, "--release", bad)
+                self.assertIsNotNone(exc, f"{bad!r} is not a version this installer can order")
+                self.assertEqual(exc.code, installer.EXIT_USAGE)
+
+    def test_a_prerelease_is_a_version_and_is_accepted(self):
+        args = self.args("--release", "0.2.0-rc.1")
+        self.assertEqual(installer.image_tag(args.image), "0.2.0-rc.1")
+
+    def test_resolving_it_reaches_no_network(self):
+        """The constraint the whole design rests on. Fixture.args() calls
+        resolve() in dozens of places and the suite runs offline in under
+        a second; a resolve() that asked a registry anything would put
+        HTTPS in every one of them."""
+        opened = []
+
+        def refuse(*a, **kw):
+            opened.append(a)
+            raise AssertionError("resolve() opened a socket")
+
+        was = installer.urllib.request.urlopen
+        installer.urllib.request.urlopen = refuse
+        self.addCleanup(setattr, installer.urllib.request, "urlopen", was)
+        self.args("--release", "0.1.0", command="install")
+        self.assertEqual(opened, [])
+
+
+class TestTheCarriedReleasePinIsTheRecordedOne(unittest.TestCase):
+    """The installer carries a version and a digest, and they are only
+    worth anything while they are the ones container/release-manifest.json
+    records.
+
+    Same discipline as the embedded compose definition, and for the same
+    reason: the copy that lands on a NAS has no checkout to read the
+    manifest out of, so the check has to happen here, in the one place
+    that can see both.
+    """
+
+    WHERE = "container/release-manifest.json"
+
+    def manifest(self) -> dict:
+        return json.loads(RELEASE_MANIFEST.read_bytes().decode("utf-8"))
+
+    def test_the_carried_version_is_the_recorded_one(self):
+        self.assertEqual(
+            installer.CARRIED_RELEASE, self.manifest()["version"],
+            f"CARRIED_RELEASE is not the version {self.WHERE} records. Move it there and here "
+            f"together, along with the --image default and the tag in "
+            f"distribution/packaging/canonical.json.")
+
+    def test_the_carried_digest_is_the_recorded_index_digest(self):
+        self.assertEqual(
+            installer.CARRIED_RELEASE_DIGEST, self.manifest()["index_digest"],
+            f"CARRIED_RELEASE_DIGEST is not the index_digest {self.WHERE} records.\n\n"
+            f"This is the value the installer HEADs the registry for and refuses on. A stale one "
+            f"turns a proof into a false alarm on every install.")
+
+    def test_the_default_reference_is_the_carried_release(self):
+        """The --image default and the carried digest are two halves of
+        one claim: `install` with no arguments installs the release this
+        file can prove, or the proof is about a different image from the
+        one being pulled."""
+        default = _subparser(installer.build_parser(), "install").get_default("image")
+        self.assertEqual(installer.image_tag(default), installer.CARRIED_RELEASE)
+        self.assertEqual(installer.image_name(default),
+                         f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}")
+
+
+class TestTheRenderedHelpReadsAsSentences(unittest.TestCase):
+    """_HelpFormatter is an ArgumentDefaultsHelpFormatter, so argparse
+    appends "(default: <value>)" to every flag's help by itself.
+
+    That is fine for a flag whose default is a path or a port and reads
+    badly for one whose default is filled in later: every `default=None`
+    flag in this file prints "(default: None)" after a sentence that has
+    already explained the real default. --release cannot afford that,
+    because its default is the whole design (it carries a release rather
+    than floating), so it states the value itself with %(default)s, which
+    is the documented way to stop argparse appending a second one.
+
+    Asserted on the RENDERED text rather than on the help string, because
+    the interpolation is exactly what could go wrong: a literal
+    %(default)s reaching an operator is a help message about Python.
+    """
+
+    def block_for(self, command: str, flag: str) -> str:
+        rendered = _subparser(installer.build_parser(), command).format_help()
+        lines = rendered.splitlines()
+        starts = [i for i, line in enumerate(lines) if line.strip().startswith(flag)]
+        self.assertTrue(starts, f"{command} --help never mentions {flag}")
+        start = starts[-1]
+        # Indentation, not a leading dash: argparse wraps help text, and
+        # this flag's own help names three other flags, so the wrapped
+        # line beginning "--image-archive, which are..." looked like the
+        # start of the next option and cut the block in half.
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        out = [lines[start]]
+        for line in lines[start + 1:]:
+            if not line.strip() or len(line) - len(line.lstrip()) <= indent:
+                break
+            out.append(line)
+        return " ".join(part.strip() for part in out)
+
+    def test_the_release_flag_states_the_release_this_installer_carries(self):
+        block = self.block_for("install", "--release")
+        self.assertIn(f"Defaults to {installer.CARRIED_RELEASE},", block,
+                      "the help has to name the release actually carried, so a release cut moves "
+                      "it without anyone remembering to")
+        self.assertNotIn("%(default)", block, "the help reached the operator uninterpolated")
+        self.assertNotIn("(default: None)", block)
+
+    def test_the_release_flag_says_what_it_will_refuse(self):
+        block = self.block_for("install", "--release")
+        for expected in ("--image", "--no-pull", "--image-archive"):
+            self.assertIn(expected, block,
+                          f"an operator cannot discover the {expected} refusal from anywhere else")
+
+    def test_preflight_documents_it_too(self):
+        """preflight is a dry run of install and declares the same
+        prerequisites, so it has to explain the same flag."""
+        self.assertIn(installer.CARRIED_RELEASE, self.block_for("preflight", "--release"))
+
+    def test_the_formatter_really_does_append_a_default(self):
+        """The positive control. Without it, "no (default: None) after
+        --release" is also satisfied by a formatter that appends nothing
+        at all, and the test would be pinning the wrong thing."""
+        self.assertIn("(default: None)", self.block_for("install", "--state-dir"))
 
 
 if __name__ == "__main__":

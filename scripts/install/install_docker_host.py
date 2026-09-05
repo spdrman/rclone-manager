@@ -166,6 +166,16 @@ EXIT_NETWORK_STILL_BROKEN = 44
 EXIT_NETWORK_UNDIAGNOSED = 45
 EXIT_PERSISTENCE_UNVERIFIED = 46
 
+# Naming a release, and proving the one this installer carries (issue
+# #484). Their own block for the same reason the bridge codes have one:
+# every code here is about WHICH version is about to be installed, which
+# is a different question from whether the image can be fetched at all
+# (EXIT_PREREQ_IMAGE) and calls for a different reaction. A wrapper that
+# retries a pull should not retry a digest that does not match.
+EXIT_RELEASE_CONFLICT = 50
+EXIT_RELEASE_OFFLINE = 51
+EXIT_RELEASE_DIGEST_MISMATCH = 52
+
 # The architectures the release manifest claims. Anything else has no
 # image, and finding that out from a `docker compose up` failure three
 # minutes in is worse than finding it out here.
@@ -190,6 +200,46 @@ MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 DEFAULT_PROJECT = "rclone-manager"
 DEFAULT_LISTEN_PORT = 8080
+
+# The release this installer carries, and the identity ghcr.io assigned
+# it. Both are copied from container/release-manifest.json (`version` and
+# `index_digest`), and TestTheCarriedReleasePinIsTheRecordedOne holds them
+# to it, the same way the embedded compose definition is held to
+# container/compose.yaml. They are copied rather than read because the
+# whole point of this file is that it travels alone: on a NAS there is no
+# checkout to read a manifest out of.
+#
+# The digest is what makes `--release` safe to offer at all. A tag is a
+# mutable pointer (scripts/release/publish-image.sh says so in its own
+# words), so "install 0.2.0" is a claim about a name until something
+# compares the name against a recorded identity. One anonymous HEAD does
+# that, with no cosign and no dependency, which is why the digest is here
+# and not derived.
+#
+# It proves exactly one version: this one. A release cut after this
+# installer was written has no digest here and cannot get one, which is
+# the reason the --image default is pinned rather than floating.
+CARRIED_RELEASE = "0.2.0"
+CARRIED_RELEASE_DIGEST = "sha256:0ba1fba4f9f35c939b63db4455f4347fa75e25e79d5486aa03a90d53d977112b"
+
+# Where that release lives. Split into two halves rather than written as
+# one reference on purpose: the --image default is the one literal
+# reference in this file that distribution/packaging's conformance suite
+# pins to canonical.json, and a second literal beside it is the copy
+# nobody looks at.
+RELEASE_REGISTRY = "ghcr.io"
+RELEASE_REPOSITORY = "spdrman/backup-manager"
+
+# Where a newer installer comes from, printed by the update check. An
+# installer can say a newer release exists; it cannot install one, and
+# offering to would be the floating default this design rules out.
+RELEASE_DOWNLOAD_PAGE = "https://github.com/spdrman/rclone-manager/releases"
+
+# How long a registry read may take. Short on purpose: every one of them
+# is optional, none of them changes what is installed, and an operator
+# waiting on a hung socket during preflight has been given a worse
+# installer, not a safer one.
+REGISTRY_TIMEOUT = 15
 
 # A private key readable by anyone but its owner is what OpenSSH's own
 # client refuses outright, so this refuses the same way, at the door.
@@ -812,15 +862,69 @@ def compose_argv(args):
 INSTALL_MODES = ("fresh", "upgrade", "factory-reset")
 
 
+def image_digest(reference: str) -> str:
+    """The `@sha256:...` half of a reference, or "" when it carries none.
+
+    A reference is `[registry[:port]/]name[:tag][@digest]`, and the
+    digest is the only part with an unambiguous separator, so it comes
+    off first and everything else is decided on what is left.
+    """
+    _, at, digest = reference.partition("@")
+    return digest if at else ""
+
+
+def image_name(reference: str) -> str:
+    """The registry-and-repository half, with any tag and digest removed."""
+    name = reference.partition("@")[0]
+    head, slash, last = name.rpartition("/")
+    return head + slash + last.split(":", 1)[0]
+
+
 def image_tag(reference: str) -> str:
     """The tag out of an image reference, or "" when it carries none.
 
     Not a naive rsplit on ":": a registry port is a colon too, and
     "localhost:5000/backup-manager" has no tag at all. The tag can only
-    live in the last path segment, so that is the only place looked.
+    live in the last path segment, so that is the only place looked. A
+    digest is not a tag either, so it is taken off before looking.
+
+    THE ONLY implementation of this question in this file (issue #484).
+    There used to be two - this one, and an inline
+    `ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"`
+    inside resolve() - and they disagreed twice over. On
+    `localhost:5000/backup-manager` this said "" and that said "latest";
+    on `backup-manager@sha256:<hex>` this said "" and that said the bare
+    hex, so the .env recorded VERSION=<hex> as though a digest were a
+    version. Two answers to one question is how one of them goes
+    unexamined.
     """
-    last = reference.rsplit("/", 1)[-1]
+    name = reference.partition("@")[0]
+    last = name.rsplit("/", 1)[-1]
     return last.split(":", 1)[1] if ":" in last else ""
+
+
+def reference_version(reference: str) -> str:
+    """The release a reference names, or "" when nothing in it names one.
+
+    "" is a real answer and every caller already treats it as one: it is
+    what installed_image_tag returns when it cannot say, and what the
+    downgrade guard reads as "unknown, so proceed". Guessing here is the
+    failure this exists to avoid, and the two guesses that were available
+    are both worse than saying nothing. "latest" writes a tag into the
+    .env that this installer never installed and that no future installer
+    can order; the bare digest hex reads as a version and is not one.
+
+    A pinned digest IS answerable when it is the digest this release
+    recorded, which is the case `container/compose.yaml`'s own
+    deploy-by-digest advice produces. That is not a guess, it is the same
+    recorded identity check_release verifies the tag against.
+    """
+    tag = image_tag(reference)
+    if tag:
+        return tag
+    if image_digest(reference) and image_digest(reference) == CARRIED_RELEASE_DIGEST:
+        return CARRIED_RELEASE
+    return ""
 
 
 def _prerelease_key(identifiers):
@@ -940,10 +1044,10 @@ def installed_image_tag(containers, prefix: Path):
     for c in containers:
         if str(c.get("Service", "")) != ENGINE_SERVICE:
             continue
-        tag = image_tag(str(c.get("Image", "")))
+        tag = reference_version(str(c.get("Image", "")))
         if tag:
             return tag, f"the {ENGINE_SERVICE} container"
-    tag = image_tag(_image_from_override(prefix))
+    tag = reference_version(_image_from_override(prefix))
     if tag:
         return tag, "compose.image.yaml, because no engine container is here to ask"
     return "", ""
@@ -2617,7 +2721,7 @@ def cmd_install(args) -> int:
     check_layout_matches(args, installed_env)
 
     here, here_from = installed_image_tag(containers, args.prefix)
-    target = image_tag(args.image)
+    target = reference_version(args.image)
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Reported in every mode, including a plain fresh install, because
@@ -3852,6 +3956,29 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
     pass
 
 
+class _RecordsThatItWasSupplied(argparse.Action):
+    """A plain store that also records that the operator typed the flag.
+
+    argparse offers no way to tell a default apart from a value that
+    happens to equal it, and --release has to know the difference. Its
+    whole contract is stated in terms of what the operator asked for: it
+    fills the tag of a reference nobody named, and it refuses rather than
+    overrule a tag somebody did. Comparing the value against
+    parser.get_default() cannot answer that, because the interesting
+    cases are exactly the ones where the two are equal.
+
+    The convention is already in this file for --ssh-key and
+    --known-hosts, where "the operator named this path" and "the default
+    filled it in" mean different things and resolve() records
+    ssh_key_supplied for it. This is the same distinction for flags whose
+    default is not None, so it cannot be recovered from the value later.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, self.dest + "_supplied", True)
+
+
 def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     """layout: every subcommand gets these, and only these, unconditionally.
 
@@ -3913,7 +4040,19 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
     runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.2.0",
+                         action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
+    runtime.add_argument("--release", default=CARRIED_RELEASE,
+                         action=_RecordsThatItWasSupplied, metavar="X.Y.Z",
+                         help="Install a previously published release instead of this one. It fills the "
+                              "tag in --image and nothing else, and when --image already names a "
+                              "different version it refuses rather than pick a winner: quietly "
+                              "installing a version other than the one you named is the whole failure "
+                              "this flag exists to prevent. Defaults to %(default)s, the release "
+                              "container/release-manifest.json records, which is the only version this "
+                              "installer holds a digest for and therefore the only one it can prove. "
+                              "Refused together with --no-pull and with --image-archive, which are the "
+                              "offline paths and resolve nothing against a registry.")
     runtime.add_argument("--image-archive", type=Path, default=None,
                          help="A `docker save` tarball to load instead of pulling. For a host that cannot reach "
                               "the registry, or a release that is not published yet.")
@@ -4109,6 +4248,87 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_release(args) -> None:
+    """--release, settled here, with no network and no registry at all
+    (issue #484).
+
+    Deciding WHICH reference to install is a string question, and keeping
+    it one is what lets the whole suite resolve arguments 49 times over
+    without a socket. The registry only ever gets asked to CONFIRM the
+    answer, in Preflight, once, and never to produce it. An installer
+    that had to reach ghcr.io to know what it was installing would have
+    made a network round trip a precondition of `--help`-adjacent work
+    and of every offline path this file deliberately supports.
+
+    Every refusal below is here rather than in a check for the same
+    reason: they are all decidable from the command line alone, and a
+    contradiction an operator typed should come back before Docker has
+    been asked anything.
+    """
+    if not args.release_supplied:
+        # The default IS the tag the --image default already carries, so
+        # there is nothing to fill and nothing that can disagree. This is
+        # every invocation that predates the flag.
+        return
+
+    if _semver(args.release) is None:
+        raise Refusal(
+            EXIT_USAGE,
+            f"--release is {args.release!r}, which is not a version.",
+            "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
+            "(0.2.0-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "tag orders against nothing, so it would be written into the .env as the "
+            "installed version and leave this host un-orderable by every later installer. "
+            "Name the version you want.",
+        )
+
+    if args.image_archive is not None or args.no_pull:
+        offline = "--image-archive" if args.image_archive is not None else "--no-pull"
+        raise Refusal(
+            EXIT_RELEASE_OFFLINE,
+            f"--release resolves a reference against the registry and {offline} says not to go there.",
+            "The offline paths are a designed feature, not an oversight: they exist for a host "
+            "that cannot reach ghcr.io at all. Pick the release on the machine that CAN, with "
+            "`docker save`, and bring the tarball over with --image-archive. Or drop "
+            f"{offline} and let this resolve it.",
+        )
+
+    if image_digest(args.image):
+        raise Refusal(
+            EXIT_RELEASE_CONFLICT,
+            f"--image already pins {image_digest(args.image)}, and --release {args.release} "
+            f"names a version instead.",
+            "A digest names exactly one image and is the stronger claim of the two, so this "
+            "will not weaken it and will not decorate it with a tag that may describe "
+            "something else. Drop --release and keep the digest, or drop the digest and name "
+            "the release.",
+        )
+
+    tag = image_tag(args.image)
+    if not args.image_supplied:
+        # The common case: --image is sitting at the release this
+        # installer carries and --release is asking for a different one.
+        # Only the tag moves; the registry and repository are not this
+        # flag's to change.
+        args.image = f"{image_name(args.image)}:{args.release}"
+        return
+    if not tag:
+        # An operator's own registry, named without a tag. Filling it is
+        # exactly what this flag is for, and there is nothing to disagree
+        # with.
+        args.image = f"{args.image}:{args.release}"
+        return
+    if tag != args.release:
+        raise Refusal(
+            EXIT_RELEASE_CONFLICT,
+            f"--release says {args.release} and --image says {tag}.",
+            "Both name the version about to be installed and they do not agree, so this "
+            "refuses rather than pick one. Installing a version other than the one you "
+            "named, quietly, is the failure this flag exists to prevent. Drop one of the "
+            "two, or make them agree.",
+        )
+
+
 def resolve(args):
     """Fill in every default this installer computes from --prefix and the
     account it runs as.
@@ -4170,10 +4390,18 @@ def resolve(args):
     if hasattr(args, "public_base_url") and args.public_base_url is None:
         args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
     if hasattr(args, "image"):
-        # The tag compose resolves for VERSION, taken from the reference so
-        # the .env cannot claim a different release from the image.
-        ref = args.image
-        args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
+        # _RecordsThatItWasSupplied only fires when the flag is on the
+        # command line, so the attribute is simply absent otherwise.
+        args.image_supplied = getattr(args, "image_supplied", False)
+        args.release_supplied = getattr(args, "release_supplied", False)
+        resolve_release(args)
+        # The version compose records as VERSION, read out of the
+        # reference so the .env cannot claim a different release from the
+        # image it pins. "unknown" rather than "latest" when the reference
+        # names none: _semver("latest") is None, so a host whose .env says
+        # latest is one no later installer can ever order, and a tagless
+        # --image used to write exactly that.
+        args.image_tag = reference_version(args.image) or "unknown"
         args.image_commit = "none"
     return args
 
