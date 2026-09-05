@@ -301,6 +301,17 @@ pointing at when it was removed, which the removal records for exactly this; for
 configuration went away some other way, what is left to compare is where its artifacts
 actually landed, and that is what gets checked.
 
+**What a removal leaves behind has its own command (issue #418).** A removed set's backups
+stay on storage and stay in the journal, which is exactly right for undoing a removal and
+exactly wrong for pretending nothing happened: those artifacts are now governed by no
+retention policy at all, because the configuration that carried one no longer names them.
+`backup-manager unconfigured` lists the sets the journal remembers and the configuration no
+longer names, what they still hold on storage, and the policy governing them, which is
+none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a
+removal stranded mid-transfer and ends the journal rows nothing will ever advance; without
+`--acknowledge` it prints what it would do. It never touches a retained backup, so it is
+not a way to delete anything you would want back.
+
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
 produce its first one; `core/service.FirstRun.CreateInitialConfig`'s own doc says plainly
@@ -1379,15 +1390,36 @@ Only three states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_
 `QUARANTINED_LOST`, or any `.partial` file you find sitting on disk regardless of what the
 journal says, is not a restore point. Take the newest row in one of the three good states;
 its `local_path` is the file, already fsynced and atomically committed (see
-[Durable commit](#durable-commit)). Copy it wherever you're restoring to. There is no
-`restore` command to do that for you and there is not meant to be: restore execution is out
-of scope, so the last step is yours.
+[Durable commit](#durable-commit)). Copy it wherever you're restoring to. Nothing here
+copies it back for you and nothing is meant to: restore execution is out of scope, so the
+last step is yours. `backup-manager restore` is a different thing despite the name, and the
+next paragraph is when you need it.
+
+**If the copy is not on local disk, find out where it is before planning anything.**
+`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
+(nothing at all when the only copy is an ordinary local file, so silence here is an
+answer). Read `access` first: `immediate` means read it now, `requires_restore` means the
+copy is on an archive class and is durable, intact and hours away, `restoring` means
+somebody already asked, and `unreachable` means the medium did not answer, which is a
+different problem from the copy being gone. For `requires_restore`, `backup-manager restore
+<source/backup-set/artifact> --medium M --days N --acknowledge` asks the provider to make it
+readable again; it is billed, it takes hours, and there is no progress number because S3
+does not serve one. See
+[Archive classes, and asking for a copy back](#archive-classes-and-asking-for-a-copy-back).
 
 If the newest row for that backup set is `QUARANTINED_LOST`: that specific backup is gone
 for good. The remote copy was already deleted before the local corruption was found, and no
 automatic path recovers it (see [The lifecycle](#the-lifecycle)). Look at the next-newest
 row in a known-good state and treat the loss as real when deciding what to tell whoever
 needs the data, not as something to retry.
+
+If the newest row is `FAILED`: an attempt did not finish, which is a different finding from
+quarantine. Quarantine is a positive statement about the content; `FAILED` is a statement
+about the mechanics of an attempt, and health treats a `FAILED` artifact with no retry
+scheduled as `FAILING`. `backup-manager retry <source/backup-set/artifact> [--note T]` puts
+it back into the pipeline. Nothing does that automatically, deliberately: a blind
+re-transfer of gigabytes for a cause nothing has classified is a cost this manager will not
+take on its own, so somebody has to look first and then say so.
 
 If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this can self-heal.
 `backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
