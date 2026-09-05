@@ -177,9 +177,10 @@ re-read for free.
 
 The rules that matter:
 
-- A move reaches VERIFIED at `content` class by default. The local copy is
-  downloaded back and re-hashed at the last moment the local truth still exists,
-  and only then is the source deleted.
+- A move reaches VERIFIED at `content` class by default. The copy that was just
+  uploaded is downloaded back and re-hashed against the SHA-256 recorded when
+  the artifact was ingested, while the source copy is still there, and the
+  source is deleted only after that verdict is durably recorded.
 - **A move at `content` class downloads the object once, and a move a restart
   picks up downloads it again.** The manager will not delete your source copy
   without a content-class verdict about the destination that is valid at that
