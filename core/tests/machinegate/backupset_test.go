@@ -1,4 +1,4 @@
-package service
+package machinegate_test
 
 import (
 	"context"
@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // TestCreateBackupSet_EndToEndAgainstARealSFTPFixture is issue #146's own
@@ -26,7 +27,7 @@ import (
 // this machine, exactly like every other Docker-backed test in this
 // repository.
 func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
-	fx := sftpfixture.Start(t)
+	fx := machines.Start(t).Source(t)
 
 	// Seed one real artifact the way a real producer would: written
 	// directly into the fixture's upload directory, discovered by the
@@ -35,7 +36,7 @@ func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
 		t.Fatalf("seeding fixture artifact: %v", err)
 	}
 
-	svc, _ := openTestService(t)
+	svc := openService(t)
 
 	// Step 1 of the wizard's real flow: import the fixture's own client
 	// key (real bytes, read off disk exactly as an operator pasting a
@@ -78,7 +79,7 @@ func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
 	// Step 3: a pre-save connection test against the real server, using
 	// exactly the references the wizard's Save button would carry —
 	// before anything is persisted.
-	connResult, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
+	connResult, err := svc.TestConnection(context.Background(), service.ConnectionTestRequest{
 		Host:           fx.Host,
 		Port:           fx.Port,
 		User:           fx.User,
@@ -95,7 +96,7 @@ func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
 
 	// Step 4: "Save, enable & run" — create the backup set for real and
 	// let it run immediately.
-	result, err := svc.CreateBackupSet(context.Background(), CreateBackupSetRequest{
+	result, err := svc.CreateBackupSet(context.Background(), service.CreateBackupSetRequest{
 		Name:               "fixture-set",
 		Host:               fx.Host,
 		Port:               fx.Port,

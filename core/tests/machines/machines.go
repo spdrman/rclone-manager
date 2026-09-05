@@ -85,20 +85,7 @@ import (
 // it.
 const NetworkEnv = "RCLONE_MANAGER_MACHINES_NETWORK"
 
-// SourceDockerfile is the source machine: the same image the SFTP fixture
-// has always used, plus iptables so LimitConnections can impose the
-// production rule without the container being privileged, and netcat so the
-// cap can be probed from a second machine on the network.
-//
-// It is exported because scripts/e2e/two-machine-backup.sh builds the same
-// machine and #451 asked for one definition of "the simulated VPS" rather
-// than two that drift. scripts/e2e/source-machine.Dockerfile is that one
-// definition on disk; sourceDockerfileMustMatchTheScript in machines_test.go
-// is what stops this constant and that file parting company.
-const SourceDockerfile = "FROM atmoz/sftp:alpine\nRUN apk add --no-cache iptables netcat-openbsd\n"
-
 const (
-	dockerBuildTimeout   = 5 * time.Minute
 	dockerNetworkTimeout = 30 * time.Second
 	dockerExecTimeout    = 30 * time.Second
 )

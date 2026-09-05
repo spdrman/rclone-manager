@@ -9,7 +9,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -540,192 +539,23 @@ func TestClassify_IntegrityFailure_RealRcloneWording(t *testing.T) {
 // top (classify's category, not just the raw rclone error text).
 // ---------------------------------------------------------------------------
 
-// dockerExecMust runs `docker exec containerID args...` and fails the test if
-// it does not succeed. It exists to set up file content/ownership/mode
-// directly on the fixture's disk, which is outside what the sftp protocol
-// (as this adapter's Transport interface exposes it: List/Stat/CopyToLocal/
-// RemoteHash/DeleteRemote, no write) can do on its own.
-func dockerExecMust(t *testing.T, containerID string, args ...string) {
-	t.Helper()
-	full := append([]string{"exec", containerID}, args...)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", full...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("docker exec %v: %v\n%s", args, err, out)
-	}
-}
+// TestClassify_Docker used to live here. It is
+// core/tests/machinegate/classify_test.go now (#448): it needed a real
+// sshd, a real chmod-000 file and two real host keys, which is a machine,
+// and running it from this package meant `go test ./internal/...` needed a
+// Docker daemon to say anything about a classifier that is otherwise pure.
+//
+// Everything above this line is the pure half and stays: the classification
+// tables, the real-local-error cases, the rclone-imposed-timeout cases and
+// the structural guard below.
 
-// writeRemoteFile creates path inside the fixture container (a path under
-// /home/backup, i.e. inside the chrooted sftp root), owned by the backup
-// user, with the given permission mode.
-func writeRemoteFile(t *testing.T, containerID, path, content string, mode string) {
-	t.Helper()
-	script := fmt.Sprintf("printf %q > %s && chown backup:backup %s && chmod %s %s",
-		content, path, path, mode, path)
-	dockerExecMust(t, containerID, "sh", "-c", script)
-}
-
-// TestClassify_Docker is one Docker test function, not several, because
-// every subtest below shares the one fixture image and (for all but the
-// host-verification subtests, which need their own containers by
-// construction) the one running container: rebuilding the image or
-// restarting sshd per category would multiply this file's Docker cost for no
-// added coverage.
-func TestClassify_Docker(t *testing.T) {
-	requireDocker(t)
-
-	clientKeyPath, authorizedKeyLine := generateClientSSHKeyPair(t)
-	image := buildSFTPFixtureImage(t, authorizedKeyLine)
-
-	host := "127.0.0.1"
-	port := freeTCPPort(t)
-	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
-
-	cont, hostKeyA := startFixtureContainer(t, image, port, "errors-main", clientKeyPath)
-	writeKnownHosts(t, knownHostsPath, host, port, hostKeyA)
-
-	baseSource := transport.Source{
-		ID:         "errors-fixture",
-		Type:       "sftp",
-		Host:       host,
-		Port:       port,
-		User:       sftpFixtureUser,
-		KeyFile:    clientKeyPath,
-		KnownHosts: knownHostsPath,
-		Root:       "upload",
-	}
-	adapter := New()
-	ctx := context.Background()
-
-	// Positive control: the correctly-authorized key against the recorded
-	// host key must work, otherwise every "this attack is refused" result
-	// below would prove nothing.
-	//
-	// One attempt, no retry, on purpose. This assertion's whole value is
-	// that it is believed when it fails, and a retry wide enough to absorb
-	// the #250 flake would have had to absorb "unable to authenticate",
-	// which is the one answer a positive control must never shrug off. The
-	// startup race that produced that flake is gone at the source instead:
-	// startFixtureContainer no longer returns until this exact key has
-	// authenticated against this exact container, which is strictly more
-	// than the List below needs. What a failure here gets is a better
-	// account of itself, not another go.
-	t.Run("positive_control_recorded_key_and_authorized_client_succeed", func(t *testing.T) {
-		if _, err := adapter.List(ctx, baseSource); err != nil {
-			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
-			t.Fatalf("List with the recorded host key and authorized client should have succeeded, got: %v\n%s\nserver logs:\n%s",
-				err, fixtureAuthVerdict(port, clientKeyPath), logs)
-		}
-	})
-
-	t.Run("authentication_wrong_client_key_is_refused", func(t *testing.T) {
-		wrongKeyPath, _ := generateClientSSHKeyPair(t) // freshly generated, never added to authorized_keys
-		src := baseSource
-		src.KeyFile = wrongKeyPath
-
-		_, err := adapter.List(ctx, src)
-		if err == nil {
-			t.Fatal("List with an unauthorized client key should have been refused, it succeeded")
-		}
-		if got := classify(err); got != transport.Authentication {
-			t.Fatalf("classify(%v) = %v, want Authentication", err, got)
-		}
-	})
-
-	t.Run("permission_denied_unreadable_remote_file_is_refused", func(t *testing.T) {
-		writeRemoteFile(t, cont, "/home/backup/upload/secret.txt", "shh", "000")
-
-		_, err := adapter.CopyToLocal(ctx, baseSource, "secret.txt", filepath.Join(t.TempDir(), "secret.txt.partial"))
-		if err == nil {
-			t.Fatal("CopyToLocal against a chmod 000 remote file should have been refused, it succeeded")
-		}
-		if got := classify(err); got != transport.PermissionDenied {
-			t.Fatalf("classify(%v) = %v, want PermissionDenied", err, got)
-		}
-	})
-
-	// UnsupportedCapability is the "hardened shell-less SFTP account" fact:
-	// the fixture's sshd forces every session to internal-sftp
-	// (ForceCommand), and the backup account has no shell (/sbin/nologin),
-	// so rclone's shell-type detection finds no shell to run md5sum/sha1sum
-	// through and Hashes() reports an empty set, for every object, readable
-	// or not. This must surface as an explicit capability result, never as
-	// a Permanent failure and never as a silent success.
-	t.Run("unsupported_capability_remote_hash_on_a_shell_less_account", func(t *testing.T) {
-		writeRemoteFile(t, cont, "/home/backup/upload/hashable.txt", "hash me please", "644")
-
-		got, err := adapter.RemoteHash(ctx, baseSource, "hashable.txt", transport.SHA256)
-		if err == nil {
-			t.Fatalf("RemoteHash succeeded against a shell-less account (got %q); capability was supposed to be absent, not silently downgraded", got)
-		}
-		if cat := classify(err); cat != transport.UnsupportedCapability {
-			t.Fatalf("classify(%v) = %v, want UnsupportedCapability", err, cat)
-		}
-	})
-
-	t.Run("not_found_missing_remote_object", func(t *testing.T) {
-		_, err := adapter.Stat(ctx, baseSource, "does-not-exist.txt")
-		if err == nil {
-			t.Fatal("Stat succeeded against a missing remote object")
-		}
-		if got := classify(err); got != transport.NotFound {
-			t.Fatalf("classify(%v) = %v, want NotFound", err, got)
-		}
-	})
-
-	// Host verification needs its own containers: "unknown" needs a live
-	// server at an address with no known_hosts entry at all, and "mismatch"
-	// needs the same host:port to answer with a different host key than the
-	// one recorded, which needs the original container gone first.
-	stopFixtureContainer(cont)
-
-	t.Run("host_verification_unknown_host_is_refused", func(t *testing.T) {
-		unknownPort := freeTCPPort(t)
-		contU, _ := startFixtureContainer(t, image, unknownPort, "errors-unknown", clientKeyPath)
-		defer stopFixtureContainer(contU)
-
-		src := baseSource
-		src.Port = unknownPort // knownHostsPath has no entry for this host:port
-
-		_, err := adapter.List(ctx, src)
-		if err == nil {
-			t.Fatal("List against a host with no known_hosts entry should have been refused, it succeeded")
-		}
-		if got := classify(err); got != transport.HostVerification {
-			t.Fatalf("classify(%v) = %v, want HostVerification", err, got)
-		}
-	})
-
-	t.Run("host_verification_changed_host_key_is_refused", func(t *testing.T) {
-		contB, hostKeyB := startFixtureContainer(t, image, port, "errors-changed", clientKeyPath)
-		defer stopFixtureContainer(contB)
-
-		if hostKeyB == hostKeyA {
-			t.Fatal("test setup bug: the replacement container generated the same host key, so this proves nothing")
-		}
-
-		_, err := adapter.List(ctx, baseSource) // same host:port, known_hosts still pinned to the original key
-		if err == nil {
-			t.Fatal("List against a changed host key should have been refused, it succeeded")
-		}
-		if got := classify(err); got != transport.HostVerification {
-			t.Fatalf("classify(%v) = %v, want HostVerification", err, got)
-		}
-
-		// #388's precedence question, settled against this exact real
-		// error rather than a described one. A caller working under a
-		// deadline can have its context expire while a handshake is still
-		// in flight (rclone's sftp dial takes ssh.ClientConfig.Timeout and
-		// ignores the caller's context entirely, so that window is the
-		// whole handshake, not a scheduling race), and the refusal still
-		// arrives afterwards. It is still a refusal. If a done context
-		// outranked it, app/halt.go would never record HALT_HOST_KEY_CHANGED
-		// for the one condition an operator most needs to be told about.
-		if got := ClassifyCtx(alreadyCancelledContext(), err); got != transport.HostVerification {
-			t.Fatalf("ClassifyCtx(done ctx, changed host key) = %v, want HostVerification: a cancellation racing a refusal does not make the refusal less true", got)
-		}
-	})
+// alreadyCancelledContext is a context that is already done before anything
+// is asked of it, which is how the #388 precedence cases put a caller's
+// cancellation up against a definite error.
+func alreadyCancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }
 
 // ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@
 // Every assertion below has a positive control, because all three
 // measurements could report zero for the boring reason that they see
 // nothing at all.
-package rclone
+package machinegate_test
 
 import (
 	"bytes"
@@ -50,7 +50,8 @@ import (
 	"github.com/rclone/rclone/fs/walk"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // dockerProbeBudget bounds every docker call this file makes. #161's whole
@@ -70,66 +71,12 @@ const dockerProbeBudget = 15 * time.Second
 // nowhere near "the drainer got round to it".
 const connectionDrainBudget = 5 * time.Second
 
-func dockerProbe(t *testing.T, what string, args ...string) (stdout, stderr string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), dockerProbeBudget)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var out, errOut bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			t.Fatalf("%s: `docker %s` was still running after %s", what, args[0], dockerProbeBudget)
-		}
-		t.Fatalf("%s: `docker %s`: %v: %s", what, args[0], err, errOut.String())
-	}
-	return out.String(), errOut.String()
-}
-
-// establishedConns asks the fixture's own sshd how many TCP connections it
-// is holding right now, from inside the container's network namespace, so
-// nothing else on this machine can be counted by accident.
-func establishedConns(t *testing.T, f *sftpfixture.Fixture) int {
-	t.Helper()
-	out, _ := dockerProbe(t, "counting established connections", "exec", f.ContainerID(),
-		"sh", "-c", "netstat -tn | grep -c ESTABLISHED || true")
-	n, err := strconv.Atoi(strings.TrimSpace(out))
-	if err != nil {
-		t.Fatalf("counting established connections: netstat produced %q, which is not a count: %v", out, err)
-	}
-	return n
-}
-
-// acceptedLogins counts the successful SSH logins sshd has recorded since
-// the container started. It only ever grows, which is what makes it usable
-// for "how many connections did that operation open" without sampling.
-//
-// It settles before answering: the count is read repeatedly until two
-// consecutive reads agree, because reading it a millisecond too early
-// would under-report, and under-reporting is the direction that turns a
-// fan-out into a false pass.
-func acceptedLogins(t *testing.T, f *sftpfixture.Fixture) int {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	last := -1
-	for {
-		// Both streams, and stderr is the one that matters: the fixture
-		// runs `sshd -D -e`, so every authentication line the server
-		// writes arrives on the container's stderr, and reading stdout
-		// alone reports a confident, wrong zero.
-		out, errOut := dockerProbe(t, "counting accepted logins", "logs", f.ContainerID())
-		n := strings.Count(out+errOut, "Accepted publickey")
-		if n == last {
-			return n
-		}
-		last = n
-		if time.Now().After(deadline) {
-			return n
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-}
+// establishedConns and acceptedLogins used to live here, each with its own
+// bounded `docker exec`. They are Source.EstablishedConnections and
+// Source.AcceptedLogins now (#448): they are the probes the connection-cap
+// case (#264) wants too, and a test under core/tests that reached them by
+// exec'ing docker itself would be the bypass the testtier guard exists to
+// stop.
 
 // sshClientLoopFrame is the stack frame golang.org/x/crypto/ssh puts on the
 // goroutine it starts for each client connection. newMux runs exactly one
@@ -208,10 +155,11 @@ func softProbe(name string, args ...string) string {
 // published port, and the stacks of any SSH client this process is still
 // running. Between them they say which side the survivor is on, which is
 // the whole question and is not answerable from a count.
-func drainDiagnostics(f *sftpfixture.Fixture, stacks string) string {
+func drainDiagnostics(t *testing.T, f *machines.Source, stacks string) string {
+	t.Helper()
 	var b strings.Builder
 	b.WriteString("--- netstat -tn inside the container: peer and state, not a count ---\n")
-	b.WriteString(softProbe("docker", "exec", f.ContainerID(), "sh", "-c", "netstat -tn"))
+	b.WriteString(f.ConnectionTable(t) + "\n")
 	fmt.Fprintf(&b, "--- lsof -nP -iTCP:%d on the host, for this test process (pid %d) ---\n", f.Port, os.Getpid())
 	if f.Port == 0 {
 		b.WriteString("(the fixture published no host port, so there is nothing on the host to look at)\n")
@@ -249,43 +197,40 @@ func drainVerdict(conns, clients int) string {
 // to the forwarder rather than to us. Our own goroutines are the reading
 // that cannot be confused for anything else, and asserting the pair is what
 // turns the next occurrence from a mystery into a one-line attribution.
-func requireNoConnections(t *testing.T, f *sftpfixture.Fixture, after string) {
+func requireNoConnections(t *testing.T, f *machines.Source, after string) {
 	t.Helper()
 	deadline := time.Now().Add(connectionDrainBudget)
 	for {
-		conns := establishedConns(t, f)
+		conns := f.EstablishedConnections(t)
 		clients, stacks := sshClientGoroutines()
 		if conns == 0 && clients == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("%s left %d connection(s) open on the server and %d live SSH client goroutine(s) in this process %s later.\n%s\n%s",
-				after, conns, clients, connectionDrainBudget, drainVerdict(conns, clients), drainDiagnostics(f, stacks))
+				after, conns, clients, connectionDrainBudget, drainVerdict(conns, clients), drainDiagnostics(t, f, stacks))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
-	f := sftpfixture.Start(t)
-	a := New()
+	f := machines.Start(t).Source(t)
+	a := rclone.New()
 	ctx := context.Background()
 
 	// Positive control for BOTH measurements, and it has to come first:
 	// every assertion below reads "and then there were none", which is
 	// also what a probe that can see nothing at all would say.
 	t.Run("TheProbesCanSeeAConnection", func(t *testing.T) {
-		before := acceptedLogins(t, f)
+		before := f.AcceptedLogins(t)
 
-		held, err := a.fsFor(ctx, f.Source("probe-control", ""))
-		if err != nil {
-			t.Fatalf("building an Fs to hold open: %v", err)
-		}
-		if got := establishedConns(t, f); got < 1 {
+		held := rawSFTPFs(t, ctx, f, "")
+		if got := f.EstablishedConnections(t); got < 1 {
 			shutdownFs(ctx, held)
 			t.Fatalf("established connections = %d while an Fs is deliberately held open; this probe cannot see a connection, so nothing else in this file would prove anything", got)
 		}
-		if got := acceptedLogins(t, f); got <= before {
+		if got := f.AcceptedLogins(t); got <= before {
 			shutdownFs(ctx, held)
 			t.Fatalf("accepted logins = %d after opening an Fs, was %d before; this probe cannot count a login, so the fan-out assertions below would pass on any behaviour", got, before)
 		}
@@ -307,7 +252,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 	// this each one abandoned it with its pool still open.
 	t.Run("EveryOperationReleasesItsPool", func(t *testing.T) {
 		writeUploadFile(t, f, "release-me.bin", []byte("release target"))
-		src := f.Source("release", "")
+		src := f.TransportSource("release", "")
 
 		if _, err := a.List(ctx, src); err != nil {
 			t.Fatalf("List: %v", err)
@@ -360,7 +305,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 	// file is accepted and the daemon then repeats it every poll interval.
 	t.Run("ARemotePathThatNamesAFileDoesNotLeak", func(t *testing.T) {
 		writeUploadFile(t, f, "not-a-directory.dump", []byte("this is a file, not a directory"))
-		src := f.Source("file-root", "not-a-directory.dump")
+		src := f.TransportSource("file-root", "not-a-directory.dump")
 
 		for i := range 5 {
 			if _, err := a.List(ctx, src); err == nil {
@@ -392,25 +337,22 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 				t.Fatalf("seed artifact in %s: %v", dir, err)
 			}
 		}
-		src := f.Source("tree", "tree")
+		src := f.TransportSource("tree", "tree")
 
 		// Control: the same walk with rclone's own default width really
 		// does open more than one connection, so "exactly one" below is a
 		// statement about this adapter and not about the fixture being
 		// too small to fan out.
-		control, err := a.fsFor(ctx, src)
-		if err != nil {
-			t.Fatalf("building the control Fs: %v", err)
-		}
+		control := rawSFTPFs(t, ctx, f, "tree")
 		wideCtx, ci := fs.AddConfig(ctx)
 		ci.Checkers = 8
-		before := acceptedLogins(t, f)
+		before := f.AcceptedLogins(t)
 		objs, _, err := walk.GetAll(wideCtx, control, "", true, -1)
 		if err != nil {
 			shutdownFs(ctx, control)
 			t.Fatalf("control walk: %v", err)
 		}
-		wide := acceptedLogins(t, f) - before
+		wide := f.AcceptedLogins(t) - before
 		shutdownFs(ctx, control)
 		// Partition the blame before going anywhere near List. This control
 		// opened seven or eight connections and, until this line existed,
@@ -428,12 +370,12 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 		}
 		t.Logf("control: a walk at --checkers 8 over %d directories opened %d connections", dirs, wide)
 
-		before = acceptedLogins(t, f)
+		before = f.AcceptedLogins(t)
 		got, err := a.List(ctx, src)
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
-		opened := acceptedLogins(t, f) - before
+		opened := f.AcceptedLogins(t) - before
 		if len(got) != dirs {
 			t.Fatalf("List found %d objects, want %d", len(got), dirs)
 		}
@@ -452,7 +394,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 	t.Run("ACopyAboveTheMultiThreadCutoffOpensOneConnection", func(t *testing.T) {
 		content := bytes.Repeat([]byte("rclone-manager"), (8<<20)/len("rclone-manager"))
 		writeUploadFile(t, f, "big.dump", content)
-		src := f.Source("big", "")
+		src := f.TransportSource("big", "")
 
 		// Lower the cutoff and the chunk size rather than seeding a
 		// 256MiB file: the behaviour under test is the split, and those
@@ -471,10 +413,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 
 		// Control, through rclone directly: at rclone's own stream count
 		// this copy really does open more than one connection.
-		controlFs, err := a.fsFor(ctx, src)
-		if err != nil {
-			t.Fatalf("building the control Fs: %v", err)
-		}
+		controlFs := rawSFTPFs(t, ctx, f, "")
 		obj, err := controlFs.NewObject(ctx, "big.dump")
 		if err != nil {
 			shutdownFs(ctx, controlFs)
@@ -486,12 +425,12 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 			shutdownFs(ctx, controlFs)
 			t.Fatalf("control destination: %v", err)
 		}
-		before := acceptedLogins(t, f)
+		before := f.AcceptedLogins(t)
 		if _, err := operations.Copy(multiThread(4), dstFs, nil, "control.dump", obj); err != nil {
 			shutdownFs(ctx, controlFs)
 			t.Fatalf("control copy: %v", err)
 		}
-		wide := acceptedLogins(t, f) - before
+		wide := f.AcceptedLogins(t) - before
 		shutdownFs(ctx, controlFs)
 		// Same partition as the walk control above, for the same reason:
 		// this copy ran at rclone's own stream count and opened three
@@ -505,13 +444,13 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 		}
 		t.Logf("control: a copy at --multi-thread-streams 4 opened %d connections", wide)
 
-		before = acceptedLogins(t, f)
+		before = f.AcceptedLogins(t)
 		local := filepath.Join(t.TempDir(), "big.dump.partial")
 		res, err := a.CopyToLocal(multiThread(4), src, "big.dump", local)
 		if err != nil {
 			t.Fatalf("CopyToLocal: %v", err)
 		}
-		opened := acceptedLogins(t, f) - before
+		opened := f.AcceptedLogins(t) - before
 		if res.BytesTransferred != int64(len(content)) {
 			t.Errorf("BytesTransferred = %d, want %d", res.BytesTransferred, len(content))
 		}
@@ -550,7 +489,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 				deadlined, cancel := context.WithTimeout(ctx, budget)
 				defer cancel()
 
-				src := f.Source("ceiling", "ceiling")
+				src := f.TransportSource("ceiling", "ceiling")
 				src.MaxConnections = ceiling
 
 				start := time.Now()

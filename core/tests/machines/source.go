@@ -542,17 +542,32 @@ var (
 func (f *Source) ensureSourceImage(t *testing.T) string {
 	t.Helper()
 	imageOnce.Do(func() {
-		sum := sha256.Sum256([]byte(SourceDockerfile))
+		text := sourceDockerfile(t)
+		sum := sha256.Sum256([]byte(text))
 		tag := "rclone-manager-machines-source:" + hex.EncodeToString(sum[:6])
 		f.setStage("docker image inspect " + tag)
 		if _, _, err := dockerRun(imageInspectTimeout, "image", "inspect", tag); err == nil {
 			imageRef = tag
 			return
 		}
+		// A directory rather than `docker build -`, because the watchdog
+		// below reads `--progress=plain` off a real build context and
+		// because that is what two-machine-backup.sh builds too.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(text), 0o644); err != nil {
+			imageErr = fmt.Errorf("staging the source machine Dockerfile: %w", err)
+			return
+		}
 		f.setStage("docker build " + tag + " (the source machine, once per daemon)")
-		_, errOut, err := dockerRunStdin(dockerBuildTimeout, SourceDockerfile, "build", "-q", "-t", tag, "-")
+		// No context deadline. The bound is derived from this build's own
+		// pace (#309): a flat ceiling on a 4 CPU Docker VM under four
+		// concurrent gate lanes is exactly the number that cannot tell a
+		// busy machine from a stuck one, and a context deadline firing
+		// produces the bare "signal: killed" that issue filed as
+		// unreadable.
+		out, err := runDockerBuildWatched(context.Background(), defaultDockerBuildBounds, dockerBuildPoll, tag, dir)
 		if err != nil {
-			imageErr = fmt.Errorf("building the source machine image %s: %w\n%s", tag, err, errOut)
+			imageErr = fmt.Errorf("building the source machine image %s: %w\n%s", tag, err, out)
 			return
 		}
 		imageRef = tag
@@ -561,6 +576,41 @@ func (f *Source) ensureSourceImage(t *testing.T) string {
 		t.Fatalf("machines: %v\nThat is a FAILURE and deliberately not a skip: skipping would take the whole machine tier out of the gate while the gate went on reporting ok (#160).", imageErr)
 	}
 	return imageRef
+}
+
+// dockerBuildPoll is how often the build watchdog re-reads the bounds it
+// derived from this build's own pace.
+const dockerBuildPoll = 200 * time.Millisecond
+
+// sourceDockerfile reads scripts/e2e/source-machine.Dockerfile, which is
+// the one definition of the simulated VPS (#451): the same file
+// scripts/e2e/two-machine-backup.sh builds its own source machine from.
+//
+// Read rather than restated as a constant here, because a constant and a
+// file are two definitions however carefully they are kept equal, and a
+// tag derived from a digest of the text means a changed file is a new
+// image rather than a stale one for free.
+//
+// A missing file is a refusal and not a skip, for ensureImage's reason: a
+// machine tier that cannot build its own machine has to say so.
+func sourceDockerfile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), "scripts", "e2e", "source-machine.Dockerfile")
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s machines: the source machine Dockerfile is not readable at %s: %v\nThat file is the one definition of the simulated VPS, shared with scripts/e2e/two-machine-backup.sh, so without it there is no machine tier to run.", infraMarker, path, err)
+	}
+	if len(bytes.TrimSpace(text)) == 0 {
+		t.Fatalf("%s machines: %s is empty, so there is no source machine to build.", infraMarker, path)
+	}
+	return string(text)
+}
+
+// repoRoot is two directories above core/tests, which is where testsRoot
+// points.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	return filepath.Dir(filepath.Dir(testsRoot(t)))
 }
 
 // ensureImage puts ref on the local daemon before anything tries to run a
@@ -1208,6 +1258,29 @@ func (f *Source) EstablishedConnections(t *testing.T) int {
 		t.Fatalf("machines: counting established connections: netstat produced %q, which is not a count: %v", out, convErr)
 	}
 	return n
+}
+
+// ConnectionTable is the source's own `netstat -tn`: peers and states
+// rather than a count.
+//
+// It is what a failed drain assertion gets to be read with. A count cannot
+// be argued with, only stared at; the table says which side a survivor is
+// on, which is the whole question and is not answerable from a number.
+//
+// Deliberately soft: it only ever runs on a path that has already failed,
+// so it returns whatever it managed to say rather than failing the test
+// again. A diagnostic that replaces the failure it was printed to explain
+// is worse than no diagnostic at all.
+func (f *Source) ConnectionTable(t *testing.T) string {
+	t.Helper()
+	out, errOut, err := dockerRun(dockerProbeTimeout, "exec", f.ContainerID(), "sh", "-c", "netstat -tn")
+	if err != nil {
+		return fmt.Sprintf("(the connection table could not be read from %s: %v\n%s)", f.ContainerID(), err, errOut)
+	}
+	if strings.TrimSpace(out) == "" {
+		return "(no output: the container reported an empty TCP table)"
+	}
+	return out
 }
 
 // AcceptedLogins counts the successful SSH logins sshd has recorded since

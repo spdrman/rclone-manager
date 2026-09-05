@@ -36,7 +36,7 @@
 // an SFTP account with no shell access (the same restricted posture FR-6
 // asks for) must fail with an explicit capability error, never a silent
 // downgrade of configured verification.
-package rclone
+package machinegate_test
 
 import (
 	"bytes"
@@ -53,12 +53,13 @@ import (
 	"github.com/rclone/rclone/fs/accounting"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 func TestPhase1Gate(t *testing.T) {
-	f := sftpfixture.Start(t)
-	a := New()
+	f := machines.Start(t).Source(t)
+	a := rclone.New()
 
 	src := func() transport.Source {
 		return transport.Source{
@@ -302,17 +303,4 @@ func TestPhase1Gate(t *testing.T) {
 		}
 		t.Logf("RemoteHash correctly returned an explicit capability error instead of a silent success: %v", err)
 	})
-}
-
-func alreadyCancelledContext() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return ctx
-}
-
-func writeUploadFile(t *testing.T, f *sftpfixture.Fixture, name string, content []byte) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(f.UploadDir, name), content, 0o644); err != nil {
-		t.Fatalf("seed %s: %v", name, err)
-	}
 }

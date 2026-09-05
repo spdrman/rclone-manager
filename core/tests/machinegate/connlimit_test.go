@@ -12,14 +12,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/rclone/rclone/backend/sftp"
 	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/walk"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
@@ -74,36 +72,6 @@ func seedTree(t *testing.T, root string) {
 // scratchArtifact is the one file the manager is allowed to delete.
 const scratchArtifact = "scratch.dump"
 
-// rcloneAtItsOwnDefaults builds an sftp Fs the way rclone would if nobody
-// had thought about connection counts: no `connections` option, so the
-// backend opens one per concurrent lister.
-//
-// It is deliberately NOT this adapter's own Fs. The point of the control is
-// that the WORKLOAD wants more connections than the cap allows, and an Fs
-// built by the code under test would be proving the opposite thing.
-func rcloneAtItsOwnDefaults(t *testing.T, ctx context.Context, src *machines.Source, root string) fs.Fs {
-	t.Helper()
-	info, err := fs.Find("sftp")
-	if err != nil {
-		t.Fatalf("the sftp backend is not registered in this test binary, so there is no control to compare against: %v", err)
-	}
-	f, err := info.NewFs(ctx, "cap-control", root, configmap.Simple{
-		"host":             src.Host,
-		"port":             strconv.Itoa(src.Port),
-		"user":             src.User,
-		"key_file":         src.KeyFile,
-		"known_hosts_file": src.KnownHostsFile,
-		"subsystem":        "sftp",
-		"chunk_size":       "32Ki",
-		"concurrency":      "64",
-		"idle_timeout":     "60s",
-	})
-	if err != nil {
-		t.Fatalf("building the control Fs against %s: %v", src.Addr(), err)
-	}
-	return f
-}
-
 // shutdownAndDrain closes the control Fs's connection pool and waits for
 // the server to agree that it has.
 //
@@ -115,11 +83,7 @@ func rcloneAtItsOwnDefaults(t *testing.T, ctx context.Context, src *machines.Sou
 // function is the fix.
 func shutdownAndDrain(t *testing.T, src *machines.Source, f fs.Fs) {
 	t.Helper()
-	if sd, ok := f.(fs.Shutdowner); ok {
-		if err := sd.Shutdown(context.Background()); err != nil {
-			t.Fatalf("shutting the control Fs down: %v", err)
-		}
-	}
+	shutdownFs(context.Background(), f)
 	deadline := time.Now().Add(drainBudget)
 	for {
 		open := src.EstablishedConnections(t)
@@ -155,7 +119,7 @@ func wideWalk(t *testing.T, ctx context.Context, src *machines.Source) (found in
 	ci.Checkers = 8
 	ci.LowLevelRetries = 1
 
-	f := rcloneAtItsOwnDefaults(t, wide, src, "upload/tree")
+	f := rawSFTPFs(t, wide, src, "tree")
 	before := src.AcceptedLogins(t)
 	objs, _, err := walk.GetAll(wide, f, "", true, -1)
 	found, logins = len(objs), src.AcceptedLogins(t)-before
