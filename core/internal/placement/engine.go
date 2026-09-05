@@ -262,10 +262,11 @@ type Outcome struct {
 // move an artifact, as opposed to something failing.
 //
 // It is the question every caller of RunCycle actually has. A refused plan
-// is normal (an artifact with two ACTIVE copies, a medium-to-medium hop, a
-// destination whose storage class cannot support the verification its
-// medium requires), and a cycle full of them is a configuration to look
-// at, not an incident. A journal that will not open is an incident.
+// is normal (an artifact with two ACTIVE copies, a destination whose
+// storage class cannot support the verification its medium requires, a
+// medium-to-medium hop on a deployment with nowhere to stage the copy),
+// and a cycle full of them is a configuration to look at, not an
+// incident. A journal that will not open is an incident.
 func (o Outcome) PolicyRefusal() bool { return errors.Is(o.Err, ErrNotEligible) }
 
 // CycleReport is what one RunCycle did.

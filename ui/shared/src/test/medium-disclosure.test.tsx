@@ -147,10 +147,19 @@ describe("mapping a retention tier to a storage medium", () => {
     const options = Array.from(picker.options).map((o) => o.textContent);
     expect(options).toContain("Local backup root");
     expect(options).toContain("offsite_s3 (STANDARD_IA)");
-    // The archive medium is labelled as one BEFORE it is chosen. An
-    // operator who picks it blind finds out hours later, holding a restore
-    // request they did not know they needed.
-    expect(options).toContain("offsite_cold (DEEP_ARCHIVE, needs a restore to read)");
+    // The archive medium is labelled as one BEFORE it is chosen, and it
+    // cannot be chosen at all. A tier bound to an archive class is refused
+    // when the config loads, because a copy written to one is archived the
+    // instant it lands and the move can never be verified, so offering the
+    // choice and refusing the save afterwards is a trap. It stays on the
+    // list rather than being hidden: declaring such a medium is legal and
+    // is how an operator restores objects already on it.
+    expect(options).toContain("offsite_cold (DEEP_ARCHIVE, cannot receive backups: reads need a restore)");
+    const archived = Array.from(picker.options).find((o) => o.value === "offsite_cold");
+    expect(archived?.disabled).toBe(true);
+    // And the control, so this is not passing because every option is
+    // disabled: the one a tier CAN deliver to is selectable.
+    expect(Array.from(picker.options).find((o) => o.value === "offsite_s3")?.disabled).toBe(false);
   });
 
   it("shows the deletion consequence, in the backend's own words, before the first mapping can be saved", async () => {

@@ -239,7 +239,17 @@ export function TierRow({
           backup. The class is part of the choice, not decoration: one of
           these places cannot be read without a restore, and an operator
           picking blind would find that out hours later, holding a restore
-          request they did not know they needed. */}
+          request they did not know they needed.
+
+          A medium whose reads need a restore is listed and NOT selectable.
+          The server refuses a tier bound to one when the config loads
+          (#442): a copy written to an archive class is archived the
+          instant it lands, so the move can never be verified and the tier
+          can never take delivery. Offering the choice and then refusing
+          the save is a trap, and hiding the medium is worse: an operator
+          who declared it wants to know it is there, and it IS legal to
+          declare one and restore from it by hand. So it stays on the list,
+          greyed out, saying why. */}
       {mediums.length > 0 ? (
         <Field label="Stored on" help={FIELD_HELP.tierMedium}>
           {(helpId) => (
@@ -253,8 +263,12 @@ export function TierRow({
             >
               <option value="">Local backup root</option>
               {mediums.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id + " (" + m.storageClass + (m.readsRequireRestore ? ", needs a restore to read" : "") + ")"}
+                <option key={m.id} value={m.id} disabled={m.readsRequireRestore}>
+                  {m.id +
+                    " (" +
+                    m.storageClass +
+                    (m.readsRequireRestore ? ", cannot receive backups: reads need a restore" : "") +
+                    ")"}
                 </option>
               ))}
             </select>
