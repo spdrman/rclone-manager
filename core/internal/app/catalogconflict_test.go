@@ -67,6 +67,13 @@ func readSidecar(t *testing.T, path string) recovery.Manifest {
 	return m
 }
 
+// rewriteSidecar replaces a manifest the product wrote with one that disagrees
+// with the journal, which is how every conflict in this file is planted.
+//
+// It encodes through recovery.EncodeManifest rather than writing JSON by hand,
+// so the planted file is one the reader would genuinely accept. A hand-written
+// sidecar that failed to parse would be reported as a manifest error, and the
+// test would pass without ever reaching the conflict path it is named after.
 func rewriteSidecar(t *testing.T, path string, m recovery.Manifest) {
 	t.Helper()
 	data, err := recovery.EncodeManifest(m)

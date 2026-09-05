@@ -44,6 +44,14 @@ type committedFixture struct {
 	localDir string
 }
 
+// newCommittedFixture drives one artifact through the real pipeline to a
+// committed state with a real file and a real recorded hash underneath it.
+//
+// Every case in this file and in validatemedium_test.go starts here, and it
+// goes through the product rather than writing the row, because what `validate`
+// re-checks is the hash lifecycle recorded at verification. A hand-written
+// baseline would prove that the check agrees with the fixture, which is the one
+// thing nobody needs to know.
 func newCommittedFixture(t *testing.T) committedFixture {
 	t.Helper()
 	localDir := t.TempDir()

@@ -34,6 +34,13 @@ import (
 // proving the loop skips what it should and keeps going through what it
 // should not.
 
+// testConfig builds the hand-made config.Config these tests run against, and
+// then resolves it the way config.Validate would.
+//
+// The resolve step is the part that matters and it is easy to leave out; see
+// resolveTestRetention just below for what a set left at the zero Retention
+// actually is. Anything constructing a config.Config directly rather than
+// through here inherits that trap.
 func testConfig(t *testing.T, sources ...config.Source) *config.Config {
 	t.Helper()
 	c := &config.Config{Sources: sources, Retention: testRetention()}
@@ -87,6 +94,8 @@ func testRetention() config.Retention {
 	}
 }
 
+// testSource wraps backup sets in a named source, since FR-7 makes identity
+// source-plus-set and nothing in this package accepts a bare set.
 func testSource(name string, backupSets ...config.BackupSet) config.Source {
 	return config.Source{Name: name, BackupSets: backupSets}
 }

@@ -55,6 +55,14 @@ type quarantinedFixture struct {
 	localDir string
 }
 
+// newQuarantinedFixture drives an artifact through the real pipeline and then
+// into the quarantine state the caller names.
+//
+// The target is a parameter because QUARANTINED and QUARANTINED_LOST are
+// reached from different places and mean different things: one still has a
+// source to re-ingest from and the other does not, which is the distinction
+// half the refusals in this file turn on. A fixture that only ever produced one
+// of them would let a refusal that never fires look like a refusal that works.
 func newQuarantinedFixture(t *testing.T, target lifecycle.State) quarantinedFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -387,6 +395,12 @@ func newReinstatableFixture(t *testing.T) quarantinedFixture {
 	return quarantinedFixture{svc: svc, journal: journal, artifact: rec.Artifact, localDir: localDir}
 }
 
+// transitionRows counts everything in the append-only log, so a test can assert
+// that an action wrote nothing at all.
+//
+// Counting rows rather than inspecting the artifact is the point: "revalidate
+// reports and writes nothing" is a claim about the log, and an artifact whose
+// state is unchanged can still have collected an audit write on the way past.
 func transitionRows(t *testing.T, j Journal) int {
 	t.Helper()
 	rows, err := j.(*state.Journal).RecentActivity(context.Background(), 1000)
@@ -600,6 +614,13 @@ func TestReinstateQuarantined_RefusesAPassingValidatorWhenTheHashNoLongerMatches
 	}
 }
 
+// testBackupSetWithValidator is the standard backup set plus a real FR-13
+// restore-test command, for the cases where the point is that the validator
+// actually ran.
+//
+// It takes a script path rather than a canned command because reinstatement
+// asks for evidence that COULD have failed, so those tests need to control
+// whether the validator passes, from outside the product.
 func testBackupSetWithValidator(t *testing.T, localDir, script string) config.BackupSet {
 	t.Helper()
 	bs := testBackupSet(t, localDir)

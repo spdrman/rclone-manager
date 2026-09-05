@@ -38,6 +38,15 @@ import (
 // fresh path, and a delete left half-done by a previous cycle needed a
 // second cycle to resume it, which no single-pass test would ever reach.
 
+// testBackupSet is the backup set almost every test in this package starts
+// from: one include pattern, the rename completion strategy, and a caller-
+// supplied local directory.
+//
+// The local directory is a parameter rather than a t.TempDir() call inside,
+// because a test with two backup sets needs two roots and sharing one is how
+// a fixture quietly proves that two sets can write over each other. Callers
+// that need a different shape mutate the returned value rather than growing
+// this signature, so the default stays readable.
 func testBackupSet(t *testing.T, localDir string) config.BackupSet {
 	t.Helper()
 	return config.BackupSet{
@@ -50,6 +59,18 @@ func testBackupSet(t *testing.T, localDir string) config.BackupSet {
 	}
 }
 
+// discoverOneRecord runs the real discovery pass and returns the single
+// record it produced, failing the test if it produced any other number.
+//
+// Going through internal/discovery rather than writing a DISCOVERED row by
+// hand is what makes the tests built on it mean anything: the row carries
+// whatever discovery actually records today, so a change to that shape shows
+// up as a pipeline test failing rather than as a fixture that has quietly
+// stopped resembling production.
+//
+// Insisting on exactly one is the guard that keeps the return value honest.
+// A fixture that discovered two artifacts would otherwise hand back whichever
+// came first out of a map.
 func discoverOneRecord(t *testing.T, ctx context.Context, journal Journal, tr transport.Transport, source transport.Source, bs config.BackupSet) state.Record {
 	t.Helper()
 	res, err := discovery.Discover(ctx, discovery.Deps{Transport: tr, Journal: journal, Now: fixedNow(epoch)}, source, bs)
@@ -62,6 +83,14 @@ func discoverOneRecord(t *testing.T, ctx context.Context, journal Journal, tr tr
 	return res.Discovered[0]
 }
 
+// epoch is the instant almost every test in this package pins its clock to,
+// through fixedNow. A fixed instant rather than time.Now is what makes
+// retention verdicts reproducible: GFS tiers are anchored on the civil date
+// an instant falls in, so a suite reading the real clock would decide
+// differently either side of midnight and either side of a DST change.
+//
+// It is deliberately in UTC and deliberately midday, so no arithmetic a test
+// does to it lands on a day boundary by accident.
 var epoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
 // TestProcessArtifact_ShutdownAfterCommit_NeverCallsDeleteRemote is this

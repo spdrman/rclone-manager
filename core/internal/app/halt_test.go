@@ -23,6 +23,14 @@ import (
 // recorded, a later connection clearing it, and a failure that says nothing
 // about the connection leaving it exactly as it was.
 
+// The three refusals FR-22 says are evidence about the connection itself,
+// each built as the classified transport.Error the adapter would really
+// produce.
+//
+// They are three constructors rather than one with a category parameter
+// because the category is the thing under test: haltReasonFor maps each to its
+// own durable reason, and a single parameterised builder invites a test that
+// passes the same category twice and proves half of what it says it does.
 func hostKeyRefusal() error {
 	return transport.NewError(transport.HostVerification, "list",
 		errors.New("knownhosts: key mismatch for prod-db-01.internal"))

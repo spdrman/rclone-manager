@@ -78,6 +78,14 @@ type validateMedium struct {
 	checksums int
 }
 
+// newValidateMedium is the medium store these tests check copies against: an
+// in-memory bucket, plus three per-key failure switches.
+//
+// The switches are per KEY rather than per store, which is what makes the
+// interesting cases expressible at all. Most of what this file proves is about
+// an artifact with more than one copy, where one medium answers and another
+// does not, and a store that either works or does not cannot pose that
+// question.
 func newValidateMedium() *validateMedium {
 	return &validateMedium{objects: map[string][]byte{}, downFor: map[string]bool{}, timeoutFor: map[string]bool{}, cancelFor: map[string]bool{}}
 }
@@ -88,6 +96,14 @@ func (m *validateMedium) put(key, content string) {
 	m.objects[key] = []byte(content)
 }
 
+// unreachable is a bucket that did not answer: Transient, with a refused dial
+// underneath it.
+//
+// It is a real transport.Error rather than a bare errors.New because the code
+// under test asks transport.CategoryOf before it asks the context anything,
+// and an unclassified error takes a different path through isCancelledErr.
+// A double that skipped the classification would exercise the wrong branch and
+// still look like a network failure.
 func (m *validateMedium) unreachable() *transport.Error {
 	return &transport.Error{
 		Category: transport.Transient, Op: "stat",
@@ -267,11 +283,29 @@ func moveToMedium(t *testing.T, f committedFixture, store *validateMedium, class
 	return movedFixture{committedFixture: f, store: store, key: key, content: content, hash: before.LocalHash}
 }
 
+// newMovedFixture is the default shape of a completed move: an artifact that
+// really went through commit, whose local file is then removed, its local
+// placement retired to GONE, and a verified copy left on a standard-class
+// medium.
+//
+// Building it by moving a genuine committed artifact rather than by writing
+// the end state into the journal is what makes the tests on top of it worth
+// running: the placements are the ones lifecycle actually wrote, so a change
+// to what a move leaves behind surfaces here instead of quietly diverging from
+// the fixture.
 func newMovedFixture(t *testing.T) movedFixture {
 	t.Helper()
 	return moveToMedium(t, newCommittedFixture(t), newValidateMedium(), config.StorageClassStandard, true)
 }
 
+// mustStayComplete asserts the artifact was left exactly as it was: still
+// COMPLETE, and with no COMPLETE to QUARANTINED_LOST edge in the log.
+//
+// Both halves are needed. The state alone would pass against an implementation
+// that quarantined the artifact and then put it back, and the missing edge is
+// the specific damage issue #434 did: a moved artifact marked lost over a copy
+// that was there and verified. Checking the append-only log is how a quarantine
+// that happened cannot be hidden by whatever happened after it.
 func mustStayComplete(t *testing.T, f movedFixture) {
 	t.Helper()
 	ctx := context.Background()

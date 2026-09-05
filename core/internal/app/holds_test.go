@@ -277,6 +277,17 @@ type windowHolds struct {
 
 func newWindowHolds() *windowHolds { return &windowHolds{changed: make(chan struct{})} }
 
+// Held answers the watcher's question and then, on the way out of the very
+// first one, places a hold.
+//
+// That ordering is the entire double. The watcher reads Changed() and then
+// Held(), and the bug being hunted is a hold that lands between the two: the
+// broadcast fires while nothing is listening on it yet, and the cancellation
+// is lost until some unrelated later hold happens to wake the goroutine.
+// Answering false and immediately planting drops a hold in exactly that gap,
+// every run, with no sleep to race.
+//
+// The plant happens outside the lock because plantHold takes it too.
 func (h *windowHolds) Held(string) bool {
 	h.mu.Lock()
 	answer := h.held

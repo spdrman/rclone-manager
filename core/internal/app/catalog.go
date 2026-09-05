@@ -424,6 +424,13 @@ func manifestConflicts(rec state.Record, m recovery.Manifest) []string {
 	return out
 }
 
+// validationUpdateFrom carries a sidecar's FR-13 validation outcome onto a
+// reconstructed row, and carries nothing when the sidecar recorded none.
+//
+// A nil ValidationPassed and a false one are different facts and the nil
+// pointer is what keeps them apart: nothing ran, against it ran and failed.
+// Flattening them would let a rebuild write "this artifact failed its
+// restore test" onto every artifact whose manifest predates the field.
 func validationUpdateFrom(m recovery.Manifest) *state.ValidationUpdate {
 	if m.ValidationPassed == nil {
 		return nil
