@@ -1,3 +1,18 @@
+/**
+ * What retention is about to do, shown in full before any of it happens.
+ *
+ * The plan is issued by the server and immutable. This dialog never
+ * recomputes it, never filters it and never applies a subset: an operator
+ * confirms the exact deletion set they were shown, or nothing happens.
+ * That is why staleness matters enough to have a mechanism of its own,
+ * and why a stale plan disables apply rather than quietly fetching a
+ * fresh one, which would mean confirming a list nobody read.
+ *
+ * Everything shown here is per artifact, with the tiers that kept it and
+ * what selected it for each. A summary count would be smaller and would
+ * remove the only thing that lets an operator notice that the one backup
+ * they care about is on the wrong side of the line.
+ */
 import { useEffect, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";

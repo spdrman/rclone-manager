@@ -1,3 +1,19 @@
+/**
+ * The artifacts that failed a check, and the three things that can be done
+ * about them.
+ *
+ * There is no "delete the remote original anyway" here and there will not
+ * be. A quarantined artifact is one this manager could not confirm, and
+ * the remote copy is the only thing standing between that and data loss.
+ *
+ * The rest of the file is about telling outcomes apart. Reinstatement can
+ * fail, be refused, or succeed, and those are three different facts: a
+ * failure is a broken request, a refusal is a verdict about the backup
+ * that arrived intact, and only success changes the list. They get three
+ * renderings and two different ARIA roles, because reading a refusal as a
+ * failure sends an operator to retry something that was answered
+ * correctly.
+ */
 import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import type { AsyncState } from "@shared/hooks/useAsync";

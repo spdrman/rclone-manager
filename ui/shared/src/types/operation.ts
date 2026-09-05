@@ -1,3 +1,19 @@
+/**
+ * What is happening now and what has happened: operations, their live
+ * progress, the activity log, and the system health summary.
+ *
+ * The organising rule here is that nothing describes work that has not
+ * been measured. There is no field for how far through a whole run cycle
+ * the service is, because a cycle discovers what it will do as it goes and
+ * no honest denominator exists before it ends. There is no uptime, no cost
+ * and no restore estimate, for the same reason in three other places.
+ *
+ * That rule is not an aspiration, it is a repair. Nine displayed fields
+ * that nothing computed were removed from this file at once, and the
+ * shapes below are written so the mistake is harder to repeat: an optional
+ * field means the service genuinely may not report it, and a surface has
+ * to handle the absence rather than default it.
+ */
 export type OperationKind =
   | "transfer"
   | "validation"
@@ -86,6 +102,16 @@ export interface TransferProgress {
   bytesPerSecond?: number;
 }
 
+/**
+ * One durable record of work the service did or is doing.
+ *
+ * Durable is the word that matters. This survives the process that started
+ * it, which is why `status` and `progress` are separate and why both
+ * `progress` and `cycle` are nullable: the record outlives the live
+ * reading, and an operation swept to failed after a restart has a status
+ * and no measurements. Each of those nulls is argued for at the field,
+ * because the tempting default for both is a zero that makes a claim.
+ */
 export interface Operation {
   id: string;
   setId: string;
@@ -200,8 +226,16 @@ export function progressPercent(progress: TransferProgress): number | null {
   return Math.max(0, Math.min(100, pct));
 }
 
+/** How loudly an activity entry should read. `info` and `ok` are both
+ *  "nothing is wrong" and are ranked equally by the Activity page's
+ *  filter, which is why that control offers a threshold rather than a
+ *  checkbox per value. */
 export type Severity = "info" | "ok" | "warn" | "error";
 
+/** What happened, as a closed vocabulary. It reads as the lifecycle in
+ *  order and then the departures from it: the first seven trace one backup
+ *  from noticed to retained, and the last four are the failures and the
+ *  deployment-level changes that interrupt that story. */
 export type ActivityEventType =
   | "backup-discovered"
   | "transfer-started"
@@ -215,6 +249,11 @@ export type ActivityEventType =
   | "storage-critical"
   | "configuration-updated";
 
+/** One line in the log. `text` and `detail` are separate so a list can
+ *  render the sentence prominently and the specifics quietly, and
+ *  `correlationId` is carried on every entry, not only on failures, so any
+ *  line here can be traced into the service's own log. `setId` is null for
+ *  the events that belong to the deployment rather than to a set. */
 export interface ActivityEvent {
   id: string;
   at: string;

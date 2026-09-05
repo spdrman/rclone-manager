@@ -1,3 +1,18 @@
+/**
+ * Live operation progress, with no page fetching anything.
+ *
+ * Every case here drives the screen by committing to the shared node and
+ * then asserting that both pages moved, which is the only way to tell a
+ * genuinely shared read from two coincidentally-agreeing fetches. The
+ * agreement case goes further and asserts the two pages observe the
+ * identical list rather than an equal one, because two independent
+ * requests would pass equality on any quiet fixture.
+ *
+ * The last two are about honest gaps. A failed fetch has to appear as a
+ * stated notice rather than as a confident empty list, and a node that has
+ * never resolved has to read as still checking rather than as idle, since
+ * "nothing is running" is a claim and neither situation supports it.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";

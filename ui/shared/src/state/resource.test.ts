@@ -1,3 +1,13 @@
+/**
+ * The two failure modes resource.ts exists to prevent, driven directly.
+ *
+ * Both are invisible to types and to a casual read. The stale-response
+ * cases resolve their promises deliberately out of order, which is the
+ * only way to distinguish "the last response wins" from "the last call
+ * wins", and the identity cases assert on object identity rather than on
+ * equality, because equality passes either way and identity is what the
+ * polling interval upstream actually depends on.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { graph, resetGraphForTests } from "./graph";

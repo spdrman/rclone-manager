@@ -1,3 +1,15 @@
+/**
+ * The three situations that used to render identically as a bar sitting at
+ * zero, told apart.
+ *
+ * A finished operation, an operation left behind by a restart, and a
+ * transfer whose artifact size is unknown are all "no percentage to show",
+ * and a zero-width bar claims something different from each of them: that
+ * a transfer exists, is measured, and has moved nothing. So each case
+ * asserts what is on screen INSTEAD, and the indeterminate one asserts
+ * that the value attribute is absent rather than zero, since that absence
+ * is what ARIA means by indeterminate.
+ */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { OperationProgress } from "@shared/components/OperationProgress";

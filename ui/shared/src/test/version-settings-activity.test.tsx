@@ -1,3 +1,20 @@
+/**
+ * Two pages that used to fetch what the app already knew, and the controls
+ * that used to pretend to do things.
+ *
+ * The version cases prove Settings reads the shared node rather than
+ * asking again, and they assert identity across the compatibility
+ * derivation as well, because two independent reads of a quiet endpoint
+ * agree by luck and diverge exactly when it matters. The loading and
+ * failure cases cover the same gap the rest of this suite keeps returning
+ * to: a blank panel is a claim, and neither "not yet" nor "could not" is
+ * blank.
+ *
+ * The removal cases assert absence, which only works if the thing asserted
+ * about is named precisely. Each one names a control that existed, looked
+ * finished and saved nowhere, so a future page cannot quietly reintroduce
+ * it under the same label.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";

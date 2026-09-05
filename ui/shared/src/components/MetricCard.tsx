@@ -1,3 +1,13 @@
+/**
+ * One number with its label, sized to be read across a room.
+ *
+ * A right border rather than a gap between cells is what makes a row of
+ * these read as one instrument panel: the enclosing `.card` hides its
+ * overflow, so the last divider lands on the card's edge and vanishes,
+ * and adding or removing a metric needs no change here. `children` is for
+ * the metrics that carry a gauge or a badge under the figure, which is
+ * why this is a component rather than a helper returning a string.
+ */
 export function MetricCard({
   label,
   value,

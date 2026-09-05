@@ -1,15 +1,57 @@
+/**
+ * What a backup set, a backup and a retention decision are, as this
+ * frontend understands them.
+ *
+ * Almost every declaration here carries a note, and reading a few of them
+ * shows what the file is actually for. It is not a transcription of the
+ * wire: client.ts does that, and the generated bindings hold the wire's
+ * own shapes. What these types add is the meaning an absence has, which no
+ * generated schema can carry.
+ *
+ * That is the thread running through the file. An optional field here is
+ * optional because absence says something a value could not, and the doc
+ * beside it says what: no halt reason on record is not "reachable", a copy
+ * with no verification class is not a weakly verified copy, a verdict with
+ * no medium is not a verdict about local storage. Several of these fields
+ * were required booleans once, filled in by the mapper with a literal
+ * false, which turned "nobody said" into a claim and put it on screen.
+ *
+ * The other recurring decision is which vocabularies are closed. Health
+ * states and completion methods are closed because the product defines
+ * them; retention tiers are open because an operator defines them, and
+ * anything narrowing an open vocabulary onto a closed one refuses rather
+ * than guessing.
+ */
 import type { RetentionSettings } from "@shared/api/contracts";
 import type { WirePlacement } from "@shared/api/generated/contract";
 
+/** The service's verdict on one backup set, or on all of them together.
+ *  Four values rather than a boolean because "stale" and "failing" call
+ *  for different actions: one set has not run recently enough, the other
+ *  ran and did not work. */
 export type HealthState = "healthy" | "degraded" | "stale" | "failing";
 
+/** How this manager decides a remote file has finished being written.
+ *  The order here is the order of assurance: the first two are signals a
+ *  producer sends deliberately, and the last one is an inference from a
+ *  file that stopped changing, which is why choosing it makes the UI say
+ *  so and makes the stable-size window a required companion. */
 export type CompletionMethod =
   | "atomic-rename"
   | "completion-marker"
   | "stable-size";
 
+/** The CLOSED badge vocabulary used to describe a backup. The tier chain
+ *  itself is open and operator-defined, so this is deliberately not the
+ *  same thing as a tier name: a tier this build has never heard of maps to
+ *  no class at all rather than being forced into one, and "protected" in
+ *  particular is a promise that retention will never delete this backup. */
 export type RetentionClass = "daily" | "weekly" | "monthly" | "protected";
 
+/** Which checks a backup set runs. They stack rather than replace each
+ *  other: the transfer arriving intact, the bytes matching a digest, and
+ *  the artifact being something the application would accept are three
+ *  separate claims, and a set can make any subset of them. */
 export type ValidationKind = "transfer" | "checksum" | "application";
 
 /**
@@ -210,6 +252,18 @@ export interface BackupPlacement {
   status: WirePlacement["status"];
 }
 
+/**
+ * One backup: the file itself, where it came from, what has been proved
+ * about it, and where its copies are.
+ *
+ * The timestamps are the spine and they are recorded rather than derived.
+ * `producedAt` is when the remote signalled the file was finished,
+ * `receivedAt` is when this manager had it, and `remoteSourceRemovedAt` is
+ * the only one that can be null on an otherwise-healthy backup, because
+ * the original outlives the copy until the copy is verified and durably
+ * committed. A surface that computed any of these from another would be
+ * able to draw a deletion that has not happened.
+ */
 export interface BackupArtifact {
   id: string;
   setId: string;
@@ -240,6 +294,11 @@ export interface BackupArtifact {
   placements: BackupPlacement[];
 }
 
+/** The closed bucket a quarantined backup falls into, derived from the
+ *  backend's own diagnostic sentence for badging and filtering. The
+ *  sentence itself is kept beside it (QuarantineRecord.detail): the bucket
+ *  is what a list can group by, and the sentence is what actually tells an
+ *  operator what was found. */
 export type QuarantineReason =
   | "checksum-mismatch"
   | "validation-failed"
@@ -247,6 +306,10 @@ export type QuarantineReason =
   | "remote-identity-changed"
   | "incomplete-transfer";
 
+/** Why one backup was set aside, in both forms: the category a surface
+ *  can badge, and the words the backend recorded. Present only on an
+ *  artifact that is actually quarantined, so its absence is the ordinary
+ *  case rather than a missing field. */
 export interface QuarantineRecord {
   reason: QuarantineReason;
   /**
@@ -317,6 +380,10 @@ export interface RetentionTierSelection {
   selectedBy: RetentionTierPlacement;
 }
 
+/** What retention decided about one backup, and why. Every verdict in a
+ *  plan is shown, keep and delete alike, because a plan is confirmed as a
+ *  whole and an operator noticing that the wrong backup is on the delete
+ *  side is the entire point of showing it before it runs. */
 export interface RetentionVerdict {
   /** The artifact's filename within its backup set, not an opaque id
    *  (service.RetentionArtifactVerdict.Artifact is v.Artifact.Name). */

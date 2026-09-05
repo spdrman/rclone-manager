@@ -1,3 +1,24 @@
+/**
+ * The interface between this frontend and any backend that can serve it:
+ * `BackupManagerApi` at the bottom of the file, and every request and
+ * response type its methods name.
+ *
+ * Two implementations satisfy it, `httpApi` in client.ts and the fixtures
+ * in mock.ts, and the split matters more than it looks. Because pages
+ * depend on this file and never on client.ts, the whole UI can be
+ * exercised against fixtures without a service, and a page cannot reach
+ * for a field the contract does not promise.
+ *
+ * Nothing here is a snake_case wire shape. These are the camelCase domain
+ * types the app speaks; client.ts owns the translation, and the generated
+ * bindings own the wire. What this file adds on top of the generated
+ * module is the shape of a CONVERSATION rather than of a payload: which
+ * request fields go together, which answers can be absent and what an
+ * absence means, and which values are references rather than secrets. The
+ * per-declaration notes carry that, and several of them record a refusal
+ * the service will produce if a caller gets it wrong, because the type
+ * alone cannot say "the server rejects this combination".
+ */
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
 import type { ApiErrorCode } from "./generated/contract";
 import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
@@ -60,6 +81,10 @@ export function toApiErrorCode(value: unknown): ApiErrorCode {
     : "unknown";
 }
 
+/** A refusal, as the service states it. `message` is already written for
+ *  an operator rather than for a log, which is why the default path in
+ *  api/failure.ts shows it verbatim: a reason nobody anticipated still
+ *  beats a reason this frontend invented. */
 export interface ApiError {
   code: ApiErrorCode;
   /** Operator-facing sentence. Already human. */
@@ -69,6 +94,9 @@ export interface ApiError {
   correlationId: string;
 }
 
+/** The typed envelope, thrown. It extends Error so an unprepared caller
+ *  still gets something with a readable message, and carries `api` so a
+ *  prepared one can branch on the code and quote the correlation id. */
 export class BackupManagerError extends Error {
   constructor(readonly api: ApiError) {
     super(api.message);
@@ -76,6 +104,10 @@ export class BackupManagerError extends Error {
   }
 }
 
+/** What a read-only catalog scan found, before anything is written. The
+ *  three counts are what the confirmation is built on: an operator agrees
+ *  to a specific number of artifacts being adopted and a specific number
+ *  needing a look, never to "recover the catalog". */
 export interface CatalogScanPreview {
   discovered: number;
   valid: number;
@@ -174,6 +206,17 @@ export interface EditHoldTaken {
   stopped: RunningWork | null;
 }
 
+/**
+ * Everything needed to create a backup set, in one request.
+ *
+ * Two properties are worth knowing before adding a field. Nothing here is
+ * key material: `sshKeyId` and `knownHostsLine` are references produced by
+ * the import and probe steps, so a wizard that never holds a private key
+ * cannot leak one. And the same body creates the FIRST configuration on an
+ * unconfigured instance, because the operator answers the same questions
+ * either way, which is why `runImmediately` has a documented refusal
+ * rather than a second request shape.
+ */
 export interface CreateBackupSetRequest {
   sourceName?: string;
   name: string;
@@ -266,6 +309,11 @@ export interface RestoreSubmission {
   billing: string;
 }
 
+/** The set as it was actually persisted, echoed back so the caller can
+ *  render what it just saved without a second read. The last two fields
+ *  are the reason this is not just an id: an immediate run can fail while
+ *  the set is created, the response is a 201 either way, and dropping the
+ *  error told an operator a backup was running when nothing started. */
 export interface CreatedBackupSet {
   id: string;
   sourceName: string;
@@ -299,18 +347,29 @@ export interface CreatedBackupSet {
   runError?: string;
 }
 
+/** What an imported key becomes: an id to refer to it by, and a
+ *  fingerprint to show. Never the key itself, which is the whole point of
+ *  importing through the service rather than carrying it in a form. */
 export interface SSHKeyImportResult {
   id: string;
   algorithm: string;
   fingerprint: string;
 }
 
+/** What a host presented, before anyone has decided to trust it. The
+ *  fingerprint is for a human to compare against something they already
+ *  know; the known-hosts line is what trust would actually be anchored to,
+ *  and only travels once "Trust host" is pressed. */
 export interface HostKeyProbeResult {
   algorithm: string;
   fingerprint: string;
   knownHostsLine: string;
 }
 
+/** Whether a pre-save connection worked, and the service's own words when
+ *  it did not. Deliberately not an error: a failed test is an ordinary
+ *  answer to a question the wizard asked on purpose, and throwing would
+ *  make the failure path the exceptional one. */
 export interface ConnectionTestOutcome {
   ok: boolean;
   message?: string;
@@ -653,6 +712,11 @@ export interface UpdateCapacitySettings {
   safetyMarginBytes?: number;
 }
 
+/** Everything GET /settings answers with: the current values, plus the
+ *  SCHEMA describing what values are legal. The schema travels with the
+ *  settings so a form can enforce the server's rules without holding a
+ *  second copy of them, which is the rule the retention and capacity
+ *  cards are both written to. */
 export interface AppSettings {
   retention: RetentionSettings;
   capacity: CapacitySettings;
@@ -676,6 +740,10 @@ export interface UpdateRetentionSettings {
   protectLastKnownGood?: boolean;
 }
 
+/** A sparse settings write: only the blocks named here are touched, and
+ *  within them only the fields named. Every layer of that is deliberate,
+ *  because a caller editing one toggle must not rewrite a retention chain
+ *  it never read. */
 export interface UpdateSettingsRequest {
   retention?: UpdateRetentionSettings;
   capacity?: UpdateCapacitySettings;
@@ -805,6 +873,21 @@ export interface ArtifactReinstatement {
   reason: string;
 }
 
+/**
+ * Everything this frontend can ask a backend to do.
+ *
+ * Two implementations satisfy it and both are real: httpApi talks to a
+ * service, createMockApi answers from memory. Pages depend on this
+ * interface and on neither of them, which is what makes the whole UI
+ * runnable without a backend and keeps a page from reaching for a field
+ * nothing promised.
+ *
+ * The method docs below carry what a signature cannot: which calls an
+ * unconfigured instance refuses, which ones the service will reject
+ * without an accompanying acknowledgement, and which answers are echoes of
+ * a write rather than fresh reads. Those are the things a caller gets
+ * wrong, and none of them are visible in the types.
+ */
 export interface BackupManagerApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;

@@ -1,3 +1,16 @@
+/**
+ * The app's one reactive graph, and the two pieces of machinery that keep
+ * it usable from a test.
+ *
+ * A module-level singleton is an awkward thing to test, and everything
+ * here except `graph` itself is about paying that bill honestly rather
+ * than pretending it is not owed. `registerInput` exists so a reset can
+ * know what to reset, and `resetGraphForTests` exists because the engine
+ * offers no reset of its own and a fresh graph would not reach the nodes
+ * that were bound to the old one at import time. Both notes below spell
+ * that out, because the obvious alternative (build a new graph per test)
+ * looks like it should work and does not.
+ */
 import { createCausl } from "@causlts/core";
 import type { InputNode } from "@causlts/core";
 import { createCauslHook } from "./useCausl";

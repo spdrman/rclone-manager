@@ -1,3 +1,27 @@
+/**
+ * Adding a backup set, in six steps, and the same six steps as an
+ * unconfigured instance's first run.
+ *
+ * Nearly all of the state here is local, and that is a decision rather
+ * than a default: nothing outside this component reads an answer while
+ * the wizard is open, so only the one fact another screen also reports, a
+ * changed host key, lives on the shared graph. state/wizardNodes.ts holds
+ * the argument.
+ *
+ * Two shapes recur and are worth knowing before reading the steps. Every
+ * field is controlled rather than defaulted, because a step's subtree
+ * unmounts while another step is showing and a defaulted input would hand
+ * the review step the example text instead of what was typed. And several
+ * pieces of state remember WHAT they were established for, not just that
+ * they were: host trust records the host and port it was granted for, the
+ * probe records which host its results describe. Editing a hostname after
+ * trusting a different one must not leave the page saying "trusted".
+ *
+ * Nothing in this component ever holds key material beyond the single
+ * import call. What the review step and the save path carry are
+ * references: a key id, and the known-hosts line that trust actually
+ * anchors to.
+ */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";

@@ -1,3 +1,18 @@
+/**
+ * The full-width notice a page puts above its content.
+ *
+ * Only the warn and danger tones announce themselves as alerts. That is a
+ * deliberate line rather than an oversight: an assistive technology
+ * interrupting the reader is right for "this backup set is halted" and
+ * wrong for the first-run hint, and a component that alerted on every tone
+ * would train people to ignore the ones that matter.
+ *
+ * `actions` is a slot rather than a button prop because the banners that
+ * carry one mostly navigate to evidence rather than resolving anything.
+ * The halt banner is the case that fixes this rule: it will not offer to
+ * dismiss, retry or re-trust, so whatever a page passes has to be its own
+ * decision, made where the consequences are visible.
+ */
 import type { ReactNode } from "react";
 
 export type BannerTone = "info" | "ok" | "warn" | "danger";

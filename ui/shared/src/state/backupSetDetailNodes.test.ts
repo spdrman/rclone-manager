@@ -1,3 +1,12 @@
+/**
+ * Whether the edit-staleness check answers the question it claims to.
+ *
+ * The interesting cases are the two it must NOT fire on: a commit to an
+ * unrelated node, and a re-read that changed nothing. A version counter
+ * that moved on any app activity at all would make every inline edit
+ * unsavable on a polling app, which is the failure this file is here to
+ * catch early.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { graph, resetGraphForTests } from "./graph";
 import { quarantineNode } from "./appNodes";

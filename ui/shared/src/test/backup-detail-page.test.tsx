@@ -1,3 +1,19 @@
+/**
+ * The backup detail page, and the one bug its state ownership exists to
+ * prevent.
+ *
+ * The case worth reading first is the stale-flash one. React Router keeps
+ * this component mounted when only the `:artifactId` changes, so a page
+ * that renders whatever data it already has while the new fetch is in
+ * flight shows one artifact's checksum, size and lifecycle under a
+ * different artifact's URL. On a page whose whole purpose is telling an
+ * operator whether THIS backup is safe, that is a correctness bug and not
+ * a flicker, and it is why the fetch here stayed page-local.
+ *
+ * The remaining cases are the ordinary contract: every documented field
+ * reaches the screen, and a failure produces a stated error rather than a
+ * blank page.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";

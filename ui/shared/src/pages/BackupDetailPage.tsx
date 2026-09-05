@@ -1,3 +1,20 @@
+/**
+ * One artifact: what it is, what happened to it, and where its bytes
+ * actually are.
+ *
+ * The page is three panels and the third is the one with a rule attached.
+ * Copies are described by PlacementList, and the sentences explaining the
+ * verification ladder and what a retrieval costs are fetched from the
+ * service rather than written here, because those words are what an
+ * operator reads while deciding whether a backup is safe, and a paraphrase
+ * kept in a frontend eventually says something the engine does not.
+ *
+ * Both fetches are page-local rather than on the shared graph, and each
+ * says why at the call site. The artifact one is the more interesting: it
+ * changes identity on every navigation, so the stale-data-while-loading
+ * behaviour that is correct for a singleton resource would show one
+ * artifact's fields under another artifact's URL.
+ */
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";

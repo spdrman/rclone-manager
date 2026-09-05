@@ -1,3 +1,12 @@
+/**
+ * The one ordering rule the timeline exists to keep: nothing can show the
+ * remote original as deleted before the local copy is committed.
+ *
+ * Asserted against `buildPhases` rather than the rendered list, because
+ * the property is about the data the component is given and a DOM
+ * assertion would also be testing the layout. The rendering case is here
+ * too, but only to prove the phases reach the screen at all.
+ */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { BackupArtifact } from "@shared/types/backup";

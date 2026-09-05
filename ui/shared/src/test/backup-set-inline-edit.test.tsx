@@ -1,3 +1,26 @@
+/**
+ * Editing a backup set in place: what a per-box Save writes, what happens
+ * to the cycle while the form is open, and what it takes to point a set at
+ * different data.
+ *
+ * The file is long because the promise is precise. A box's Save writes
+ * that box and nothing else, so several cases assert on the request body
+ * rather than on the screen: a form that sent the whole object would look
+ * identical to an operator and would quietly overwrite a field somebody
+ * else had just changed. The same reasoning drives the case for the
+ * stable-size window, which must not travel in a patch that no longer
+ * shows it.
+ *
+ * The hold cases cover the part with a real cost attached. Entering edit
+ * mode stops the cycle for that set, so every exit has to give it back:
+ * the explicit one, the implicit one, and the route moving to a different
+ * set while the form is still open.
+ *
+ * Every case drives the control an operator presses rather than the
+ * handler behind it. On a form with this many boxes, "the handler works"
+ * and "this box's button reaches it with this box's value" are different
+ * claims and only the second one can go wrong here.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";

@@ -1,3 +1,29 @@
+/**
+ * One backup set: its health, its connection, its retention, its recent
+ * activity, and the in-place editor for everything about it that can
+ * change.
+ *
+ * The page is large because editing is a MODE it enters rather than a
+ * dialog it opens, and that mode has real obligations. Each box saves on
+ * its own and saves only itself. A save is armed by comparing against what
+ * the box held when the mode opened, not against the last keystroke, so
+ * typing a character and deleting it leaves Save inactive. And while the
+ * mode is open this page holds a lease on the set, renewed on a heartbeat,
+ * so a cycle cannot start underneath an operator mid-edit; the heartbeat
+ * exists for the exits a browser cannot report, like a closed laptop,
+ * because a set left permanently paused is a backup silently not
+ * happening.
+ *
+ * Two things here look like defensive over-engineering and are not, and
+ * both are consequences of the router keeping this component mounted when
+ * only the URL params change. The edit state is reset synchronously on a
+ * set change, because an effect would paint one set's draft under the
+ * other's heading first, and a Save in that frame would write the wrong
+ * set's values. The repoint refusal is held apart from the field errors
+ * for a different reason: it is not a field error at all, the value is
+ * fine, and what the operator has is one decision to make about pointing
+ * this set at different data.
+ */
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

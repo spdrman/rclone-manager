@@ -65,6 +65,11 @@ export interface TierDraft {
 }
 
 let nextTierKey = 0;
+/** Turns a saved tier into an editable row, numbers included, since the
+ *  draft holds everything as typed text. The key is minted from a
+ *  module-level counter rather than from the tier's name or its position,
+ *  because both of those change while the operator is editing and React
+ *  would then move focus out of the box being typed in. */
 export function toDraft(t: RetentionTierSetting): TierDraft {
   nextTierKey += 1;
   return {
@@ -78,6 +83,10 @@ export function toDraft(t: RetentionTierSetting): TierDraft {
   };
 }
 
+/** The granularity value that means "a window the operator states in
+ *  days" rather than a named calendar period. It is the one value that
+ *  makes `periodDays` meaningful, and the only one the server accepts it
+ *  alongside. */
 export const CUSTOM_PERIOD = "days";
 
 /** The chain "Restore default chain" fills the form with, taken from the
@@ -97,6 +106,10 @@ export function defaultChain(schema: RetentionSchema): TierDraft[] {
   return schema.defaultTiers.map(toDraft);
 }
 
+/** Operator-facing words for the granularities the schema serves. A
+ *  presentation table only: the legal SET comes from the schema, so a
+ *  granularity added server-side still renders, under its own raw name,
+ *  rather than disappearing from the picklist. */
 export const GRANULARITY_LABELS: Record<string, string> = {
   day: "Day",
   week: "Week",
@@ -107,10 +120,16 @@ export const GRANULARITY_LABELS: Record<string, string> = {
   days: "Custom period"
 };
 
+/** The label for a granularity, or the raw value when this build has no
+ *  word for it. Falling back to the value is deliberate: an unlabelled
+ *  tier an operator can still read and keep beats one that renders blank. */
 export function granularityLabel(value: string): string {
   return GRANULARITY_LABELS[value] ?? value;
 }
 
+/** The week-start options, lower-case because that is the spelling the
+ *  config file and the wire use. Rendering capitalises; nothing here
+ *  translates, so what is shown and what is sent cannot drift. */
 export const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 export function TierRow({
@@ -337,6 +356,9 @@ export function Field({
   );
 }
 
+/** The problems one row can have, keyed by the box they belong in, so a
+ *  message renders beside the field it is about rather than as a summary
+ *  the operator has to map back onto a chain of several tiers. */
 export interface TierErrors {
   name?: string;
   keep?: string;
@@ -389,6 +411,10 @@ export function tierErrors(
   return errors;
 }
 
+/** Turns an edited row back into what the wire expects, which is where
+ *  the text-versus-number split is finally paid off. It is also where the
+ *  custom-period rule is applied, because `period_days` is legal only on
+ *  that granularity and sending it otherwise is a refusal. */
 export function toTierSetting(t: TierDraft): RetentionTierSetting {
   const custom = t.granularity === CUSTOM_PERIOD;
   return {

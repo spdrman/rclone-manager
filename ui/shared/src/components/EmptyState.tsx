@@ -1,3 +1,19 @@
+/**
+ * The two things a panel shows instead of content: nothing to show, and
+ * could not be shown.
+ *
+ * They live together because the mistake they prevent is the same one.
+ * A list that is empty because there is nothing yet and a list that is
+ * empty because the request failed look identical if both render as blank
+ * space, and the operator's next step is completely different. So each
+ * gets a shape of its own, and the error one insists on saying what to do
+ * as well as what happened.
+ *
+ * Neither ever shows a stack trace. The most an error offers is the
+ * correlation id the failing response actually carried, folded away under
+ * advanced details, and it is omitted entirely when the failure carried
+ * none, because an id that appears in no log is a false lead.
+ */
 import type { ReactNode } from "react";
 
 export function EmptyState({

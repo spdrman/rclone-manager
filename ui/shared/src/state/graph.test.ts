@@ -1,3 +1,13 @@
+/**
+ * The reset that every later component test leans on, proved before
+ * anything leans on it.
+ *
+ * Small, and deliberately so: the mechanism is three lines, and what needs
+ * proving is that it reaches derived nodes and more than one input, since
+ * a reset that quietly covered only what the test author remembered would
+ * fail as a silent leak between unrelated suites rather than as a red
+ * test here.
+ */
 import { describe, expect, it } from "vitest";
 import { graph, registerInput, resetGraphForTests } from "./graph";
 

@@ -37,6 +37,10 @@ import type {
 
 export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
 
+/** Reads the scenario out of the URL, falling back to the default for
+ *  anything unrecognised. A closed allow-list rather than a cast, so a
+ *  typo in a query string lands on a working app instead of a fixture that
+ *  half exists. */
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
   const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
@@ -942,6 +946,22 @@ function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => bo
   return wrapped as unknown as BackupManagerApi;
 }
 
+/**
+ * A whole BackupManagerApi, in memory, for one scenario.
+ *
+ * This is a second implementation of the contract rather than a bag of
+ * canned responses, and quite a lot rests on it: the dev server, the
+ * vitest suites, and the browser suite all drive real screens through it,
+ * so a fixture that answers more helpfully than the service would is a
+ * suite that passes on behaviour the product does not have. That is why
+ * writes here mutate the instance's own state, why retention plans go
+ * stale on the same rule the real revision check uses, and why an
+ * unconfigured instance is built by wrapping the finished API in the same
+ * refusal the real router applies rather than by leaving methods out.
+ *
+ * Each instance is independent. Tests that want to read a fixture without
+ * disturbing the one under test build a second mock rather than sharing.
+ */
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   // Every deployment written before storage mediums existed, which is the

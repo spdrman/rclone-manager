@@ -49,6 +49,11 @@ export interface ParsedField {
   error?: string;
 }
 
+/** One editable field, described completely enough that the page needs no
+ *  knowledge of it: how to label it, how to help with it, how to draw it,
+ *  how to read it out of a set and how to turn what was typed back into a
+ *  patch. A field that needed a special case in the page would defeat the
+ *  point of the list. */
 export interface EditField {
   key: EditFieldKey;
   label: string;
@@ -80,6 +85,10 @@ const COMPLETION_OPTIONS: { value: CompletionMethod; label: string }[] = [
   { value: "stable-size", label: "Stable file size / timestamp" }
 ];
 
+/** Every field an operator can change in place, in the order the page
+ *  draws them. Adding one here is the whole change: rendering, the dirty
+ *  check, the per-box save and the error reporting all walk this list, so
+ *  there is no second place for a new field to be forgotten. */
 export const EDIT_FIELDS: EditField[] = [
   {
     key: "host",
