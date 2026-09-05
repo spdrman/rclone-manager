@@ -35,6 +35,13 @@ name: Release
 # decides, in the `decide` job below, and every other job reads its
 # output.
 #
+# Neither path publishes off `release`. The dispatch input is a request,
+# not a permission: `decide` checks the ref first and refuses to publish
+# from anywhere else, whatever the input says. Without that, one dispatch
+# aimed at a feature branch pushes and signs an image under that branch's
+# OIDC identity, which the compliance record does not describe and the
+# documented verification command rejects.
+#
 # GitHub Actions still does not auto-trigger anywhere else in this
 # repository (see the "on:" blocks in .github/workflows/*.yml) and
 # scripts/ci-local.sh is still the gate. This workflow is the one
@@ -99,12 +106,25 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
-          if [ "$EVENT_NAME" = "push" ]; then
+          # The ref gate comes before everything else, and it is not about
+          # the event. workflow_dispatch can be aimed at any branch, so
+          # `publish: true` from a feature branch would push, sign and
+          # attest an image whose OIDC identity is that branch's ref. That
+          # is not the identity provenance/release-provenance.json records
+          # and not one the documented `cosign verify` accepts, so it puts
+          # an image in a public registry that this project's own
+          # compliance record does not vouch for, one click away and with
+          # no reviewable diff behind it. A run off `release` still builds
+          # and still runs every check; it just cannot publish (#510).
+          publish=false
+          if [ "$GITHUB_REF" != "refs/heads/release" ]; then
+            echo "This run is on ${GITHUB_REF}. Only refs/heads/release publishes, so everything is built and checked and nothing is pushed, signed or attested." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$EVENT_NAME" = "push" ]; then
             publish=true
             echo "A push reached the release branch, so this run publishes." >> "$GITHUB_STEP_SUMMARY"
           else
             publish="${INPUT_PUBLISH:-false}"
-            echo "Dispatched with publish=${publish}." >> "$GITHUB_STEP_SUMMARY"
+            echo "Dispatched on the release branch with publish=${publish}." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
 

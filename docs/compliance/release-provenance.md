@@ -105,10 +105,18 @@ is nothing to match loosely, and an exact identity cannot be quietly widened by 
 missing anchor the way the old `@refs/tags/` pattern was: it had no `$`, so it would
 have accepted any tag ref at all.
 
-A hand-dispatched run publishing from some other branch would sign under that branch's
-ref and would not match this command. That is intended. `release` is the only branch a
-cut lands on (`docs/release-branch.md`), and an image signed from anywhere else is not
-one this record vouches for.
+Nothing can be signed under a different ref, which is what makes one exact identity
+enough. `workflow_dispatch` can be aimed at any branch, so its `publish` input is
+treated as a request rather than as permission: the `decide` job checks the ref first
+and publishes only from `refs/heads/release`, whatever the input says. A dispatch from
+anywhere else still builds and still runs every check, and pushes, signs and attests
+nothing. `TestOnlyTheReleaseRefCanPublish` executes that decision, for each ref worth
+asking about, out of the workflow file itself.
+
+Without it, one dispatch from a feature branch would put an image in a public registry
+signed under that branch's ref: an artifact this record does not describe and this
+command rejects, which is #510's failure mode again except that a pushed image cannot
+be taken back the way a wrong sentence can.
 
 The tag in that example is `0.2.0` rather than the `0.3.0` this tree declares, because
 `0.3.0` is not pushed yet and there is nothing at that tag to verify. Move it once the
