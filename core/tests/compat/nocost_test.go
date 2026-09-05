@@ -1,3 +1,22 @@
+// FR-34's rule that no surface renders a cost figure or an invented ETA,
+// asserted against the whole /api/v1 contract by looking for the fields
+// rather than for the values.
+//
+// Absence rather than emptiness, because those are different promises. A
+// field a client never learns about cannot be rendered; a field that
+// exists and happens to be empty is one release away from somebody filling
+// it with a plausible guess, and a plausible guess is exactly what this
+// rule exists to prevent. The backend has no price list, no negotiated
+// rates, and S3 reports no restore progress at all, so every number in the
+// forbidden list would have to be invented to be produced.
+//
+// It scans the entire contract and not only the schemas EPIC E adds. The
+// rule is a product rule, and scoping it to the new work would leave it
+// enforced only where nobody was going to break it.
+//
+// The exception list is checked rather than trusted: an entry the contract
+// has outgrown fails this test instead of sitting there granting
+// permission nobody needs any more.
 package compat
 
 import (

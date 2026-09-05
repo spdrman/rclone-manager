@@ -1,3 +1,22 @@
+// The cells that read the migrated SQLite file directly: the artifact rows
+// as the migrations left them, the schema and migration list that produced
+// them, and the retention and prune verdicts decided from records read
+// back out of it.
+//
+// Reading the database rather than a typed API is the point rather than a
+// shortcut. FR-29 puts placements in a new table specifically so that no
+// artifact row changes, and a typed read surface would hide exactly the
+// difference this has to see: a column added, a value backfilled, a table
+// recreated slightly differently by a migration that had to recreate it.
+// Two of this repository's migrations already recreate artifacts wholesale.
+//
+// The verdict cells go the long way round for the same reason. They could
+// decide from the structs that were seeded and would then be identical
+// whatever the migrations did, which is the difference between a cell that
+// can fail and a cell that only looks like it can.
+//
+// normalizeRoot lives here and is the only normalization in the package.
+// Everything else is compared raw.
 package compat
 
 import (

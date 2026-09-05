@@ -1,3 +1,24 @@
+// FR-35 clause 4, the CLI: build backup-manager from this working tree,
+// run a fixed table of invocations against the seeded medium-free
+// deployment, and write down exactly what an operator would have seen.
+//
+// This is the file that decides what "operator-visible" means for the rest
+// of the repository. Every line it records becomes a line in the corpus,
+// so the usage block, the column padding, the error sentences and the exit
+// statuses of the commands listed below are pinned byte for byte from
+// here. Anything reworded on the other side of that boundary, in
+// core/cmd/backup-manager, arrives as a red cell in this package, which is
+// the intended and only route.
+//
+// Two things are normalized before anything is compared and no more: the
+// throwaway root directory, and the Go toolchain version. Both are the
+// machine's facts rather than the product's, and each is argued where it
+// happens (normalizeRoot in capture_state.go, normalizeGoVersion below).
+// The rclone version deliberately is not normalized.
+//
+// The argv table is chosen rather than exhaustive, and captureCLI says
+// which surfaces it leaves out and why, because a surface nobody mentions
+// cannot be told apart from one nobody thought of.
 package compat
 
 import (

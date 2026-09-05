@@ -1,3 +1,19 @@
+// The corpus format and the comparison over it: what a captured cell is,
+// how two captures are held against each other, and how a difference is
+// reported to whoever has to act on it.
+//
+// It is deliberately separate from the capture files beside it. Everything
+// here is pure: it reads no database, builds no binary and runs no
+// command, so it is the half of this package that can be reasoned about
+// and changed without a deployment to point it at. That split is also why
+// the rules live here rather than at the call sites, where each cell would
+// have grown its own idea of what "the same" means.
+//
+// The comparison is asymmetric on purpose, and the asymmetry is the
+// package's whole opinion: a captured line that is missing is a break, a
+// captured line that is new is only a break under RuleIdentical, and a
+// cell that captured nothing is a break under every rule there is. Compare
+// argues each of those where it makes the decision.
 package compat
 
 import (
