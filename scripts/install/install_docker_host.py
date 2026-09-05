@@ -211,16 +211,28 @@ DEFAULT_LISTEN_PORT = 8080
 #
 # The digest is what makes `--release` safe to offer at all. A tag is a
 # mutable pointer (scripts/release/publish-image.sh says so in its own
-# words), so "install 0.2.0" is a claim about a name until something
+# words), so "install 0.3.0" is a claim about a name until something
 # compares the name against a recorded identity. One anonymous HEAD does
 # that, with no cosign and no dependency, which is why the digest is here
 # and not derived.
 #
+# It is None between the cut and the push, which is a real state and not a
+# gap. The manifest records `index_digest: null` for a release nothing has
+# pushed yet, canonical.json records image.published false, and a test
+# refuses either half without the other; there is no identity to copy
+# because there is no image in a registry to have one. Carrying the
+# PREVIOUS release's digest through that window would be worse than
+# carrying none: the tag would resolve to exactly the right image and this
+# installer would refuse it, so every operator would get
+# EXIT_RELEASE_DIGEST_MISMATCH on a correct install. check_release says
+# what it cannot prove instead, and the digest is filled in here at the
+# same time it is recorded back into the manifest.
+#
 # It proves exactly one version: this one. A release cut after this
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
-CARRIED_RELEASE = "0.2.0"
-CARRIED_RELEASE_DIGEST = "sha256:0ba1fba4f9f35c939b63db4455f4347fa75e25e79d5486aa03a90d53d977112b"
+CARRIED_RELEASE = "0.3.0"
+CARRIED_RELEASE_DIGEST = None
 
 # Where that release lives. Split into two halves rather than written as
 # one reference on purpose: the --image default is the one literal
@@ -739,11 +751,21 @@ class Preflight:
 
         Then the proof, which is what makes naming a release safe to
         offer at all. A tag is a mutable pointer, and this project says so
-        in its own release tooling, so "install 0.2.0" is a claim about a
+        in its own release tooling, so "install 0.3.0" is a claim about a
         name until something compares the name against a recorded
-        identity. container/release-manifest.json recorded that identity
-        at push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
+        identity. container/release-manifest.json records that identity at
+        push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
         anonymous HEAD settles it.
+
+        Between a cut and a push there is no identity to copy, and that
+        window is handled here rather than papered over. The manifest
+        records a null index_digest for a release nothing has pushed yet,
+        so CARRIED_RELEASE_DIGEST is None and this says the tag went
+        unproven, in the same words it uses for a registry it could not
+        reach. What it must never do is compare the new tag to the
+        previous release's digest: that comparison fails on a perfectly
+        correct image and turns the whole check into a refusal every
+        operator hits.
 
         It settles exactly one version: the one this installer carries. A
         release cut afterwards has no digest here and cannot get one,
@@ -766,6 +788,14 @@ class Preflight:
         if image_name(ref) != home:
             self.warn(f"{image_name(ref)} is not {home}, so nothing recorded here says what {ref} "
                       f"should be. Whatever is behind that reference is yours to vouch for.")
+            return
+
+        if CARRIED_RELEASE_DIGEST is None:
+            self.warn(f"{CARRIED_RELEASE} is cut and not pushed, so container/release-manifest.json "
+                      f"records no identity for it and there is nothing here to hold {ref} to. "
+                      f"Whatever that reference resolves to goes in on the registry's word. The "
+                      f"digest is recorded, and this installer reissued with it, once the release "
+                      f"workflow has pushed.")
             return
 
         pinned = image_digest(ref)
@@ -4315,7 +4345,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.2.0",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.0",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -4326,7 +4356,9 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "installing a version other than the one you named is the whole failure "
                               "this flag exists to prevent. Defaults to %(default)s, the release "
                               "container/release-manifest.json records, which is the only version this "
-                              "installer holds a digest for and therefore the only one it can prove. "
+                              "installer can hold to a recorded identity. Until that release is pushed "
+                              "and its digest recorded there is no identity to hold it to, and "
+                              "preflight says so rather than passing over it. "
                               "Refused together with --no-pull and with --image-archive, which are the "
                               "offline paths and resolve nothing against a registry.")
     runtime.add_argument("--image-archive", type=Path, default=None,
@@ -4454,7 +4486,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.2.0\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.3.0\n"
         ),
     )
     _add_shared_groups(sp_install)
@@ -4552,7 +4584,7 @@ def resolve_release(args) -> None:
             EXIT_USAGE,
             f"--release is {args.release!r}, which is not a version.",
             "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
-            "(0.2.0-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "(0.3.0-rc.1). It deliberately does not take a moving name like `latest`: that "
             "tag orders against nothing, so it would be written into the .env as the "
             "installed version and leave this host un-orderable by every later installer. "
             "Name the version you want.",

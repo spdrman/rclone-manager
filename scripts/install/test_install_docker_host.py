@@ -54,6 +54,34 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_COMPOSE = REPO_ROOT / "container" / "compose.yaml"
 RELEASE_MANIFEST = REPO_ROOT / "container" / "release-manifest.json"
 
+# A stand-in for the identity the release manifest records.
+#
+# installer.CARRIED_RELEASE_DIGEST is None between a cut and a push, when
+# the manifest records `index_digest: null` and canonical.json records
+# image.published false, and it is a sha256 for the rest of a release's
+# life. The proof it feeds has to behave correctly on both sides of that
+# push, so the tests that drive the proof itself patch this value in, and
+# the tests that drive the unproven window patch None in. Reading the real
+# constant would mean half the behaviour going untested for whichever half
+# of the release cycle the tree is currently in, and the half that goes
+# untested is the half that breaks.
+#
+# What still reads the real one: TestTheCarriedReleasePinIsTheRecordedOne,
+# which holds it to the manifest, and the shape check in
+# TestAReleaseWithNoRecordedIdentityYet.
+RECORDED_DIGEST = "sha256:" + "0b" * 32
+
+
+@contextlib.contextmanager
+def carrying_a_recorded_digest(digest: str | None = RECORDED_DIGEST):
+    """Run a block with installer.CARRIED_RELEASE_DIGEST set."""
+    was = installer.CARRIED_RELEASE_DIGEST
+    installer.CARRIED_RELEASE_DIGEST = digest
+    try:
+        yield digest
+    finally:
+        installer.CARRIED_RELEASE_DIGEST = was
+
 
 class Fixture:
     """A prefix with a key, a known_hosts and the three data directories,
@@ -3415,22 +3443,33 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         """A pinned digest IS answerable when it is the one recorded, and
         that is not a guess: it is the same identity check_release holds
         the tag to."""
-        ref = "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST
-        self.assertEqual(installer.reference_version(ref), installer.CARRIED_RELEASE)
-        self.assertEqual(
-            installer.compare_versions(installer.reference_version(ref), installer.CARRIED_RELEASE),
-            "same",
-            "a digest-pinned host has to be orderable, or the downgrade guard is blind on it")
+        with carrying_a_recorded_digest() as recorded:
+            ref = "ghcr.io/spdrman/backup-manager@" + recorded
+            self.assertEqual(installer.reference_version(ref), installer.CARRIED_RELEASE)
+            self.assertEqual(
+                installer.compare_versions(installer.reference_version(ref), installer.CARRIED_RELEASE),
+                "same",
+                "a digest-pinned host has to be orderable, or the downgrade guard is blind on it")
+
+    def test_a_digest_nothing_records_is_not_a_version(self):
+        """The other side of the same question, and the state the tree is
+        in between a cut and a push: with no recorded identity there is
+        nothing a digest can be equal to, so the answer is "" rather than
+        a guess at the carried release."""
+        with carrying_a_recorded_digest(None):
+            ref = "ghcr.io/spdrman/backup-manager@" + RECORDED_DIGEST
+            self.assertEqual(installer.reference_version(ref), "")
 
     def test_the_env_of_a_digest_pinned_install_names_the_release(self):
         fx = Fixture(self)
-        args = fx.args("--image", "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST)
-        rendered = installer.render_env(args)
-        self.assertIn(f"VERSION={installer.CARRIED_RELEASE}", rendered)
-        self.assertNotIn("VERSION=sha256", rendered)
-        self.assertNotIn(f"VERSION={installer.CARRIED_RELEASE_DIGEST.split(':')[1]}", rendered,
-                         "the bare digest hex is not a version, and writing it as one is what "
-                         "issue #484 found")
+        with carrying_a_recorded_digest() as recorded:
+            args = fx.args("--image", "ghcr.io/spdrman/backup-manager@" + recorded)
+            rendered = installer.render_env(args)
+            self.assertIn(f"VERSION={installer.CARRIED_RELEASE}", rendered)
+            self.assertNotIn("VERSION=sha256", rendered)
+            self.assertNotIn(f"VERSION={recorded.split(':')[1]}", rendered,
+                             "the bare digest hex is not a version, and writing it as one is what "
+                             "issue #484 found")
 
     def test_a_tagless_reference_never_writes_latest_into_the_env(self):
         """The one-way door. _semver("latest") is None, so a host whose
@@ -3448,9 +3487,10 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         """installed_image_tag reads the same question off a running
         container and off the override, so both go through the one
         implementation."""
-        containers = [{"Service": installer.ENGINE_SERVICE,
-                       "Image": "ghcr.io/spdrman/backup-manager@" + installer.CARRIED_RELEASE_DIGEST}]
-        tag, source = installer.installed_image_tag(containers, Path("/nonexistent"))
+        with carrying_a_recorded_digest() as recorded:
+            containers = [{"Service": installer.ENGINE_SERVICE,
+                           "Image": "ghcr.io/spdrman/backup-manager@" + recorded}]
+            tag, source = installer.installed_image_tag(containers, Path("/nonexistent"))
         self.assertEqual(tag, installer.CARRIED_RELEASE)
         self.assertIn(installer.ENGINE_SERVICE, source)
 
@@ -3911,7 +3951,20 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     be named at all: an installer that floated onto a future tag could
     never do this, because it cannot carry a digest for a release that
     does not exist yet.
+
+    Every test here patches a recorded digest in, because
+    CARRIED_RELEASE_DIGEST is None between a cut and a push and the proof
+    still has to be right for the rest of the release's life.
+    TestAReleaseWithNoRecordedIdentityYet drives the other side, and
+    TestTheCarriedReleasePinIsTheRecordedOne is what holds the real value
+    to the manifest.
     """
+
+    def setUp(self):
+        self.recorded = RECORDED_DIGEST
+        was = installer.CARRIED_RELEASE_DIGEST
+        installer.CARRIED_RELEASE_DIGEST = self.recorded
+        self.addCleanup(setattr, installer, "CARRIED_RELEASE_DIGEST", was)
 
     def preflight(self, *extra, registry=None):
         fx = Fixture(self)
@@ -3924,13 +3977,13 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         return out.getvalue()
 
     def test_the_resolved_reference_is_printed_before_anything_else(self):
-        registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+        registry = _FakeRegistry(digest=self.recorded)
         pf = self.preflight(registry=registry)
         printed = self.notes_from(pf)
         self.assertIn(pf.args.image, printed.splitlines()[0],
                       "which version is about to be installed is the first thing to say, and it "
                       "has to be said before check_image pulls two gigabytes")
-        self.assertIn(installer.CARRIED_RELEASE_DIGEST, printed,
+        self.assertIn(self.recorded, printed,
                       "the digest is printed too; a proof nobody can see is a claim")
 
     def test_a_moved_tag_is_refused(self):
@@ -3940,9 +3993,9 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
                                   "what this check exists to catch")
         self.assertEqual(exc.code, installer.EXIT_RELEASE_DIGEST_MISMATCH)
         self.assertIn("ff" * 32, exc.message, "the refusal has to show what was found")
-        self.assertIn(installer.CARRIED_RELEASE_DIGEST, exc.message, "and what was expected")
+        self.assertIn(self.recorded, exc.message, "and what was expected")
         self.assertIn("--image-archive", exc.remedy)
-        self.assertIn(f"@{installer.CARRIED_RELEASE_DIGEST}", exc.remedy,
+        self.assertIn(f"@{self.recorded}", exc.remedy,
                       "the remedy has to be a command, not advice")
 
     def test_a_registry_that_cannot_be_reached_is_not_a_moved_tag(self):
@@ -3962,7 +4015,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         archive.write_bytes(b"not really a tarball")
         for extra in (["--image-archive", str(archive)], ["--no-pull"]):
             with self.subTest(extra=extra):
-                registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+                registry = _FakeRegistry(digest=self.recorded)
                 pf = installer.Preflight(fx.args(*extra), registry=registry)
                 printed = self.notes_from(pf)
                 self.assertEqual(registry.asked, [],
@@ -3970,14 +4023,14 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
                 self.assertIn(pf.args.image, printed, "the reference is still printed")
 
     def test_somebody_elses_registry_is_not_vouched_for(self):
-        registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+        registry = _FakeRegistry(digest=self.recorded)
         pf = self.preflight("--image", "registry.example:5000/backup-manager:0.2.0", registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [], "nothing recorded here describes another registry")
         self.assertIn("!!", printed)
 
     def test_a_release_this_installer_has_no_digest_for_says_so(self):
-        registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+        registry = _FakeRegistry(digest=self.recorded)
         pf = self.preflight("--release", "0.1.0", registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [],
@@ -3987,16 +4040,16 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         self.assertIn("0.1.0", printed)
 
     def test_a_reference_already_pinned_to_the_recorded_digest_needs_no_question(self):
-        registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+        registry = _FakeRegistry(digest=self.recorded)
         pf = self.preflight("--image",
                             f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}@"
-                            + installer.CARRIED_RELEASE_DIGEST, registry=registry)
+                            + self.recorded, registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [], "a digest is the identity; there is no tag to move")
         self.assertNotIn("!!", printed)
 
     def test_a_reference_pinned_to_some_other_digest_is_installed_and_flagged(self):
-        registry = _FakeRegistry(digest=installer.CARRIED_RELEASE_DIGEST)
+        registry = _FakeRegistry(digest=self.recorded)
         pf = self.preflight("--image",
                             f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}@sha256:"
                             + "ab" * 32, registry=registry)
@@ -4020,6 +4073,96 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         with _StubbedHTTP([]):
             pf = self.preflight()
             self.assertIsNone(pf._registry)
+
+
+class TestAReleaseWithNoRecordedIdentityYet(unittest.TestCase):
+    """The window between a cut and a push, which is a state this file is
+    in for the first days of every release.
+
+    container/release-manifest.json records `index_digest: null` until the
+    release workflow has pushed, canonical.json records image.published
+    false beside it, and TestTheCarriedReleasePinIsTheRecordedOne holds
+    CARRIED_RELEASE_DIGEST to that null. So the installer carries a
+    version and no identity, and what it does then is a decision rather
+    than an accident.
+
+    The decision is: say so, ask nothing, refuse nothing. The refusal is
+    the outcome that must not happen, and it is not hypothetical. Moving
+    the version and leaving the previous release's digest behind makes
+    every install of the new tag compare a perfectly correct image
+    against the wrong recorded identity, so the whole check turns into
+    EXIT_RELEASE_DIGEST_MISMATCH for every operator, on an image that is
+    exactly what it should be.
+    """
+
+    def setUp(self):
+        was = installer.CARRIED_RELEASE_DIGEST
+        installer.CARRIED_RELEASE_DIGEST = None
+        self.addCleanup(setattr, installer, "CARRIED_RELEASE_DIGEST", was)
+
+    def preflight(self, *extra, registry=None):
+        fx = Fixture(self)
+        return installer.Preflight(fx.args(*extra), registry=registry)
+
+    def notes_from(self, pf):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            pf.check_release()
+        return out.getvalue()
+
+    def test_the_default_reference_is_said_to_be_unproven_rather_than_refused(self):
+        registry = _FakeRegistry(digest=RECORDED_DIGEST)
+        pf = self.preflight(registry=registry)
+        printed = self.notes_from(pf)
+        self.assertIn(pf.args.image, printed, "the reference is still printed")
+        self.assertIn("!!", printed, "an unproven pin is said out loud rather than passed over")
+        self.assertIn(installer.CARRIED_RELEASE, printed)
+
+    def test_it_is_not_a_refusal(self):
+        """The positive control on the sentence above. A warn line is also
+        printed on the way to a refusal, so the absence of the exception
+        is the half that matters."""
+        registry = _FakeRegistry(digest=RECORDED_DIGEST)
+        exc = refusal_from(self.preflight(registry=registry).check_release)
+        self.assertIsNone(exc, "an image nothing records an identity for is not a moved tag, and "
+                               "refusing it would refuse every install of a release between its "
+                               "cut and its push")
+
+    def test_the_registry_is_not_asked(self):
+        """There is nothing to compare an answer against, and a HEAD whose
+        result cannot change any decision is theatre with a timeout."""
+        registry = _FakeRegistry(digest=RECORDED_DIGEST)
+        self.notes_from(self.preflight(registry=registry))
+        self.assertEqual(registry.asked, [])
+
+    def test_a_digest_pinned_reference_is_not_called_wrong_either(self):
+        """The branch that would otherwise say "which is not the release
+        this installer recorded" about a digest nothing here records."""
+        registry = _FakeRegistry(digest=RECORDED_DIGEST)
+        pf = self.preflight("--image",
+                            f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}@"
+                            + RECORDED_DIGEST, registry=registry)
+        printed = self.notes_from(pf)
+        self.assertEqual(registry.asked, [])
+        self.assertNotIn("not the", printed,
+                         "nothing here records an identity, so no reference can be the wrong one")
+
+    def test_the_real_carried_digest_is_either_absent_or_a_digest(self):
+        """The one assertion in this file that reads the real constant
+        rather than a patched one. Both classes patch, on purpose, so that
+        neither half of the behaviour goes untested for whichever half of
+        the release cycle this tree is in; this is what stops the patching
+        from hiding a third state, such as a bare hex string or an empty
+        one, that neither class would notice.
+        """
+        carried = installer.CARRIED_RELEASE_DIGEST
+        if carried is None:
+            return
+        self.assertIsInstance(carried, str)
+        self.assertTrue(carried.startswith("sha256:"),
+                        f"CARRIED_RELEASE_DIGEST is {carried!r}, which is neither None nor the "
+                        f"sha256: index digest container/release-manifest.json records")
+        self.assertEqual(len(carried), len("sha256:") + 64)
 
 
 class TestTheUpdateCheckOnlyEverAddsALine(unittest.TestCase):
