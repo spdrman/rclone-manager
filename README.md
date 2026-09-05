@@ -1469,6 +1469,14 @@ that broke the build for an unrelated reason from reading as a pass. The one ass
 regeneration of that corpus cannot silence compares two captures from the same run rather
 than a capture against a file.
 
+Two of its cells are compared additively rather than exactly, and it is worth knowing which
+and why: the migrated schema may gain tables and migrations, and the CLI usage block may
+gain lines, because both grow in a direction that is routine and harmless and an exact
+comparison there would have people regenerating the corpus without reading it. Neither may
+change or lose a line it already has, and the violation that family exists to catch, an
+additive column rendered where there is no non-local placement, lands in the artifact
+detail, which is compared exactly.
+
 The additive rule falls out of the same promise: the `copy:` block only renders when there
 is something additive to say, which is why an artifact with one ordinary local copy prints
 exactly what it always printed.
