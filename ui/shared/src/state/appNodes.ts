@@ -1,3 +1,22 @@
+/**
+ * The state the whole app shares: what the service says about its health
+ * and version, the backup sets, the quarantine, the running operations,
+ * whether this instance is configured at all, and the retention plan a
+ * dialog is currently showing.
+ *
+ * A node earns a place in this file by being read somewhere other than
+ * where it is fetched. That is the bar every note below argues from, and
+ * it is why `App.tsx` owns the fetches while pages only read: two pages
+ * each running their own `listOperations()` could disagree with each
+ * other, and did.
+ *
+ * The retention nodes at the bottom are the exception worth knowing about
+ * before reading them. `retentionPlanStaleNode` derives staleness from
+ * evidence rather than from a wire boolean, which is the right mechanism,
+ * but nothing in production writes the evidence yet, so in a running app
+ * it is a constant false. Its own doc says so at length rather than
+ * letting the shape imply a guard that is not armed.
+ */
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type { Operation, SystemHealth, VersionInfo } from "@shared/types/operation";
 import { graph, registerInput } from "./graph";

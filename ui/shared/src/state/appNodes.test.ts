@@ -1,3 +1,13 @@
+/**
+ * The app-wide nodes, checked for the things a type cannot state: the
+ * initial value a page renders against before any fetch resolves, and the
+ * derivations that turn version and revision facts into the two booleans
+ * the UI gates on.
+ *
+ * The retention staleness cases commit revisions by hand. That is not a
+ * shortcut around a producer, it is standing in for one that does not
+ * exist yet, which retentionRevisionsNode's own doc explains at length.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { graph, resetGraphForTests } from "./graph";
 import {
