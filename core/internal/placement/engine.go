@@ -167,6 +167,16 @@ type TierGuard interface {
 }
 
 // Engine executes FR-30's journaled three-phase moves.
+//
+// The six collaborators below are plain fields with no constructor
+// checking them, and a nil one is not a programming error to be caught at
+// startup. It is a refusal at the point of use, worded for whatever was
+// about to happen: no medium store is configured, no retention-tier guard
+// is configured, %q cannot be reached. Only Journal is checked up front,
+// because RunCycle cannot even list what is in flight without it. That is
+// the same direction every other uncertainty in this package falls, and
+// it is what lets a fixture hand over an engine that can read but not
+// delete and get the refusal rather than a panic mid-cycle.
 type Engine struct {
 	Journal MoveJournal
 	Store   MediumStore
@@ -208,6 +218,16 @@ type Engine struct {
 	StagingFreeBytes func(dir string) (int64, error)
 }
 
+// defaultMaxCopyAttempts is two, which is one retry, and the bound is per
+// CYCLE rather than per move: the counter is a local in advance, so a move
+// that is not abandoned is left at COPYING and tomorrow's cycle starts
+// counting again from zero.
+//
+// That split is what the number is for. A destination that failed
+// verification once for a transient reason gets a second go immediately
+// and a third one tomorrow, while one that fails the same way every time
+// stops buying uploads within a single cycle rather than spinning until
+// the step limit.
 const defaultMaxCopyAttempts = 2
 
 // maxPhaseStepsPerMove bounds one move's walk through the phase machine in
@@ -231,7 +251,12 @@ type Plan struct {
 type Outcome struct {
 	Artifact model.ArtifactID
 	MoveID   int64
-	Phase    Phase
+
+	// Phase is where the move was LEFT, which is a terminal phase only
+	// when it actually finished. A refused move is reported at the phase
+	// it stopped in, still open and still legitimately waiting, for the
+	// next cycle to pick up and refuse again.
+	Phase Phase
 
 	// Resumed is true when this move was found in the journal rather than
 	// planned by this cycle.
@@ -278,6 +303,11 @@ type Outcome struct {
 func (o Outcome) PolicyRefusal() bool { return errors.Is(o.Err, ErrNotEligible) }
 
 // CycleReport is what one RunCycle did.
+//
+// The first two counters say what the cycle touched and the last three
+// say how it ended, and the two groups do not balance on their own:
+// Refused also counts a plan that was refused before any move row existed,
+// which never counted as Planned because nothing was planned.
 type CycleReport struct {
 	Resumed   int
 	Planned   int
@@ -370,6 +400,13 @@ func (e *Engine) RunCycle(ctx context.Context, plans []Plan) (CycleReport, error
 	return report, nil
 }
 
+// record files one outcome under exactly one heading.
+//
+// The order of the cases is the whole of it. An ABANDONED move carries the
+// reason it gave up in Refused, so asking about Refused first would file
+// every abandonment as a refusal and leave Abandoned permanently at zero.
+// A plan that never became a move does not come through here at all;
+// RunCycle counts those where it refuses them.
 func (r *CycleReport) record(o Outcome) {
 	switch {
 	case o.Phase == Done:
@@ -579,6 +616,14 @@ func localArtifactPath(bs config.BackupSet, artifact model.ArtifactID) (string, 
 	return store.Locator(artifact)
 }
 
+// resolve turns a configured medium id into somewhere reachable and the
+// verification class a copy there has to earn.
+//
+// The nil check is here rather than at each of the twelve call sites for
+// the obvious reason, and it refuses by naming the medium rather than
+// returning a bare error for a less obvious one: every caller is one step
+// from spending money or deleting something, and "%q cannot be reached"
+// is a sentence an operator can act on.
 func (e *Engine) resolve(id string) (transport.Medium, Class, error) {
 	if e.Mediums == nil {
 		return transport.Medium{}, "", fmt.Errorf("placement: no medium resolver is configured, so %q cannot be reached", id)
@@ -586,6 +631,14 @@ func (e *Engine) resolve(id string) (transport.Medium, Class, error) {
 	return e.Mediums.Resolve(id)
 }
 
+// backupSet answers where a backup set's local root is, which is the fact
+// FR-20's containment proof is against.
+//
+// Same shape as resolve, and it matters more here: the three callers are
+// the source delete's own path proof, the destination path of a move back
+// to local, and the staging area. A missing resolver has to refuse rather
+// than produce a zero BackupSet, whose empty LocalPath would make every
+// one of those a path relative to wherever the daemon started.
 func (e *Engine) backupSet(id model.BackupSetID) (config.BackupSet, error) {
 	if e.Sets == nil {
 		return config.BackupSet{}, fmt.Errorf("placement: no backup-set resolver is configured, so %s has no known local root", id)
@@ -788,6 +841,14 @@ func (e *Engine) copy(ctx context.Context, mv state.Move) (state.Move, error) {
 	return e.Journal.AdvanceMove(ctx, e.checked(advance))
 }
 
+// copyToMedium is the copy phase for a local source going out to a medium.
+//
+// It hands the SOURCE placement's location straight to UploadFromLocal,
+// which is exactly why it is the local-source case and not the general
+// one: for a medium-resident source that location is an object key rather
+// than a path on disk, and the upload goes looking for a file that was
+// never there. copyMediumToMedium and its staging copy are what that
+// costs to fix properly (#429, staging.go).
 func (e *Engine) copyToMedium(ctx context.Context, mv state.Move, src state.Placement) (int64, error) {
 	if e.Store == nil {
 		return 0, fmt.Errorf("no medium store is configured")
@@ -993,6 +1054,17 @@ func (e *Engine) verifyLocalCopy(ctx context.Context, p state.Placement) (Result
 		"%s was read back and still hashes to the %s recorded at ingestion", p.Location, p.HashAlg)}, nil
 }
 
+// destinationPlacement is the placements row the VERIFIED write records
+// for the copy this move just made.
+//
+// The size is the count of bytes that actually arrived, and the source's
+// recorded size only when the copy phase recorded none. On every move that
+// worked the two agree; where they disagree the journal should describe
+// the object that is really at the key rather than the one that was
+// expected, because the guard before the source delete compares against
+// this row. Everything else comes from the source row, since a copy is the
+// same bytes under the same hash, and the class comes from the Result,
+// which carries the rung that RAN.
 func (e *Engine) destinationPlacement(mv state.Move, src state.Placement, result Result) state.PlacementUpdate {
 	verified := result.At
 	size := src.Size
@@ -1410,6 +1482,15 @@ type deleteTarget struct {
 	key    string
 }
 
+// remove issues the delete guardSourceDelete authorised, against the
+// target that guard named and nothing else.
+//
+// It re-derives no path and no key. Both were proved by the guard, from
+// the journal and the filesystem, and anything computed again here would
+// be a second implementation of a proof whose whole value is that it ran
+// once, immediately before this. Its only decision is which of the two
+// seams the target belongs to, and both go through the narrow interfaces,
+// so a fixture watching for deletes sees every one.
 func (e *Engine) remove(ctx context.Context, t deleteTarget) error {
 	if t.localPath != "" {
 		if e.Local == nil {
@@ -1552,6 +1633,14 @@ func CheckInvariant(rec state.Record, sufficient ...Class) error {
 		rec.Artifact, rec.State, strings.Join(names, " or "), describePlacements(rec))
 }
 
+// describePlacements lists every placement a record carries, whatever its
+// status, for the invariant's refusal to end with.
+//
+// Every one of them rather than the qualifying ones, because the whole
+// message is about there being none of those: a list filtered to what
+// qualified would say "nothing qualified" twice and tell an operator
+// nothing about the copy that went DELETE_PENDING or the ACTIVE one
+// nothing ever verified, which is what actually went wrong.
 func describePlacements(rec state.Record) string {
 	if len(rec.Placements) == 0 {
 		return "it has no placements at all"
