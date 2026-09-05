@@ -1,17 +1,20 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -79,9 +82,16 @@ func discoverAll(t *testing.T, ctx context.Context, journal Journal, tr transpor
 // the removal dialog promises stays on storage and stays listed.
 func driveToComplete(t *testing.T, ctx context.Context, journal Journal, rec state.Record, final string) {
 	t.Helper()
-	mustWriteFile(t, final, "a whole payload")
+	// The file has to be exactly the size discovery recorded on the
+	// remote, or the next reconciliation pass finds a mismatch and
+	// quarantines the artifact. A fixture whose "finished backup" is one
+	// reconcile away from being a loss is not a finished backup.
+	if rec.Remote.Size == nil {
+		t.Fatalf("%s was discovered with no recorded size; this fixture cannot build a matching local copy", rec.Artifact)
+	}
+	size := *rec.Remote.Size
+	mustWriteFile(t, final, strings.Repeat("x", int(size)))
 	lp := final
-	size := int64(len("a whole payload"))
 	if _, err := journal.RecordTransition(ctx, state.Transition{
 		Artifact:   rec.Artifact,
 		Key:        "test:complete:" + rec.Artifact.String(),
@@ -467,4 +477,57 @@ func (r *refusingTransitionJournal) RecordTransition(ctx context.Context, t stat
 		return state.Outcome{}, r.err
 	}
 	return r.Journal.RecordTransition(ctx, t)
+}
+
+// TestRunCycle_SaysWhatItIsHoldingOutsideEveryConfiguredSet is the half of
+// this report that reaches a deployment nobody is typing commands at.
+// `daemon` has no exit status and no operator at a prompt, so a NAS
+// filling up with backups no policy governs would otherwise be visible
+// only to somebody who thought to go and look.
+func TestRunCycle_SaysWhatItIsHoldingOutsideEveryConfiguredSet(t *testing.T) {
+	ctx := context.Background()
+	journal := openJournal(t)
+	localDir := t.TempDir()
+
+	gone := setNamed(t, "production", "beta", localDir)
+	tr := newFakeTransport()
+	tr.put("done.dump", "done payload", epoch.Unix())
+	rec := discoverOneRecord(t, ctx, journal, tr, transport.Source{ID: "gone"}, gone)
+	driveToComplete(t, ctx, journal, rec, filepath.Join(localDir, "done.dump"))
+
+	var log bytes.Buffer
+	svc := New(testConfig(t, testSource("production")), journal, tr, obs.New(&log, obs.LevelInfo))
+	svc.RunCycle(ctx)
+
+	line := log.String()
+	if !strings.Contains(line, "artifacts_ungoverned") {
+		t.Errorf("a cycle over a deployment holding a removed set's backups says nothing about them:\n%s", line)
+	}
+	if !strings.Contains(line, `"artifacts":1`) || !strings.Contains(line, `"backup_sets":1`) {
+		t.Errorf("the event does not carry what is being held:\n%s", line)
+	}
+}
+
+// TestRunCycle_SaysNothingWhenEverythingIsGoverned is the control. A line
+// that appears on every cycle of every deployment is a line an operator
+// stops seeing, which is the failure mode this whole issue is about one
+// level up.
+func TestRunCycle_SaysNothingWhenEverythingIsGoverned(t *testing.T) {
+	ctx := context.Background()
+	journal := openJournal(t)
+	localDir := t.TempDir()
+
+	kept := setNamed(t, "production", "alpha", localDir)
+	tr := newFakeTransport()
+	tr.put("done.dump", "done payload", epoch.Unix())
+	rec := discoverOneRecord(t, ctx, journal, tr, transport.Source{ID: "kept"}, kept)
+	driveToComplete(t, ctx, journal, rec, filepath.Join(localDir, "done.dump"))
+
+	var log bytes.Buffer
+	svc := New(testConfig(t, testSource("production", kept)), journal, tr, obs.New(&log, obs.LevelInfo))
+	svc.RunCycle(ctx)
+
+	if line := log.String(); strings.Contains(line, "artifacts_ungoverned") {
+		t.Errorf("a fully-configured deployment was told it is holding ungoverned backups:\n%s", line)
+	}
 }

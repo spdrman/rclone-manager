@@ -92,12 +92,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -184,6 +186,52 @@ type StrandedArtifact struct {
 	// per-artifact problems here rather than aborting, so one row it
 	// refuses never hides the rest of the set's answer.
 	Err error
+}
+
+// reportUngoverned writes what this deployment is holding outside every
+// configured backup set into the FR-23 event stream, once per cycle,
+// and only when there is something to say.
+//
+// It is here for the reason `run` cannot cover on its own: a daemon has
+// no exit status and nobody typing commands at it, so a NAS quietly
+// filling up with backups no policy governs would be visible only to
+// somebody who thought to go and look. This is the same argument
+// reportBarrenSets makes for issue #361's verdict (cycleoutcome.go), and
+// the line is deliberately one event for the whole deployment rather than
+// one per set: what an operator acts on is "how much am I holding that
+// nothing manages", and a per-set fan-out of that on every poll interval
+// is how a line stops being read.
+//
+// Info rather than an error, because nothing has failed. An operator
+// removed a backup set and this manager kept its promise to leave the
+// backups alone; saying that in the vocabulary of a fault would make
+// every removal look like a problem.
+//
+// It cannot fail a cycle. The configuration is not involved, no work is
+// started, and a journal that will not answer this question has already
+// failed the cycle somewhere it matters more.
+func (s *Service) reportUngoverned(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	sets, err := s.UnconfiguredSets(ctx)
+	if err != nil || len(sets) == 0 {
+		return
+	}
+	artifacts, stranded := 0, 0
+	var bytes int64
+	for _, u := range sets {
+		artifacts += u.Artifacts
+		stranded += u.Stranded
+		bytes += u.Bytes
+	}
+	s.logger().Event(ctx, obs.LevelInfo, "artifacts_ungoverned",
+		"this deployment is holding backups for backup sets its configuration no longer names; no retention policy applies to them and nothing will delete them",
+		slog.Int("backup_sets", len(sets)),
+		slog.Int("artifacts", artifacts),
+		slog.Int("stranded_artifacts", stranded),
+		slog.Int64("bytes", bytes),
+	)
 }
 
 // IsAcquisitionState reports whether an FR-10 state string is one an
