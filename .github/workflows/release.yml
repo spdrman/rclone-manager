@@ -147,7 +147,7 @@ jobs:
         run: go test ./packaging/ -count=1
 
       - name: Upload the release's compliance bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compliance-bundle
           path: |
@@ -202,7 +202,7 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install cosign
         if: needs.decide.outputs.publish == 'true'
@@ -210,14 +210,14 @@ jobs:
 
       - name: Log in to ghcr.io
         if: needs.decide.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download the compliance bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: compliance-bundle
 

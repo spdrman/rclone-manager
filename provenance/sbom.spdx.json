@@ -749,9 +749,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-go-github.com-go-chi-chi-v5-v5.3.1",
+      "SPDXID": "SPDXRef-Package-go-github.com-go-chi-chi-v5-v5.3.2",
       "name": "github.com/go-chi/chi/v5",
-      "versionInfo": "v5.3.1",
+      "versionInfo": "v5.3.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -761,7 +761,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:golang/github.com/go-chi/chi/v5@v5.3.1"
+          "referenceLocator": "pkg:golang/github.com/go-chi/chi/v5@v5.3.2"
         }
       ],
       "checksums": [
@@ -2354,7 +2354,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-go-github.com-go-chi-chi-v5-v5.3.1"
+      "relatedSpdxElement": "SPDXRef-Package-go-github.com-go-chi-chi-v5-v5.3.2"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
