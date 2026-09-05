@@ -1445,11 +1445,13 @@ committed artifacts, and dropping `--dry-run` does it.
 
 ## Toolchain
 
-Go 1.27, Node for the frontend workspaces, and Docker for the disposable SFTP server the
-integration tests use.
+Go 1.27, Node for the frontend workspaces, and Docker for the containers the machine tier
+puts a test on: a real sshd standing in for the server being backed up, and a real S3 API
+standing in for a storage medium.
 
-This repository is four Go modules stitched together by `go.work`: `core/`, `apps/common/`,
-`apps/generic/` and `apps/synology/`. The engine's own commands run from `core/`:
+This repository is five Go modules stitched together by `go.work`: `core/`, `apps/common/`,
+`apps/generic/`, `apps/synology/` and `distribution/`. The engine's own commands run from
+`core/`:
 
 ```bash
 cd core
@@ -1463,16 +1465,43 @@ because this engine's core loop is a scheduler handing a config snapshot to a cy
 service methods swap that snapshot underneath it. Drop the flag for a quick single-package
 loop if you like; do not form an opinion about a change from a run without it.
 
+The unit packages need no Docker at all, which is worth knowing before reaching for the
+daemon:
+
+```bash
+cd core
+go test -race ./internal/... ./service/... ./cmd/...   # 52s, no daemon
+```
+
+That is #448 and #450's doing. `core/internal/transport/rclone` used to build its own sshd
+image and take 128 to 180s; it has no container in it at all now and takes 23s. Six
+container-backed tests moved out of unit packages into `core/tests/machinegate`, and two
+integration tests that exec'd `docker` themselves went through the harness instead. The
+rule is [Which tier a test belongs on](#which-tier-a-test-belongs-on) below, and a guard
+holds the tree to it rather than a convention.
+
 ### The local gate
 
 `scripts/ci-local.sh` is the gate for this repository. `.github/workflows/ci.yml`,
 `rclone-upgrade-gate.yml` and `nightly-e2e.yml` are all `workflow_dispatch`-only, so
 **nothing runs on push or on a pull request**, and `.husky/pre-commit` runs this script on
 every commit instead. It mirrors those workflows job for job, which makes it slow: the whole
-`core/` suite including the Docker-backed crash matrix and the SFTP integration tests, both
-cross-compiles, every Go module's build/vet/test/lint, the frontend
-lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, and the
-repository-structure dependency proofs.
+`core/` suite including the crash matrix, the SFTP and MinIO integration suites and the
+machine tier, both cross-compiles, every Go module's build/vet/test/lint, the frontend
+lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, EPIC E's
+FR-35 compatibility corpus, and the repository-structure dependency proofs. About
+twenty-five minutes.
+
+It opens with the cheap checks that can invalidate everything after them, because a control
+that turns out to have been planting nothing is worth knowing about in second one rather
+than in minute twenty-five. `scripts/selftest/check-anchors.sh` is the one worth naming:
+the compat, conformance, race and format self-tests each plant deliberate violations to
+prove their cells can go red, every plant is anchored to a verbatim copy of product source
+living in a script the author of the product change never opens, and a refactor drifts the
+anchor so the mutation quietly stops planting anything. That was caught before #458 too,
+loudly, but only at the end of a full run and one stale anchor at a time. Now every anchor
+in all four is dry-run against the real tree, building nothing, in about half a second, and
+one run names the whole list.
 
 Install the JS workspaces before the first full run in a new clone or `git worktree`:
 
@@ -1487,9 +1516,9 @@ for each one that is not. It used to skip those checks and still print
 `==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
 
 The Docker daemon is the same rule with a bigger blast radius. With it stopped, the crash
-matrix, the SFTP integration suite, `distribution/tests/adapterstacks` and the whole
-`apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and nothing
-would reach the ledger. A full run refuses to start without a reachable daemon.
+matrix, the SFTP and MinIO integration suites, `distribution/tests/adapterstacks` and the
+whole `apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and
+nothing would reach the ledger. A full run refuses to start without a reachable daemon.
 
 That refusal is about the start of the run, and the start of the run is not the run (#457).
 Docker Desktop's Resource Saver stops the hypervisor after five idle minutes, and this gate
@@ -1503,10 +1532,17 @@ immediately before it runs, which costs about 100ms and turns "the VM died at mi
 into `==> ci-local: FAILED` naming the step that needed it. The preflight also warns, and
 only warns, when it can see that Resource Saver is on.
 
-Everything the gate starts gets `CI_LOCAL=1` in its environment, which is how the Docker
-fixtures in `core/tests` tell "this laptop has no Docker", an honest skip when you are
-running one suite by hand, from "the daemon this gate already used has gone away", which is
-a failure.
+Everything the gate starts gets `CI_LOCAL=1` in its environment, and that marker is the
+whole of how a fixture tells two identical-looking situations apart. "This laptop has no
+Docker" is an honest skip when somebody is running one suite by hand. "The daemon this gate
+already used has gone away" is a failure, because a full run refused to start without one,
+so its absence now is the daemon dying rather than never being there. Under `CI_LOCAL=1` a
+Docker fixture in `core/tests` **refuses rather than skips** (#456), and it says so in the
+failure: the machine could not offer a daemon, which is an infrastructure failure and not a
+product one. That is not a preference. Before it, a daemon that died mid-run produced
+`==> ci-local: ok` with four suites silently empty. `CI_LOCAL_SKIP_DOCKER=1` is the
+exception at both ends, is already in the environment of everything the gate starts, and
+ledgers, so that run cannot end `ok`.
 
 Every `go test` the gate runs carries `-race` (#417). Until that landed it ran none at all,
 anywhere, which is the same shape as every other hole this gate has had to close: `go test`
@@ -1620,18 +1656,79 @@ in a copy of the tree, requires the detector to catch it and to name the write t
 it, and then runs the same mutant with the flag off and requires it to go green. That last
 cell is the one that makes the other two mean anything.
 
-Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
-says which tier a test belongs to (unit, integration, or a machine reached through
-`core/tests/machines`), and `core/internal/testtier` holds the tree to it.
+### Which tier a test belongs on
 
-Three environment variables change what runs:
+Which tests get a container is a rule, not a habit (#447). A test belongs to the tier of
+the heaviest thing it needs, and the tier decides the directory:
+
+| Tier | What it needs | Where it lives |
+|---|---|---|
+| unit | nothing outside the process: fakes, `t.TempDir()`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` |
+| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package |
+| machine | a source machine, optionally a storage medium, on a dedicated network | `core/tests/<name>`, reached through `core/tests/machines` |
+
+[`docs/architecture/test-tiers.md`](docs/architecture/test-tiers.md) is the whole rule,
+including the list of coverage that would be silently deleted if every test ran on two
+machines: a crash between the rename and the directory fsync inside `Commit`, a copy that
+returns partial bytes and then an error, a `DeleteRemote` that fails the instant it is
+called, an archive-class object that answers `InvalidObjectState`, an injected clock. None
+of those is something a real server can be made to do on demand, and most of them are how
+this product proves it does not delete the wrong backup.
+
+`core/internal/testtier` holds the tree to it, with the Go parser rather than grep so
+comments are invisible to it. Two rules: a file under a unit directory that imports a
+machine package or execs `docker`, and a file under `core/tests` that execs `docker` itself
+instead of going through the harness. It also reads `scripts/ci-local.sh` and checks that
+every package importing the harness is named both on the `gotestwatch` line and in the
+exclusion group of the plain `go test` step, so a machine-tier package cannot end up under
+a fixed timeout or, worse, not run at all. Its ledger is empty: it held eight files when
+the guard landed, six moved into `core/tests/machinegate` and two given harness
+capabilities, and the empty slice stays because the next migration should find the shape
+already here. A listed file that stops violating fails the guard until it is removed, so
+the ledger cannot go stale in either direction.
+
+The machine tier is the two-machine topology, and `core/tests/machines` is the whole of it
+since #450 folded the SFTP and MinIO fixtures and three copies of the Docker plumbing into
+one place. `machines.Start(t)` creates a network and nothing else; `m.Source(t)` starts the
+machine being backed up on it (a real sshd, chrooted, key-only, with iptables so it can
+carry a connection cap), `m.Medium(t)` joins a real S3 API to the same network, and
+`m.AnotherSource(t)` gives a genuinely second server, which is what "this address has no
+known_hosts entry" needs to be real rather than a rebuilt image. Nothing starts that a test
+did not ask for. Failure shapes are methods rather than paragraphs, and each one has a
+negative control where getting it wrong by hand would be silent: `KnownHostsFor` re-records
+a machine's real host keys against a relay's address, and `DecoyKnownHostsFor` is the
+control that proves pinning the wrong one fails.
+
+`scripts/e2e/run-machine-tier.sh` (#451) is the second placement for that tier and the one
+the gate uses: a manager machine built from a Go toolchain with a Docker client, the
+repository mounted at the same absolute path inside as out, joined to the network as an
+ordinary user, running the machine-tier packages from inside. On Docker Desktop for macOS a
+host process cannot sit on a bridge network, so by default the source publishes a port on
+`127.0.0.1`; inside the manager nothing publishes anything and the source is reached by
+alias. `Source.Addr()` answers correctly either way, so a test never has to know which
+placement it is in. The manager gets the Docker socket, which
+`scripts/e2e/two-machine-backup.sh` refuses for itself and for a good reason: that one runs
+the real installer, so a socket would install onto the developer's own host, while this one
+runs the harness, which is orchestration and not the product.
+
+Measured on a quiet machine, after #448 and #450: every machine package inside the manager
+container, `-race`, under `gotestwatch`, warm, is 164s, and 169s with both caches empty, of
+which 45s is the compile. That last number is why the tier is a tier: 76 seconds of cold
+compile per package, times the number of packages, is the reason "run every test on two
+machines" was rejected, and #451 asked for it to be measured here rather than inherited.
+
+### Turning parts of the gate off, out loud
+
+Seven environment variables change what runs, and every one that leaves something out
+ledgers it:
 
 | Variable | Effect |
 |---|---|
-| `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix and the SFTP integration tests), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
+| `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix, the SFTP and MinIO integration suites and the machine tier), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
 | `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
 | `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
 | `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
+| `CI_LOCAL_SKIP_E2E=1` | Leaves out the browser suite and the CLI smoke slice from `rclone-manager-tests`, which are the only automated execution either of them gets. The step otherwise refuses on a machine with no Playwright Chromium and names the install command. Ends INCOMPLETE. |
 | `CI_LOCAL_SENTINEL=0` | Does not start the sentinel container that keeps the Docker daemon out of Resource Saver's idle timer (#457). The per-step daemon probes still run, so a daemon that dies is still a named failure rather than a skip. |
 | `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, chosen because the SFTP fixture already builds from it so every machine that can run this gate has it cached. |
 
