@@ -374,7 +374,7 @@ func (u *unfinishedCheck) Unwrap() error { return u.err }
 // No hash update. Layer 1 computed the local file's SHA-256 as a side
 // effect of reading it, and attaching it here would leave the row carrying
 // exactly the evidence QuarantineReason reads to decide whether to say "a
-// content check failed" -- about a comparison that never happened.
+// content check failed", about a comparison that never happened.
 func recordStall(ctx context.Context, d Deps, p VerifyParams, rec state.Record, cause error) (state.Outcome, error) {
 	attempt := rec.RetryCount + 1
 	// The category, once. transport.Error renders it itself, so prefixing
