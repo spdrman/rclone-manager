@@ -114,7 +114,10 @@ _selftest_anchor() {
   display=$(_selftest_display "$file")
   selftest_anchors_checked=$((selftest_anchors_checked + 1))
   selftest_anchors_in_control=$((selftest_anchors_in_control + 1))
-  out=$(python3 - "$mode" "$file" "$old" "$new" "$display" <<'PY'
+  # 2>&1 is load-bearing: python's sys.exit(message) writes to stderr, so
+  # without it the complaint escapes to the terminal unindented and out of
+  # order while $out stays empty and the verdict says nothing.
+  out=$(python3 - "$mode" "$file" "$old" "$new" "$display" 2>&1 <<'PY'
 import sys
 
 mode, path, old, new, shown = sys.argv[1:6]
@@ -132,7 +135,7 @@ if n == 1:
 
 
 def quoted(text):
-    return "\n".join("      | " + line for line in text.split("\n"))
+    return "\n".join("  | " + line for line in text.split("\n"))
 
 
 if n > 1:
@@ -151,9 +154,9 @@ while kept < len(lines) and "\n".join(lines[: kept + 1]) in src:
 
 detail = "%s no longer contains this anchor:\n%s" % (shown, quoted(old))
 if kept == 0:
-    detail += "\n      not even its first line survives, so the whole block moved or went away."
+    detail += "\n  not even its first line survives, so the whole block moved or went away."
 else:
-    detail += "\n      its first %d line(s) are still there; it stops matching at:\n%s" % (
+    detail += "\n  its first %d line(s) are still there; it stops matching at:\n%s" % (
         kept,
         quoted(lines[kept]),
     )
@@ -197,7 +200,7 @@ mutate_py() {
   out=$(python3 - "$file" 2>&1) || status=$?
   if [ "$status" -ne 0 ]; then
     selftest_note_stale "$(_selftest_display "$file"): the mutation refused to plant:
-$(printf '%s\n' "$out" | sed 's/^/      | /')"
+$(printf '%s\n' "$out" | sed 's/^/  | /')"
   fi
 }
 
@@ -246,8 +249,9 @@ selftest_stale_summary() {
     return 0
   fi
   echo >&2
-  echo "STALE ANCHORS: $selftest_stale_count control(s) could not plant their violation, out of $selftest_anchors_checked anchor(s) checked." >&2
+  echo "STALE ANCHORS: $selftest_stale_count of these controls could not plant their violation, so they proved nothing:" >&2
   printf '%s' "$selftest_stale_controls" >&2
-  echo "Each one names a verbatim copy of product source that has since been refactored." >&2
-  echo "Re-anchor it to the code as it is now. Run 'bash scripts/selftest/check-anchors.sh' to check them all in seconds." >&2
+  echo "Each one quotes product source that has since moved. Re-anchor it to the code as" >&2
+  echo "it is now rather than deleting the control, and check every anchor in seconds with:" >&2
+  echo "    bash scripts/selftest/check-anchors.sh" >&2
 }
