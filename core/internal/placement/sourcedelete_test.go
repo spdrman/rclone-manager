@@ -2,9 +2,11 @@ package placement_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +116,17 @@ func plantSourceDeletePending(t *testing.T, f *fixture, a deleteAttempt) state.M
 
 	if a.afterPlant != nil {
 		a.afterPlant(t, f)
+	}
+
+	// Some of these worlds break FR-30's invariant the instant they are
+	// planted, and that is the premise rather than a defect: a
+	// destination the journal cannot rely on, with the source already at
+	// DELETE_PENDING, is precisely the state guardSourceDelete has to
+	// refuse a delete in. Declared from the journal rather than from a
+	// per-cell flag, so a cell cannot claim a breach it does not have and
+	// a cell that stops having one stops forgiving anything.
+	if placement.CheckInvariant(f.record()) != nil {
+		f.guard.tolerateExistingBreach(t)
 	}
 	return mv
 }
@@ -397,4 +410,130 @@ func TestTheGuardRefusesWhenTheJournalsPathIsNotTheComputedOne(t *testing.T) {
 	}
 	plantSourceDeletePending(t, f, a)
 	runDeleteAttempt(t, f, a)
+}
+
+// TestAStandingRefusalBeforeTheSourceDeleteIsRecordedOnTheMoveRow is the
+// visibility half of a refusal that is deliberately invisible in every
+// other respect.
+//
+// deleteSource's standing refusals change nothing on purpose: same phase,
+// same placements, every copy preserved, and the move re-driven and
+// re-refused on the next cycle until somebody acts on it. That is right,
+// and it left the move row reading SOURCE_DELETE_PENDING with an EMPTY
+// error column, so the only account of what the engine had decided lived
+// in the cycle report, which is in memory and gone by the time an operator
+// looks.
+//
+// FR-24's health surface is what makes that matter rather than merely
+// untidy. It reads the error on the move row to tell a move that is
+// failing from a move that is young, so a move parked here read as
+// open-and-fine and could sit there indefinitely with nothing saying so.
+//
+// The three claims are separate on purpose: the reason is THERE, the move
+// did NOT move, and no copy changed. A build that recorded the reason by
+// advancing the move, or by touching a placement, would satisfy the first
+// and break the thing the refusal exists to protect.
+func TestAStandingRefusalBeforeTheSourceDeleteIsRecordedOnTheMoveRow(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	size := int64(len(f.content))
+	at := testNow2
+	a := deleteAttempt{
+		destination: &state.PlacementUpdate{
+			Medium: testMedium, Location: f.key, Size: &size, Hash: f.hash, HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, VerifiedAt: &at, Status: state.PlacementActive,
+		},
+	}
+	plantSourceDeletePending(t, f, a)
+
+	// The control, and it is the one this cell would be worthless
+	// without: the row carries no reason before the cycle runs, so a
+	// reason afterwards can only have been written by the refusal. A
+	// planted world that already had one would make this pass no matter
+	// what the engine did.
+	if before := f.onlyMove(); before.Error != "" {
+		t.Fatalf("the planted move row already carries a reason (%q), so this cell cannot tell who wrote one", before.Error)
+	}
+	placementsBefore := describePlacementsForTest(f.record())
+
+	// A destination that cannot be READ at the moment of the re-check.
+	// This is the capability refusal, not a failed verification: the
+	// object is there, the journal's account of it is perfect, and the
+	// endpoint will not serve it right now. deleteSource must change
+	// nothing at all in that situation, because the destination is the
+	// copy FR-30's invariant is currently resting on.
+	f.medium.openErr = &transport.Error{
+		Category: transport.UnsupportedCapability, Op: "open",
+		Cause: errors.New("InvalidObjectState: the operation is not valid for the object's storage class"),
+	}
+
+	report, err := f.engine.RunCycle(f.ctx, nil)
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	f.guard.fail()
+	if len(report.Outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %+v", report.Outcomes)
+	}
+
+	mv := f.onlyMove()
+
+	// 1. The reason is on the row, and it is one an operator can act on:
+	// which artifact, which medium, what could not be done, and the fact
+	// that nothing was changed.
+	if mv.Error == "" {
+		t.Fatal("the move row carries no reason after a standing refusal, so an operator reading the move journal " +
+			"has no account of why this move has not progressed, and a health surface reading the same column has none either")
+	}
+	for _, want := range []string{
+		f.artifact.String(), // which artifact
+		testMedium,          // which medium
+		"could not be re-verified",
+		"nothing has been changed", // that this is a refusal and not a half-done delete
+	} {
+		if !strings.Contains(mv.Error, want) {
+			t.Errorf("the recorded reason does not carry %q, so it does not say what an operator has to act on: %q", want, mv.Error)
+		}
+	}
+	t.Logf("the move row records: %s", mv.Error)
+
+	// 2. It did not move. The refusal is not a fault and not a give-up:
+	// the phase is where it was, and it is not terminal, so the next
+	// cycle drives it again.
+	if got := placement.Phase(mv.Phase); got != placement.SourceDeletePending {
+		t.Errorf("the move is at %s after a standing refusal, want %s; recording a reason must not advance anything",
+			got, placement.SourceDeletePending)
+	}
+	if placement.IsTerminal(placement.Phase(mv.Phase)) {
+		t.Error("the move reached a terminal phase; a standing refusal is a move waiting, not a move finished")
+	}
+
+	// 3. No copy changed, and the source is still on disk.
+	if got := describePlacementsForTest(f.record()); got != placementsBefore {
+		t.Errorf("the placements changed under a refusal that must change nothing:\n before: %s\n after:  %s", placementsBefore, got)
+	}
+	if !f.localExists() {
+		t.Fatal("THE SOURCE COPY WAS DELETED against a destination nothing could read")
+	}
+
+	// And the caller can still classify it. The error the row renders is
+	// the caller's own, so an errors.Is that worked before still works.
+	o := report.Outcomes[0]
+	if o.Err == nil || !errors.Is(o.Err, placement.ErrClassUnavailable) {
+		t.Errorf("the outcome no longer carries a capability refusal a caller can ask about: %v", o.Err)
+	}
+}
+
+// describePlacementsForTest renders every placement, so a cell can compare
+// the whole set before and after and not only the one it was thinking of.
+func describePlacementsForTest(rec state.Record) string {
+	parts := make([]string, 0, len(rec.Placements))
+	for _, p := range rec.Placements {
+		class := p.VerificationClass
+		if class == "" {
+			class = "unverified"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s/%s@%s", p.Medium, p.Status, class, p.Location))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
 }

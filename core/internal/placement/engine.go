@@ -1035,6 +1035,8 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	result, want, err := e.verifyCopy(ctx, mv, src, false)
 	switch {
 	case errors.Is(err, ErrClassUnavailable):
+		// This branch RECORDS its reason and changes nothing else. See
+		// noteOnRow for why the recording is not optional.
 		// "I could not check it" is not "I checked and it is wrong", and
 		// at this phase the difference decides whether a good copy gets
 		// destroyed. The destination here is not the disposable one it was
@@ -1056,9 +1058,9 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		// it. That is the same standing refusal guardSourceDelete's own
 		// clauses produce, and it is reached the same way: by returning
 		// rather than by advancing.
-		return mv, fmt.Errorf(
+		return e.noteOnRow(ctx, mv, fmt.Errorf(
 			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
-			mv.Artifact, mv.DestinationMedium, want, err)
+			mv.Artifact, mv.DestinationMedium, want, err))
 	case err != nil:
 		return e.recopyOrAbandon(ctx, mv, SourceDeletePending, fmt.Sprintf(
 			"the destination copy on %q could not be re-verified at %s class immediately before the source delete: %v",
@@ -1091,12 +1093,14 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 	switch {
 	case errors.Is(err, errSourceAlreadyGone):
 		// The delete already happened and the process died before it could
-		// say so. Recording DONE below is the whole remaining work.
+		// say so. Recording DONE below is the whole remaining work, and
+		// nothing is noted on the row because nothing refused.
 	case err != nil:
-		return mv, err
+		return e.noteOnRow(ctx, mv, err)
 	default:
 		if err := e.remove(ctx, target); err != nil {
-			return mv, fmt.Errorf("placement: deleting %s's source copy on %q: %w", mv.Artifact, mv.SourceMedium, err)
+			return e.noteOnRow(ctx, mv, fmt.Errorf(
+				"placement: deleting %s's source copy on %q: %w", mv.Artifact, mv.SourceMedium, err))
 		}
 	}
 
@@ -1106,6 +1110,49 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		OccurredAt: e.now(),
 		Placements: []state.PlacementUpdate{src.Update().WithStatus(state.PlacementGone)},
 	}))
+}
+
+// noteOnRow records WHY a move stopped where it is, without moving it and
+// without changing a single placement.
+//
+// # What was wrong with returning the error and nothing else
+//
+// Every path this serves is a STANDING refusal: the destination could not
+// be re-verified, or one of guardSourceDelete's clauses could not be
+// proved, or the delete itself failed. All of them are deliberate, all of
+// them preserve every copy, and all of them are reached by returning
+// rather than by advancing, which is exactly right. What was missing is
+// the account. The move row read SOURCE_DELETE_PENDING with an empty error
+// column, so the only record of what the engine had decided lived in the
+// cycle report, which is in memory and gone by the time an operator looks.
+//
+// That is the same hole copy() closed for a failed copy, and this is
+// deliberately the same shape so the two read consistently: a From == To
+// write, which phases.go names as the one legal non-transition precisely
+// because it is how a caller records a fact without claiming progress.
+//
+// # It makes a decision visible; it does not turn one into a fault
+//
+// The phase does not change, no placement changes, and nothing here is
+// terminal. A move parked here is still open and still legitimately
+// waiting, and it will be re-driven and re-refused on the next cycle,
+// which is the intended behaviour. The one thing that changes is that the
+// reason is now durable and readable, which is what FR-24's health surface
+// needs to tell "this move is waiting on something a person has to fix"
+// from "this move started ten seconds ago". Without it those two are the
+// same row.
+//
+// The error given back is the caller's own, unwrapped and unchanged, so
+// every errors.Is a caller was already asking still gets the same answer.
+// A failure to write the note is folded into it rather than replacing it,
+// because the reason the move stopped matters more than the reason it
+// could not be written down.
+func (e *Engine) noteOnRow(ctx context.Context, mv state.Move, why error) (state.Move, error) {
+	noted, noteErr := e.step(ctx, mv, Phase(mv.Phase), Phase(mv.Phase), why.Error())
+	if noteErr != nil {
+		return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", why, noteErr)
+	}
+	return noted, why
 }
 
 // recopyOrAbandon takes the destination away and either copies again or

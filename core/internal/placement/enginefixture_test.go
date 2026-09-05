@@ -325,6 +325,48 @@ type guard struct {
 	mu         sync.Mutex
 	violations []string
 	deletes    []string
+
+	// tolerated is one breach this fixture's world already had before the
+	// engine was started, rendered exactly as CheckInvariant renders it.
+	// See tolerateExistingBreach.
+	tolerated string
+}
+
+// tolerateExistingBreach declares that this world ALREADY breaks FR-30's
+// standing invariant, before the engine has done anything.
+//
+// Four of the source-delete guard cells build exactly that world on
+// purpose: a destination placement the journal cannot rely on, plus a
+// source already at DELETE_PENDING, leaves no ACTIVE content-class copy.
+// That is not a defect being tolerated, it IS the world guardSourceDelete's
+// clauses exist to refuse a delete in, and a cell that could not build it
+// could not test them.
+//
+// It went unnoticed until the engine started recording a reason on the
+// move row when it refuses (noteOnRow). That write changes nothing about
+// the copies, but it is a journal write, and this guard checks after every
+// one, so the planted breach became visible at the first write rather than
+// never.
+//
+// The tolerated value is the rendered message rather than a boolean, and
+// that is the whole point: CheckInvariant's text carries every placement's
+// medium, status and class, so any change to the copies produces a
+// different string and is still reported. This forgives the exact state
+// the cell planted and nothing else.
+func (g *guard) tolerateExistingBreach(t *testing.T) {
+	t.Helper()
+	rec, err := g.journal.Get(context.Background(), g.artifact)
+	if err != nil {
+		t.Fatalf("reading the journal to declare the planted breach: %v", err)
+	}
+	broke := placement.CheckInvariant(rec, g.sufficient...)
+	if broke == nil {
+		t.Fatal("this cell declared that its planted world breaks FR-30's invariant, and it does not; " +
+			"a declaration that forgives nothing is a declaration that will forgive something else later")
+	}
+	g.mu.Lock()
+	g.tolerated = broke.Error()
+	g.mu.Unlock()
 }
 
 func (g *guard) check(what string) error {
@@ -378,7 +420,9 @@ func (g *guard) checkSurviving(what, medium, locator string) error {
 
 func (g *guard) violation(what string, err error) error {
 	g.mu.Lock()
-	g.violations = append(g.violations, fmt.Sprintf("%s: %v", what, err))
+	if g.tolerated == "" || err.Error() != g.tolerated {
+		g.violations = append(g.violations, fmt.Sprintf("%s: %v", what, err))
+	}
 	g.mu.Unlock()
 	return fmt.Errorf("the standing invariant does not hold, so %s is refused: %w", what, err)
 }

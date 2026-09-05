@@ -38,6 +38,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -88,19 +89,31 @@ func run() error {
 		bucket      = flag.String("bucket", "", "the medium's bucket: a directory for a local_dir medium, a real bucket name for an s3 one")
 		mediumID    = flag.String("medium", "", "the medium id")
 		mediumType  = flag.String("medium-type", string(transport.MediumTypeLocalDir), "the medium's transport type")
-		endpoint    = flag.String("endpoint", "", "the medium's endpoint, for an s3 medium")
-		region      = flag.String("region", "", "the medium's region, for an s3 medium")
-		credentials = flag.String("credentials-file", "", "a shared-credentials file, for an s3 medium")
-		source      = flag.String("source", "", "the backup set's source name")
-		set         = flag.String("set", "", "the backup set's name")
-		artifact    = flag.String("artifact", "", "the artifact's name")
-		destination = flag.String("destination", "", "the medium the artifact should move to")
-		plan        = flag.Bool("plan", false, "plan a move for the artifact as well as resuming")
+
+		// A second medium, so a cell can drive a hop whose two ends are
+		// both mediums. It shares the type, endpoint, region and
+		// credentials of the first, because both suites that run this
+		// binary put their two mediums on one endpoint; only the id and
+		// the bucket differ. Left empty, nothing about this harness
+		// changes and every existing invocation means what it meant.
+		secondMediumID = flag.String("second-medium", "", "a second medium id, for a hop between two mediums")
+		secondBucket   = flag.String("second-bucket", "", "the second medium's bucket")
+		endpoint       = flag.String("endpoint", "", "the medium's endpoint, for an s3 medium")
+		region         = flag.String("region", "", "the medium's region, for an s3 medium")
+		credentials    = flag.String("credentials-file", "", "a shared-credentials file, for an s3 medium")
+		source         = flag.String("source", "", "the backup set's source name")
+		set            = flag.String("set", "", "the backup set's name")
+		artifact       = flag.String("artifact", "", "the artifact's name")
+		destination    = flag.String("destination", "", "the medium the artifact should move to")
+		plan           = flag.Bool("plan", false, "plan a move for the artifact as well as resuming")
 
 		killAfterPhase       = flag.String("kill-after-phase", "", "die the instant a phase write with this target commits")
 		killAfterPlan        = flag.Bool("kill-after-plan", false, "die the instant the durable intent to move is recorded, before any phase write")
 		killAfterCopy        = flag.Bool("kill-after-copy", false, "die the instant a copy to the medium returns, before anything is journaled")
-		killAfterSourceWipe  = flag.Bool("kill-after-source-delete", false, "die the instant the source copy is removed, before anything is journaled")
+		killAfterSourceWipe  = flag.Bool("kill-after-source-delete", false, "die the instant a local file is removed, before anything is journaled")
+		killAfterObjectWipe  = flag.Bool("kill-after-object-delete", false, "die the instant an object is removed from a medium, before anything is journaled")
+		killDuringStage      = flag.Bool("kill-during-stage", false, "die part-way through reading a medium object back onto local disk")
+		killAfterStage       = flag.Bool("kill-after-stage", false, "die the instant a local file is written, before anything is done with it")
 		corruptAfterCopy     = flag.Bool("corrupt-after-copy", false, "overwrite the object the copy just wrote, the way a hostile or broken endpoint would")
 		suppressKillRequests = flag.Bool("suppress-kill", false, "turn every self-kill into a no-op, to prove the suite's own kill assertion is not vacuous")
 	)
@@ -135,6 +148,13 @@ func run() error {
 		Region:      *region,
 		Credentials: transport.MediumCredentials{File: *credentials},
 	}
+	mediums := []transport.Medium{medium}
+	if *secondMediumID != "" {
+		second := medium
+		second.ID = *secondMediumID
+		second.Bucket = *secondBucket
+		mediums = append(mediums, second)
+	}
 	adapter := rclone.New()
 
 	g := &invariantGuard{journal: journal, artifact: id}
@@ -143,10 +163,14 @@ func run() error {
 		Journal: &killerJournal{Journal: journal, killAfter: *killAfterPhase, killAfterPlan: *killAfterPlan, guard: g},
 		Store: &killerStore{
 			MediumStore: adapter, guard: g,
-			killAfterCopy: *killAfterCopy, corruptAfterCopy: *corruptAfterCopy, bucket: *bucket,
+			killAfterCopy: *killAfterCopy, corruptAfterCopy: *corruptAfterCopy,
+			killAfterDelete: *killAfterObjectWipe, killDuringRead: *killDuringStage,
 		},
-		Local:            &killerLocal{Local: local, guard: g, killAfterRemove: *killAfterSourceWipe},
-		Mediums:          resolver{medium: medium},
+		Local: &killerLocal{
+			Local: local, guard: g,
+			killAfterRemove: *killAfterSourceWipe, killAfterPut: *killAfterStage,
+		},
+		Mediums:          resolver{mediums: mediums},
 		Sets:             sets{set: config.BackupSet{Name: *set, ID: setID, LocalPath: *root}},
 		Tiers:            noTierWantsIt{},
 		MaxMovesPerCycle: 4,
@@ -186,7 +210,19 @@ type invariantGuard struct {
 	violations []string
 }
 
-func (g *invariantGuard) before(what, locator string) error {
+// before evaluates the invariant, and then evaluates it again as it WILL
+// be once the copy on medium at locator is gone.
+//
+// A copy is a MEDIUM and a locator, never a locator alone. FR-28's key is
+// <prefix>/<source>/<set>/<artifact-name>, so two mediums that declare no
+// prefix give one artifact the same key on both, and nothing had two
+// medium copies at once until a hop between two mediums did (#429). Keyed
+// by locator, deleting the source subtracted the destination as well and
+// this guard refused a delete that was perfectly safe, which parks the
+// move at the phase before it for ever. The same mistake the other way
+// round is worse: a filter that removes the wrong copy can leave the one
+// being deleted in the surviving set, and then a real breach reads clean.
+func (g *invariantGuard) before(what, medium, locator string) error {
 	rec, err := g.journal.Get(context.Background(), g.artifact)
 	if err != nil {
 		return fmt.Errorf("reading the journal before %s: %w", what, err)
@@ -201,12 +237,13 @@ func (g *invariantGuard) before(what, locator string) error {
 	surviving := rec
 	surviving.Placements = nil
 	for _, p := range rec.Placements {
-		if !samePlace(p.Location, locator) {
-			surviving.Placements = append(surviving.Placements, p)
+		if p.Medium == medium && samePlace(p.Location, locator) {
+			continue
 		}
+		surviving.Placements = append(surviving.Placements, p)
 	}
 	if err := placement.CheckInvariant(surviving); err != nil {
-		return g.violation(what, fmt.Errorf("once the copy at %q is gone, %w", locator, err))
+		return g.violation(what, fmt.Errorf("once the copy at %q on %q is gone, %w", locator, medium, err))
 	}
 	return nil
 }
@@ -270,7 +307,44 @@ type killerStore struct {
 	guard            *invariantGuard
 	killAfterCopy    bool
 	corruptAfterCopy bool
-	bucket           string
+	killAfterDelete  bool
+	killDuringRead   bool
+}
+
+// OpenObject can hand back a reader that dies part-way through, which is
+// the one crash point a hop between two mediums has that no other move
+// does: the bytes come down onto local disk before they go anywhere, and
+// a process that dies during that read leaves whatever the local store's
+// write was in the middle of.
+//
+// Killing inside the read rather than after it is the point. The local
+// store writes through a temporary file and links it into place, so a
+// process killed DURING the read and one killed AFTER the write leave
+// two genuinely different things behind, and only one of them is a file
+// at the name anything will look for.
+func (s *killerStore) OpenObject(ctx context.Context, medium transport.Medium, key string) (io.ReadCloser, error) {
+	rc, err := s.MediumStore.OpenObject(ctx, medium, key)
+	if err != nil || !s.killDuringRead {
+		return rc, err
+	}
+	return &dyingReader{ReadCloser: rc, what: key}, nil
+}
+
+// dyingReader serves one read and then kills the process, so the write
+// consuming it is interrupted in flight rather than completed.
+type dyingReader struct {
+	io.ReadCloser
+	what string
+	read bool
+}
+
+func (r *dyingReader) Read(p []byte) (int, error) {
+	if r.read {
+		selfDestruct("the read of " + r.what + " was interrupted in flight")
+	}
+	n, err := r.ReadCloser.Read(p)
+	r.read = true
+	return n, err
 }
 
 func (s *killerStore) UploadFromLocal(ctx context.Context, medium transport.Medium, localPath, key string, opts transport.UploadOptions) (transport.UploadResult, error) {
@@ -293,16 +367,25 @@ func (s *killerStore) UploadFromLocal(ctx context.Context, medium transport.Medi
 // the only way to reach "the object really is there and really is the
 // wrong bytes" through a real backend without a real hostile endpoint.
 //
-// It has two implementations because the two mediums this harness runs
-// against are reached differently, and neither may go through the manager
-// in a way that would journal the substitution: a directory bucket is
-// written on disk, and a real endpoint is written through a second upload
-// to the same key, which is what an endpoint keeping the wrong bytes looks
-// like from every side the manager can see.
+// It has two implementations because the two backend kinds this harness
+// runs against are reached differently, and neither may go through the
+// manager in a way that would journal the substitution: a directory bucket
+// is written on disk, and a real endpoint is written through a second
+// upload to the same key, which is what an endpoint keeping the wrong
+// bytes looks like from every side the manager can see.
+//
+// The directory it writes into comes from the MEDIUM it was handed, not
+// from a field on this struct. It used to be the latter, which was
+// indistinguishable from correct while there was one medium and became a
+// real defect the moment there were two: a hop between two mediums
+// corrupted the SOURCE object rather than the destination, and the cell
+// that found it read as the engine refusing a source delete for a size
+// mismatch. Both mediums give one artifact the same key, so nothing about
+// the key could have caught it.
 func (s *killerStore) corrupt(ctx context.Context, medium transport.Medium, key string) error {
 	const wrong = "this endpoint kept something else"
 	if medium.Type == transport.MediumTypeLocalDir {
-		return os.WriteFile(filepath.Join(s.bucket, filepath.FromSlash(key)), []byte(wrong), 0o600)
+		return os.WriteFile(filepath.Join(medium.Bucket, filepath.FromSlash(key)), []byte(wrong), 0o600)
 	}
 	f, err := os.CreateTemp("", "movecrash-wrong-bytes")
 	if err != nil {
@@ -321,10 +404,16 @@ func (s *killerStore) corrupt(ctx context.Context, medium transport.Medium, key 
 }
 
 func (s *killerStore) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
-	if err := s.guard.before("deleting the destination object", key); err != nil {
+	if err := s.guard.before("deleting an object on "+medium.ID, medium.ID, key); err != nil {
 		return err
 	}
-	return s.MediumStore.DeleteObject(ctx, medium, key)
+	if err := s.MediumStore.DeleteObject(ctx, medium, key); err != nil {
+		return err
+	}
+	if s.killAfterDelete {
+		selfDestruct("the object " + key + " on " + medium.ID + " was removed, before anything was journaled")
+	}
+	return nil
 }
 
 // killerLocal guards the local delete, and can die the instant it lands.
@@ -332,30 +421,61 @@ type killerLocal struct {
 	artifactstore.Local
 	guard           *invariantGuard
 	killAfterRemove bool
+	killAfterPut    bool
 }
 
+// Put can die the instant a local file is written and linked into place,
+// which is the second crash point a hop between two mediums adds: the
+// bytes are down, complete and correct, and nothing has been uploaded or
+// journaled about them.
+//
+// The kill is after the underlying call returns, so the local store's
+// temporary-file-then-link has finished and the file is at the name a
+// resumed move will look for. That is the whole difference from
+// -kill-during-stage, and the pair is what says which of the two things a
+// crash can leave behind is the one the engine has to cope with.
+func (l *killerLocal) Put(ctx context.Context, locator string, r io.Reader) error {
+	if err := l.Local.Put(ctx, locator, r); err != nil {
+		return err
+	}
+	if l.killAfterPut {
+		selfDestruct("the local file at " + locator + " was written, before anything was done with it")
+	}
+	return nil
+}
+
+// Remove guards, and can die on, every local delete this engine makes.
+//
+// It says "a local file" rather than "the source copy" because it is no
+// longer only the source: a hop between two mediums removes its staging
+// copy through this same call, and a guard message that named the wrong
+// thing would send somebody looking for a lost backup that is not lost.
+// The guard's arithmetic is unaffected either way, since it filters on the
+// locator and a staging path is no placement's location.
 func (l *killerLocal) Remove(ctx context.Context, locator string) error {
-	if err := l.guard.before("removing the local copy", locator); err != nil {
+	if err := l.guard.before("removing a local file", state.MediumLocal, locator); err != nil {
 		return err
 	}
 	if err := l.Local.Remove(ctx, locator); err != nil {
 		return err
 	}
 	if l.killAfterRemove {
-		selfDestruct("the source copy at " + locator + " was removed, before anything was journaled")
+		selfDestruct("the local file at " + locator + " was removed, before anything was journaled")
 	}
 	return nil
 }
 
 // --- the small resolvers ----------------------------------------------
 
-type resolver struct{ medium transport.Medium }
+type resolver struct{ mediums []transport.Medium }
 
 func (r resolver) Resolve(id string) (transport.Medium, placement.Class, error) {
-	if id != r.medium.ID {
-		return transport.Medium{}, "", fmt.Errorf("no medium %q is configured", id)
+	for _, m := range r.mediums {
+		if m.ID == id {
+			return m, placement.Content, nil
+		}
 	}
-	return r.medium, placement.Content, nil
+	return transport.Medium{}, "", fmt.Errorf("no medium %q is configured", id)
 }
 
 type sets struct{ set config.BackupSet }

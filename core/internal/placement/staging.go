@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
@@ -97,6 +98,25 @@ import (
 // recovery.ScanManifests, the one thing that reads a backup root
 // directly, skips directories, so nothing downstream sees it at all.
 const StagingDirName = ".moves"
+
+// stagingTempPrefix is what artifactstore.Local.Put names the temporary
+// file it writes through before it links the result into place.
+//
+// It is a second copy of a literal that package owns, and it is here for
+// one reason: a process killed part-way through a staged download leaves
+// that temp file behind, because the deferred cleanup that would have
+// removed it never runs. Nothing else ever will. One artifact-sized file
+// per interrupted download, on the backup set's own disk, which is the
+// disk the next hop's size check is about.
+//
+// The copy is pinned behaviourally rather than by a shared constant, and
+// that is stronger than either exporting it or trusting this line. The
+// crash matrix kills a real process in the middle of a real staged
+// download and then requires the staging area to be empty after the
+// restart (tests/movecrash, S1). If artifactstore ever names its temp
+// files differently, that cell fails with the actual leftover name in the
+// message. It is the cell that put this constant here in the first place.
+const stagingTempPrefix = ".artifactstore-"
 
 // stagingPath is where a staged move's local copy of one artifact goes.
 //
@@ -198,6 +218,11 @@ func (e *Engine) copyMediumToMedium(ctx context.Context, mv state.Move, src stat
 	// TestAStagingAreaThatCannotBeCreatedRefusesTheMove pins it.
 	if err := os.MkdirAll(filepath.Dir(staged), 0o750); err != nil {
 		return 0, fmt.Errorf("preparing the staging area for %s: %w", mv.Artifact, err)
+	}
+	// Before the size check, not after, because what it sweeps is space
+	// the check is about.
+	if err := e.sweepStagingTemps(ctx, filepath.Dir(staged)); err != nil {
+		return 0, err
 	}
 	if err := e.roomToStage(staged, src); err != nil {
 		return 0, err
@@ -427,6 +452,53 @@ func (e *Engine) stagedCopyIsTheArtifact(ctx context.Context, staged string, src
 	return result.Passed, nil
 }
 
+// sweepStagingTemps removes the temporary files a killed process left in
+// the staging directory.
+//
+// artifactstore.Local.Put writes through a temp file and links it into
+// place, and removes the temp name on every path out of itself. Every path
+// it takes, that is: a SIGKILL takes none of them, so a process killed
+// during a staged download leaves a temp behind and the file at the
+// staging name is never created at all. The crash matrix found this with a
+// real kill (tests/movecrash, S1), and it is a leak nothing else collects
+// because a temp name is random and cannot be attributed to an artifact.
+//
+// # Why this is allowed to delete files it cannot name in advance
+//
+// Every other delete in this package addresses exactly one path it
+// computed itself, which is the property that makes it safe without a
+// guard. This one is a prefix match over a directory, so it needs a
+// different argument, and the argument is that the directory is entirely
+// this file's: nothing else writes to it, an artifact's own copy can never
+// be in it (proveLocalSourceSafe accepts a local source only in the
+// canonical backup-set root), and the prefix is one only Put produces. It
+// still goes through the LocalStore seam, so the guards a fixture puts on
+// deletes see every one of them.
+//
+// It cannot race a download of its own. The engine drives one move at a
+// time within a cycle and there are no goroutines under RunCycle, so at
+// the moment this runs there is no staged read in flight to interrupt.
+//
+// A directory that cannot be listed is not an error here. The sweep is
+// housekeeping in front of the real work, and the real work will fail on
+// its own terms a moment later if the directory is genuinely unusable.
+func (e *Engine) sweepStagingTemps(ctx context.Context, dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), stagingTempPrefix) {
+			continue
+		}
+		leftover := filepath.Join(dir, entry.Name())
+		if err := e.Local.Remove(ctx, leftover); err != nil {
+			return fmt.Errorf("clearing a temporary file %q left in the staging area by an interrupted download: %w", leftover, err)
+		}
+	}
+	return nil
+}
+
 // discardStaging removes whatever this move left in the staging area.
 //
 // It is called from abandon, which is the one terminal end a staged move
@@ -452,5 +524,7 @@ func (e *Engine) discardStaging(ctx context.Context, mv state.Move) error {
 	if err := e.Local.Remove(ctx, staged); err != nil {
 		return fmt.Errorf("placement: discarding %s's staging copy at %q: %w", mv.Artifact, staged, err)
 	}
-	return nil
+	// And the temporary file an interrupted download of this artifact may
+	// have left, which nothing else collects. See sweepStagingTemps.
+	return e.sweepStagingTemps(ctx, filepath.Dir(staged))
 }
