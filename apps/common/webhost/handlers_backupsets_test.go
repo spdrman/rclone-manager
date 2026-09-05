@@ -1,3 +1,17 @@
+// Creating a backup set, including the branch where creating it also
+// starts work.
+//
+// run_immediately is what makes this route interesting. Persisting a set
+// touches no backup data and is not gated; the same call with that flag
+// set also starts a run cycle, which is exactly what the gate exists to
+// block, so the check is on the branch rather than on the route. The cases
+// here pin both directions, including the one where the set is created
+// disabled and must never run even though a run was requested.
+//
+// The partial-failure case is the other one to read: a create that
+// succeeds followed by a run that fails is still a successful create, and
+// answering it as an error would leave an operator with a set they were
+// told did not exist.
 package webhost
 
 import (

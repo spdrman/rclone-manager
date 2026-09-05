@@ -1,3 +1,10 @@
+// The move outcome on an operation read: present when the summary carries
+// one, and absent rather than zero-valued when it does not.
+//
+// The omission case is the one worth having. An outcome rendered as a
+// zero-valued object claims a move happened and moved nothing, which is a
+// different and much worse statement than saying nothing about a move at
+// all.
 package webhost
 
 import (

@@ -1,3 +1,15 @@
+// The sparse edit of a backup set, where the whole contract is which
+// fields cross the seam.
+//
+// Two assertions carry that. Only the fields present in the body may reach
+// the service, so a UI saving one box cannot silently rewrite the rest of
+// the set with whatever it happened to be holding; and a zero in the body
+// is not the same as an absent key, which on a timeout or an interval is
+// the difference between "no limit" and "leave the limit alone".
+//
+// The seconds-to-duration case pins the unit conversion at the boundary.
+// A number on the wire with no unit is a bug waiting for somebody to read
+// it as the other one.
 package webhost
 
 import (

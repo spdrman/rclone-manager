@@ -1,3 +1,16 @@
+// Asking for a restore over HTTP, and the matcher that keeps the refusals
+// honest.
+//
+// The forbidden-readings test is a positive control for another test in
+// this file, and it is the reason both are trustworthy. One case asserts a
+// refused restore never reads as something it is not; that assertion is
+// only worth anything if the matcher behind it can actually match, so the
+// matcher is driven against strings it must catch. Without that, a matcher
+// that never matched would make the first test pass forever.
+//
+// The gate case pins that a restore is behind the destructive gate, which
+// is the tier this route belongs in: it is the one read-shaped operation
+// here that spends real money and moves real objects.
 package webhost
 
 import (

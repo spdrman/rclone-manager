@@ -1,3 +1,16 @@
+// The capacity assessment, which is a read that must stay a read.
+//
+// One case asserts the response carries no delete affordance of any kind.
+// That is a strange thing to test until you notice what this endpoint
+// reports: a set of backup destinations, some of them critically full,
+// which is exactly the context in which somebody would helpfully add a
+// "free up space" action. It has none, and this is what stops one
+// appearing by accident.
+//
+// The unavailable case pins that a destination this manager cannot assess
+// is reported as unavailable with a reason rather than as an error for the
+// whole request. One unreachable volume must not blank the page for every
+// other one.
 package webhost
 
 import (

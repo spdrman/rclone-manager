@@ -1,3 +1,19 @@
+// The doubles every handler test in this package is built on.
+//
+// They exist because standing up a real BackupService means a state
+// directory, a SQLite journal, migrations and an rclone transport, and a
+// test that checks a JSON field should not need any of that. What they are
+// NOT is a set of stubs shaped to make assertions pass: each one records
+// what it was asked for, so a test can prove a handler actually reached
+// the backend with the arguments it claimed rather than merely returning a
+// plausible status.
+//
+// The authenticator double has two settings and no middle ground, which
+// keeps every test explicit about whether it is exercising an
+// authenticated path. The asynchronous backend is the one with real
+// machinery: it starts work on a goroutine gated by a channel the test
+// controls, which is what turns "the operation outlives the request" from
+// a timing-dependent hope into a deterministic assertion.
 package webhost
 
 import (

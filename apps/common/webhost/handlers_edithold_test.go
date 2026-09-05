@@ -1,3 +1,16 @@
+// The edit hold, and mostly the null.
+//
+// Three of the cases here assert that nothing running is reported as an
+// absent object rather than an empty one, on both the read and the take.
+// That is not a serialisation nicety: a client renders the warning when
+// the field is present, so a zero-valued object warns an operator about
+// interrupting work that is not happening, and an operator warned about
+// nothing stops reading warnings.
+//
+// The naming case covers the other half. When something IS running, the
+// warning has to say which artifact and which stage, because discarding a
+// partial transfer and cancelling a cycle that has not picked a file yet
+// cost very different amounts.
 package webhost
 
 import (

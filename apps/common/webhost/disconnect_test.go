@@ -1,3 +1,17 @@
+// The proof that a submitted operation outlives the request that
+// submitted it.
+//
+// This is the one test in the package that must run against a real
+// listening server rather than a recorder. On a recorder, the request
+// context behaves however the test constructs it; on a real server it is
+// cancelled by net/http when the client goes away, which is the exact
+// event a handler that carelessly started its work under the request
+// context would be destroyed by. So a recorder-based version of this test
+// would pass against the bug it exists to catch.
+//
+// The asynchronous double's channel gate is what keeps it deterministic:
+// the background work is held open until the test decides, instead of the
+// assertion racing a delay somebody tuned.
 package webhost
 
 import (

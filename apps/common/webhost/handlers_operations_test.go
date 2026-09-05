@@ -1,3 +1,17 @@
+// POST /api/v1/operations and the reads beside it.
+//
+// The idempotency cases are the ones carrying real weight. A duplicate key
+// has to return the same operation rather than a second one, and a missing
+// key has to be refused rather than defaulted, because the alternative to
+// both is a retried submit that starts a second run cycle over the same
+// data. The stale-revision case is the same idea for configuration: a
+// client acting on an old picture is refused, and the refusal carries the
+// current revision as a field so the client has something to retry
+// against without parsing prose.
+//
+// Every case goes through the real router rather than calling the handler
+// directly, so the CSRF and gate middleware in front of the route are part
+// of what is being tested.
 package webhost
 
 import (

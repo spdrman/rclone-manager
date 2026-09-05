@@ -1,3 +1,20 @@
+// One backup set's retention override: reading it, replacing it, and
+// going back to inheriting.
+//
+// The pairing test is the important one. Set and clear are the two
+// directions of a single piece of state, and testing either alone leaves
+// the obvious bug uncovered: a clear that does not actually clear looks
+// identical to a set that was never applied.
+//
+// The empty-versus-absent case is this file's version of the sparse-update
+// distinction. A tier list that is present and empty says keep nothing,
+// and an absent one says inherit; collapsing them would silently turn an
+// override into an inheritance or the reverse, and only one of those
+// deletes backups.
+//
+// Refusals from the configuration layer are echoed rather than
+// reinterpreted, so an operator sees the same reason a hand-edited config
+// file would have given them.
 package webhost
 
 import (

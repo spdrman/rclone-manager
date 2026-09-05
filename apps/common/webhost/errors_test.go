@@ -1,3 +1,13 @@
+// The correlation-id header, which is the one property of an error
+// response that nothing else would notice was missing.
+//
+// The shared UI reads X-Correlation-Id off every non-2xx response and
+// falls back to the string "unavailable" when it is absent, so a server
+// that never sent it produced perfectly valid-looking errors that an
+// operator could not quote back to anybody. Both writers are covered
+// because they are two separate paths, and the second one exists precisely
+// so a stale-revision error can carry an extra field; a header set on one
+// and forgotten on the other would be invisible.
 package webhost
 
 import (

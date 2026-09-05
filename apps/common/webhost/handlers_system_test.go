@@ -1,3 +1,15 @@
+// The three system reads, plus one standing constraint on all of them.
+//
+// That constraint is the leak test: nothing these endpoints serve may
+// spell rclone or sqlite. Those are implementation choices this product
+// does not put on the wire, and a field name that leaks one is the kind of
+// thing that arrives by copying a struct rather than by anybody deciding.
+//
+// The not-ready case is the other one to read. Readiness is asked of the
+// backend, and this pins that no backend means not ready, because the
+// previous version derived it from a value that was non-empty for every
+// backend that could be constructed at all, which made it a flag that
+// could not report false.
 package webhost
 
 import (

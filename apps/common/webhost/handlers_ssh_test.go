@@ -1,3 +1,16 @@
+// The three SSH steps, and the one rule they share: key material goes in
+// and never comes back out.
+//
+// The import case asserts the response carries a fingerprint and does not
+// carry the key, which is the whole reason the route answers with a
+// reference rather than an echo. The passphrase cases pin that an omitted
+// field forwards an empty string rather than being dropped, because those
+// two reach the service differently and only one of them means the key is
+// unencrypted.
+//
+// The CSRF case is here rather than in the router tests because these
+// routes look like reads and are not: each opens a real outbound
+// connection to a host the caller named.
 package webhost
 
 import (
