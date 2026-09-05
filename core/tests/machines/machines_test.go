@@ -261,10 +261,11 @@ func TestHelperStartAgainstAnUnavailableDocker(t *testing.T) {
 // VM this gate runs against: the rule installs and it bites. So requiring
 // it under the gate closes a hole rather than turning the gate red. The
 // refusal is simulated with a `docker` in front of the real one that fails
-// only the iptables exec, which is the same PATH-shim idiom sftpfixture
-// uses, and it is narrow on purpose: every other command still reaches the
-// real daemon, so Start really does bring a machine up and the branch under
-// test is reached the way a real kernel refusal would reach it.
+// only the iptables exec, which is the same PATH-shim idiom the image
+// tests in source_test.go use, and it is narrow on purpose: every other
+// command still reaches the real daemon, so Start really does bring a
+// machine up and the branch under test is reached the way a real kernel
+// refusal would reach it.
 
 // limitReturnedMarker is printed if LimitConnections ever comes back from a
 // rule it could not install. A harness that shrugged and carried on would
@@ -351,7 +352,7 @@ func TestLimitConnectionsStillSkipsAKernelThatWillNotCapOutsideTheGate(t *testin
 func TestHelperLimitConnectionsAgainstARefusingKernel(t *testing.T) {
 	skipUnlessHelper(t)
 	m := Start(t)
-	m.Source.LimitConnections(t, 2)
+	m.Source(t).LimitConnections(t, 2)
 	fmt.Println(limitReturnedMarker)
 	t.Fatal("LimitConnections returned though the rule could not be installed")
 }

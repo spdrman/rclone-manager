@@ -44,9 +44,10 @@ func requireDocker(t *testing.T) {
 }
 
 // infraMarker is the fixed, greppable string every infrastructure refusal
-// here carries. It is the same literal in sftpfixture and miniofixture on
-// purpose: a gate log sorts into "the machine broke" and "the product
-// broke" with one grep, and a marker that varied by package would not.
+// here carries. It is the same literal in core/tests/machines and in
+// distribution/tests/adapterstacks on purpose: a gate log sorts into "the
+// machine broke" and "the product broke" with one grep, and a marker that
+// varied by package would not.
 const infraMarker = "INFRA:"
 
 func dockerUnavailable(t *testing.T, reason string, args ...any) {

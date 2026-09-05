@@ -1,4 +1,4 @@
-package sftpintegration_test
+package machinegate_test
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // The numbers TestSFTPAdapterCancelsAMidFlightTransfer is built from. They
@@ -152,7 +152,7 @@ func TestMidTransferCancellationCanStillFail(t *testing.T) {
 // and the number is bounded by the in-flight window over the link speed
 // rather than by anything this repository controls.
 func TestSFTPAdapterCancelsAMidFlightTransfer(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	a := rclone.New()
 
 	link := startSlowLink(t, f, cancelLinkRate)

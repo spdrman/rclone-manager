@@ -104,12 +104,15 @@ var UnitDirs = []string{"internal", "service", "cmd"}
 
 // HarnessDirs are the packages that ARE the machine tier's mechanism. They
 // are the only places under core/ allowed to exec docker, and importing any
-// of them puts a test package in the machine tier. The three old fixtures
-// stay listed until #450 folds them into machines.
+// of them puts a test package in the machine tier.
+//
+// Two, since #450. tests/sftpfixture and tests/miniofixture were listed here
+// until their bodies were folded into tests/machines and the directories
+// went; a name left behind on this list would be a rule about a package that
+// does not exist, which is how a guard starts describing the tree it used to
+// have.
 var HarnessDirs = []string{
 	"tests/machines",
-	"tests/sftpfixture",
-	"tests/miniofixture",
 	"tests/dockerlease",
 }
 

@@ -1,4 +1,4 @@
-package sftpintegration_test
+package machinegate_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // handshakeSamples is how many real connects the measurement below makes.
@@ -61,7 +61,7 @@ const handshakeHeadroom = 5
 // safe direction for a floor: it can only make this row stricter, never
 // laxer, and on loopback the extra round trip is noise beside a handshake.
 func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	a := rclone.New()
 
 	// An empty root, so the LIST that rides along with the connect has
@@ -71,7 +71,7 @@ func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.UploadDir, root), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	src := f.Source(root, root)
+	src := f.TransportSource(root, root)
 
 	var worst, total time.Duration
 	for i := 1; i <= handshakeSamples; i++ {

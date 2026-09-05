@@ -12,27 +12,28 @@ type LedgerEntry struct {
 	Issue int
 }
 
-// Ledger is every file the scan finds today. Eight, in two shapes.
+// Ledger is empty, and #448 and #450 are what emptied it.
 //
-// The first six are container-backed tests living in unit packages, which
-// is why `go test ./internal/...` needs a Docker daemon and why those two
-// packages were the ones that went red under concurrent gate load. #448
-// moves them into the machine tier.
+// It held eight entries in two shapes. Six were container-backed tests
+// living in unit packages, which is why `go test ./internal/...` needed a
+// Docker daemon and why core/internal/transport/rclone and core/service
+// were the two suites that went red under concurrent gate load for reasons
+// that had nothing to do with the code under test. They are
+// core/tests/machinegate now, and the pure halves of the three mixed files
+// stayed where they were.
 //
-// The last two are integration tests that exec docker themselves rather
-// than through a harness (one to kill its container on purpose, one to
-// look inside MinIO's drive). #450 gives the harness those two capabilities
-// and removes the direct calls.
-var Ledger = []LedgerEntry{
-	{File: "internal/transport/rclone/connections_gate_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "internal/transport/rclone/dockerbuild_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "internal/transport/rclone/errors_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "internal/transport/rclone/gate_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "internal/transport/rclone/ssh_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "service/backupsets_docker_test.go", Rule: RuleUnitReachesContainer, Issue: 448},
-	{File: "tests/miniointegration/helpers_test.go", Rule: RuleBypassesHarness, Issue: 450},
-	{File: "tests/sftpintegration/sftp_integration_test.go", Rule: RuleBypassesHarness, Issue: 450},
-}
+// The other two were integration tests that exec'd docker themselves rather
+// than through a harness. The harness has those two capabilities now
+// (Source.Kill, to remove its own container on purpose, and
+// Medium.HasBucket, to look inside MinIO's drive), so the bypasses-harness
+// rule holds with no exceptions at all.
+//
+// Keeping the mechanism with an empty slice is deliberate. The ledger is
+// how a migration is written down where the guard can hold it, and the next
+// one should find the shape already here rather than reinventing it. An
+// empty ledger also means the guard is now a plain rule: a new violation is
+// unexpected, full stop, with nothing to add itself to.
+var Ledger = []LedgerEntry{}
 
 // Key is what a finding and a ledger entry are matched on.
 type Key struct {

@@ -18,7 +18,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // accountingStore is the request accounting the issue's INTEGRATION step
@@ -64,7 +64,7 @@ func (o oneMedium) MediumFor(id string) (transport.Medium, bool) {
 // the placement is existence-checked, the class reported is existence, and
 // no bytes are downloaded.
 func TestRevalidationAgainstMinioExistenceChecksAndNeverDownloads(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 	medium := fixture.Medium()
@@ -136,7 +136,7 @@ func TestRevalidationAgainstMinioExistenceChecksAndNeverDownloads(t *testing.T) 
 // verdict, and it must route the artifact exactly where a failed local
 // recheck routes it.
 func TestRevalidationAgainstMinioNoticesAnObjectThatIsGone(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 	medium := fixture.Medium()
@@ -215,7 +215,7 @@ func TestRevalidationAgainstMinioNoticesAnObjectThatIsGone(t *testing.T) {
 // S3 endpoint reachable through rclone v1.75.0 can attest a full-object
 // SHA-256, so this must be an explicit capability refusal every time.
 func TestAttestingAMinioPlacementIsRefused(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 	medium := fixture.Medium()

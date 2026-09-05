@@ -30,7 +30,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -47,7 +46,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 func openJournal(t *testing.T) *state.Journal {
@@ -88,7 +87,7 @@ func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 // unexported test functions make, and covers hash capability separately
 // and honestly in TestSFTPHashCapability below.
 func TestSFTPContractSuite(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
 
@@ -98,7 +97,7 @@ func TestSFTPContractSuite(t *testing.T) {
 		if err := os.MkdirAll(full, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", full, err)
 		}
-		return f.Source("sftp-contract-"+root, root)
+		return f.TransportSource("sftp-contract-"+root, root)
 	}
 	put := func(t *testing.T, root, remotePath string, content []byte) {
 		t.Helper()
@@ -296,13 +295,13 @@ func TestSFTPContractSuite(t *testing.T) {
 // explicitly rather than silently downgrading, exactly the two honest
 // postures verify.go documents.
 func TestSFTPHashCapability(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
 	if err := os.MkdirAll(filepath.Join(f.UploadDir, "hash-capability-probe"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	source := f.Source("hash-capability", "hash-capability-probe")
+	source := f.TransportSource("hash-capability", "hash-capability-probe")
 
 	content := []byte("hash target content")
 	if err := os.WriteFile(filepath.Join(f.UploadDir, "hash-capability-probe", "hash-me.bin"), content, 0o644); err != nil {
@@ -332,7 +331,7 @@ func TestSFTPHashCapability(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(f.UploadDir, remoteDir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
-		source := f.Source("hash-capability-"+name, remoteDir)
+		source := f.TransportSource("hash-capability-"+name, remoteDir)
 		if err := os.WriteFile(filepath.Join(f.UploadDir, remoteDir, name+".bin"), content, 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -403,7 +402,7 @@ func TestSFTPHashCapability(t *testing.T) {
 // cross-contaminate: discovering, transferring and deleting one never
 // touches the other's remote object or journal row.
 func TestSFTPMultipleSources(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
 	journal := openJournal(t)
@@ -427,7 +426,7 @@ func TestSFTPMultipleSources(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(s.remoteDir, "backup.dump"), []byte("content for "+s.name), 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		s.source = f.Source("multi-"+s.name, s.name)
+		s.source = f.TransportSource("multi-"+s.name, s.name)
 	}
 
 	var artifacts []model.ArtifactID
@@ -504,9 +503,9 @@ func TestSFTPMultipleSources(t *testing.T) {
 // implementation tolerated BeginTx on an already-done context. Wrapping
 // with Wrap here tests the real, intended code path instead.
 func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := classifytransport.Wrap(rclone.New())
-	source := f.Source("cancel-lifecycle", "")
+	source := f.TransportSource("cancel-lifecycle", "")
 	journal := openJournal(t)
 	localDir := t.TempDir()
 
@@ -634,10 +633,10 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 // same-size case this account shape cannot distinguish from an untouched
 // file), must refuse the pending delete and leave the replacement intact.
 func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
-	source := f.Source("replacement", "")
+	source := f.TransportSource("replacement", "")
 	journal := openJournal(t)
 	localDir := t.TempDir()
 
@@ -750,9 +749,9 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 // name pattern or counted out of `docker ps` could be another agent's
 // container and would prove nothing about this one.
 func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
-	source := f.Source("container-death", "")
+	source := f.TransportSource("container-death", "")
 	if err := os.WriteFile(filepath.Join(f.UploadDir, "present.txt"), []byte("present"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -772,11 +771,13 @@ func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
 	case <-time.After(2 * time.Second):
 	}
 
-	f.ExpectContainerDeath()
 	killedAt := time.Now()
-	if out, err := exec.Command("docker", "rm", "-f", f.ContainerID()).CombinedOutput(); err != nil {
-		t.Fatalf("docker rm -f %s: %v\n%s", f.ContainerID(), err, out)
-	}
+	// Through the harness, not through exec.Command. Kill does the same
+	// `docker rm -f` on the same container id and tells the watchdog the
+	// death is deliberate, and going through it is what lets the testtier
+	// guard's "nothing under core/tests execs docker outside the harness"
+	// rule hold with no exceptions at all (#450).
+	f.Kill(t)
 
 	select {
 	case <-f.Context().Done():
@@ -785,7 +786,7 @@ func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
 	}
 	t.Logf("the fixture noticed its container was gone %s after the kill", time.Since(killedAt))
 
-	var died *sftpfixture.ContainerDiedError
+	var died *machines.ContainerDiedError
 	if !errors.As(context.Cause(f.Context()), &died) {
 		t.Fatalf("the cause on the fixture context is %v, not a *ContainerDiedError; without it a reader cannot tell a dead fixture container from a genuine deadlock in the transport, and both used to cost 25 minutes", context.Cause(f.Context()))
 	}

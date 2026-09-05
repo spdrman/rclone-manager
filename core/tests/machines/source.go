@@ -1,4 +1,4 @@
-// Package sftpfixture stands up a disposable SFTP server in Docker so the
+// Package machines stands up a disposable SFTP server in Docker so the
 // Phase-1 gate tests can drive the real rclone sftp backend against a real
 // server, rather than reasoning about the API from the outside.
 //
@@ -20,11 +20,13 @@
 // in parallel, either that VM needs more than 4 GB, or the two architecture
 // checks need to stop re-running a container-backed suite to prove a
 // dependency boundary that no container is involved in.
-package sftpfixture
+package machines
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -41,6 +43,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
@@ -101,6 +104,12 @@ const (
 	// dockerRemoveTimeout bounds teardown, which must not be the reason a
 	// suite hangs either.
 	dockerRemoveTimeout = 60 * time.Second
+	// probeHold is how long the connection-cap probe holds its connections
+	// open, and probeSettle how long the measurement waits for them to
+	// arrive. The hold has to outlast the settle comfortably, or the
+	// measurement races the probe's own teardown.
+	probeHold   = 30 * time.Second
+	probeSettle = 15 * time.Second
 	// keygenTimeout bounds one ssh-keygen, keyscanTimeout one ssh-keyscan
 	// attempt inside its retry loop.
 	keygenTimeout  = 60 * time.Second
@@ -186,9 +195,9 @@ var (
 	errTestFinished = errors.New("the test that owns this fixture has finished")
 )
 
-// Fixture is a running SFTP server plus everything a test needs to point the
+// Source is a running SFTP server plus everything a test needs to point the
 // real rclone adapter at it.
-type Fixture struct {
+type Source struct {
 	Host string
 	Port int
 	User string
@@ -209,6 +218,20 @@ type Fixture struct {
 	// upload directory. Tests seed remote files by writing here directly,
 	// and observe remote deletes by checking what disappears here.
 	UploadDir string
+
+	// Alias is the name other containers on the network reach this
+	// machine by. Inside the network it is also Host.
+	Alias string
+
+	network   string
+	inNetwork bool
+	// ownsNetwork is true when the harness created the network this
+	// machine is on, so hardStop knows whether it is allowed to take it
+	// away. False when a driver put the process inside somebody else's
+	// network (#451).
+	ownsNetwork bool
+	image       string
+	capped      int
 
 	containerID   string
 	containerName string
@@ -233,10 +256,10 @@ type Fixture struct {
 	teardownOnce sync.Once
 }
 
-// Options is how core/tests/machines places this fixture on a network
+// sourceOptions is how core/tests/machines places this fixture on a network
 // (issue #447). The zero value is what Start has always done: no network,
 // a port published on 127.0.0.1, the default image.
-type Options struct {
+type sourceOptions struct {
 	// Network, when set, is a docker network the container joins.
 	Network string
 	// Alias is the name the container answers to on Network.
@@ -253,91 +276,41 @@ type Options struct {
 	RunArgs []string
 }
 
-// infraMarker is the fixed, greppable string every infrastructure refusal
-// in this fixture carries. It is the same literal in miniofixture and in
-// tests/dockerlease on purpose: a gate log sorts into "the machine broke"
-// and "the product broke" with one grep, and a marker that varied by
-// package would not.
-const infraMarker = "INFRA:"
-
-// dockerUnavailable ends the calling test for a docker that is not there to
-// be used, and decides whether that is a skip or a failure.
-//
-// On a machine that simply has no docker, skipping is honest: this fixture
-// is evidence for the gate, not a requirement on every developer's laptop.
-// Inside the gate it is the opposite. Docker is a declared prerequisite
-// there, so the same condition means the gate's own machine is broken, and
-// a skip quietly deletes this suite from the run while the run goes on
-// printing ok.
-//
-// That is not hypothetical (#456). Start used to fail a WEDGED daemon,
-// three lines above a skip for an UNREACHABLE one, and a Docker VM that
-// dies mid-run is unreachable rather than wedged. In one stored gate log it
-// did exactly that: 13 of the 14 conformance mutation cells printed
-// `ok ... 0.08s` against a dead daemon, and one cell happened to refuse,
-// which is the only reason anybody noticed.
-//
-// So under the gate this is a failure carrying infraMarker. The one way
-// past it is CI_LOCAL_SKIP_DOCKER=1, the gate's own documented opt-out for
-// a run with the daemon down, which already ledgers that run as INCOMPLETE.
-func dockerUnavailable(t *testing.T, reason string, args ...any) {
-	t.Helper()
-	detail := fmt.Sprintf(reason, args...)
-	if gateRequiresDocker() {
-		t.Fatalf("%s sftpfixture: %s\nDocker is a declared prerequisite of this gate (CI_LOCAL=1), so this is an INFRASTRUCTURE failure and not a product one: the machine could not offer a docker daemon. Skipping here would take the SFTP suite out of the run while the gate still printed ok, which is #456.", infraMarker, detail)
-	}
-	t.Skipf("sftpfixture: SKIPPING (missing capability: %s)", detail)
-}
-
-// gateRequiresDocker reports whether this process is inside the local gate,
-// which declares docker a prerequisite. scripts/ci-local.sh exports
-// CI_LOCAL=1. CI_LOCAL_SKIP_DOCKER=1 is that same gate's documented opt-out
-// for a run with the daemon down, and it already ends the run INCOMPLETE,
-// so it is honoured here rather than overruled: a fixture that refused
-// anyway would make that flag a lie.
-func gateRequiresDocker() bool {
-	return os.Getenv("CI_LOCAL") == "1" && os.Getenv("CI_LOCAL_SKIP_DOCKER") != "1"
-}
-
-// Start launches a disposable SFTP server for the duration of the calling
-// test and registers cleanup. On a developer machine it SKIPS when the
-// external tools it needs are unavailable, since this fixture is evidence
-// for the embedding gate rather than a requirement on every machine. Inside
-// the gate, where docker is a declared prerequisite, the same condition
-// FAILS instead and says INFRA:, because skipping there deletes the suite
-// from a run that goes on reporting ok (#456).
-func Start(t *testing.T) *Fixture {
-	t.Helper()
-	return StartWith(t, Options{})
-}
-
-// StartWith is Start with a placement. New tests should not call either
+// startSource is Start with a placement. New tests should not call either
 // directly: core/tests/machines is the one entry point to a machine, and
 // this package is on its way into it (#450).
-func StartWith(t *testing.T, opts Options) *Fixture {
+// newSource creates the machine's Go-side shell and arms its watchdog, and
+// it does that BEFORE anything shells out to anything.
+//
+// That order is the whole of #161's setup half. Every step of standing a
+// machine up runs an external command, each of those commands can hang, and
+// the deadlines in the retry loops further down are only re-read BETWEEN
+// attempts, so one call that never returns outruns all of them. What stops
+// the package hanging silently is a watchdog that is already running while
+// those calls are made, and a stage string it can name when the budget
+// expires.
+//
+// Start calls this before its own `docker info`, which is why a wedged
+// daemon is reported as "still at docker info" within the test's budget
+// rather than sitting there for the full sixty seconds of that call's own
+// timeout.
+func newSource(t *testing.T) *Source {
 	t.Helper()
-	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
-		t.Fatalf("sftpfixture: Options.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
-	}
-
-	// The fixture exists, its cleanup is registered and its watchdog is
-	// running before anything can block. Every step below shells out to
-	// something, and the point of #161 is that none of them may be able to
-	// hang the package silently, setup included.
-	f := &Fixture{
+	f := &Source{
 		Host: "127.0.0.1",
 		User: User,
 		done: make(chan struct{}),
-	}
-	if opts.InNetwork {
-		f.Host = opts.Alias
-		f.Port = 22
 	}
 	f.ctx, f.cancel = context.WithCancelCause(context.Background())
 	f.setStage("looking for docker, ssh-keygen and ssh-keyscan")
 	t.Cleanup(f.finish)
 	f.watch(t)
+	return f
+}
 
+// probeDocker is the capability check, run under an armed watchdog.
+func (f *Source) probeDocker(t *testing.T) {
+	t.Helper()
 	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			dockerUnavailable(t, "%q not found on PATH: %v", tool, err)
@@ -350,13 +323,27 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 		// A daemon that is present but not answering is not, and neither
 		// is one absent from the gate's own machine, where docker is a
 		// declared prerequisite: skipping either would quietly delete the
-		// whole SFTP suite from the gate, which is the failure mode #160
+		// whole machine tier from the gate, which is the failure mode #160
 		// is about and the one #456 reopened. dockerUnavailable is where
 		// that verdict is made.
 		if errors.Is(err, errDockerTimedOut) {
-			t.Fatalf("%s sftpfixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
+			t.Fatalf("%s machines: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove the machine tier from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
 		}
 		dockerUnavailable(t, "docker daemon not reachable, Docker itself appears absent or not running here: %v\n%s", err, errOut)
+	}
+}
+
+// startSourceOn finishes standing f up as a running machine. f comes from
+// newSource, so its watchdog has been running since before Start's own
+// docker probe.
+func startSourceOn(t *testing.T, f *Source, opts sourceOptions) *Source {
+	t.Helper()
+	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
+		t.Fatalf("machines: sourceOptions.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
+	}
+	if opts.InNetwork {
+		f.Host = opts.Alias
+		f.Port = 22
 	}
 
 	f.setStage("creating the run directory")
@@ -405,11 +392,21 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 	// quiet run has nothing to accidentally mix into the container ID even
 	// if some future docker version starts writing something else to
 	// stdout during "run".
-	image := serverImage
-	if opts.Image != "" {
-		image = opts.Image
+	// The base image first, through the presence-check-then-pull-with-
+	// retries path #243 asked for, and then the source machine built on
+	// top of it. Two steps rather than one `docker build` doing both,
+	// because the pull is the step that can fail on network weather and
+	// the one whose retries were paid for in three dead gate runs, while
+	// the build is local and cached by content.
+	f.ensureImage(t, serverImage)
+	image := opts.Image
+	if image == "" {
+		image = f.ensureSourceImage(t)
 	}
-	f.ensureImage(t, image)
+	f.image = image
+	f.Alias = opts.Alias
+	f.network = opts.Network
+	f.inNetwork = opts.InNetwork
 
 	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
 	f.mu.Lock()
@@ -445,7 +442,7 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 	f.setStage("docker run " + image)
 	containerID, err := dockerCapture(t, dockerRunTimeout, args...)
 	if err != nil {
-		t.Fatalf("sftpfixture: docker run: %v", err)
+		t.Fatalf("machines: docker run: %v", err)
 	}
 	// Publishing the id is what arms the watchdog: from here on a
 	// container that dies is noticed within a second, and the cleanup
@@ -481,7 +478,7 @@ func StartWith(t *testing.T, opts Options) *Fixture {
 // machine runs many worktrees against one docker daemon, so an assertion
 // that matched on a name pattern could be answered by somebody else's
 // container instead of this fixture's.
-func (f *Fixture) ContainerID() string { return f.containerID }
+func (f *Source) ContainerID() string { return f.containerID }
 
 // Context returns the context every operation a test runs against this
 // fixture should use, instead of context.Background().
@@ -492,7 +489,7 @@ func (f *Fixture) ContainerID() string { return f.containerID }
 // operation that takes it therefore unwinds in seconds with a legible
 // reason, rather than retrying against a corpse until the package's
 // 25-minute go test timeout kills everything.
-func (f *Fixture) Context() context.Context { return f.ctx }
+func (f *Source) Context() context.Context { return f.ctx }
 
 // ExpectContainerDeath tells the fixture that this test kills the container
 // on purpose, so the death is evidence rather than a failure. The context
@@ -500,7 +497,7 @@ func (f *Fixture) Context() context.Context { return f.ctx }
 // the death as a test failure and stops stopping the process over it.
 //
 // Only the tests that prove the fail-fast mechanism itself should call it.
-func (f *Fixture) ExpectContainerDeath() {
+func (f *Source) ExpectContainerDeath() {
 	f.mu.Lock()
 	f.expectDeath = true
 	f.mu.Unlock()
@@ -548,6 +545,102 @@ func (e *ContainerDiedError) Error() string {
 
 // --- the image ------------------------------------------------------------
 
+var (
+	imageOnce sync.Once
+	imageRef  string
+	imageErr  error
+)
+
+// ensureSourceImage builds the source machine image once per daemon: the
+// base image plus iptables, so LimitConnections can impose #264's rule
+// without the container being privileged, and netcat, so the cap can be
+// probed from a second machine on the network.
+//
+// The tag carries a digest of the Dockerfile, so a daemon that already has
+// this exact image builds nothing and a changed Dockerfile is a new tag
+// rather than a stale one. A build that cannot happen is a failure and not
+// a skip, for ensureImage's reason.
+//
+// Once per daemon, never once per test function, which is #450's third
+// item: the version of this that lived in ssh_test.go built an image inside
+// six separate test functions, and #309 then had to wrap each of those
+// builds in a progress-derived watchdog because a fixed timeout could not
+// tell a busy machine from a stuck one. One build for the whole binary
+// makes that watchdog unnecessary rather than better.
+func (f *Source) ensureSourceImage(t *testing.T) string {
+	t.Helper()
+	imageOnce.Do(func() {
+		text := sourceDockerfile(t)
+		sum := sha256.Sum256([]byte(text))
+		tag := "rclone-manager-machines-source:" + hex.EncodeToString(sum[:6])
+		f.setStage("docker image inspect " + tag)
+		if _, _, err := dockerRun(imageInspectTimeout, "image", "inspect", tag); err == nil {
+			imageRef = tag
+			return
+		}
+		// A directory rather than `docker build -`, because the watchdog
+		// below reads `--progress=plain` off a real build context and
+		// because that is what two-machine-backup.sh builds too.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(text), 0o644); err != nil {
+			imageErr = fmt.Errorf("staging the source machine Dockerfile: %w", err)
+			return
+		}
+		f.setStage("docker build " + tag + " (the source machine, once per daemon)")
+		// No context deadline. The bound is derived from this build's own
+		// pace (#309): a flat ceiling on a 4 CPU Docker VM under four
+		// concurrent gate lanes is exactly the number that cannot tell a
+		// busy machine from a stuck one, and a context deadline firing
+		// produces the bare "signal: killed" that issue filed as
+		// unreadable.
+		out, err := runDockerBuildWatched(context.Background(), defaultDockerBuildBounds, dockerBuildPoll, tag, dir)
+		if err != nil {
+			imageErr = fmt.Errorf("building the source machine image %s: %w\n%s", tag, err, out)
+			return
+		}
+		imageRef = tag
+	})
+	if imageErr != nil {
+		t.Fatalf("machines: %v\nThat is a FAILURE and deliberately not a skip: skipping would take the whole machine tier out of the gate while the gate went on reporting ok (#160).", imageErr)
+	}
+	return imageRef
+}
+
+// dockerBuildPoll is how often the build watchdog re-reads the bounds it
+// derived from this build's own pace.
+const dockerBuildPoll = 200 * time.Millisecond
+
+// sourceDockerfile reads scripts/e2e/source-machine.Dockerfile, which is
+// the one definition of the simulated VPS (#451): the same file
+// scripts/e2e/two-machine-backup.sh builds its own source machine from.
+//
+// Read rather than restated as a constant here, because a constant and a
+// file are two definitions however carefully they are kept equal, and a
+// tag derived from a digest of the text means a changed file is a new
+// image rather than a stale one for free.
+//
+// A missing file is a refusal and not a skip, for ensureImage's reason: a
+// machine tier that cannot build its own machine has to say so.
+func sourceDockerfile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), "scripts", "e2e", "source-machine.Dockerfile")
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s machines: the source machine Dockerfile is not readable at %s: %v\nThat file is the one definition of the simulated VPS, shared with scripts/e2e/two-machine-backup.sh, so without it there is no machine tier to run.", infraMarker, path, err)
+	}
+	if len(bytes.TrimSpace(text)) == 0 {
+		t.Fatalf("%s machines: %s is empty, so there is no source machine to build.", infraMarker, path)
+	}
+	return string(text)
+}
+
+// repoRoot is two directories above core/tests, which is where testsRoot
+// points.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	return filepath.Dir(filepath.Dir(testsRoot(t)))
+}
+
 // ensureImage puts ref on the local daemon before anything tries to run a
 // container from it, and refuses the run when it cannot.
 //
@@ -576,7 +669,7 @@ func (e *ContainerDiedError) Error() string {
 // printing ok. That is the exact hole issue #160 was opened about and the
 // reason `docker info` timing out a few lines above is fatal rather than a
 // skip. A fixture that cannot stand up refuses.
-func (f *Fixture) ensureImage(t *testing.T, ref string) {
+func (f *Source) ensureImage(t *testing.T, ref string) {
 	t.Helper()
 
 	f.setStage("docker image inspect " + ref)
@@ -614,20 +707,20 @@ func (f *Fixture) ensureImage(t *testing.T, ref string) {
 		}
 	}
 
-	t.Fatalf("sftpfixture: %s is not on this daemon and %d pull attempt(s) over %s could not fetch it, so this suite cannot run here.\n"+
+	t.Fatalf("machines: %s is not on this daemon and %d pull attempt(s) over %s could not fetch it, so this suite cannot run here.\n"+
 		"That is a FAILURE and deliberately not a skip: skipping would take the whole SFTP suite out of the gate while the gate went on reporting ok, which is the silent hole #160 exists to close. Put the image on this daemon, or fix the registry access, and run again.\n"+
 		"last error: %v", ref, made, time.Since(started).Round(time.Second), lastErr)
 }
 
 // --- the mid-test watchdog ------------------------------------------------
 
-func (f *Fixture) setStage(stage string) {
+func (f *Source) setStage(stage string) {
 	f.mu.Lock()
 	f.stage = stage
 	f.mu.Unlock()
 }
 
-func (f *Fixture) current() (id, name, stage string) {
+func (f *Source) current() (id, name, stage string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.containerID, f.containerName, f.stage
@@ -636,7 +729,7 @@ func (f *Fixture) current() (id, name, stage string) {
 // finish is the fixture's single cleanup. It is registered before anything
 // can fail, so it covers every exit path Start has, not just a clean
 // return.
-func (f *Fixture) finish() {
+func (f *Source) finish() {
 	f.mu.Lock()
 	if !f.finished {
 		f.finished = true
@@ -654,7 +747,33 @@ func (f *Fixture) finish() {
 // #161: orphans found still running after 4 and 11 hours compete with the
 // next run for a Docker VM that has roughly 4 GB to give, and each leak
 // makes the next collapse likelier.
-func (f *Fixture) teardown() {
+// reclaimNetwork removes the network this machine is on, and whatever else
+// is still attached to it, on the one path where t.Cleanup cannot.
+//
+// Everything on that network belongs to this dying process by construction:
+// the name carries this process's pid, and the harness is the only thing
+// that joins anything to it. Best effort throughout, because this runs
+// immediately before a panic and a failure to tidy up must not replace the
+// report that panic carries.
+func (f *Source) reclaimNetwork() {
+	if !f.ownsNetwork || f.network == "" {
+		return
+	}
+	if _, _, err := dockerRun(dockerNetworkTimeout, "network", "rm", f.network); err == nil {
+		return
+	}
+	// Still in use: something else this process started is on it. A medium,
+	// or a second source.
+	out, _, err := dockerRun(dockerProbeTimeout, "ps", "-aq", "--filter", "network="+f.network)
+	if err == nil {
+		if ids := strings.Fields(out); len(ids) > 0 {
+			_, _, _ = dockerRun(dockerRemoveTimeout, append([]string{"rm", "-f"}, ids...)...)
+		}
+	}
+	_, _, _ = dockerRun(dockerNetworkTimeout, "network", "rm", f.network)
+}
+
+func (f *Source) teardown() {
 	f.teardownOnce.Do(func() {
 		f.mu.Lock()
 		id, dir := f.containerID, f.runDir
@@ -672,7 +791,7 @@ func (f *Fixture) teardown() {
 // suite could not answer before: when this test stops making progress, is
 // its fixture container dead, or is the code under test genuinely stuck?
 // Those two looked identical from outside and both cost 25 minutes.
-func (f *Fixture) watch(t *testing.T) {
+func (f *Source) watch(t *testing.T) {
 	testName := t.Name()
 	budget := durationFromEnv(budgetEnv, defaultTestBudget)
 	grace := durationFromEnv(graceEnv, defaultGrace)
@@ -716,7 +835,7 @@ func (f *Fixture) watch(t *testing.T) {
 	}()
 }
 
-func (f *Fixture) containerDied(t *testing.T, testName, id string, st containerState, removed bool, grace time.Duration) {
+func (f *Source) containerDied(t *testing.T, testName, id string, st containerState, removed bool, grace time.Duration) {
 	_, name, _ := f.current()
 	cause := &ContainerDiedError{
 		Name:      name,
@@ -729,7 +848,7 @@ func (f *Fixture) containerDied(t *testing.T, testName, id string, st containerS
 	if !removed {
 		cause.Logs = containerLogTail(id)
 	}
-	report := fmt.Sprintf("sftpfixture: %s\n\n%s failed because its fixture container died, not because of anything the code under test did. "+
+	report := fmt.Sprintf("machines: %s\n\n%s failed because its fixture container died, not because of anything the code under test did. "+
 		"The Docker VM on this machine has roughly 4 GB and 4 CPUs, and one ci-local.sh run starts this suite three times over, "+
 		"so an eviction or an OOM under concurrent load is the first thing to check.", cause.Error(), testName)
 
@@ -740,7 +859,7 @@ func (f *Fixture) containerDied(t *testing.T, testName, id string, st containerS
 	}
 	expected := f.expectDeath
 	if expected {
-		t.Logf("sftpfixture: %s (this test killed it on purpose)", cause.Error())
+		t.Logf("machines: %s (this test killed it on purpose)", cause.Error())
 	} else {
 		t.Errorf("%s", report)
 	}
@@ -762,14 +881,14 @@ func (f *Fixture) containerDied(t *testing.T, testName, id string, st containerS
 	}
 }
 
-func (f *Fixture) budgetExceeded(t *testing.T, testName string, budget, grace time.Duration) {
+func (f *Source) budgetExceeded(t *testing.T, testName string, budget, grace time.Duration) {
 	id, name, stage := f.current()
 	verdict := fmt.Sprintf("It never reached a running container: the fixture was still at %q. That points at docker or at this host, not at the code under test.", stage)
 	if id != "" {
 		verdict = fmt.Sprintf("Its fixture container %s (%s) is still running, which rules out the container death in #161: "+
 			"this is a genuine hang in the code under test, in the transport, the adapter or the lifecycle.", name, id)
 	}
-	report := fmt.Sprintf("sftpfixture: %s ran past its %s budget. %s\n\nAll goroutine stacks follow; the one worth reading is this test's own.", testName, budget, verdict)
+	report := fmt.Sprintf("machines: %s ran past its %s budget. %s\n\nAll goroutine stacks follow; the one worth reading is this test's own.", testName, budget, verdict)
 
 	f.mu.Lock()
 	if f.finished {
@@ -790,7 +909,7 @@ func (f *Fixture) budgetExceeded(t *testing.T, testName string, budget, grace ti
 // hardStop is the last resort, for a test that ignores Context() entirely.
 // It removes the container FIRST, because the panic below is raised on the
 // watchdog's goroutine and t.Cleanup will never run.
-func (f *Fixture) hardStop(report string) {
+func (f *Source) hardStop(report string) {
 	// The grace timer and the test finishing can land together. Stopping a
 	// process whose test has already passed would be a worse flake than the
 	// one this fixture exists to remove, so the last word is the flag, not
@@ -802,6 +921,13 @@ func (f *Fixture) hardStop(report string) {
 		return
 	}
 	f.teardown()
+	// t.Cleanup will not run: the panic below takes the whole process
+	// down, which is the point of a hard stop. So the network has to be
+	// given back here or it survives the run holding one of the daemon's
+	// ~30 address-pool slots until the lease sweep reclaims it fifteen
+	// minutes later. Measured: one leaked network per full run of this
+	// package, from the one test that deliberately drives this path.
+	f.reclaimNetwork()
 	debug.SetTraceback("all")
 	panic(report)
 }
@@ -875,7 +1001,7 @@ func containerLogTail(id string) string {
 // root == "", files this fixture mounts for its own purposes outside
 // upload/, such as the authorized_keys directory), not the sandbox this
 // method's caller actually seeded through UploadDir.
-func (f *Fixture) Source(id, root string) transport.Source {
+func (f *Source) TransportSource(id, root string) transport.Source {
 	return transport.Source{
 		ID:         id,
 		Type:       "sftp",
@@ -900,15 +1026,15 @@ func (f *Fixture) Source(id, root string) transport.Source {
 // (containerUID, a plain, non-root, non-CAP_DAC_OVERRIDE user), regardless
 // of which user owns the file or what euid the host test process itself
 // happens to run under.
-func (f *Fixture) Deny(t *testing.T, name string) (cleanup func()) {
+func (f *Source) Deny(t *testing.T, name string) (cleanup func()) {
 	t.Helper()
 	full := filepath.Join(f.UploadDir, filepath.FromSlash(name))
 	info, err := os.Stat(full)
 	if err != nil {
-		t.Fatalf("sftpfixture: Deny: stat %s before chmod: %v", full, err)
+		t.Fatalf("machines: Deny: stat %s before chmod: %v", full, err)
 	}
 	if err := os.Chmod(full, 0o000); err != nil {
-		t.Fatalf("sftpfixture: Deny: chmod %s: %v", full, err)
+		t.Fatalf("machines: Deny: chmod %s: %v", full, err)
 	}
 	original := info.Mode().Perm()
 	return func() {
@@ -922,9 +1048,9 @@ func testsRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("sftpfixture: could not determine source location")
+		t.Fatal("machines: could not determine source location")
 	}
-	// this file is tests/sftpfixture/fixture.go
+	// this file is tests/machines/fixture.go
 	return filepath.Dir(filepath.Dir(file))
 }
 
@@ -936,7 +1062,7 @@ func sanitize(name string) string {
 func must(t *testing.T, err error, what string) {
 	t.Helper()
 	if err != nil {
-		t.Fatalf("sftpfixture: %s: %v", what, err)
+		t.Fatalf("machines: %s: %v", what, err)
 	}
 }
 
@@ -958,37 +1084,6 @@ func dockerCapture(t *testing.T, timeout time.Duration, args ...string) (stdout 
 	return stdout, err
 }
 
-// dockerRun is the only place this package shells out to docker, and every
-// call through it is bounded. Before #161 each one was a plain
-// exec.Command with no timeout, which is why the retry loops below could
-// not do what their deadlines promised: they only re-read the deadline
-// between attempts, so a single call that never returned outran all of
-// them and took the whole package to its go test timeout.
-//
-// A timeout and a non-zero exit are told apart, because they mean
-// completely different things: one is a statement about the daemon, the
-// other about the container.
-func dockerRun(timeout time.Duration, args ...string) (stdout, stderr string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	runErr := cmd.Run()
-	stdout = strings.TrimSpace(outBuf.String())
-	stderr = strings.TrimSpace(errBuf.String())
-
-	switch {
-	case ctx.Err() != nil:
-		return stdout, stderr, fmt.Errorf("%w: `docker %s` was still running after %s", errDockerTimedOut, args[0], timeout)
-	case runErr != nil:
-		return stdout, stderr, fmt.Errorf("%w: %s", runErr, stderr)
-	}
-	return stdout, stderr, nil
-}
-
 func keygen(t *testing.T, path string) {
 	t.Helper()
 	keygenType(t, path, "ed25519", "")
@@ -1004,7 +1099,7 @@ func keygenType(t *testing.T, path, keyType, bits string) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "ssh-keygen", args...).CombinedOutput()
 	if err != nil {
-		t.Fatalf("sftpfixture: ssh-keygen %s (%s): %v\n%s", path, keyType, err, out)
+		t.Fatalf("machines: ssh-keygen %s (%s): %v\n%s", path, keyType, err, out)
 	}
 }
 
@@ -1039,7 +1134,7 @@ func waitForPublishedPort(t *testing.T, containerID string) int {
 		time.Sleep(200 * time.Millisecond)
 	}
 	dumpContainerLogs(t, containerID)
-	t.Fatalf("sftpfixture: container never published its ssh port: %v", lastErr)
+	t.Fatalf("machines: container never published its ssh port: %v", lastErr)
 	return 0
 }
 
@@ -1073,7 +1168,7 @@ func keyscan(t *testing.T, host string, port int, outPath string) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	t.Fatalf("sftpfixture: ssh-keyscan on port %d never returned both host key types: %v\n%s", port, lastErr, lastOut)
+	t.Fatalf("machines: ssh-keyscan on port %d never returned both host key types: %v\n%s", port, lastErr, lastOut)
 }
 
 // writeSubstituteKnownHosts writes a known_hosts entry for host:port using a
@@ -1085,7 +1180,7 @@ func writeSubstituteKnownHosts(t *testing.T, outPath string, host string, port i
 	must(t, err, "read decoy pub key")
 	fields := strings.Fields(string(pub))
 	if len(fields) < 2 {
-		t.Fatalf("sftpfixture: unexpected pub key format: %q", pub)
+		t.Fatalf("machines: unexpected pub key format: %q", pub)
 	}
 	// ssh-keyscan writes a bare host for port 22 and [host]:port otherwise,
 	// and known_hosts matching follows the same rule, so the decoy has to
@@ -1107,33 +1202,63 @@ func writeSubstituteKnownHosts(t *testing.T, outPath string, host string, port i
 // This probe intentionally does not verify the host key: its only job is to
 // confirm the server is up. Host-key verification itself is exercised by the
 // gate test through the real adapter, using KnownHostsFile / BadKnownHostsFile.
-func waitForSSHReady(t *testing.T, f *Fixture) {
+func waitForSSHReady(t *testing.T, f *Source) {
 	t.Helper()
-	key, err := os.ReadFile(f.KeyFile)
+	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
+	if err := waitForSSHAuth(addr, clientConfigFor(t, f.KeyFile, f.User), sshReadyWindow); err != nil {
+		dumpContainerLogs(t, f.containerID)
+		t.Fatalf("machines: sftp server never became ready at %s: %v", addr, err)
+	}
+}
+
+// sshReadyWindow is how long a machine gets to start answering.
+const sshReadyWindow = 20 * time.Second
+
+// clientConfigFor is the client the readiness probe authenticates as. It
+// verifies no host key on purpose: the probe's question is whether this
+// server will let this key in, and host-key verification is a separate
+// question the tests ask through known_hosts.
+func clientConfigFor(t *testing.T, keyPath, user string) *ssh.ClientConfig {
+	t.Helper()
+	key, err := os.ReadFile(keyPath)
 	must(t, err, "read client key")
 	signer, err := ssh.ParsePrivateKey(key)
 	must(t, err, "parse client key")
-
-	cfg := &ssh.ClientConfig{
-		User:            f.User,
+	return &ssh.ClientConfig{
+		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         sshDialTimeout,
 	}
+}
 
-	deadline := time.Now().Add(20 * time.Second)
+// waitForSSHAuth retries a full handshake until the server AUTHENTICATES
+// this key, not merely until it accepts TCP.
+//
+// The distinction is the whole of #250. A published docker port accepts
+// connections the moment the mapping exists, before sshd inside is
+// necessarily answering, so a probe that dialled and declared victory
+// called a machine ready that would then refuse every real operation. And
+// "speaks SSH" is not enough either: a server can complete the transport
+// handshake happily and turn the key away at authentication.
+//
+// It is lifted out of waitForSSHReady so it can be pointed at a server
+// whose answer is decided in advance. A container's is not, and the three
+// probe tests in source_test.go are only possible against one that is.
+func waitForSSHAuth(addr string, cfg *ssh.ClientConfig, within time.Duration) error {
+	deadline := time.Now().Add(within)
 	var lastErr error
-	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
-	for time.Now().Before(deadline) {
+	for {
 		err := trySSHHandshake(addr, cfg)
 		if err == nil {
-			return
+			return nil
 		}
 		lastErr = err
+		if time.Now().After(deadline) {
+			return lastErr
+		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	dumpContainerLogs(t, f.containerID)
-	t.Fatalf("sftpfixture: sftp server never became ready at %s: %v", addr, lastErr)
 }
 
 // trySSHHandshake bounds the handshake as well as the dial, which ssh.Dial
@@ -1173,5 +1298,402 @@ func trySSHHandshake(addr string, cfg *ssh.ClientConfig) error {
 
 func dumpContainerLogs(t *testing.T, containerID string) {
 	t.Helper()
-	t.Logf("sftpfixture: container logs:\n%s", containerLogTail(containerID))
+	t.Logf("machines: container logs:\n%s", containerLogTail(containerID))
+}
+
+// --- the machine, as other machines and the manager see it ----------------
+
+// Addr is host:port as the manager (this test process) reaches the source.
+// Published loopback port on the host, alias and 22 inside the network.
+func (f *Source) Addr() string {
+	return net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
+}
+
+// Kill removes the source machine out from under the test, on purpose,
+// and tells the watchdog so the death is evidence rather than a failure.
+// Context() is cancelled with a ContainerDiedError, which is what a test
+// proving the fail-fast path (#161) waits for.
+//
+// It exists so that no test under core/tests ever has to exec docker
+// itself: before #450, sftpintegration ran its own `docker rm -f` for this
+// one case, which is the single exception the testtier guard's
+// bypasses-harness rule had to carry.
+func (f *Source) Kill(t *testing.T) {
+	t.Helper()
+	f.ExpectContainerDeath()
+	if _, errOut, err := dockerRun(dockerRemoveTimeout, "rm", "-f", f.ContainerID()); err != nil {
+		t.Fatalf("machines: could not remove the source container %s: %v\n%s", f.ContainerID(), err, errOut)
+	}
+}
+
+// --- the two measurements #264 and #355 are argued from -------------------
+
+// EstablishedConnections asks the source's own sshd how many TCP
+// connections it is holding right now, from inside the container's network
+// namespace, so nothing else on this machine can be counted by accident.
+//
+// It is a harness capability rather than a per-test helper because it is
+// the probe both the leak question (#355) and the connection-cap question
+// (#264) are answered with, and because a test that had to reach it by
+// exec'ing docker would be exactly the bypass the testtier guard exists to
+// stop.
+func (f *Source) EstablishedConnections(t *testing.T) int {
+	t.Helper()
+	out, errOut, err := dockerRun(dockerProbeTimeout, "exec", f.ContainerID(),
+		"sh", "-c", "netstat -tn | grep -c ESTABLISHED || true")
+	if err != nil {
+		t.Fatalf("machines: counting established connections on %s: %v\n%s", f.ContainerID(), err, errOut)
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(out))
+	if convErr != nil {
+		t.Fatalf("machines: counting established connections: netstat produced %q, which is not a count: %v", out, convErr)
+	}
+	return n
+}
+
+// ConnectionTable is the source's own `netstat -tn`: peers and states
+// rather than a count.
+//
+// It is what a failed drain assertion gets to be read with. A count cannot
+// be argued with, only stared at; the table says which side a survivor is
+// on, which is the whole question and is not answerable from a number.
+//
+// Deliberately soft: it only ever runs on a path that has already failed,
+// so it returns whatever it managed to say rather than failing the test
+// again. A diagnostic that replaces the failure it was printed to explain
+// is worse than no diagnostic at all.
+func (f *Source) ConnectionTable(t *testing.T) string {
+	t.Helper()
+	out, errOut, err := dockerRun(dockerProbeTimeout, "exec", f.ContainerID(), "sh", "-c", "netstat -tn")
+	if err != nil {
+		return fmt.Sprintf("(the connection table could not be read from %s: %v\n%s)", f.ContainerID(), err, errOut)
+	}
+	if strings.TrimSpace(out) == "" {
+		return "(no output: the container reported an empty TCP table)"
+	}
+	return out
+}
+
+// AcceptedLogins counts the successful SSH logins sshd has recorded since
+// the container started. It only ever grows, which is what makes it usable
+// for "how many connections did that operation open" without sampling.
+//
+// It settles before answering: the count is read repeatedly until two
+// consecutive reads agree, because reading it a millisecond too early
+// would under-report, and under-reporting is the direction that turns a
+// fan-out into a false pass.
+func (f *Source) AcceptedLogins(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	last := -1
+	for {
+		// Both streams, and stderr is the one that matters: the machine
+		// runs `sshd -D -e`, so every authentication line the server
+		// writes arrives on the container's stderr, and reading stdout
+		// alone reports a confident, wrong zero.
+		out, errOut, err := dockerRun(dockerProbeTimeout, "logs", f.ContainerID())
+		if err != nil {
+			t.Fatalf("machines: reading %s's logs to count accepted logins: %v", f.ContainerID(), err)
+		}
+		n := strings.Count(out+errOut, "Accepted publickey")
+		if n == last {
+			return n
+		}
+		last = n
+		if time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+// --- the connection cap (#264) -------------------------------------------
+
+// connlimitRule is the production rule behind #264, as iptables arguments
+// after the chain: a REJECT with a TCP reset for any SYN to port 22 that
+// would take one address above n simultaneous established connections.
+// LimitConnections appends it and RemoveConnectionLimit deletes the same
+// text, so the two can never drift into capping one thing and uncapping
+// another.
+func connlimitRule(n int) []string {
+	return []string{
+		"!", "-i", "lo", "-p", "tcp", "--syn", "--dport", "22",
+		"-m", "connlimit", "--connlimit-above", strconv.Itoa(n), "--connlimit-mask", "32",
+		"-j", "REJECT", "--reject-with", "tcp-reset",
+	}
+}
+
+// LimitConnections installs the production rule behind #264 on the source
+// machine. Then it proves the rule bites, from a throwaway container on the
+// same network, before letting the test trust it: a rule that installs and
+// does not bite would turn the test into a copy of the uncapped case, green
+// and proving nothing.
+//
+// The test process's own connections are subject to the same cap. On the
+// host placement they arrive through Docker Desktop's port proxy, which
+// presents one source address for all of them, so the cap counts them
+// together exactly as a real source counts one manager.
+//
+// A kernel that will not install a connlimit rule inside a container is a
+// capability the machine running this does not have. On a laptop that is a
+// skip that names itself, the same verdict the shell script gives with
+// CANNOT RUN. Inside the gate it is a refusal, for #456's reason: the gate
+// machine is expected to have it, and skipping there would take #264's
+// connection-cap proof out of a run that went on printing ok. Measured on
+// the Docker Desktop VM this gate runs against, the rule installs and it
+// bites, so the capability is there to be required.
+func (f *Source) LimitConnections(t *testing.T, n int) {
+	t.Helper()
+	if n < 1 {
+		t.Fatalf("machines: LimitConnections(%d): a cap below one is a block, not a cap", n)
+	}
+	args := append([]string{"exec", f.ContainerID(), "iptables", "-A", "INPUT"}, connlimitRule(n)...)
+	if _, errOut, err := dockerRun(dockerExecTimeout, args...); err != nil {
+		capabilityUnavailable(t, "this kernel will not install an iptables connlimit rule inside the source container: %v\n%s\nWithout the rule the connection-cap shape (#264) is untested here, and running the test anyway would make it a copy of the uncapped case.", err, errOut)
+	}
+	f.capped = n
+
+	held, accepted := f.probeCap(t, n)
+	if accepted {
+		t.Fatalf("machines: the connection cap did not bite: with %d connection(s) already held to %s, connection %d was still accepted. This test is only worth running if the cap is real.", held, f.probeTarget(), n+1)
+	}
+	if held < n {
+		t.Fatalf("machines: the cap of %d rejected connection %d, but only %d of the %d connections it is supposed to ALLOW were established. That is a block, not a cap, and every assertion made against it would be measuring the wrong thing.", n, n+1, held, n)
+	}
+}
+
+// RemoveConnectionLimit deletes the rule LimitConnections installed and
+// proves the cap is gone, the same way LimitConnections proves it is
+// there.
+//
+// It exists for #463. A test that only ever ran under the cap cannot tell
+// "the workload respected the cap" from "the workload never opened enough
+// connections to reach it", and the only way to tell those apart is to run
+// the identical workload with the cap lifted and watch the verdict change.
+func (f *Source) RemoveConnectionLimit(t *testing.T) {
+	t.Helper()
+	if f.capped == 0 {
+		t.Fatalf("machines: RemoveConnectionLimit was called on a source that was never capped, so it would prove nothing")
+	}
+	args := append([]string{"exec", f.ContainerID(), "iptables", "-D", "INPUT"}, connlimitRule(f.capped)...)
+	if _, errOut, err := dockerRun(dockerExecTimeout, args...); err != nil {
+		t.Fatalf("machines: could not remove the connection cap of %d from %s: %v\n%s", f.capped, f.ContainerID(), err, errOut)
+	}
+	was := f.capped
+	f.capped = 0
+
+	if _, accepted := f.probeCap(t, was); !accepted {
+		t.Fatalf("machines: the cap of %d was deleted and connection %d was STILL refused. Whatever is refusing it is not the rule this harness installed, so a control that lifts the cap would not be lifting anything.", was, was+1)
+	}
+}
+
+// probeTarget is the address the cap probe dials the source by. Inside the
+// network that is the alias; from the host it is still the alias, because
+// the probe itself runs in a throwaway container on that network rather
+// than in this process, so no port proxy is in the way and the count is of
+// the machine's real peers.
+func (f *Source) probeTarget() string {
+	if f.Alias != "" {
+		return f.Alias
+	}
+	return f.Host
+}
+
+// probeCap holds n connections open to the source from one address and
+// reports how many of them the server actually established, and whether
+// the (n+1)th was accepted.
+//
+// Both numbers are measured rather than one being inferred from the other,
+// because "connection n+1 was refused" has two explanations: the cap bit,
+// or nothing could connect at all. The held count is the positive control
+// that separates them, and it is read off the server's own TCP table WHILE
+// the probe is still holding its connections open. A count taken after the
+// probe container exits is always zero, which reads exactly like "the rule
+// blocked everything" and would condemn a cap that was working.
+func (f *Source) probeCap(t *testing.T, n int) (held int, acceptedOneMore bool) {
+	t.Helper()
+
+	// The connections are held by `sleep | nc`, not by nc alone: nc with no
+	// stdin sees EOF immediately and closes, so a probe written the obvious
+	// way holds nothing and measures nothing.
+	script := fmt.Sprintf("for i in $(seq 1 %d); do (sleep %d | nc %s 22 >/dev/null 2>&1) & done; sleep %d",
+		n, int(probeHold/time.Second), f.probeTarget(), int(probeHold/time.Second))
+
+	// The probe container is on the source's network and shares one source
+	// address for all of its connections, which is what --connlimit-mask 32
+	// counts. It carries the same lease label as everything else here, so a
+	// killed run's probe is swept rather than left behind.
+	baseline := f.EstablishedConnections(t)
+	id, errOut, err := dockerRun(dockerRunTimeout, "run", "-d",
+		"--network", f.network, dockerlease.LabelFlag, dockerlease.LabelSpec,
+		f.image, "sh", "-c", script)
+	if err != nil {
+		t.Fatalf("machines: the connection-cap probe could not be started against %s: %v\n%s", f.probeTarget(), err, errOut)
+	}
+	t.Cleanup(func() { _, _, _ = dockerRun(dockerRemoveTimeout, "rm", "-f", id) })
+
+	// Wait for the probe to get its connections up rather than sleeping a
+	// guessed interval: a fixed sleep is how this measurement becomes
+	// flaky on a loaded machine, and the deadline is what turns "they
+	// never arrived" into a stated number instead of a hang.
+	deadline := time.Now().Add(probeSettle)
+	for {
+		held = f.EstablishedConnections(t) - baseline
+		if held >= n || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// The (n+1)th connection comes from the SAME container, so it lands in
+	// the same --connlimit-mask 32 bucket as the n already held. Asking
+	// from anywhere else would be asking a different question.
+	out, _, _ := dockerRun(dockerExecTimeout, "exec", id, "sh", "-c",
+		"nc -w 3 "+f.probeTarget()+" 22 </dev/null 2>/dev/null | head -1")
+	acceptedOneMore = strings.HasPrefix(strings.TrimSpace(out), "SSH-")
+
+	// And then the probe gives the machine back, before this function
+	// returns, rather than at t.Cleanup.
+	//
+	// This is not tidiness either. The probe holds exactly n connections,
+	// which against a cap of n is the whole cap: a caller that got on with
+	// its work the moment LimitConnections returned would find a source
+	// with nothing left to give and would read that as the manager
+	// violating the rule. That is what the first run of the #463 test did,
+	// and it cost an hour of looking at the wrong thing.
+	if _, errOut, err := dockerRun(dockerRemoveTimeout, "rm", "-f", id); err != nil {
+		t.Fatalf("machines: could not remove the connection-cap probe %s: %v\n%s", id, err, errOut)
+	}
+	deadline = time.Now().Add(probeSettle)
+	for {
+		open := f.EstablishedConnections(t) - baseline
+		if open <= 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s machines: the connection-cap probe was removed and %s still shows %d connection(s) above the %d it started with, %s later. Anything the caller measures now is measuring the probe.", infraMarker, f.probeTarget(), open, baseline, probeSettle)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return held, acceptedOneMore
+}
+
+// KnownHostsFor writes a known_hosts file pinning THIS machine's real host
+// keys at a different address, and returns its path.
+//
+// It exists for the tests that put something in front of a machine (a TCP
+// relay that adds latency or drops a connection, say) and then point the
+// adapter at the relay. Host-key verification has to stay real across that
+// move: the server the relay forwards to is this machine, so the keys are
+// this machine's keys, and only the ADDRESS they are recorded against
+// changes.
+//
+// Doing it here rather than in each test is the point. A test that rebuilt
+// the file by hand would have to know that ssh-keyscan writes a bare host
+// for port 22 and [host]:port otherwise, and that known_hosts matching
+// follows the same rule; get it wrong and the entry is never consulted,
+// the adapter refuses everything, and the obvious fix is to weaken the
+// check. Worse, a test that hardcoded 127.0.0.1 would keep passing on the
+// host placement and quietly verify against nothing once the tier runs
+// inside a manager container, where this machine's address is an alias on
+// a bridge network (#451). Both failures are silent, which is why this is
+// a capability and not a comment.
+//
+// DecoyKnownHostsFor is its negative control, and a test that uses one
+// should use both.
+func (f *Source) KnownHostsFor(t *testing.T, host string, port int) string {
+	t.Helper()
+	return f.repin(t, f.KnownHostsFile, host, port)
+}
+
+// DecoyKnownHostsFor is KnownHostsFor for the machine's DECOY key: a real
+// key this machine does not have, pinned at the given address.
+//
+// It is the negative control for anything KnownHostsFor makes possible. A
+// relay that re-pins the machine's real keys to its own port has to be shown
+// refusing a wrong key at that same port, or "it connected" is equally
+// consistent with verification having been quietly turned off for the sake
+// of the detour, which is the way that particular test fails: silently, and
+// still green.
+func (f *Source) DecoyKnownHostsFor(t *testing.T, host string, port int) string {
+	t.Helper()
+	return f.repin(t, f.BadKnownHostsFile, host, port)
+}
+
+// repin rewrites a known_hosts file so its keys are recorded against a
+// different address. The keys are copied through untouched: this is a
+// re-addressing, never a re-keying.
+func (f *Source) repin(t *testing.T, from, host string, port int) string {
+	t.Helper()
+	recorded, err := os.ReadFile(from)
+	must(t, err, "read "+from)
+
+	addr := knownhosts.Normalize(net.JoinHostPort(host, strconv.Itoa(port)))
+	var out strings.Builder
+	kept := 0
+	for _, line := range strings.Split(string(recorded), "\n") {
+		line = strings.TrimSpace(line)
+		// ssh-keyscan writes a `# host:port SSH-2.0-...` banner above each
+		// key, and a banner has three fields too. Reading one as a key
+		// produced a file rclone rejected with "illegal base64 data at
+		// input byte 3", which is a legible error for once and would not
+		// have been if the bytes had happened to decode.
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		// Parsed rather than copied through, so anything that is not
+		// actually a key is dropped here rather than written into a file
+		// that then fails to load.
+		key, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(fields[1] + " " + fields[2]))
+		if parseErr != nil {
+			continue
+		}
+		out.WriteString(knownhosts.Line([]string{addr}, key))
+		out.WriteString("\n")
+		kept++
+	}
+	if kept == 0 {
+		t.Fatalf("machines: %s held no usable host key line, so a known_hosts written from it would pin nothing and every verification against it would fail closed for the wrong reason", from)
+	}
+
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("known_hosts_%s_%d_%s", sanitize(host), port, sanitize(filepath.Base(from))))
+	must(t, os.WriteFile(path, []byte(out.String()), 0o644), "write the re-addressed known_hosts")
+	return path
+}
+
+// --- key material a test can change --------------------------------------
+
+// AuthorizeKey adds another public key to the machine's authorized_keys,
+// so a test can prove a second client identity (an encrypted key, a key
+// that arrives through a resolver) authenticates against the same real
+// sshd.
+//
+// It writes into the running container rather than rebuilding an image,
+// which is the whole of #450's third item: the version of this that lived
+// in ssh_test.go baked the client key into a fresh image inside six
+// separate test functions, and that per-test `docker build` is what #309
+// then had to wrap in a progress-derived watchdog.
+func (f *Source) AuthorizeKey(t *testing.T, authorizedKeyLine string) {
+	t.Helper()
+	line := strings.TrimSpace(authorizedKeyLine)
+	if line == "" {
+		t.Fatalf("machines: AuthorizeKey was given an empty key line")
+	}
+	if strings.ContainsAny(line, "\n\r'") {
+		t.Fatalf("machines: AuthorizeKey was given a key line with a newline or a quote in it, which is not an authorized_keys line: %q", line)
+	}
+	// authorized_keys only. The directory the machine's own key is mounted
+	// through (/home/<user>/.ssh/keys) is a READ-ONLY bind mount, and
+	// atmoz/sftp copies it into authorized_keys at startup anyway, so the
+	// file is the writable surface and the mount is not.
+	home := "/home/" + User
+	script := fmt.Sprintf("mkdir -p %s/.ssh && printf '%%s\\n' '%s' >> %s/.ssh/authorized_keys && chown %s:%s %s/.ssh/authorized_keys && chmod 600 %s/.ssh/authorized_keys",
+		home, line, home, containerUID, containerUID, home, home)
+	if _, errOut, err := dockerRun(dockerExecTimeout, "exec", f.ContainerID(), "sh", "-c", script); err != nil {
+		t.Fatalf("machines: authorizing an extra key on %s: %v\n%s", f.ContainerID(), err, errOut)
+	}
 }

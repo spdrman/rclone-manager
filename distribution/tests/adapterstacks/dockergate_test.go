@@ -36,10 +36,14 @@ import (
 )
 
 // infraMarker is the fixed, greppable string every infrastructure refusal
-// carries. It is the same literal in core's sftpfixture, miniofixture,
-// dockerlease and machines on purpose: a gate log sorts into "the machine
-// broke" and "the product broke" with one grep, and a marker that varied by
-// package would not.
+// carries. It is the same literal in core's dockerlease and machines on
+// purpose: a gate log sorts into "the machine broke" and "the product
+// broke" with one grep, and a marker that varied by package would not.
+//
+// It used to name sftpfixture and miniofixture too. #450 folded both into
+// core/tests/machines, and this comment is a map of where the copies are:
+// one that still names packages that no longer exist sends the next reader
+// looking for them.
 //
 // This is a local copy rather than an import. distribution is a separate
 // module from core, and #81's dependency rule is that core must build and

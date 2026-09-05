@@ -13,7 +13,7 @@
 // # One call, one tier
 //
 //	m := machines.Start(t)
-//	src := m.Source                 // a real sshd, chrooted, key-only
+//	src := m.Source(t)              // a real sshd, chrooted, key-only
 //	src.LimitConnections(t, 2)      // the production rule from #264
 //	medium := m.Medium(t)           // a real S3 API, on the same network
 //
@@ -24,16 +24,23 @@
 // #161, image presence before pull from #243, the labelled sweep from
 // #150) comes with the call.
 //
-// # What this package is, right now
+// # Nothing starts that a test did not ask for
 //
-// A composition over core/tests/sftpfixture and core/tests/miniofixture,
-// which gained network attachment for it, plus the network itself, the
-// source image with iptables in it, and the failure shapes. That is
-// deliberate: those two packages carry 1300 lines of behaviour that was
-// paid for in incidents, and this was written on a machine whose Docker
-// daemon was down, so nothing here could be run. Composing what exists is
-// the change that can be reviewed statically; folding the fixtures into
-// this package is #450, and it happens with a daemon.
+// Start creates the network and nothing else. Source and Medium each stand
+// their machine up the first time they are called and hand back the same
+// one after that, so a test that only needs an S3 API never pays for an
+// sshd and a test that only needs an sshd never pays for MinIO. That is not
+// a micro-optimisation: the MinIO suite runs eight tests, and an eagerly
+// started source would have added an ssh-keygen rsa 2048 and a container
+// start to every one of them.
+//
+// # What this package is
+//
+// The whole of it, since #450. core/tests/sftpfixture and
+// core/tests/miniofixture used to hold the source and the medium and were
+// composed from here; their bodies are now source.go and medium.go, and the
+// three copies of the docker plumbing, the INFRA: verdict and the #456
+// refusal tests collapsed into one on the way in.
 //
 // # Placement
 //
@@ -45,9 +52,10 @@
 // network and what lets a medium reach the source by name.
 //
 // When NetworkEnv is set, the test process is itself a container on that
-// network (#451's driver does this), nothing publishes a port, and the
-// source is reached by its alias. Source.Addr answers correctly in both
-// placements, so a test never has to know which one it is in.
+// network (scripts/e2e/run-machine-tier.sh does this, #451), nothing
+// publishes a port, and the source is reached by its alias. Source.Addr
+// answers correctly in both placements, so a test never has to know which
+// one it is in.
 //
 // # What it exposes and what it never will
 //
@@ -58,25 +66,16 @@
 package machines
 
 import (
-	"bytes"
-	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
 
 // NetworkEnv, when set, names the network this test process is already a
@@ -85,65 +84,32 @@ import (
 // it.
 const NetworkEnv = "RCLONE_MANAGER_MACHINES_NETWORK"
 
-// sourceDockerfile is the source machine: the same image the SFTP fixture
-// has always used, plus iptables so LimitConnections can impose the
-// production rule without the container being privileged. It is the
-// Dockerfile scripts/e2e/two-machine-backup.sh builds for its own source
-// machine, restated here until #451 gives the two one home.
-const sourceDockerfile = "FROM atmoz/sftp:alpine\nRUN apk add --no-cache iptables\n"
-
 const (
-	dockerInfoTimeout    = 60 * time.Second
-	dockerBuildTimeout   = 5 * time.Minute
 	dockerNetworkTimeout = 30 * time.Second
 	dockerExecTimeout    = 30 * time.Second
-	probeTimeout         = 60 * time.Second
 )
 
-var errDockerTimedOut = errors.New("docker did not answer in time")
-
-// Machines is what Start hands back: the network and the source, and a
-// medium on request.
+// Machines is what Start hands back: the network, and the machines on it
+// once something asks for them.
 type Machines struct {
 	// Network is the docker network the machines share. Created by Start
 	// unless NetworkEnv named one.
 	Network string
-	// Source is the VPS being backed up.
-	Source *Source
 
 	inNetwork bool
 	mu        sync.Mutex
-	medium    *Medium
-}
-
-// Source is the source machine. It embeds the SFTP fixture, so everything
-// a test used to read off sftpfixture.Fixture (Host, Port, User, KeyFile,
-// KnownHostsFile, BadKnownHostsFile, UploadDir, Source, Deny, Context,
-// ContainerID, ExpectContainerDeath) is still there, unchanged.
-type Source struct {
-	*sftpfixture.Fixture
-	// Alias is the name other containers on the network reach this
-	// machine by.
-	Alias string
-
-	network   string
-	inNetwork bool
-	image     string
-	capped    int
-}
-
-// Medium is a storage medium on the same network. It embeds the MinIO
-// fixture, so Medium(), MediumForBucket and NewBucket are all still there.
-type Medium struct {
-	*miniofixture.Fixture
-	Alias string
+	// pending is the Source shell Start armed a watchdog on before its own
+	// docker probe. The first call to Source finishes standing it up.
+	pending *Source
+	source  *Source
+	medium  *Medium
 }
 
 // infraMarker is the fixed, greppable string every infrastructure refusal
-// in this package carries. It is the same literal in sftpfixture,
-// miniofixture and tests/dockerlease on purpose: a gate log sorts into "the
-// machine broke" and "the product broke" with one grep, and a marker that
-// varied by package would not.
+// in this package carries. It is the same literal in tests/dockerlease and
+// in distribution/tests/adapterstacks on purpose: a gate log sorts into
+// "the machine broke" and "the product broke" with one grep, and a marker
+// that varied by package would not.
 const infraMarker = "INFRA:"
 
 // dockerUnavailable ends the calling test for a docker that is not there to
@@ -167,11 +133,9 @@ const infraMarker = "INFRA:"
 // past it is CI_LOCAL_SKIP_DOCKER=1, the gate's own documented opt-out for
 // a run with the daemon down, which already ledgers that run as INCOMPLETE.
 //
-// This is deliberately a fourth copy rather than something exported from
-// one of the three packages underneath. Making it shared would put a test
-// harness's private verdict on another harness's public surface, and #450
-// is folding all four into this one anyway, at which point three of the
-// copies go away with the packages that hold them.
+// Until #450 this was four copies, one per fixture, kept word for word the
+// same so a reader comparing them found no differences to explain. It is
+// one copy now, because the packages that held the other three are gone.
 func dockerUnavailable(t *testing.T, reason string, args ...any) {
 	t.Helper()
 	detail := fmt.Sprintf(reason, args...)
@@ -182,10 +146,7 @@ func dockerUnavailable(t *testing.T, reason string, args ...any) {
 }
 
 // capabilityUnavailable is dockerUnavailable for a capability that is not
-// docker itself, and it makes the same decision for the same reason. It is
-// a sibling rather than a rewrite of dockerUnavailable because that one is
-// word for word the same in all five packages that have it, and a reader
-// comparing them should find no differences to explain.
+// docker itself, and it makes the same decision for the same reason.
 //
 // It shares gateRequiresDocker, which is right rather than convenient:
 // everything reached through this package needs a live daemon first, so a
@@ -209,11 +170,9 @@ func gateRequiresDocker() bool {
 	return os.Getenv("CI_LOCAL") == "1" && os.Getenv("CI_LOCAL_SKIP_DOCKER") != "1"
 }
 
-// Start creates the network, builds the source image if this daemon does
-// not have it, starts the source machine on the network and returns once
-// it accepts a real SSH session. Everything is removed when the test ends,
-// including on a panic on another goroutine, because the fixture underneath
-// already handles that.
+// Start probes the daemon, reclaims what a killed run left behind and
+// creates the dedicated network. It starts no machine: Source and Medium do
+// that, on demand, so a test pays only for what it asks for.
 //
 // On a developer machine it SKIPS when docker is genuinely absent, since
 // the machine tier is evidence for the gate rather than a requirement on
@@ -225,52 +184,121 @@ func gateRequiresDocker() bool {
 func Start(t *testing.T) *Machines {
 	t.Helper()
 
-	if _, err := exec.LookPath("docker"); err != nil {
-		dockerUnavailable(t, "%q not found on PATH: %v", "docker", err)
+	// The network's name and its removal come FIRST, before anything else
+	// registers a cleanup.
+	//
+	// t.Cleanup runs LIFO, so whatever registers first is torn down last,
+	// and a network with an endpoint still on it cannot be removed. Getting
+	// this backwards is not a tidiness bug: Docker's default address pool
+	// is about thirty /16s, every leaked network holds one for the fifteen
+	// minutes until the lease sweep will touch it, and the failure lands on
+	// whoever asks next as "all predefined address pools have been fully
+	// subnetted". That is what it did here, on the run that found it: 25
+	// leaked networks and a conformance package that could not start a
+	// container at all.
+	name := os.Getenv(NetworkEnv)
+	inNetwork := name != ""
+	// created is read by the cleanup below and written after the network
+	// exists. The cleanup has to be registered before the network is made,
+	// for the LIFO reason above, and the probe between the two can end the
+	// test: every #456 case does exactly that, with a dead DOCKER_HOST or
+	// an empty PATH. Without this flag those cases spend the removal budget
+	// retrying against a daemon that was never there and then fail for it,
+	// which is a refusal test failing at teardown over a network it never
+	// created.
+	created := false
+	if !inNetwork {
+		name = fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
+		t.Cleanup(func() {
+			if created {
+				removeNetwork(t, name)
+			}
+		})
 	}
-	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
-		if errors.Is(err, errDockerTimedOut) {
-			t.Fatalf("%s machines: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove the machine tier from the gate, so this is a failure: %v\n%s", infraMarker, dockerInfoTimeout, err, errOut)
-		}
-		dockerUnavailable(t, "docker daemon not reachable: %v\n%s", err, errOut)
-	}
+
+	// The watchdog is armed before the first external command, not after
+	// it. Everything from here on shells out to docker, and #161 is what
+	// happens when one of those calls never returns and nothing is
+	// watching: the package hangs to its own timeout with nothing said
+	// about which step is stuck. The pending machine below is that
+	// watchdog's home, and Source hands the same one back when it is asked
+	// for a machine.
+	pending := newSource(t)
+	pending.probeDocker(t)
 
 	// Reclaim what a KILLED run left behind before adding to it: the
 	// containers, and now the networks too.
+	pending.setStage("dockerlease.Sweep (reclaiming what a killed run left behind)")
 	dockerlease.Sweep()
 	dockerlease.SweepNetworks()
 
-	network := os.Getenv(NetworkEnv)
-	inNetwork := network != ""
 	if !inNetwork {
-		network = createNetwork(t)
+		pending.setStage("docker network create")
+		createNetwork(t, name)
+		created = true
 	}
+	pending.setStage("waiting for the test to ask for a machine")
 
-	image := ensureSourceImage(t)
+	return &Machines{Network: name, inNetwork: inNetwork, pending: pending}
+}
+
+// Source starts the machine being backed up the first time it is called and
+// returns the same one after that.
+func (m *Machines) Source(t *testing.T) *Source {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.source != nil {
+		return m.source
+	}
+	pending := m.pending
+	if pending == nil {
+		// Only reachable if a future edit stops Start arming one. A fresh
+		// shell is correct rather than a panic, and it loses only the
+		// stage naming for steps that have already happened.
+		pending = newSource(t)
+	}
+	src := m.startOn(t, pending)
+	m.pending = nil
+	m.source = src
+	return src
+}
+
+// AnotherSource starts an additional, independent source machine on the
+// same network, with its own host key and its own client key.
+//
+// It is what the host-key cases need and the reason they no longer build an
+// image per test function: "this server's key is not the one known_hosts
+// pinned" is a statement about two machines, and the honest way to make it
+// true is to have two.
+func (m *Machines) AnotherSource(t *testing.T) *Source {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.addSource(t)
+}
+
+// addSource stands up one additional source machine, with a watchdog of its
+// own. The caller holds m.mu.
+func (m *Machines) addSource(t *testing.T) *Source {
+	t.Helper()
+	return m.startOn(t, newSource(t))
+}
+
+// startOn stands f up as a machine on this network. The caller holds m.mu.
+func (m *Machines) startOn(t *testing.T, f *Source) *Source {
+	t.Helper()
 	alias := "source-" + shortID(t)
-
-	fx := sftpfixture.StartWith(t, sftpfixture.Options{
-		Network:   network,
+	f.ownsNetwork = !m.inNetwork
+	return startSourceOn(t, f, sourceOptions{
+		Network:   m.Network,
 		Alias:     alias,
-		InNetwork: inNetwork,
-		Image:     image,
+		InNetwork: m.inNetwork,
 		// NET_ADMIN is what an iptables rule inside the container needs,
 		// and it is a capability rather than --privileged, which is the
 		// same choice the shell script made for its source machine.
 		RunArgs: []string{"--cap-add", "NET_ADMIN"},
 	})
-
-	return &Machines{
-		Network: network,
-		Source: &Source{
-			Fixture:   fx,
-			Alias:     alias,
-			network:   network,
-			inNetwork: inNetwork,
-			image:     image,
-		},
-		inNetwork: inNetwork,
-	}
 }
 
 // Medium starts a storage medium on the network the first time it is
@@ -284,171 +312,72 @@ func (m *Machines) Medium(t *testing.T) *Medium {
 		return m.medium
 	}
 	alias := "medium-" + shortID(t)
-	fx := miniofixture.StartWith(t, miniofixture.Options{
+	med := startMedium(t, mediumOptions{
 		Network:   m.Network,
 		Alias:     alias,
 		InNetwork: m.inNetwork,
 	})
-	m.medium = &Medium{Fixture: fx, Alias: alias}
-	return m.medium
-}
-
-// Addr is host:port as the manager (this test process) reaches the source.
-// Published loopback port on the host, alias and 22 inside the network.
-func (s *Source) Addr() string {
-	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
-}
-
-// LimitConnections installs the production rule behind #264 on the source
-// machine: a REJECT with a TCP reset for any SYN to port 22 that would take
-// one address above n simultaneous established connections. Then it proves
-// the rule bites, from a throwaway container on the same network, before
-// letting the test trust it: a rule that installs and does not bite would
-// turn the test into a copy of the uncapped case, green and proving
-// nothing.
-//
-// The test process's own connections are subject to the same cap. On the
-// host placement they arrive through Docker Desktop's port proxy, which
-// presents one source address for all of them, so the cap counts them
-// together exactly as a real source counts one manager.
-//
-// A kernel that will not install a connlimit rule inside a container is a
-// capability the machine running this does not have. On a laptop that is a
-// skip that names itself, the same verdict the shell script gives with
-// CANNOT RUN. Inside the gate it is a refusal, for #456's reason: the gate
-// machine is expected to have it, and skipping there would take #264's
-// connection-cap proof out of a run that went on printing ok. Measured on
-// the Docker Desktop VM this gate runs against, the rule installs and it
-// bites, so the capability is there to be required.
-func (s *Source) LimitConnections(t *testing.T, n int) {
-	t.Helper()
-	if n < 1 {
-		t.Fatalf("machines: LimitConnections(%d): a cap below one is a block, not a cap", n)
-	}
-	_, errOut, err := dockerRun(dockerExecTimeout, "exec", s.ContainerID(),
-		"iptables", "-A", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn", "--dport", "22",
-		"-m", "connlimit", "--connlimit-above", strconv.Itoa(n), "--connlimit-mask", "32",
-		"-j", "REJECT", "--reject-with", "tcp-reset")
-	if err != nil {
-		capabilityUnavailable(t, "this kernel will not install an iptables connlimit rule inside the source container: %v\n%s\nWithout the rule the connection-cap shape (#264) is untested here, and running the test anyway would make it a copy of the uncapped case.", err, errOut)
-	}
-	s.capped = n
-
-	// Proven, not assumed. Hold n connections open and check the next one
-	// is refused, from inside the network so no proxy is in the way. The
-	// held connections are the positive control: if they were refused
-	// too, the rule would be a block and this would say so.
-	script := fmt.Sprintf(`
-set -e
-for i in $(seq 1 %d); do (sleep 20 | nc %s 22 >/dev/null 2>&1) & done
-sleep 3
-if nc -w 3 %s 22 </dev/null 2>/dev/null | grep -q '^SSH-'; then
-  echo "connection %d was accepted"; exit 1
-fi
-exit 0
-`, n, s.Alias, s.Alias, n+1)
-	out, errOut, err := dockerRun(probeTimeout, "run", "--rm", "--network", s.network,
-		dockerlease.LabelFlag, dockerlease.LabelSpec, s.image, "sh", "-c", script)
-	if err != nil {
-		t.Fatalf("machines: the connection cap did not bite: a connection past %d to %s was accepted, or the probe could not run: %v\n%s%s\nThis test is only worth running if the cap is real.", n, s.Alias, err, out, errOut)
-	}
-}
-
-// Kill removes the source machine out from under the test, on purpose,
-// and tells the fixture's watchdog so the death is evidence rather than a
-// failure. Context() is cancelled with a ContainerDiedError, which is what
-// a test proving the fail-fast path (#161) waits for.
-func (s *Source) Kill(t *testing.T) {
-	t.Helper()
-	s.ExpectContainerDeath()
-	if _, errOut, err := dockerRun(dockerExecTimeout, "rm", "-f", s.ContainerID()); err != nil {
-		t.Fatalf("machines: could not remove the source container %s: %v\n%s", s.ContainerID(), err, errOut)
-	}
+	med.Alias = alias
+	m.medium = med
+	return med
 }
 
 // --- the network ----------------------------------------------------------
 
-func createNetwork(t *testing.T) string {
+func createNetwork(t *testing.T, name string) {
 	t.Helper()
-	name := fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
-	// Registered before the network exists and before any machine joins
-	// it, so t.Cleanup's LIFO order removes the machines first. A network
-	// with an endpoint on it cannot be removed, and "network is in use" at
-	// teardown is how a network survives a run.
-	t.Cleanup(func() {
-		_, _, _ = dockerRun(dockerNetworkTimeout, "network", "rm", name)
-	})
 	if _, errOut, err := dockerRun(dockerNetworkTimeout, "network", "create",
 		dockerlease.LabelFlag, dockerlease.LabelSpec, name); err != nil {
 		t.Fatalf("machines: could not create the network %s: %v\n%s", name, err, errOut)
 	}
-	return name
 }
 
-// --- the source image -----------------------------------------------------
-
-var (
-	imageOnce sync.Once
-	imageRef  string
-	imageErr  error
-)
-
-// ensureSourceImage builds the source image once per daemon. The tag
-// carries a digest of the Dockerfile, so a daemon that already has this
-// exact image builds nothing, and a changed Dockerfile is a new tag rather
-// than a stale one: the same discipline as sftpfixture.ensureImage (#243),
-// and, like it, a build that cannot happen is a failure and not a skip.
-func ensureSourceImage(t *testing.T) string {
-	t.Helper()
-	imageOnce.Do(func() {
-		sum := sha256.Sum256([]byte(sourceDockerfile))
-		tag := "rclone-manager-machines-source:" + hex.EncodeToString(sum[:6])
-		if _, _, err := dockerRun(dockerExecTimeout, "image", "inspect", tag); err == nil {
-			imageRef = tag
+// removeNetwork gives the network back, and says so out loud when it
+// cannot.
+//
+// It retries, because `docker rm -f` on a container returns before the
+// daemon has finished detaching its endpoint, so the first `network rm`
+// after a teardown can legitimately answer "network is in use" for a
+// fraction of a second. It does not retry forever: past that window the
+// answer means a machine really did outlive its test, and the leak is worth
+// more than a clean-looking log. The pool this comes out of is about thirty
+// networks wide, so a leak that goes unreported takes down whatever runs
+// next rather than the run that caused it.
+func removeNetwork(t *testing.T, name string) {
+	deadline := time.Now().Add(networkRemoveBudget)
+	var lastErr error
+	var lastOut string
+	for {
+		_, errOut, err := dockerRun(dockerNetworkTimeout, "network", "rm", name)
+		if err == nil {
 			return
 		}
-		_, errOut, err := dockerRunStdin(dockerBuildTimeout, sourceDockerfile, "build", "-q", "-t", tag, "-")
-		if err != nil {
-			imageErr = fmt.Errorf("building the source machine image %s: %w\n%s", tag, err, errOut)
+		// Already gone is success: the lease sweep or another teardown got
+		// there first, which is a normal outcome on a shared daemon.
+		if strings.Contains(errOut, "not found") || strings.Contains(errOut, "No such network") {
 			return
 		}
-		imageRef = tag
-	})
-	if imageErr != nil {
-		t.Fatalf("machines: %v\nThat is a FAILURE and deliberately not a skip: skipping would take the whole machine tier out of the gate while the gate went on reporting ok (#160).", imageErr)
+		// A daemon that is not there to be asked is not a leak, and it is
+		// not this test's to report: the fixtures already say INFRA: when
+		// the daemon goes, and adding a second verdict from teardown buries
+		// the first. The network goes with the daemon anyway.
+		if strings.Contains(errOut, "Cannot connect to the Docker daemon") ||
+			strings.Contains(err.Error(), "executable file not found") {
+			return
+		}
+		lastErr, lastOut = err, errOut
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	return imageRef
+	t.Errorf("%s machines: the network %s could not be removed within %s: %v\n%s\nA network that outlives its test holds one of the daemon's ~30 address-pool slots until the lease sweep reclaims it %s later, and the run that runs out of slots is not this one. Something joined to it is still alive.",
+		infraMarker, name, networkRemoveBudget, lastErr, lastOut, dockerlease.StaleAfter)
 }
 
-// --- docker ---------------------------------------------------------------
-
-// dockerRun runs one docker command under a hard timeout. A test helper
-// must never be the reason a suite hangs (#161).
-func dockerRun(timeout time.Duration, args ...string) (stdout, stderr string, err error) {
-	return dockerRunStdin(timeout, "", args...)
-}
-
-func dockerRunStdin(timeout time.Duration, stdin string, args ...string) (stdout, stderr string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	runErr := cmd.Run()
-	stdout = strings.TrimSpace(outBuf.String())
-	stderr = strings.TrimSpace(errBuf.String())
-	switch {
-	case ctx.Err() != nil:
-		return stdout, stderr, fmt.Errorf("%w: `docker %s` was still running after %s", errDockerTimedOut, args[0], timeout)
-	case runErr != nil:
-		return stdout, stderr, fmt.Errorf("%w: %s", runErr, stderr)
-	}
-	return stdout, stderr, nil
-}
+// networkRemoveBudget is how long teardown waits for the daemon to finish
+// detaching endpoints before calling a network leaked.
+const networkRemoveBudget = 15 * time.Second
 
 func shortID(t *testing.T) string {
 	t.Helper()

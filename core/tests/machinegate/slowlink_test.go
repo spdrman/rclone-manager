@@ -1,23 +1,16 @@
-package sftpintegration_test
+package machinegate_test
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"net"
-	"os"
-	"path"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // slowLink is a TCP relay that sits in front of the SFTP fixture and hands
@@ -52,7 +45,7 @@ import (
 // latency, loss or reordering. It makes one thing true (the server's bytes
 // arrive at a known rate) and leaves the rest of the connection alone.
 type slowLink struct {
-	fixture *sftpfixture.Fixture
+	fixture *machines.Source
 	// knownHosts is the fixture's own host keys, re-pinned to this relay's
 	// port so host-key verification stays real rather than being turned
 	// off for the sake of the detour.
@@ -76,14 +69,17 @@ const slowLinkChunk = 8 * 1024
 
 // startSlowLink puts a relay in front of f, delivering the server's bytes
 // at bytesPerSecond, and registers its cleanup.
-func startSlowLink(t *testing.T, f *sftpfixture.Fixture, bytesPerSecond int) *slowLink {
+func startSlowLink(t *testing.T, f *machines.Source, bytesPerSecond int) *slowLink {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("slowLink: listen: %v", err)
 	}
 	l := &slowLink{fixture: f, ln: ln, rate: bytesPerSecond, chunk: slowLinkChunk}
-	l.knownHosts = repinKnownHosts(t, f.KnownHostsFile, l.Port())
+	// The relay listens on 127.0.0.1 in this process, in both placements,
+	// so that is the address the machine's real keys are re-pinned to. The
+	// machine's own address is whatever Addr() says and is not used here.
+	l.knownHosts = f.KnownHostsFor(t, "127.0.0.1", l.Port())
 
 	// serve() is counted in the same WaitGroup as the connections it
 	// spawns, so the counter is never zero while it is still accepting.
@@ -108,28 +104,29 @@ func startSlowLink(t *testing.T, f *sftpfixture.Fixture, bytesPerSecond int) *sl
 		}
 		l.wg.Wait()
 	})
-	t.Logf("slow link: 127.0.0.1:%d -> %s:%d at %d B/s", l.Port(), f.Host, f.Port, bytesPerSecond)
+	t.Logf("slow link: 127.0.0.1:%d -> %s at %d B/s", l.Port(), f.Addr(), bytesPerSecond)
 	return l
 }
 
 // Port is the relay's own port, which is what a Source has to dial.
 func (l *slowLink) Port() int { return l.ln.Addr().(*net.TCPAddr).Port }
 
-// Source mirrors sftpfixture.Fixture.Source, pointing at the relay instead
+// Source mirrors machines.Source.TransportSource, pointing at the relay instead
 // of at the container, with the host keys re-pinned to match. Everything
 // else, including real host-key verification, is exactly what the fixture
 // would have handed out.
 func (l *slowLink) Source(id, root string) transport.Source {
-	return transport.Source{
-		ID:         id,
-		Type:       "sftp",
-		Host:       "127.0.0.1",
-		Port:       l.Port(),
-		User:       l.fixture.User,
-		KeyFile:    l.fixture.KeyFile,
-		KnownHosts: l.knownHosts,
-		Root:       path.Join("upload", root),
-	}
+	// Derived from the machine's own TransportSource rather than rebuilt
+	// field by field, so the only things that differ are the two that have
+	// to: the address, which is the relay's, and the known_hosts, which
+	// records the machine's real keys at that address. A hand-built copy
+	// would silently stop matching the moment TransportSource gained a
+	// field.
+	src := l.fixture.TransportSource(id, root)
+	src.Host = "127.0.0.1"
+	src.Port = l.Port()
+	src.KnownHosts = l.knownHosts
+	return src
 }
 
 func (l *slowLink) serve() {
@@ -160,7 +157,10 @@ func (l *slowLink) track(c net.Conn) {
 
 func (l *slowLink) handle(client net.Conn) {
 	defer func() { _ = client.Close() }()
-	upstream, err := net.Dial("tcp", net.JoinHostPort(l.fixture.Host, strconv.Itoa(l.fixture.Port)))
+	// Addr() is the machine as this process reaches it: a published
+	// loopback port on the host, its network alias inside a manager
+	// container. The relay does not need to know which.
+	upstream, err := net.Dial("tcp", l.fixture.Addr())
 	if err != nil {
 		return
 	}
@@ -208,54 +208,20 @@ func closeWrite(c net.Conn) {
 	}
 }
 
-// repinKnownHosts rewrites the fixture's known_hosts so its real host keys
-// are pinned to the relay's port instead of the container's.
+// repinKnownHosts used to live here, rewriting the machine's known_hosts so
+// its real keys were pinned to the relay's port. It is
+// machines.Source.KnownHostsFor now, with DecoyKnownHostsFor as its
+// sibling, for two reasons.
 //
-// The alternative was to point the Source at the relay with host-key
-// verification relaxed, and that would have quietly removed FR-6's
-// verification from a test in the gate that exists to prove FR-6-shaped
-// things. The keys here are the fixture's own, byte for byte; only the
-// address they are pinned to changes, which is the one thing the detour
-// really did change.
-func repinKnownHosts(t *testing.T, knownHostsFile string, port int) string {
-	t.Helper()
-	fh, err := os.Open(knownHostsFile)
-	if err != nil {
-		t.Fatalf("slowLink: reading the fixture's known_hosts: %v", err)
-	}
-	defer fh.Close()
-
-	var out strings.Builder
-	entries := 0
-	scanner := bufio.NewScanner(fh)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// host, keytype, key. ssh-keyscan writes exactly that.
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		fmt.Fprintf(&out, "[127.0.0.1]:%d %s %s\n", port, fields[1], fields[2])
-		entries++
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("slowLink: scanning the fixture's known_hosts: %v", err)
-	}
-	// Zero entries would authenticate nothing and fail closed later with a
-	// host-key error that looks like a real refusal. Say it here instead.
-	if entries == 0 {
-		t.Fatalf("slowLink: the fixture's known_hosts at %s carried no usable entries, so nothing could be re-pinned", knownHostsFile)
-	}
-
-	repinned := filepath.Join(t.TempDir(), "known_hosts")
-	if err := os.WriteFile(repinned, []byte(out.String()), 0o600); err != nil {
-		t.Fatalf("slowLink: writing the re-pinned known_hosts: %v", err)
-	}
-	return repinned
-}
+// It has a test on it, driving the real adapter through a real relay in
+// both directions (core/tests/machinegate/relay_test.go), which a helper
+// in a test file did not.
+//
+// And the address is no longer always 127.0.0.1. The relay's own address
+// is, because the relay runs in this process; the MACHINE's is not, and
+// once the tier runs inside a manager container (#451) it is an alias on a
+// bridge network. Keeping the two apart in a helper that only ever saw one
+// of them is how this would have gone quietly wrong.
 
 // SourceWithKnownHosts is Source with a different known_hosts file, which
 // exists only so the negative control below can point a relay Source at the
@@ -266,11 +232,11 @@ func (l *slowLink) SourceWithKnownHosts(id, root, knownHosts string) transport.S
 	return src
 }
 
-// BadKnownHosts is the fixture's decoy host key, re-pinned to this relay's
+// BadKnownHosts is the machine's decoy host key, re-pinned to this relay's
 // port the same way the real one is.
 func (l *slowLink) BadKnownHosts(t *testing.T) string {
 	t.Helper()
-	return repinKnownHosts(t, l.fixture.BadKnownHostsFile, l.Port())
+	return l.fixture.DecoyKnownHostsFor(t, "127.0.0.1", l.Port())
 }
 
 // TestSlowLinkStillVerifiesHostKeys is the negative control on the detour
@@ -289,7 +255,7 @@ func (l *slowLink) BadKnownHosts(t *testing.T) string {
 // refused. If host-key verification had been quietly relaxed for the sake of
 // the detour, this row would pass the wrong way round and say so.
 func TestSlowLinkStillVerifiesHostKeys(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	a := rclone.New()
 	// Rate is irrelevant here: nothing gets far enough to transfer.
 	link := startSlowLink(t, f, cancelLinkRate)

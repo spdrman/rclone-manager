@@ -14,7 +14,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // This file is the honest half of #242's archive question, and it is
@@ -58,7 +58,7 @@ import (
 // fails, and the failure is the notification that the composed scenario
 // can be extended to cover a rung it currently cannot.
 func TestThisFixtureRefusesAnArchiveStorageClass(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 	medium.StorageClass = config.StorageClassGlacier
 
@@ -90,7 +90,7 @@ func TestThisFixtureRefusesAnArchiveStorageClass(t *testing.T) {
 // still pass on a fixture that had started refusing every class, which is
 // a broken fixture reading as a proved boundary.
 func TestWhichStorageClassesThisFixtureWillTake(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	root := t.TempDir()
 	local := filepath.Join(root, "probe.dump")
 	if err := writeFile(local, []byte("a probe object nobody expects to survive")); err != nil {
@@ -254,7 +254,7 @@ func TestAnArchiveClassCopyCannotSatisfyTheStandingInvariant(t *testing.T) {
 // rclone/mediumrestore.go's own doc warns about, so this check makes sure
 // it is not making it.
 func TestThisFixtureImplementsNoRestore(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	medium := fixture.NewBucket(t)
 
 	root := t.TempDir()

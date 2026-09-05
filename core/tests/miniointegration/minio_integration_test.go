@@ -17,7 +17,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/miniofixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // minioFixtures adapts the container fixture to the contract suite.
@@ -27,7 +27,7 @@ import (
 // its isolation requirement ("nothing written under a previous NewMedium may
 // be visible through this one") cannot be met by a prefix it never sees.
 type minioFixtures struct {
-	fixture *miniofixture.Fixture
+	fixture *machines.Medium
 }
 
 func (f *minioFixtures) NewMedium(t *testing.T) transport.Medium {
@@ -46,7 +46,7 @@ func (f *minioFixtures) AttestsSHA256() bool { return false }
 // TestMinioMediumContractSuite runs the whole MediumStore contract against
 // a real S3 endpoint.
 func TestMinioMediumContractSuite(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	contract.RunMedium(t, rclone.New(), &minioFixtures{fixture: fixture})
 }
 
@@ -64,7 +64,7 @@ func TestMinioMediumContractSuite(t *testing.T) {
 // teach the fixture that s3 attests now, which is a decision somebody
 // should make deliberately rather than discover in production.
 func TestMinioAttestationIsRefused(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 	medium := fixture.Medium()
@@ -99,7 +99,7 @@ func TestMinioAttestationIsRefused(t *testing.T) {
 // does arrive as something this table has an entry for, and that a missing
 // bucket really does say NoSuchBucket where the manager can see it.
 func TestMinioErrorClassification(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 
@@ -162,7 +162,7 @@ func TestMinioErrorClassification(t *testing.T) {
 // buckets off, rather than through the S3 API, so a permissions quirk in
 // the API cannot make an existing bucket look absent.
 func TestMinioNeverCreatesABucket(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 
@@ -175,12 +175,12 @@ func TestMinioNeverCreatesABucket(t *testing.T) {
 	medium.Bucket = "typo-in-the-config"
 	_, _ = adapter.UploadFromLocal(ctx, medium, local, "production/pg/artifact.dump", transport.UploadOptions{})
 
-	if dirExistsInContainer(t, fixture.ContainerID(), "/data/typo-in-the-config") {
+	if fixture.HasBucket(t, "typo-in-the-config") {
 		t.Error("the failed upload created the bucket; a backup manager that provisions the bucket it was pointed at turns a typo into a silent second home for artifacts nobody looks in again")
 	}
 	// A positive control, because the assertion above is an absence and an
 	// absence assertion that cannot fail is not an assertion.
-	if !dirExistsInContainer(t, fixture.ContainerID(), "/data/"+fixture.Bucket) {
+	if !fixture.HasBucket(t, fixture.Bucket) {
 		t.Fatal("the probe cannot see the bucket the fixture definitely created, so its verdict about the other one means nothing")
 	}
 }
@@ -203,7 +203,7 @@ func TestMinioNeverCreatesABucket(t *testing.T) {
 // the theory it rests on: that an existing bucket answers a listing
 // however empty it is, and only a missing one 404s.
 func TestMinioNeverReportsAMissingBucketAsAMissingObject(t *testing.T) {
-	fixture := miniofixture.Start(t)
+	fixture := machines.Start(t).Medium(t)
 	adapter := rclone.New()
 	ctx := context.Background()
 

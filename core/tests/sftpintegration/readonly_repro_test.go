@@ -65,7 +65,7 @@ func TestReadOnlyBackupSet_RealSFTPFixture(t *testing.T) {
 	// this test read off the fixture before (UploadDir, Host, Port, User,
 	// KeyFile, KnownHostsFile, Context) is still there on the source
 	// machine, unchanged.
-	f := machines.Start(t).Source
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
 
@@ -86,7 +86,7 @@ func TestReadOnlyBackupSet_RealSFTPFixture(t *testing.T) {
 		// transport.Source out of bs.Remote/bs.RemotePath, unlike
 		// discovery.Discover elsewhere in this file, which is handed an
 		// already-built transport.Source directly. "upload" matches what
-		// Fixture.Source's own root-joining does (root == "" here, since
+		// Source.TransportSource's own root-joining does (root == "" here, since
 		// every backup set in this test shares the fixture's one upload
 		// directory).
 		return config.BackupSet{
