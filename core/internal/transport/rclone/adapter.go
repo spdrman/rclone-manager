@@ -317,19 +317,26 @@ func shutdownFs(ctx context.Context, f fs.Fs) {
 // A backend that did fetch would need the operation's own context
 // threaded here.
 //
-// And this does not guard against a zero time the way medium.go's
-// toObjectInfo does, so a backend reporting no modification time would
-// produce time.Time{}.Unix(), a large negative number, where
-// RemoteArtifact.ModTime documents 0. Nothing hits it today for the same
-// reason as above (both backends always report one), and the comparison
-// that would read it, model.CompareIdentity, compares two captures of the
-// same object and so would see the same wrong number twice.
+// And the !IsZero guard is the same one medium.go's toObjectInfo makes,
+// for the same reason. RemoteArtifact.ModTime documents 0 as "the backend
+// did not report one", and time.Time{}.Unix() is -62135596800, not 0: a
+// backend that reports nothing would otherwise hand every consumer of the
+// field a timestamp in the year one rather than the absence the field's
+// own doc promises. No backend reachable through a Source does that today,
+// which is exactly why it went unwritten until #492, and the consumer that
+// would have absorbed it quietly is model.CompareIdentity, which compares
+// two captures of the same object and would see the same wrong number
+// twice. Retention is the one that would not: it reads the field as a
+// date.
 func toArtifact(o fs.Object) transport.RemoteArtifact {
-	return transport.RemoteArtifact{
-		Path:    o.Remote(),
-		Size:    o.Size(),
-		ModTime: o.ModTime(context.Background()).Unix(),
+	art := transport.RemoteArtifact{
+		Path: o.Remote(),
+		Size: o.Size(),
 	}
+	if t := o.ModTime(context.Background()); !t.IsZero() {
+		art.ModTime = t.Unix()
+	}
+	return art
 }
 
 // List recurses the whole tree beneath src's root, not just the top
@@ -473,11 +480,13 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 // splitPath below does that split rather than filepath.Split, deliberately.
 //
 // BytesTransferred is read off the destination object after the copy, so
-// it is what landed rather than what was sent. Checksummed is left false,
-// which transport.TransferResult's own doc explains: operations.Copy does
-// compare a hash when the two sides share one, but it does not report
-// whether it found one, so this cannot honestly claim a comparison
-// happened.
+// it is what landed rather than what was sent, and it is the only thing
+// reported. operations.Copy does compare a hash of its own when the two
+// sides share one, and this deliberately says nothing about that:
+// transport.TransferResult's own doc has the reasoning, but the short
+// version is that operations.CommonHash picks the first type both ends
+// share and that is never the one this boundary speaks, so a claim about
+// it here could only ever be read as more than it is.
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)

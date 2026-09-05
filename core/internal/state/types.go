@@ -47,7 +47,23 @@ type RemoteIdentity struct {
 // TransferResult is what the copy step actually did (FR-11, FR-13).
 type TransferResult struct {
 	BytesTransferred int64
-	Checksummed      bool
+
+	// Checksummed is a column, not a signal. Nothing writes it any more.
+	//
+	// It mirrors artifacts.transfer_checksummed, which lives in shipped
+	// migrations that TestShippedMigrationsAreImmutable holds fixed, so
+	// the column outlives the reason it was added. That reason was
+	// transport.TransferResult.Checksummed, a claim no adapter ever made,
+	// which #492 removed rather than wired up: read its doc for why an
+	// honest version of the claim would have been worse than a dead one.
+	//
+	// A true here therefore only ever came from a test fixture or from a
+	// journal somebody hand-edited. It must never again be read as a
+	// verification verdict, and internal/lifecycle/verify_test.go's
+	// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum
+	// is what keeps that true: it sets this field and insists the backend
+	// is asked anyway.
+	Checksummed bool
 }
 
 // HashUpdate carries a locally computed hash, typically attached to the

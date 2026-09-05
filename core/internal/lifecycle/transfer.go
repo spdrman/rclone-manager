@@ -377,9 +377,13 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 		Key:      p.AttemptKey + keyTransferredSuffix,
 		From:     string(Transferring),
 		To:       string(Transferred),
+		// Checksummed is not set, and there is nothing left to set it
+		// from: #492 removed the field from transport.TransferResult
+		// because the only hash a copy could have compared is not the one
+		// a hash policy asks for. See state.TransferResult's own doc for
+		// why the column is still there.
 		Transfer: &state.TransferResult{
 			BytesTransferred: result.BytesTransferred,
-			Checksummed:      result.Checksummed,
 		},
 	})
 	if err != nil {

@@ -58,19 +58,25 @@
 //     this case, because nothing asked for the capability.
 //   - config.Validation.Hash == "sha256": the operator has explicitly
 //     required cryptographic confirmation. The manager honours that
-//     literally: it trusts an already-verified producer-supplied checksum
-//     when the transfer step recorded one (state.TransferResult.Checksummed,
-//     rclone's own copy-time hash comparison, which would already have
-//     failed the copy outright on a mismatch), and otherwise asks the
-//     backend directly via RemoteHash. If the backend cannot answer,
-//     capability absent, or any other error, verification for this
-//     artifact FAILS explicitly, with a detail naming the reason. It never
-//     falls back to treating the already-passed transfer-verification
-//     checks as "good enough": that would be exactly the silent downgrade
-//     to a size check FR-13 forbids. An operator running the recommended
-//     hardened SFTP setup and wanting a hard per-artifact content guarantee
-//     needs an application validator instead (one that does not depend on
-//     a remote hash call), not this switch.
+//     literally: it asks the backend, via RemoteHash, every time. If the
+//     backend cannot answer, capability absent, or any other error,
+//     verification for this artifact FAILS explicitly, with a detail
+//     naming the reason. It never falls back to treating the
+//     already-passed transfer-verification checks as "good enough": that
+//     would be exactly the silent downgrade to a size check FR-13 forbids.
+//     An operator running the recommended hardened SFTP setup and wanting
+//     a hard per-artifact content guarantee needs an application validator
+//     instead (one that does not depend on a remote hash call), not this
+//     switch.
+//
+// "Every time" in the second of those is #492's correction. It used to say
+// the manager would take the transfer step's own word for it when the
+// record carried state.TransferResult.Checksummed, and nothing ever set
+// that field, so the shortcut was unreachable. It came out rather than
+// getting wired up: the hash rclone compares during a copy is the first
+// type both ends share, which is the weaker one everywhere this manager
+// copies from, and discharging a configured sha256 policy with it is the
+// same silent downgrade the paragraph above already refuses.
 //
 // # A check that could not be completed (issue #419)
 //
@@ -487,14 +493,17 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 		// The operator has explicitly not asked for this; transfer
 		// verification above is the whole guarantee for this backup set.
 	case string(transport.SHA256):
-		if rec.Transfer != nil && rec.Transfer.Checksummed {
-			// A producer-supplied checksum was already verified as an
-			// intrinsic part of the copy (rclone's own Copy compares a
-			// common hash type and fails the transfer outright on a
-			// mismatch), so there is nothing left to prove.
-			break
-		}
-
+		// No shortcut here, deliberately. There used to be one: a record
+		// carrying state.TransferResult.Checksummed skipped the call
+		// below, on the reading that the copy had already compared a hash
+		// and would have failed outright on a mismatch. #492 removed it.
+		// Nothing ever set the field, so the branch was dead, and it was
+		// dead in the direction that hid what it would have cost: the
+		// hash rclone's copy compares is the first type both ends share,
+		// which is the weaker one on every backend this manager can
+		// reach, so a live version of that branch would have discharged a
+		// configured sha256 policy with a comparison the operator did not
+		// ask for. See transport.TransferResult's own doc.
 		remoteHash, hashErr := remoteHashWithRetry(ctx, d.Transport, source, rec.RemotePath)
 		if isCancellation(hashErr) {
 			return verifyOutcome{}, hashErr
