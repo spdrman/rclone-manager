@@ -13,6 +13,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// The readers that turn four packaging formats into one vocabulary.
+//
+// A platform declares its deployment in whatever its store understands:
+// Compose YAML, a TrueNAS catalog pair, an Unraid Docker template in XML,
+// an OpenMediaVault env file. The rules in this package are all about the
+// same handful of facts (which image, which mounts and in which write
+// mode, which ports, which hardening, which health check, what happens
+// when a variable is unset), and a rule written per format is a rule that
+// exists in four versions and agrees with itself until it does not. So
+// everything here narrows to Service and Mount, and the rules are written
+// once against those.
+//
+// The parsing is deliberately less forgiving than a container runtime's
+// would be, in two places, because a packaging check and a runtime want
+// opposite things from an ambiguous file. A runtime gets on with it; a
+// check has to notice.
+//
+//   - Variable references are modelled rather than merely expanded. The
+//     difference between ${STATE_DIR}, ${STATE_DIR:-/srv/state} and
+//     ${STATE_DIR:?set STATE_DIR} is invisible after expansion and is the
+//     whole question for packaging: only the last one refuses to deploy,
+//     and a backup root that quietly lands on the OS disk because nobody
+//     set a variable is the failure this is guarding.
+//   - Keys every correct profile leaves empty are still parsed, because a
+//     reader that only models what a good file contains cannot fail on a
+//     bad one.
+//
+// A format's own quirks stay in its own reader (splitVolumeSpec's colon
+// counting, Unraid's ExtraParams seam, the long depends_on form), so the
+// shared vocabulary above stays a description of the deployment rather
+// than a union of four schemas.
+
 // Mount is one host-path-to-container-path binding a provider package
 // declares, whatever format it declared it in. Reducing a compose
 // `volumes:` entry, an Unraid `<Config Type="Path">` element and an OMV
@@ -98,6 +130,11 @@ type Service struct {
 	UnresolvedVars []string
 }
 
+// rawCompose and rawService are the on-disk shape, kept separate from
+// Service so the exported vocabulary is not hostage to compose's field
+// names. Only what the rules ask about is modelled; a key nobody checks
+// is deliberately absent rather than carried along unread, since a
+// modelled-but-unchecked field reads like coverage.
 type rawCompose struct {
 	Services map[string]rawService `yaml:"services"`
 }
@@ -329,6 +366,13 @@ func ParseCompose(data []byte, source string, env map[string]string) ([]Service,
 	return out, nil
 }
 
+// parseComposeVolume keeps both the expanded and the unexpanded host
+// side, because two different rules need two different views: what this
+// mount resolves to here, and what it would do on a machine where the
+// variable is unset. It also refuses a spec it cannot split into at least
+// host and container rather than returning a half-built Mount, since an
+// empty container path silently matches no canonical role and would read
+// as "a mount we have no opinion about".
 func parseComposeVolume(raw, spec, source string, canonical Canonical) (Mount, error) {
 	parts := splitVolumeSpec(spec)
 	if len(parts) < 2 {
@@ -371,6 +415,11 @@ func splitVolumeSpec(spec string) []string {
 	return append(parts, spec[start:])
 }
 
+// roleForContainerPath derives the role from the CONTAINER side, which is
+// the half the image fixes and the operator cannot change. Deriving it
+// from the host path would key the whole storage contract on whatever
+// directory a NAS happens to hand out, and an empty answer here is a
+// finding in its own right rather than a lookup miss to skip over.
 func roleForContainerPath(canonical Canonical, containerPath string) string {
 	for _, role := range Roles {
 		p, _ := canonical.ContainerPaths.ByRole(role)
@@ -403,6 +452,12 @@ type UnraidTemplate struct {
 	TemplateURL string         `xml:"TemplateURL"`
 }
 
+// UnraidConfig is one <Config> element: Unraid's single element type for
+// a mount, a port, a variable and a device alike, distinguished only by
+// its Type attribute. Everything is a string because the template schema
+// has no types, and that is worth keeping in mind when reading the
+// conversion: Mode carries "rw"/"ro" for a path and something else
+// entirely for a port.
 type UnraidConfig struct {
 	Name        string `xml:"Name,attr"`
 	Target      string `xml:"Target,attr"`
