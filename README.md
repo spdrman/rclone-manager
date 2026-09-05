@@ -1926,7 +1926,7 @@ ledgers it:
 | `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
 | `CI_LOCAL_SKIP_E2E=1` | Leaves out the browser suite and the CLI smoke slice from `rclone-manager-tests`, which are the only automated execution either of them gets. The step otherwise refuses on a machine with no Playwright Chromium and names the install command. Ends INCOMPLETE. |
 | `CI_LOCAL_SENTINEL=0` | Does not start the sentinel container that keeps the Docker daemon out of Resource Saver's idle timer (#457). The per-step daemon probes still run, so a daemon that dies is still a named failure rather than a skip. |
-| `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, chosen because the SFTP fixture already builds from it so every machine that can run this gate has it cached. |
+| `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, pinned rather than `latest` so a machine that can run this gate at all already has it cached and the sentinel costs no pull. |
 
 A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
 and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
