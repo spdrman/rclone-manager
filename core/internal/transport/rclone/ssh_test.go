@@ -35,6 +35,11 @@ func touchFile(t *testing.T, dir, name string) string {
 	return p
 }
 
+// validSource is a Source that sftpConfig accepts, so every case below can
+// be about exactly one thing being wrong with it. The two file paths are
+// real files because sftpConfig stats both and refuses a path it cannot
+// reach, which would otherwise mask whichever refusal a case is actually
+// checking for.
 func validSource(t *testing.T, dir string) transport.Source {
 	t.Helper()
 	return transport.Source{
@@ -785,6 +790,11 @@ func generateClientSSHKeyPair(t *testing.T) (privateKeyPath string, authorizedKe
 	return privateKeyPath, authorizedKeyLine
 }
 
+// freeTCPPort asks the kernel for a port and hands back the number after
+// closing the listener. It is inherently racy, and that is acceptable
+// here for the reason it usually is not: the callers want an address
+// nothing is listening on, so losing the race means something bound the
+// port in between, which is the condition they were looking for anyway.
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

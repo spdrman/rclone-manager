@@ -173,6 +173,17 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 	})
 }
 
+// requireConfigurationNotNotFound is the assertion this whole file is
+// about, written once so no case can express it slightly differently.
+//
+// It checks four things, and the second is the one that would be easy to
+// leave out. The failure has to carry a category at all, it must not be
+// NotFound (which a reconciler reads as the medium having LOST the
+// artifact and a mover reads as permission to delete the local copy), it
+// has to be Configuration specifically rather than the Permanent label for
+// a failure nobody can act on, and its text has to actually say the
+// container is missing, because a correctly categorised error an operator
+// cannot read is only half a fix.
 func requireConfigurationNotNotFound(t *testing.T, err error, op, wantOp string) {
 	t.Helper()
 	if err == nil {
@@ -202,6 +213,11 @@ func requireConfigurationNotNotFound(t *testing.T, err error, op, wantOp string)
 	}
 }
 
+// requireNotFound is the positive control's half of the same assertion:
+// against a container that DOES exist, an absent key still has to be
+// NotFound. Without it every case here would pass against an adapter that
+// had simply started calling everything a configuration problem, which
+// would quarantine working deployments instead of fixing mistyped ones.
 func requireNotFound(t *testing.T, err error, op string) {
 	t.Helper()
 	if err == nil {

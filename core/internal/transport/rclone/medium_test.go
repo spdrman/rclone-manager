@@ -137,6 +137,21 @@ type s3APIError struct {
 func (e s3APIError) Error() string     { return "api error " + e.code + ": something the endpoint said" }
 func (e s3APIError) ErrorCode() string { return e.code }
 
+// TestClassifyS3APIErrors walks the whole s3Categories table, and the row
+// worth understanding before editing it is Forbidden.
+//
+// Forbidden and Unauthorized are not S3 codes at all; they are what the
+// SDK synthesises from an HTTP status when the response has no body to
+// read a code out of. A HEAD is exactly that response, and a HEAD is how
+// this adapter stats an object, so those are the codes a wrong credential
+// actually produces on the commonest call. An earlier version of the table
+// was written from S3's documentation alone and did not have them, which
+// is why every entry here is a claim about what an endpoint really emits
+// rather than about what the docs list.
+//
+// The error is built with errors.Join around a message resembling the
+// SDK's own, because apiErrorCode finds its interface anywhere in the
+// chain and a test that put the coder at the top would not exercise that.
 func TestClassifyS3APIErrors(t *testing.T) {
 	for _, tc := range []struct {
 		code string

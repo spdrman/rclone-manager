@@ -185,6 +185,15 @@ func TestResolveCredentialsFromEachSource(t *testing.T) {
 	})
 }
 
+// assertStaticCredentials is the env and command sources' shared
+// expectation: both resolved values reach rclone, and env_auth is
+// explicitly off. The last one is the part worth asserting rather than
+// assuming, because a static key and the ambient AWS chain are two
+// different answers to who this process authenticates as, and rclone only
+// skips the chain while it has a key.
+//
+// The parameter is an interface rather than configmap.Simple so a caller
+// can pass either that or a *configmap.Map without the assertion caring.
 func assertStaticCredentials(t *testing.T, cfg interface{ Get(string) (string, bool) }) {
 	t.Helper()
 	if got, _ := cfg.Get("access_key_id"); got != canaryAccessKeyID {
@@ -280,6 +289,14 @@ func TestResolveCredentialsAcceptsASingleNamedProfile(t *testing.T) {
 	}
 }
 
+// TestMediumAuthOptionsRequiresExactlyOneSource pins "exactly one", not
+// "at least one". Two configured sources is a config mistake and not a
+// precedence order for this adapter to pick through silently: whichever it
+// chose would be the account the backups actually ran as, decided by the
+// order of a switch statement nobody reading the config could see.
+//
+// internal/config enforces the same rule, so this is the backstop for a
+// transport.Medium built directly, which every test in this package does.
 func TestMediumAuthOptionsRequiresExactlyOneSource(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

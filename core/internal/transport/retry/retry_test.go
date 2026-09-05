@@ -123,6 +123,13 @@ func TestPolicyDelay_ZeroAttemptTreatedAsFirst(t *testing.T) {
 // Do(): the retry loop, including cancellation.
 // ---------------------------------------------------------------------------
 
+// fastPolicy makes the loop's behaviour observable without its timing
+// getting in the way: the delays are sub-millisecond, so a case about how
+// many attempts happen finishes immediately and is not also a case about
+// how long they take. TestDo_CancelledContextStopsPromptly deliberately
+// does not use it and builds a policy with a full second of backoff
+// instead, because what that case asserts IS the clock: returning fast
+// under fastPolicy would prove nothing about waking on ctx.Done().
 func fastPolicy() Policy {
 	return Policy{BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond, Multiplier: 2}
 }
