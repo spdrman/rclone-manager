@@ -181,6 +181,24 @@ func dockerUnavailable(t *testing.T, reason string, args ...any) {
 	t.Skipf("machines: SKIPPING (missing capability: %s)", detail)
 }
 
+// capabilityUnavailable is dockerUnavailable for a capability that is not
+// docker itself, and it makes the same decision for the same reason. It is
+// a sibling rather than a rewrite of dockerUnavailable because that one is
+// word for word the same in all five packages that have it, and a reader
+// comparing them should find no differences to explain.
+//
+// It shares gateRequiresDocker, which is right rather than convenient:
+// everything reached through this package needs a live daemon first, so a
+// run that opted out of docker never gets here to be asked.
+func capabilityUnavailable(t *testing.T, reason string, args ...any) {
+	t.Helper()
+	detail := fmt.Sprintf(reason, args...)
+	if gateRequiresDocker() {
+		t.Fatalf("%s machines: %s\nThe gate's own machine is expected to be able to do this (CI_LOCAL=1), so this is an INFRASTRUCTURE failure and not a product one. Skipping here would take the proof out of the run while the gate still printed ok, which is #456.", infraMarker, detail)
+	}
+	t.Skipf("machines: SKIPPING (missing capability: %s)", detail)
+}
+
 // gateRequiresDocker reports whether this process is inside the local gate,
 // which declares docker a prerequisite. scripts/ci-local.sh exports
 // CI_LOCAL=1. CI_LOCAL_SKIP_DOCKER=1 is that same gate's documented opt-out
@@ -295,8 +313,13 @@ func (s *Source) Addr() string {
 // together exactly as a real source counts one manager.
 //
 // A kernel that will not install a connlimit rule inside a container is a
-// capability this machine does not have, and that is a skip that names
-// itself, the same verdict the shell script gives with CANNOT RUN.
+// capability the machine running this does not have. On a laptop that is a
+// skip that names itself, the same verdict the shell script gives with
+// CANNOT RUN. Inside the gate it is a refusal, for #456's reason: the gate
+// machine is expected to have it, and skipping there would take #264's
+// connection-cap proof out of a run that went on printing ok. Measured on
+// the Docker Desktop VM this gate runs against, the rule installs and it
+// bites, so the capability is there to be required.
 func (s *Source) LimitConnections(t *testing.T, n int) {
 	t.Helper()
 	if n < 1 {
@@ -307,7 +330,7 @@ func (s *Source) LimitConnections(t *testing.T, n int) {
 		"-m", "connlimit", "--connlimit-above", strconv.Itoa(n), "--connlimit-mask", "32",
 		"-j", "REJECT", "--reject-with", "tcp-reset")
 	if err != nil {
-		t.Skipf("machines: SKIPPING (missing capability: this kernel will not install an iptables connlimit rule inside the source container): %v\n%s\nWithout the rule the connection-cap shape (#264) is untested here, and running the test anyway would make it a copy of the uncapped case.", err, errOut)
+		capabilityUnavailable(t, "this kernel will not install an iptables connlimit rule inside the source container: %v\n%s\nWithout the rule the connection-cap shape (#264) is untested here, and running the test anyway would make it a copy of the uncapped case.", err, errOut)
 	}
 	s.capped = n
 

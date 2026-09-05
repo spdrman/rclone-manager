@@ -249,3 +249,109 @@ func TestHelperStartAgainstAnUnavailableDocker(t *testing.T) {
 	fmt.Println(startReturnedMarker)
 	t.Fatal("Start returned against a docker that is not available, which should be impossible")
 }
+
+// --- a capability that is not docker itself -------------------------------
+
+// LimitConnections skips when the kernel will not install the iptables
+// connlimit rule, and that skip has the same shape as the docker one: it
+// takes #264's connection-cap proof out of the run while the run goes on
+// printing ok. It gets the same verdict for the same reason.
+//
+// The capability is genuinely present here, measured on the Docker Desktop
+// VM this gate runs against: the rule installs and it bites. So requiring
+// it under the gate closes a hole rather than turning the gate red. The
+// refusal is simulated with a `docker` in front of the real one that fails
+// only the iptables exec, which is the same PATH-shim idiom sftpfixture
+// uses, and it is narrow on purpose: every other command still reaches the
+// real daemon, so Start really does bring a machine up and the branch under
+// test is reached the way a real kernel refusal would reach it.
+
+// limitReturnedMarker is printed if LimitConnections ever comes back from a
+// rule it could not install. A harness that shrugged and carried on would
+// leave the test a copy of the uncapped case, green and proving nothing.
+const limitReturnedMarker = "LIMIT_RETURNED"
+
+// refusingIptablesDocker writes a `docker` that fails any command mentioning
+// iptables and hands everything else to the real one, and returns the
+// directory to put in front of PATH.
+func refusingIptablesDocker(t *testing.T) string {
+	t.Helper()
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		dockerUnavailable(t, "%q not on PATH, so there is no real client for the shim to hand its other arguments to: %v", "docker", err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$*\" in\n  *iptables*)\n    echo 'iptables: No chain/target/match by that name.' >&2\n    exit 1\n    ;;\nesac\nexec '" + realDocker + "' \"$@\"\n"
+	if err := os.WriteFile(dir+"/docker", []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the iptables-refusing docker shim: %v", err)
+	}
+	return dir
+}
+
+// requireALiveDaemon is the premise for the two tests below: they need Start
+// to actually bring a machine up, because the branch they are about is three
+// steps past it.
+func requireALiveDaemon(t *testing.T) {
+	t.Helper()
+	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
+		dockerUnavailable(t, "docker daemon not reachable, so Start cannot get far enough to reach LimitConnections: %v\n%s", err, errOut)
+	}
+}
+
+func TestLimitConnectionsRefusesAKernelThatWillNotCapInsideTheGate(t *testing.T) {
+	requireDockerBinary(t)
+	requireALiveDaemon(t)
+
+	shim := refusingIptablesDocker(t)
+
+	// The positive control, and it is the same helper behind the same shim
+	// with only CI_LOCAL removed: the verdict really can tell a skip from a
+	// refusal, and the environment is the only thing deciding which.
+	skipOut, skipCode := runHelper(t, "TestHelperLimitConnectionsAgainstARefusingKernel",
+		"CI_LOCAL=", "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := refusalVerdict(skipOut, skipCode); err == nil {
+		t.Fatalf("refusalVerdict ACCEPTED a run that skipped, so it cannot tell a refusal from a silent skip and its verdict below would mean nothing.\ncontrol helper output:\n%s", skipOut)
+	}
+
+	out, code := runHelper(t, "TestHelperLimitConnectionsAgainstARefusingKernel",
+		"CI_LOCAL=1", "CI_LOCAL_SKIP_DOCKER=", "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if strings.Contains(out, limitReturnedMarker) {
+		t.Fatalf("LimitConnections RETURNED though the rule could not be installed, so the test would run as a copy of the uncapped case.\nhelper output:\n%s", out)
+	}
+	if err := refusalVerdict(out, code); err != nil {
+		t.Fatalf("LimitConnections did not refuse a kernel that will not cap, under CI_LOCAL=1: %v.\nSkipping there takes #264's connection-cap proof out of the run while the gate prints ok.\nhelper output:\n%s", err, out)
+	}
+	// Pinned to the branch, not merely to a refusal. Start refuses too, on
+	// its own docker paths, so without this the test would pass just as
+	// happily if the machine never came up at all.
+	if !strings.Contains(out, "connlimit") {
+		t.Fatalf("the refusal never mentions connlimit, so it is not LimitConnections refusing and this proves nothing about that branch.\nhelper output:\n%s", out)
+	}
+}
+
+func TestLimitConnectionsStillSkipsAKernelThatWillNotCapOutsideTheGate(t *testing.T) {
+	requireDockerBinary(t)
+	requireALiveDaemon(t)
+
+	shim := refusingIptablesDocker(t)
+	out, code := runHelper(t, "TestHelperLimitConnectionsAgainstARefusingKernel",
+		"CI_LOCAL=", "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := skipVerdict(out, code); err != nil {
+		t.Fatalf("with CI_LOCAL unset, a kernel that will not install the rule no longer skips: %v.\nThat is a real capability some machines lack, so off the gate it stays a skip that names itself.\nhelper output:\n%s", err, out)
+	}
+	if !strings.Contains(out, "connlimit") {
+		t.Fatalf("the skip never mentions connlimit, so it is not LimitConnections skipping and this proves nothing about that branch.\nhelper output:\n%s", out)
+	}
+}
+
+// TestHelperLimitConnectionsAgainstARefusingKernel brings a real machine up
+// and then asks for a cap its `docker` will not install.
+func TestHelperLimitConnectionsAgainstARefusingKernel(t *testing.T) {
+	skipUnlessHelper(t)
+	m := Start(t)
+	m.Source.LimitConnections(t, 2)
+	fmt.Println(limitReturnedMarker)
+	t.Fatal("LimitConnections returned though the rule could not be installed")
+}
