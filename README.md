@@ -253,6 +253,18 @@ has been read. If the new location holds a *different* dataset, make it a separa
 set instead. `--port` and `--user` are not in that list: neither changes which directory on
 which machine holds the data.
 
+**`backup-set create` asks the same question, for the same reason.** A backup set is
+identified by its source and its name, so `backup-set remove` frees that id up and a set
+created over it again takes every artifact the removed one left on record. That is what
+undoing a removal needs, and re-creating the set exactly where it was removed from costs
+nothing and says nothing. Creating it somewhere else is the repoint above with no edit in
+front of it, so it is refused the same way, under its own code
+(`BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED`), with the same `--acknowledge-repoint` out of
+it and **Create anyway** in the wizard. What it compares against is the address the set was
+pointing at when it was removed, which the removal records for exactly this; for an id whose
+configuration went away some other way, what is left to compare is where its artifacts
+actually landed, and that is what gets checked.
+
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
 produce its first one; `core/service.FirstRun.CreateInitialConfig`'s own doc says plainly
