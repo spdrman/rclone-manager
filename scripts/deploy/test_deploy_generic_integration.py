@@ -59,10 +59,24 @@ def _require_tools():
 
 
 def _sh(*args: str, **kwargs) -> subprocess.CompletedProcess:
+    """Run a command, capture both streams, and always under a timeout.
+
+    The timeout is the reason this exists rather than bare
+    subprocess.run calls: every command here talks to Docker or to an
+    SSH server that is still starting, and a suite that hangs on one of
+    those tells nobody anything.
+    """
     return subprocess.run(args, capture_output=True, text=True, timeout=kwargs.pop("timeout", 30), **kwargs)
 
 
 def _keygen(path: Path, key_type: str = "ed25519", bits: str = "") -> None:
+    """Generate a keypair with no passphrase and no comment.
+
+    Both are deliberate. A passphrase would need an agent, and the
+    comment carries the generating machine's user and hostname, which
+    would make the fixture's files differ between developers for no
+    reason anything here cares about.
+    """
     args = ["ssh-keygen", "-q", "-t", key_type, "-N", "", "-C", "", "-f", str(path)]
     if bits:
         args += ["-b", bits]
@@ -95,6 +109,15 @@ class GenericSFTPFixture:
         self.upload_dir = run_dir / "upload"
 
     def start(self) -> None:
+        """Bring the SFTP server up and get to the point where it will accept a
+        login.
+
+        Three separate waits, because three things become true at different
+        times and each has its own way of failing: the container publishing
+        its port, the host keys being offered, and the account actually
+        accepting an SFTP session. A test that started as soon as `docker
+        run` returned would fail intermittently on all three.
+        """
         self.run_dir.mkdir(parents=True, exist_ok=True)
         host_key_ed25519 = self.run_dir / "ssh_host_ed25519_key"
         _keygen(host_key_ed25519)
@@ -190,6 +213,14 @@ class GenericSFTPFixture:
         raise RuntimeError("ssh-keyscan never returned both host key types")
 
     def _wait_for_ssh_ready(self) -> None:
+        """Wait until the account will actually serve SFTP.
+
+        Checked by speaking SFTP rather than by running a remote command,
+        because atmoz/sftp forces internal-sftp for this account: there is
+        no shell, so `ssh ... true` is refused by design and would never
+        report ready. `sftp -b -` with an immediate quit is the smallest
+        thing that asks the real question.
+        """
         # atmoz/sftp forces `internal-sftp` for this account (no shell), so
         # readiness has to be checked by actually speaking SFTP (the `sftp`
         # CLI in batch mode, quitting immediately) rather than running an
@@ -314,6 +345,13 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         )
 
     def _deploy_args(self) -> list[str]:
+        """The command line this suite hands to the script under test.
+
+        Assembled here rather than inline so the one thing each test varies
+        is visible against a fixed background, and so the arguments are the
+        ones an operator would type rather than a shape only this suite
+        uses.
+        """
         return [
             "--ssh-key", str(self.fixture.client_key),
             "--known-hosts", str(self.fixture.known_hosts),

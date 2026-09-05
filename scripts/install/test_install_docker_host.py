@@ -72,6 +72,18 @@ class Fixture:
         self.known.write_text("# pinned host keys go here\n")
 
     def args(self, *extra: str, command: str = "preflight"):
+        """A resolved Namespace for one subcommand, built through the real
+        parser.
+
+        Through build_parser and resolve rather than constructed directly,
+        so a test is exercising the flags an operator would actually type
+        and a flag that moves between subparsers fails here rather than
+        silently stopping being covered.
+
+        The credential and compose flags are added only for the two
+        subcommands that declare them, since the others would reject them at
+        parse time.
+        """
         argv = [command, "--prefix", str(self.prefix)]
         # --ssh-key/--known-hosts/--compose-file only exist on preflight and
         # install's own subparsers (issue #330): only Preflight's checks and

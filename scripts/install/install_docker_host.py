@@ -378,6 +378,12 @@ class Preflight:
         return self._registry
 
     def note(self, text: str) -> None:
+        """Record a satisfied prerequisite and print it as it passes.
+
+        Printed as it happens rather than summarised at the end, because
+        these run in order and some of them take seconds: an operator
+        watching a preflight stall wants to know which check it stalled on.
+        """
         self.notes.append(text)
         say(f"  ok   {text}")
 
@@ -422,6 +428,14 @@ class Preflight:
     # -- the machine ---------------------------------------------------
 
     def check_python(self) -> None:
+        """The interpreter floor, checked first because everything else assumes
+        it.
+
+        3.8 rather than something newer is what a NAS appliance is likely to
+        have, and the remedy names the two ways out that do not involve
+        installing anything on the host, since installing a package is
+        exactly what this account cannot do.
+        """
         if sys.version_info < (3, 8):
             raise Refusal(
                 EXIT_PREREQ_PYTHON,
@@ -1291,6 +1305,15 @@ class Registry:
         return self._bearer
 
     def _open(self, path: str, *, method: str = "GET", accept: str = ""):
+        """One authenticated request to the registry, with the token attached.
+
+        Every registry call goes through here so the timeout, the bearer
+        token and the URL rules are decided once. The path rule is the part
+        worth knowing: a value starting with "/" came out of a Link header
+        and is already rooted, and anything else is relative to this
+        repository's own v2 endpoint, so a caller never has to know which
+        kind it is holding.
+        """
         # A path beginning with "/" is one the registry handed back in a
         # Link header and is already rooted; anything else is relative to
         # this repository's own v2 endpoint.
@@ -3372,6 +3395,13 @@ class Sudo:
         self._passwordless = None
 
     def available(self) -> bool:
+        """Is there a sudo binary at all.
+
+        Separate from whether it would work: a host with no sudo and a host
+        where this account is not a sudoer need different messages, and
+        collapsing them into one "cannot escalate" sends people to edit a
+        sudoers file that does not exist.
+        """
         return self.sudo is not None
 
     def passwordless(self) -> bool:
