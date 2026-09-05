@@ -204,6 +204,16 @@ export interface CreateBackupSetRequest {
    *  after this set is persisted. Ignored (never runs anything) when
    *  disabled is true. */
   runImmediately?: boolean;
+  /** Confirms creating this set somewhere other than where the history
+   *  already on its id came from (issue #411). Removing a set frees its
+   *  id up, and a set created over an id that already has artifacts on
+   *  record takes every one of them, so a different host, remote path or
+   *  destination is the same move an edit makes. Without it such a create
+   *  refuses with BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED and writes
+   *  nothing; re-creating a set exactly where it was removed from asks
+   *  nothing. Sent only when the caller actually set it, so an ordinary
+   *  create is never a pre-acknowledged one. */
+  acknowledgeRepoint?: boolean;
 }
 
 /** What a submitted run_cycle operation looks like from
