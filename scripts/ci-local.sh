@@ -510,7 +510,10 @@ if [ "$FAST" != "1" ]; then
   # of the tree, and requires the detector to catch it AND to name the
   # write that planted it AND to be the reason it was caught, by showing
   # the same mutant going green with the flag off. One package, one test,
-  # three runs, about a minute.
+  # three runs: about ten seconds on a warm cache, because the mutant is
+  # one file deep in a leaf package and Go's build cache is
+  # content-addressed, so each copy rebuilds core/service and nothing
+  # under it.
   gate_step "the race detector can actually catch a race (mutation self-test, #417)"
   bash scripts/race/selftest.sh
 

@@ -20,9 +20,14 @@ rule, and the tier decides the directory.
 
 | tier | what the test needs | where it lives | how the gate runs it |
 |---|---|---|---|
-| unit | nothing outside the process: fakes, `t.TempDir()`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` | `go test ./internal/... ./service/... ./cmd/...`, including under `CI_LOCAL_FAST=1` |
-| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package | the plain `go test ./...` step |
-| machine | a source machine, optionally a storage medium, on a dedicated network | `core/tests/<name>`, reached through `core/tests/machines` | the gotestwatch step, never a fixed `go test` timeout |
+| unit | nothing outside the process: fakes, `t.TempDir()`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` | `go test -race ./internal/... ./service/... ./cmd/...`, including under `CI_LOCAL_FAST=1` |
+| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package | the `go test -race ./...` step |
+| machine | a source machine, optionally a storage medium, on a dedicated network | `core/tests/<name>`, reached through `core/tests/machines` | the gotestwatch step, `-race` too, never a fixed `go test` timeout |
+
+Every tier runs under `-race` (#417). The detector is a flag on the steps
+above rather than a fourth column, because it changes the binary and not the
+tier: a unit test and a machine test are still told apart by what they need,
+not by whether anybody asked the detector to look.
 
 "Needs" is the operative word, in both directions. A unit test that stands up
 a container is slow, needs a daemon, and goes red when the shared Docker VM
