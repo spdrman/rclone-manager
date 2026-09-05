@@ -153,6 +153,13 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       keep_count: 1,
       delete_count: 1,
       reclaim_bytes: 4096,
+      retention: {
+        timezone: "Europe/Berlin",
+        week_starts_on: "monday",
+        protect_last_known_good: true,
+        tiers: [{ name: "daily", granularity: "day", keep: 4 }]
+      },
+      retention_is_override: true,
       verdicts: [WIRE_VERDICT, { artifact: "b.dump", action: "DELETE", reason: "not selected" }]
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -172,6 +179,24 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       deleteCount: 1,
       reclaimBytes: 4096,
       operationId: undefined,
+      // Issue #333: the plan says which policy decided it. `true` here,
+      // and a chain that is not the product default, so a mapper that
+      // dropped either would have to produce something visibly wrong
+      // rather than something plausible.
+      retentionIsOverride: true,
+      // Issue #430: this wire response omits `moves` and
+      // `unconfirmed_placements`, which is what a deployment declaring no
+      // storage medium serves. They arrive as [] rather than undefined,
+      // and toEqual DOES compare an empty array against a missing key, so
+      // a mapper that passed the absence through fails here.
+      moves: [],
+      unconfirmedPlacements: [],
+      retention: {
+        timezone: "Europe/Berlin",
+        weekStartsOn: "monday",
+        protectLastKnownGood: true,
+        tiers: [{ name: "daily", granularity: "day", keep: 4, periodDays: undefined, windowUnit: undefined, medium: undefined }]
+      },
       verdicts: [
         {
           artifact: "a.dump",
@@ -203,6 +228,8 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       delete_count: 1,
       reclaim_bytes: 4096,
       operation_id: "op_1",
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false,
       verdicts: [WIRE_VERDICT]
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -220,10 +247,65 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
     vi.unstubAllGlobals();
   });
 
+  // Issue #430. EPIC E's placement facts reach this UI only through this
+  // mapper, so a field the wire carries and this drops is a field that
+  // does not exist as far as any page is concerned. The fixture populates
+  // every one of them, because a mapper test whose fixture leaves the new
+  // fields empty passes against a mapper that never reads them.
+  it("carries the moves, the unconfirmed placements and the per-verdict medium through", async () => {
+    const fetchMock = mockFetchOk({
+      plan_id: "retplan_abc",
+      backup_set_id: "production/postgres-primary",
+      inventory_revision: "inv_1",
+      config_revision: "cfg_1",
+      expires_at: "2026-08-29T06:09:48Z",
+      keep_count: 2,
+      delete_count: 2,
+      reclaim_bytes: 4096,
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false,
+      moves: [
+        { artifact: "month-old.dump", from_medium: "local", to_medium: "cold_offsite" },
+        { artifact: "older.dump", from_medium: "warm_s3", to_medium: "cold_offsite" }
+      ],
+      unconfirmed_placements: ["midmove.dump"],
+      verdicts: [
+        { artifact: "month-old.dump", action: "KEEP", reason: "kept by the MONTHLY tier" },
+        // The deletion that would NOT happen on this machine, and the one
+        // that would. The wire spells local by omitting the field, so the
+        // two are only distinguishable if the mapper reads it at all.
+        { artifact: "offsite.dump", action: "DELETE", medium: "cold_offsite", reason: "no tier selects this" },
+        { artifact: "here.dump", action: "DELETE", reason: "no tier selects this" }
+      ]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const plan = await httpApi.previewRetention("production", "postgres-primary");
+
+    expect(plan.moves).toEqual([
+      { artifact: "month-old.dump", fromMedium: "local", toMedium: "cold_offsite" },
+      { artifact: "older.dump", fromMedium: "warm_s3", toMedium: "cold_offsite" }
+    ]);
+    expect(plan.unconfirmedPlacements).toEqual(["midmove.dump"]);
+
+    const medium = (artifact: string) =>
+      plan.verdicts.find((v) => v.artifact === artifact)?.medium;
+    expect(medium("offsite.dump")).toBe("cold_offsite");
+    // toBeUndefined, not a check for "local": absence is the wire's
+    // spelling for the implicit local medium AND for the two REFUSE
+    // shapes that establish nothing, so resolving it here would turn the
+    // second into a claim. See RetentionVerdict.medium (types/backup.ts).
+    expect(medium("here.dump")).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
   it("URL-encodes source/set independently, so a literal '/' or space in either half cannot smuggle an extra path segment", async () => {
     const fetchMock = mockFetchOk({
       plan_id: "x", backup_set_id: "a b/c/d", inventory_revision: "i", config_revision: "c",
-      expires_at: "t", keep_count: 0, delete_count: 0, reclaim_bytes: 0, verdicts: []
+      expires_at: "t", keep_count: 0, delete_count: 0, reclaim_bytes: 0, verdicts: [],
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -539,7 +621,8 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
             local_path: "/data/backups/postgres",
             include: ["*.dump.zst"],
             completion_strategy: "marker",
-            disabled: true
+            disabled: true,
+            retention_is_override: true
           }
         ]
       },
@@ -563,18 +646,16 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
 
     // Fields the backend does NOT yet send: present, correctly typed and
     // never undefined — this is exactly what crashed
-    // BackupSetDetailPage's s.retention.daily / s.validations.includes(...)
-    // (a real TypeError) the first time these routes returned real data
-    // instead of 404ing.
-    expect(s.retention).toEqual({
-      daily: 0,
-      weekly: 0,
-      monthly: 0,
-      timezone: "UTC",
-      weekStartsOn: "monday",
-      protectLastKnownGood: false
-    });
+    // BackupSetDetailPage's s.validations.includes(...) (a real
+    // TypeError) the first time these routes returned real data instead
+    // of 404ing.
     expect(s.validations).toEqual([]);
+    // Issue #333: retention_is_override IS computed and IS sent, so it
+    // is read rather than defaulted. The fixture says true, which is not
+    // the value a mapper that had forgotten this field would produce; the
+    // per-set retention policy that used to be faked here as three zeros
+    // is gone, and the chain has its own route now.
+    expect(s.retentionIsOverride).toBe(true);
     expect(s.state).toBe("stale");
     expect(s.newestKnownGoodAt).toBeNull();
     expect(s.lastRunAt).toBeNull();
@@ -604,7 +685,6 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
     expect(s.id).toBe("api/x");
     expect(s.completionMethod).toBe("atomic-rename");
     expect(s.enabled).toBe(true);
-    expect(s.retention.daily).toBe(0);
     expect(s.validations).toEqual([]);
   });
 
@@ -870,6 +950,32 @@ describe("httpApi requests the paths the contract declares", () => {
     return JSON.parse(init.body as string) as Record<string, unknown>;
   }
 
+  it("retryFailedIngestion posts to the backups path, not the quarantine one", async () => {
+    // The two are different facts about a backup and different refusals,
+    // so a client that sent a failed backup to the quarantine route would
+    // get ARTIFACT_NOT_QUARANTINED back and leave an operator reading a
+    // sentence about trust for a backup that is merely stuck.
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.retryFailedIngestion("production/postgres/bad.dump", "the NAS came back");
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/backups/production/postgres/bad.dump/retry");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    expect(bodyOf(fetchMock)).toEqual({ note: "the NAS came back" });
+  });
+
+  it("retryFailedIngestion omits an absent note rather than sending an empty one", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.retryFailedIngestion("production/postgres/bad.dump");
+
+    expect(bodyOf(fetchMock)).toEqual({});
+  });
+
+
   it("reads the version from /system/version, not /version", async () => {
     const fetchMock = mockFetchOk({
       api_version: "v1", core_version: "1.4.0", commit: "abc1234",
@@ -923,6 +1029,73 @@ describe("httpApi requests the paths the contract declares", () => {
 
     expect(urlOf(fetchMock)).toBe("/api/v1/operations");
     expect(bodyOf(fetchMock)).toEqual({ action: "run_cycle", config_revision: "cfg_7" });
+  });
+
+  it("sends every field of a restore, on the same operations route", async () => {
+    const fetchMock = mockFetchOk({
+      operation_id: "op_9",
+      status: "running",
+      action: "restore_placement",
+      restore: {
+        window_days: 14,
+        wait: "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours",
+        billing: "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list"
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sub = await httpApi.restoreCopy({
+      artifactId: "nas-a/photos/2026-09-01.tar.gz",
+      medium: "cold-store",
+      windowDays: 14,
+      acknowledged: true,
+      configRevision: "cfg_7"
+    });
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/operations");
+    // Field for field. A client that dropped window_days would still get
+    // a 202 back from a real server and restore somebody's backup for the
+    // default length of time instead of the one they asked for, and a
+    // client that dropped acknowledged would be refused for a reason the
+    // operator has no way to act on.
+    expect(bodyOf(fetchMock)).toEqual({
+      action: "restore_placement",
+      config_revision: "cfg_7",
+      restore: {
+        artifact_id: "nas-a/photos/2026-09-01.tar.gz",
+        medium: "cold-store",
+        window_days: 14,
+        acknowledged: true
+      }
+    });
+    expect(sub.operationId).toBe("op_9");
+    expect(sub.windowDays).toBe(14);
+    expect(sub.wait).toContain("twelve hours");
+    expect(sub.billing).toContain("no price list");
+  });
+
+  it("never reads a percentage or a finishing time out of a restore, whatever the server sends", async () => {
+    // A server that grew a progress reading for a restore would be wrong,
+    // and this client must not become the thing that renders it. There is
+    // nowhere in RestoreSubmission to put one, and this is the assertion
+    // that says so about a response that actually carries some.
+    const fetchMock = mockFetchOk({
+      operation_id: "op_9",
+      status: "running",
+      restore: { window_days: 3, wait: "hours", billing: "billed" },
+      progress: { observed_at: "2026-09-03T00:00:00Z", sequence: 1, stage: "restoring", bytes_total: 100 }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sub = await httpApi.restoreCopy({
+      artifactId: "nas-a/photos/x.tar.gz",
+      medium: "cold-store",
+      windowDays: 3,
+      acknowledged: true,
+      configRevision: "cfg_7"
+    });
+
+    expect(Object.keys(sub).sort()).toEqual(["billing", "operationId", "status", "wait", "windowDays"]);
   });
 
   it("tests a persisted set by id alone, on the shared test-connection route", async () => {

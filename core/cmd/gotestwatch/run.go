@@ -41,6 +41,25 @@ type Options struct {
 type Result struct {
 	ExitCode int
 	Trip     *trip
+
+	// What the tracker had measured by the time Run returned: the same
+	// four numbers the summary line on stderr carries. A trip already
+	// carries its own snapshot of these, taken at the instant the
+	// decision was made, so read res.Trip for a tripped run; these are
+	// here for the runs that did NOT trip, where nothing but prose on
+	// stderr used to say how close the run came to its own window.
+	//
+	// Issue #401 is what needed them programmatically. A test that
+	// plants a stall and expects the watchdog to notice it has two very
+	// different reasons to see no trip: the watchdog stopped working, or
+	// the host had already produced a gap longer than the planted stall,
+	// so the derived window was wider than the stall before the stall
+	// even began. Only these numbers separate the two, and parsing the
+	// prose above for them is exactly the fragility this replaces.
+	Events       int
+	SlowestStep  time.Duration
+	SlowestLabel string
+	Window       time.Duration
 }
 
 // reapWait bounds how long killAndWait waits for a killed process group to
@@ -218,26 +237,31 @@ watch:
 		}
 	}
 
-	if tripped != nil {
-		return Result{Trip: tripped}, nil
-	}
 	// What the run measured itself at, on every invocation, not just a
 	// tripped one: go test's own summary line does not say how close a
 	// run came to gotestwatch's derived window, and that is the number an
 	// operator needs to trust "ok" rather than just read it (mirrors
-	// tests/crashmatrix's own t.Logf for the identical reason).
+	// tests/crashmatrix's own t.Logf for the identical reason). It goes
+	// on Result as well as on stderr so a caller can act on it instead of
+	// parsing the sentence (see Result).
+	events, slowest, label, window := tr.summary()
+	res := Result{Events: events, SlowestStep: slowest, SlowestLabel: label, Window: window}
+	if tripped != nil {
+		res.Trip = tripped
+		return res, nil
+	}
 	if opts.Stderr != nil {
-		events, slowest, label, window := tr.summary()
 		_, _ = fmt.Fprintf(opts.Stderr, "gotestwatch: %d events observed, slowest gap %s (%s), no-progress window %s\n",
 			events, slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
 	}
 	if waitErr == nil {
-		return Result{ExitCode: 0}, nil
+		return res, nil
 	}
 	if exitErr, ok := waitErr.(*exec.ExitError); ok {
-		return Result{ExitCode: exitErr.ExitCode()}, nil
+		res.ExitCode = exitErr.ExitCode()
+		return res, nil
 	}
-	return Result{}, fmt.Errorf("running go test: %w", waitErr)
+	return res, fmt.Errorf("running go test: %w", waitErr)
 }
 
 // observeLine parses one line of `go test -json` output, feeds it to the

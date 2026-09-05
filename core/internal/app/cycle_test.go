@@ -12,7 +12,38 @@ import (
 
 func testConfig(t *testing.T, sources ...config.Source) *config.Config {
 	t.Helper()
-	return &config.Config{Sources: sources, Retention: testRetention()}
+	c := &config.Config{Sources: sources, Retention: testRetention()}
+	// Issue #333: resolve each set's effective retention the way Validate
+	// does, for the same reason testRetention mirrors validateRetention's
+	// defaults. These fixtures are built by hand rather than loaded, so
+	// nothing else fills the resolved field in, and a set left at the zero
+	// Retention is not merely unconfigured, it is a different policy.
+	resolveTestRetention(c)
+	return c
+}
+
+// resolveTestRetention fills in every backup set's resolved Retention, by
+// running the real config.ResolveBackupSetRetention rather than a second
+// copy of it (issue #333). These fixtures are built by hand rather than
+// loaded, so nothing else fills that field in, and a set left at the zero
+// Retention is not merely unconfigured: it is a chain that keeps nothing,
+// which internal/retention refuses outright.
+//
+// A test that changes the global policy after building its config has to
+// call this again. Not re-resolving is exactly what #333 guarantees in
+// production, where an already-resolved set does not silently follow a
+// later edit to the global policy, so the fixture has to re-resolve to
+// mean "and this is the policy in force" rather than relying on the read
+// happening to be live.
+//
+// It panics rather than returning: a fixture whose policy does not resolve
+// would otherwise leave every set on that keep-nothing chain, and a test
+// that then passes has proved something about a config no operator could
+// ever have.
+func resolveTestRetention(c *config.Config) {
+	if err := c.ResolveBackupSetRetention(); err != nil {
+		panic("test fixture's retention does not resolve: " + err.Error())
+	}
 }
 
 // testRetention mirrors the defaults config.Validate fills in for a config

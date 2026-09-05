@@ -2,6 +2,7 @@ package webhost
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -211,6 +212,72 @@ func TestCreateBackupSet_SSHKeyNotFoundReturns400WithItsOwnCode(t *testing.T) {
 	errObj, _ := body["error"].(map[string]any)
 	if errObj["code"] != "SSH_KEY_NOT_FOUND" {
 		t.Errorf("error.code = %v, want %q", errObj["code"], "SSH_KEY_NOT_FOUND")
+	}
+}
+
+// TestCreateBackupSet_HistoryRepointRefusalIs409WithItsOwnCode: a create
+// over an id that already has artifacts on record, pointed somewhere
+// other than where they came from, is not a malformed request. It is a
+// well-formed one whose consequences the caller has to see first, and it
+// conflicts with the state of the id rather than with its own shape, so
+// it is a 409 under its own code. Under 400 INVALID_REQUEST the wizard
+// could offer an operator nothing better than the same failure again, and
+// under the EDIT path's code it could not tell which of the two buttons
+// to offer.
+func TestCreateBackupSet_HistoryRepointRefusalIs409WithItsOwnCode(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnCreate = fmt.Errorf("%w: 40 artifact(s) are already on record for api/postgres-primary, and this creates it elsewhere: local_path on record as %q, requested as %q",
+		service.ErrHistoryRepointNotAcknowledged, "/old", "/new")
+
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED" {
+		t.Errorf("error code = %q, want BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", body.Error.Code)
+	}
+	// What the operator reads before deciding has to survive the hop
+	// rather than be replaced by a generic sentence.
+	for _, want := range []string{"local_path", "/old", "/new", "40"} {
+		if !strings.Contains(body.Error.Message, want) {
+			t.Errorf("the message does not carry %q: %s", want, body.Error.Message)
+		}
+	}
+}
+
+// TestCreateBackupSet_AcknowledgementCrossesTheSeam: the acknowledgement
+// is only worth anything if it reaches core. A handler that decoded it
+// and dropped it would produce an identical refusal on the retry, with
+// the operator having answered the question and got nowhere.
+func TestCreateBackupSet_AcknowledgementCrossesTheSeam(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+
+	acknowledged := strings.TrimSuffix(strings.TrimSpace(validCreateBody), "}") + `, "acknowledge_repoint": true}`
+	if rec := postBackupSet(t, tr.router, acknowledged, true); rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if !tr.backend.lastCreate.AcknowledgeRepoint {
+		t.Error("AcknowledgeRepoint did not reach the service request")
+	}
+
+	// The control: a body that never mentions it must not arrive as an
+	// acknowledgement, or every create would be pre-acknowledged and the
+	// refusal could never fire at all.
+	if rec := postBackupSet(t, tr.router, validCreateBody, true); rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if tr.backend.lastCreate.AcknowledgeRepoint {
+		t.Error("a body that never mentioned acknowledge_repoint arrived as an acknowledgement")
 	}
 }
 

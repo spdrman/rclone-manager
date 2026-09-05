@@ -49,13 +49,28 @@ rather than torn down under you.
 
 # Credentials
 
-The SSH private key is never read, never copied, never generated and
-never printed. Only its host-side PATH reaches `.env`, which is the
-convention `container/.env.example` states ("Nothing in this file is a
-secret: it only points at where secrets live on the host") and the rule
+The SSH private key at `--ssh-key` is never read and never printed. Only
+its host-side PATH reaches `.env`, which is the convention
+`container/.env.example` states ("Nothing in this file is a secret: it
+only points at where secrets live on the host") and the rule
 `scripts/deploy/deploy_generic.py` already holds itself to. The same goes
 for a non-default SSH port on a backup source: it is an input, never a
 default and never a value written into this repository (issue #264).
+
+This used to say "never copied" as well, and issue #343 made that false.
+Saying it anyway would be worse than the copying, so:
+
+  * `--mode upgrade` and `--mode factory-reset` archive
+    `config/ssh_keys`, which is where the ENGINE keeps the keys an
+    operator imported through the Web UI. An archive therefore holds
+    copies of private key material. It is created 0700 under the prefix,
+    nothing in it is ever read or printed, and the installer refuses
+    rather than let archives accumulate past ARCHIVE_LIMIT: an upgrade
+    that silently multiplied that material every time it ran would be
+    spreading keys nobody asked to spread.
+  * `<prefix>/secrets` is neither archived nor destroyed. A factory reset
+    leaves `--ssh-key` and `--known-hosts` exactly where they are, and
+    the preview says so by name instead of leaving it to be discovered.
 
 # Dependencies
 
@@ -95,6 +110,7 @@ Run --help for the full flag list.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -131,6 +147,10 @@ EXIT_PREREQ_IMAGE = 18
 EXIT_PREREQ_PAYLOAD = 19
 
 EXIT_EXISTING_INSTALL = 20
+# A refused downgrade is its own answer, not a generic existing-install
+# refusal: the remedy is different (there is none short of a restore),
+# and a caller scripting an upgrade wants to tell the two apart.
+EXIT_DOWNGRADE_REFUSED = 21
 EXIT_RUNTIME = 30
 EXIT_VERIFY = 31
 
@@ -145,6 +165,16 @@ EXIT_NETWORK_BROKEN = 43
 EXIT_NETWORK_STILL_BROKEN = 44
 EXIT_NETWORK_UNDIAGNOSED = 45
 EXIT_PERSISTENCE_UNVERIFIED = 46
+
+# Naming a release, and proving the one this installer carries (issue
+# #484). Their own block for the same reason the bridge codes have one:
+# every code here is about WHICH version is about to be installed, which
+# is a different question from whether the image can be fetched at all
+# (EXIT_PREREQ_IMAGE) and calls for a different reaction. A wrapper that
+# retries a pull should not retry a digest that does not match.
+EXIT_RELEASE_CONFLICT = 50
+EXIT_RELEASE_OFFLINE = 51
+EXIT_RELEASE_DIGEST_MISMATCH = 52
 
 # The architectures the release manifest claims. Anything else has no
 # image, and finding that out from a `docker compose up` failure three
@@ -170,6 +200,58 @@ MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 DEFAULT_PROJECT = "rclone-manager"
 DEFAULT_LISTEN_PORT = 8080
+
+# The release this installer carries, and the identity ghcr.io assigned
+# it. Both are copied from container/release-manifest.json (`version` and
+# `index_digest`), and TestTheCarriedReleasePinIsTheRecordedOne holds them
+# to it, the same way the embedded compose definition is held to
+# container/compose.yaml. They are copied rather than read because the
+# whole point of this file is that it travels alone: on a NAS there is no
+# checkout to read a manifest out of.
+#
+# The digest is what makes `--release` safe to offer at all. A tag is a
+# mutable pointer (scripts/release/publish-image.sh says so in its own
+# words), so "install 0.3.0" is a claim about a name until something
+# compares the name against a recorded identity. One anonymous HEAD does
+# that, with no cosign and no dependency, which is why the digest is here
+# and not derived.
+#
+# It is None between the cut and the push, which is a real state and not a
+# gap. The manifest records `index_digest: null` for a release nothing has
+# pushed yet, canonical.json records image.published false, and a test
+# refuses either half without the other; there is no identity to copy
+# because there is no image in a registry to have one. Carrying the
+# PREVIOUS release's digest through that window would be worse than
+# carrying none: the tag would resolve to exactly the right image and this
+# installer would refuse it, so every operator would get
+# EXIT_RELEASE_DIGEST_MISMATCH on a correct install. check_release says
+# what it cannot prove instead, and the digest is filled in here at the
+# same time it is recorded back into the manifest.
+#
+# It proves exactly one version: this one. A release cut after this
+# installer was written has no digest here and cannot get one, which is
+# the reason the --image default is pinned rather than floating.
+CARRIED_RELEASE = "0.3.0"
+CARRIED_RELEASE_DIGEST = None
+
+# Where that release lives. Split into two halves rather than written as
+# one reference on purpose: the --image default is the one literal
+# reference in this file that distribution/packaging's conformance suite
+# pins to canonical.json, and a second literal beside it is the copy
+# nobody looks at.
+RELEASE_REGISTRY = "ghcr.io"
+RELEASE_REPOSITORY = "spdrman/backup-manager"
+
+# Where a newer installer comes from, printed by the update check. An
+# installer can say a newer release exists; it cannot install one, and
+# offering to would be the floating default this design rules out.
+RELEASE_DOWNLOAD_PAGE = "https://github.com/spdrman/rclone-manager/releases"
+
+# How long a registry read may take. Short on purpose: every one of them
+# is optional, none of them changes what is installed, and an operator
+# waiting on a hung socket during preflight has been given a worse
+# installer, not a safer one.
+REGISTRY_TIMEOUT = 15
 
 # A private key readable by anyone but its owner is what OpenSSH's own
 # client refuses outright, so this refuses the same way, at the door.
@@ -276,13 +358,35 @@ class Preflight:
     unsupported machine is told that before being told about a port.
     """
 
-    def __init__(self, args) -> None:
+    def __init__(self, args, *, registry=None) -> None:
         self.args = args
         self.notes = []
+        # The seam the suite pins the registry through (issue #484).
+        # None is not "no registry", it is "build one if a check gets as
+        # far as needing an answer", which no unit test ever does: the
+        # only two callers are check_release and the update check, and
+        # both are reached from check_all and nowhere else. So the suite
+        # stays offline by construction rather than by remembering.
+        self._registry = registry
+
+    def registry(self):
+        if self._registry is None:
+            self._registry = Registry(RELEASE_REGISTRY, RELEASE_REPOSITORY)
+        return self._registry
 
     def note(self, text: str) -> None:
         self.notes.append(text)
         say(f"  ok   {text}")
+
+    def warn(self, text: str) -> None:
+        """Something an operator has to read that is not a refusal.
+
+        `ok` and `!!` read differently at a glance, which is the whole
+        reason for having two. A preflight where every line says ok is a
+        preflight nobody reads the lines of.
+        """
+        self.notes.append(text)
+        say(f"  !!   {text}")
 
     def check_all(self) -> None:
         self.check_python()
@@ -294,6 +398,12 @@ class Preflight:
         self.check_credentials()
         self.check_port()
         self.check_space()
+        # Before check_image, which is the step that PULLS. An operator
+        # should be told which reference is about to be installed, and
+        # that its identity is the recorded one, before a 2 GB download
+        # starts rather than after it.
+        self.check_release()
+        self.check_for_a_newer_release()
         self.check_image()
 
     # -- the machine ---------------------------------------------------
@@ -365,15 +475,76 @@ class Preflight:
     # -- what we are about to install ----------------------------------
 
     def check_payload(self) -> None:
+        """Where the runtime definition is coming from.
+
+        The refusal narrowed rather than disappeared. Supplying nothing is
+        no longer an error, because the canonical definition is embedded
+        and generated from container/compose.yaml. Naming a path that is
+        not there still is: that is an operator asking for one specific
+        file, and quietly installing a different one instead would be the
+        worst of both.
+        """
         canonical = self.args.compose_file
+        if canonical is None:
+            self.check_embedded_compose()
+            return
         if not canonical.is_file():
             raise Refusal(
                 EXIT_PREREQ_PAYLOAD,
-                f"the canonical compose definition is not at {canonical}.",
-                "Point --compose-file at container/compose.yaml from a checkout, or run this from inside one. "
-                "This installer copies that file rather than writing its own, so it cannot proceed without it.",
+                f"--compose-file names {canonical}, and there is no file there.",
+                "Point it at a real container/compose.yaml, or drop the flag entirely to use the "
+                "definition embedded in this installer.",
             )
-        self.note(f"canonical runtime definition at {canonical}")
+        self.note(f"canonical runtime definition at {canonical} (supplied, overriding the embedded copy)")
+
+    def check_embedded_compose(self) -> None:
+        """The shipped artifact checking itself, before it stages anything.
+
+        TestEmbeddedComposeMatchesCanonical only exists inside a checkout,
+        and the whole point of embedding the definition is that the
+        installer travels without one. So the copy that actually lands on
+        a NAS has had no gate applied to it at all, and the failure it is
+        exposed to is the quiet kind: truncation is loud because Python
+        stops parsing, while a changed mount, network or healthcheck
+        parses perfectly and stages a runtime topology nobody wrote.
+
+        The digest is recorded beside the blob by
+        scripts/install/embed_compose.py, held to the canonical file by
+        the same test, and verified here, so the artifact carries its own
+        check wherever it ends up.
+        """
+        digest = embedded_compose_digest()
+        if digest != EMBEDDED_COMPOSE_SHA256:
+            raise Refusal(
+                EXIT_PREREQ_PAYLOAD,
+                "the runtime definition embedded in this installer does not match the digest "
+                f"recorded beside it:\n  found    {digest}\n  expected {EMBEDDED_COMPOSE_SHA256}\n"
+                "so this copy of the script has been edited since it was generated.",
+                "Do not install from it. Fetch a clean copy of install_docker_host.py, or from a "
+                "checkout regenerate it with `python3 scripts/install/embed_compose.py` and commit "
+                "the result. If you meant to install a modified runtime, put it in a file and pass "
+                "--compose-file, which is the supported way to do that and leaves a trail.",
+            )
+        self.note("canonical runtime definition embedded in this installer, sha256 "
+                  f"{digest[:12]} (generated from container/compose.yaml)")
+
+        # Running from inside a checkout used to mean installing that
+        # checkout's compose.yaml. It silently does not any more, and a
+        # developer testing an uncommitted runtime change through the
+        # installer would have deployed the embedded copy and never been
+        # told. This does not change which file wins, because "whichever
+        # directory the script happens to sit in" is precisely the
+        # location-dependent behaviour embedding removed. It says so
+        # instead, and names the flag that settles it.
+        local = checkout_compose_beside_this_installer()
+        if local is None:
+            return
+        if local.read_bytes() == embedded_compose_bytes():
+            self.note(f"identical to {local} in the checkout this installer is sitting in")
+        else:
+            self.warn(f"{local} in this checkout DIFFERS from the embedded copy, and the embedded "
+                      f"copy is what will be staged. Pass --compose-file {local} to install the "
+                      f"checkout's version instead.")
 
     def check_paths(self) -> None:
         """Every host directory, and whether THIS uid can actually use it.
@@ -445,14 +616,31 @@ class Preflight:
         """
         key = self.args.ssh_key
         known = self.args.known_hosts
-        for label, path in (("--ssh-key", key), ("--known-hosts", known)):
+        pending = []
+        for label, path, supplied in (
+            ("--ssh-key", key, getattr(self.args, "ssh_key_supplied", True)),
+            ("--known-hosts", known, getattr(self.args, "known_hosts_supplied", True)),
+        ):
+            if not path.exists() and not supplied:
+                # A default that install is about to create. Refusing here
+                # would make `preflight` report a fresh host as broken for
+                # the one thing `install` fixes by itself, which is a false
+                # alarm on exactly the machine this is meant to be easy on.
+                pending.append(label)
+                say(f"  note {label} is not there yet; install creates it at {path}")
+                continue
             if not path.exists():
+                # Only reachable for a path the operator named: ensure_credentials()
+                # has already created any defaulted one by the time this runs. An
+                # explicitly named file that is absent stays a refusal, because
+                # quietly generating a different key than the one asked for is worse
+                # than either creating nothing or refusing.
                 raise Refusal(
                     EXIT_PREREQ_CREDENTIALS,
                     f"{label} is {path}, which is not there.",
-                    "container/compose.yaml mounts both of these with `:?`, so the stack cannot start without "
-                    "them. Create them on this host first. This installer never generates a key and never "
-                    "reads one.",
+                    "container/compose.yaml mounts both of these with `:?`, so the stack cannot start "
+                    "without them. Point the flag at a file that exists, or drop it to have the installer "
+                    "create one under <prefix>/secrets.",
                 )
             if not path.is_file():
                 raise Refusal(
@@ -460,6 +648,8 @@ class Preflight:
                     f"{label} is {path}, which is not a regular file.",
                     "Both mounts are read-only single files, deliberately: a directory would be a different claim.",
                 )
+        if "--ssh-key" in pending:
+            return
         mode = key.stat().st_mode
         if mode & DISALLOWED_KEY_MODE_BITS:
             raise Refusal(
@@ -549,6 +739,160 @@ class Preflight:
                 "not starting. Free space, or point --backup-dir at a larger volume.",
             )
         self.note(f"{usage.free // (1024 ** 3)} GiB free on the filesystem holding {target}")
+
+    def check_release(self) -> None:
+        """Which reference is about to be installed, and whether the tag
+        on it really is the release it names (issue #484).
+
+        The reference is printed first and unconditionally, because "what
+        version did this actually install" is the first question anyone
+        debugging a deployment asks and the answer was previously only
+        deducible from the flags.
+
+        Then the proof, which is what makes naming a release safe to
+        offer at all. A tag is a mutable pointer, and this project says so
+        in its own release tooling, so "install 0.3.0" is a claim about a
+        name until something compares the name against a recorded
+        identity. container/release-manifest.json records that identity at
+        push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
+        anonymous HEAD settles it.
+
+        Between a cut and a push there is no identity to copy, and that
+        window is handled here rather than papered over. The manifest
+        records a null index_digest for a release nothing has pushed yet,
+        so CARRIED_RELEASE_DIGEST is None and this says the tag went
+        unproven, in the same words it uses for a registry it could not
+        reach. What it must never do is compare the new tag to the
+        previous release's digest: that comparison fails on a perfectly
+        correct image and turns the whole check into a refusal every
+        operator hits.
+
+        It settles exactly one version: the one this installer carries. A
+        release cut afterwards has no digest here and cannot get one,
+        which is the whole reason the --image default is pinned rather
+        than floating. Everything this cannot prove is SAID rather than
+        passed over, because a check that stays quiet when it did nothing
+        is indistinguishable from one that succeeded.
+        """
+        ref = self.args.image
+        self.note(f"installing {ref}")
+
+        if self.args.image_archive is not None:
+            self.note(f"loaded from {self.args.image_archive}, so there is no registry to ask")
+            return
+        if self.args.no_pull:
+            self.note("--no-pull, so nothing is resolved against a registry")
+            return
+
+        home = f"{RELEASE_REGISTRY}/{RELEASE_REPOSITORY}"
+        if image_name(ref) != home:
+            self.warn(f"{image_name(ref)} is not {home}, so nothing recorded here says what {ref} "
+                      f"should be. Whatever is behind that reference is yours to vouch for.")
+            return
+
+        if CARRIED_RELEASE_DIGEST is None:
+            self.warn(f"{CARRIED_RELEASE} is cut and not pushed, so container/release-manifest.json "
+                      f"records no identity for it and there is nothing here to hold {ref} to. "
+                      f"Whatever that reference resolves to goes in on the registry's word. The "
+                      f"digest is recorded, and this installer reissued with it, once the release "
+                      f"workflow has pushed.")
+            return
+
+        pinned = image_digest(ref)
+        if pinned:
+            if pinned == CARRIED_RELEASE_DIGEST:
+                self.note(f"pinned by digest to {CARRIED_RELEASE}'s recorded identity, so there is "
+                          f"nothing a moved tag could change")
+            else:
+                self.warn(f"pinned by digest to {pinned}, which is not the {CARRIED_RELEASE} this "
+                          f"installer recorded. A digest is exact, so this installs what you named; "
+                          f"it is just not a release this can vouch for.")
+            return
+
+        tag = image_tag(ref)
+        if tag != CARRIED_RELEASE:
+            self.warn(f"this installer records a digest for {CARRIED_RELEASE} only, so {tag} goes in "
+                      f"on the registry's word. Use the {tag} installer if you want it checked: it "
+                      f"is the one that carries {tag}'s digest.")
+            return
+
+        try:
+            digest = self.registry().digest_for(tag)
+        except (OSError, ValueError, KeyError) as exc:
+            # NOT a refusal. Being unable to reach a registry over HTTPS
+            # from this process is a different fact from a tag that has
+            # moved, and plenty of hosts pull through a daemon-level proxy
+            # this cannot see. check_image still has to resolve the image
+            # itself, so an unreachable registry does not get past that.
+            self.warn(f"could not ask {RELEASE_REGISTRY} what {ref} points at ({exc}), so the "
+                      f"recorded digest went unchecked. The pull below still has to succeed.")
+            return
+
+        if digest != CARRIED_RELEASE_DIGEST:
+            raise Refusal(
+                EXIT_RELEASE_DIGEST_MISMATCH,
+                f"{ref} is {digest or 'nothing this could read'} on {RELEASE_REGISTRY}, and the "
+                f"release manifest records {CARRIED_RELEASE_DIGEST} for {CARRIED_RELEASE}.",
+                "A tag is a mutable pointer, so exactly one of three things is true: the tag has "
+                "been moved since this release was recorded, this installer's copy of the digest "
+                "is stale, or something other than the registry is answering. None of the three "
+                "is something to install through.\n\n"
+                f"If you know the recorded digest is the right one, install it by identity rather "
+                f"than by name:\n  --image {image_name(ref)}@{CARRIED_RELEASE_DIGEST}\n\n"
+                "Otherwise take the release from a machine that already has it, with `docker save` "
+                "and --image-archive.",
+            )
+        self.note(f"{ref} is {digest}, the identity the release manifest records for {CARRIED_RELEASE}")
+
+    def check_for_a_newer_release(self) -> None:
+        """Whether a newer release exists. Read-only, and it can only ever
+        add a line of output (issue #484).
+
+        Not a check in this class's usual sense: it has no refusal and no
+        exit code, and it deliberately cannot acquire one. It must not
+        change what is installed, so every failure degrades to silence
+        rather than to a decision, and a registry that is down or slow
+        costs an operator nothing but a missing sentence.
+
+        It also does not offer to install what it finds, and that is the
+        design rather than a gap. The proof above works off a digest this
+        installer carries, and it can never carry the digest of a release
+        cut after it was written; an installer that floated onto a newer
+        tag would be installing on the registry's word alone. So this says
+        where the newer installer is and stops.
+        """
+        if self.args.image_archive is not None or self.args.no_pull:
+            return
+        if image_name(self.args.image) != f"{RELEASE_REGISTRY}/{RELEASE_REPOSITORY}":
+            return
+        carried = _semver(CARRIED_RELEASE)
+        if carried is None:
+            # Unreachable while the pin test stands, and cheaper than the
+            # alternative: this is the one method in the class that must
+            # never raise, and "newer than an unorderable version" has no
+            # answer to give.
+            return
+        try:
+            published = self.registry().released_versions()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.warn(f"could not ask {RELEASE_REGISTRY} whether a newer release exists ({exc}). "
+                      f"Nothing about this install changes.")
+            return
+
+        newer = [v for v in published if _semver(v) > carried]
+        if not newer:
+            # "nothing published is newer" rather than "this is the newest
+            # published release". Those read the same while the carried
+            # release is on the registry and they differ between a cut and
+            # a push, when the carried release is not published at all and
+            # calling it the newest published one is simply false.
+            self.note(f"nothing published is newer than {CARRIED_RELEASE}, prereleases excluded")
+            return
+        self.warn(f"{newer[-1]} has been published since this installer was written, which carries "
+                  f"{CARRIED_RELEASE} (prereleases are excluded from that comparison). Nothing here "
+                  f"changes what is about to be installed, on purpose: an installer can only prove "
+                  f"a release it already holds a digest for. Get the {newer[-1]} installer from "
+                  f"{RELEASE_DOWNLOAD_PAGE}.")
 
     def check_image(self) -> None:
         """The image has to be resolvable BEFORE anything is created.
@@ -679,12 +1023,723 @@ def compose_argv(args):
     ]
 
 
+# The three things `install` can be asked to do. One flag with three
+# values rather than three flags, for the reason --fix-network already
+# demonstrates in this file: two knobs for one decision is how they end
+# up disagreeing, and #330's review found exactly that defect here.
+#
+# --if-installed {converge,refuse} is GONE, reconciled into these rather
+# than left beside them as a second opinion about the same question:
+#
+#   converge  ->  --mode upgrade. Converging IS the no-op end of
+#                 upgrading, which is why "already this version" still
+#                 runs the upgrade path and says so rather than pretending
+#                 a version moved.
+#   refuse    ->  --mode fresh. fresh means nothing is here, so meeting an
+#                 install is a refusal by definition, and no separate flag
+#                 is needed to ask for one.
+#
+# That is a breaking change for anyone re-running the installer in a
+# script, because the old default converged silently and the new default
+# refuses rather than guess. It is documented as such in docs/install.md,
+# and the refusal names the flag that settles it.
+INSTALL_MODES = ("fresh", "upgrade", "factory-reset")
+
+
+def image_digest(reference: str) -> str:
+    """The `@sha256:...` half of a reference, or "" when it carries none.
+
+    A reference is `[registry[:port]/]name[:tag][@digest]`, and the
+    digest is the only part with an unambiguous separator, so it comes
+    off first and everything else is decided on what is left.
+    """
+    _, at, digest = reference.partition("@")
+    return digest if at else ""
+
+
+def image_name(reference: str) -> str:
+    """The registry-and-repository half, with any tag and digest removed."""
+    name = reference.partition("@")[0]
+    head, slash, last = name.rpartition("/")
+    return head + slash + last.split(":", 1)[0]
+
+
+def image_tag(reference: str) -> str:
+    """The tag out of an image reference, or "" when it carries none.
+
+    Not a naive rsplit on ":": a registry port is a colon too, and
+    "localhost:5000/backup-manager" has no tag at all. The tag can only
+    live in the last path segment, so that is the only place looked. A
+    digest is not a tag either, so it is taken off before looking.
+
+    THE ONLY implementation of this question in this file (issue #484).
+    There used to be two - this one, and an inline
+    `ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"`
+    inside resolve() - and they disagreed twice over. On
+    `localhost:5000/backup-manager` this said "" and that said "latest";
+    on `backup-manager@sha256:<hex>` this said "" and that said the bare
+    hex, so the .env recorded VERSION=<hex> as though a digest were a
+    version. Two answers to one question is how one of them goes
+    unexamined.
+    """
+    name = reference.partition("@")[0]
+    last = name.rsplit("/", 1)[-1]
+    return last.split(":", 1)[1] if ":" in last else ""
+
+
+def reference_version(reference: str) -> str:
+    """The release a reference names, or "" when nothing in it names one.
+
+    "" is a real answer and every caller already treats it as one: it is
+    what installed_image_tag returns when it cannot say, and what the
+    downgrade guard reads as "unknown, so proceed". Guessing here is the
+    failure this exists to avoid, and the two guesses that were available
+    are both worse than saying nothing. "latest" writes a tag into the
+    .env that this installer never installed and that no future installer
+    can order; the bare digest hex reads as a version and is not one.
+
+    A pinned digest IS answerable when it is the digest this release
+    recorded, which is the case `container/compose.yaml`'s own
+    deploy-by-digest advice produces. That is not a guess, it is the same
+    recorded identity check_release verifies the tag against.
+    """
+    tag = image_tag(reference)
+    if tag:
+        return tag
+    digest = image_digest(reference)
+    if digest and digest == CARRIED_RELEASE_DIGEST:
+        return CARRIED_RELEASE
+    return ""
+
+
+def _prerelease_key(identifiers):
+    """An orderable key for the dot-separated identifiers after the `-`.
+
+    Semver's own rule, because half of it is the half that bites: a
+    numeric identifier orders numerically and below any alphanumeric one,
+    and a shorter run of identifiers orders below a longer one that
+    matches so far. `rc.2` after `rc.10` is the case a lexical comparison
+    gets backwards, and it is the case a release candidate series
+    actually produces.
+    """
+    key = []
+    for part in identifiers:
+        if part.isdigit():
+            key.append((0, int(part), ""))
+        else:
+            key.append((1, 0, part))
+    return key
+
+
+def _semver(tag: str):
+    """An orderable key for a version tag, else None.
+
+    None is a real answer and is treated as one everywhere it is used:
+    "latest", a branch name and a digest order against nothing, and
+    claiming otherwise is how an installer offers to "upgrade" a host
+    onto an older build.
+
+    The prerelease suffix is part of the answer, not something to throw
+    away. Discarding it made 0.2.0-rc1 compare EQUAL to 0.2.0, so moving
+    a host from the release back onto its own release candidate was a
+    "same version, converging in place" no-op rather than the downgrade
+    it is, and the guard this whole path exists for never fired. A
+    prerelease sorts BELOW its release, which is why the released half of
+    the key carries a 1 and a prerelease carries a 0 and its own
+    identifiers.
+    """
+    core, _, _build = (tag or "").partition("+")
+    core, dash, pre = core.partition("-")
+    parts = core.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    numbers = tuple(int(p) for p in parts)
+    if not dash:
+        return (numbers, 1, [])
+    # The separator, not the suffix. "0.2.0-" partitions to an empty
+    # suffix exactly like "0.2.0" does, and reading it as a plain release
+    # would order a typo confidently.
+    identifiers = pre.split(".")
+    if not all(identifiers):
+        return None
+    return (numbers, 0, _prerelease_key(identifiers))
+
+
+def _next_page(link_header: str) -> str:
+    """The `rel="next"` target out of a Link header, or "" when there is none.
+
+    RFC 8288 in the one shape a registry sends it: `</v2/...>; rel="next"`,
+    sometimes with other links beside it. Written out rather than
+    approximated with `"next" in header`, because `rel="previous"` also
+    contains the word and following it is an infinite loop.
+    """
+    for part in link_header.split(","):
+        target, _, params = part.partition(";")
+        if "rel=next" not in params.replace(" ", "").replace('"', ""):
+            continue
+        return target.strip().strip("<>")
+    return ""
+
+
+class Registry:
+    """The two read-only questions this installer asks a registry, and
+    nothing else (issue #484).
+
+    Standard library only, like the rest of this file, and both questions
+    are GETs and HEADs against an anonymous pull token. Nothing here
+    writes, nothing here needs a credential, and nothing here can change
+    what is installed: the reference is settled in resolve_release()
+    before this class is constructed, and the answers are used to CONFIRM
+    it or to print a line, never to produce it.
+
+    Built lazily and injectable on purpose. `test_install_docker_host.py`
+    runs its whole suite offline in about a second, and Fixture.args()
+    resolves arguments dozens of times; a registry read reachable from
+    resolve(), or from an argparse default, would put HTTPS into every
+    one of them. So Preflight takes one of these as a keyword argument
+    and only ever builds a real one when a check gets as far as needing
+    an answer.
+
+    Deliberately NOT cosign. Verification through a digest the release
+    already recorded is one request and no dependency; a signature check
+    would need a binary a NAS may not let anyone install, and would put
+    the most security-sensitive code in this project in the least
+    reviewed place. Issue #484 records all four reviewers saying so.
+    """
+
+    # An image index and an image manifest, in both the OCI and the
+    # Docker spellings. Without an Accept a registry may answer with a
+    # converted manifest, whose digest is a different (and correct)
+    # digest for a different set of bytes, and the comparison below
+    # would fail for a reason that has nothing to do with the release.
+    ACCEPT = ", ".join((
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ))
+
+    def __init__(self, registry: str = RELEASE_REGISTRY, repository: str = RELEASE_REPOSITORY,
+                 *, timeout: int = REGISTRY_TIMEOUT) -> None:
+        self.registry = registry
+        self.repository = repository
+        self.timeout = timeout
+        self._bearer = None
+
+    def _token(self) -> str:
+        """An anonymous pull token, fetched once and kept for the run.
+
+        Anonymous because the image is public and because an installer
+        that asked for a credential to check a public digest would be
+        asking for a credential nobody should have to give it.
+        """
+        if self._bearer is None:
+            url = (f"https://{self.registry}/token"
+                   f"?scope=repository:{self.repository}:pull&service={self.registry}")
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                self._bearer = json.loads(response.read().decode("utf-8"))["token"]
+        return self._bearer
+
+    def _open(self, path: str, *, method: str = "GET", accept: str = ""):
+        # A path beginning with "/" is one the registry handed back in a
+        # Link header and is already rooted; anything else is relative to
+        # this repository's own v2 endpoint.
+        url = (f"https://{self.registry}{path}" if path.startswith("/")
+               else f"https://{self.registry}/v2/{self.repository}/{path}")
+        request = urllib.request.Request(url, method=method)
+        request.add_header("Authorization", f"Bearer {self._token()}")
+        if accept:
+            request.add_header("Accept", accept)
+        return urllib.request.urlopen(request, timeout=self.timeout)
+
+    def digest_for(self, tag: str) -> str:
+        """What the registry says this tag currently points at.
+
+        A HEAD, so no manifest body crosses the wire: the answer is the
+        `docker-content-digest` header, which is the identity the release
+        manifest recorded at push time.
+        """
+        with self._open(f"manifests/{tag}", method="HEAD", accept=self.ACCEPT) as response:
+            return response.headers.get("docker-content-digest", "")
+
+    def released_versions(self) -> list:
+        """Every tag that is a released version, oldest first.
+
+        Paginated, because ghcr.io caps a page at 100 tags and this
+        repository publishes three per release (the version, its
+        signature and its attestation), so the first page fills at 33
+        releases and a later one is the page the newest release is on.
+
+        Ordered by _semver, never by the order the registry answers in.
+        That order is push order, and push order is not version order:
+        the six tags here today come back with the newest release fourth.
+        Sorting by _semver also drops the signature and attestation tags
+        for free, since neither parses as a version.
+
+        Prereleases are excluded. A release candidate is published the
+        same way a release is, and telling an operator that 0.3.0-rc.1 is
+        "newer" than the release they are installing is telling them to
+        move a backup host onto a candidate.
+        """
+        page, tags = "tags/list?n=100", []
+        while page:
+            with self._open(page) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                tags += body.get("tags") or []
+                page = _next_page(response.headers.get("Link", ""))
+        released = [t for t in tags if _semver(t) is not None and _semver(t)[1] == 1]
+        return sorted(released, key=_semver)
+
+
+def compare_versions(installed: str, target: str) -> str:
+    """Where `installed` sits relative to `target`: older, same, newer or
+    unknown.
+
+    Numeric per component, never lexical: "0.10.0" is newer than "0.9.0"
+    and sorts the other way as a string, so a string comparison here gets
+    the one case that matters backwards. A prerelease sorts below its own
+    release, so 0.2.0 -> 0.2.0-rc1 is a downgrade and is refused as one.
+    """
+    a, b = _semver(installed), _semver(target)
+    if a is None or b is None:
+        return "unknown"
+    return "same" if a == b else ("older" if a < b else "newer")
+
+
+# The service name the engine runs under in container/compose.yaml. The
+# version question is about THAT container: web-ui runs the same image
+# today and is not required to forever, and an orphan or a stopped
+# leftover from an older layout is neither.
+ENGINE_SERVICE = "rclone-manager"
+
+
+def _image_from_override(prefix: Path) -> str:
+    """The engine's image out of the override this installer wrote, or "".
+
+    Two keys per service and this installer authored every byte of it, so
+    a line-oriented read is honest here rather than lazy: it is not
+    parsing arbitrary YAML, it is reading back its own render_image_override.
+    """
+    override = prefix / "compose.image.yaml"
+    if not override.is_file():
+        return ""
+    service = None
+    for raw in override.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.endswith(":") and not stripped.startswith("#") and raw.startswith("  ") \
+                and not raw.startswith("    "):
+            service = stripped[:-1]
+        elif service == ENGINE_SERVICE and stripped.startswith("image:"):
+            return stripped.split(":", 1)[1].strip()
+    return ""
+
+
+def installed_image_tag(containers, prefix: Path):
+    """(tag, where the answer came from). Both halves matter.
+
+    THE ENGINE'S container, selected by its compose Service field, not
+    "the first container that has a tag". `docker compose ps -a` lists
+    stopped leftovers and orphans from an older layout in whatever order
+    it likes, and reading a version off one of those is how an installer
+    decides an upgrade against a container nobody is running.
+
+    And when the stack is DOWN there are no containers at all, so the
+    running-version answer was "" and the downgrade guard evaporated
+    exactly when a re-run is most likely: after a reboot, or after an
+    operator stopped the stack to do something to it. The deployment
+    files still say what the last install pinned, so that is the fallback,
+    and the caller is told which of the two answered because they are
+    different claims: one is what is serving, the other is what the next
+    `up` would start.
+    """
+    for c in containers:
+        if str(c.get("Service", "")) != ENGINE_SERVICE:
+            continue
+        tag = reference_version(str(c.get("Image", "")))
+        if tag:
+            return tag, f"the {ENGINE_SERVICE} container"
+    tag = reference_version(_image_from_override(prefix))
+    if tag:
+        return tag, "compose.image.yaml, because no engine container is here to ask"
+    return "", ""
+
+
+def decide_install_mode(*, requested, installed, installed_tag,
+                        target_version, interactive, prefix):
+    """Which mode to run, and whether an operator has to be asked first.
+
+    Returns (mode, needs_prompt). (None, True) means the caller must ask,
+    and the answer has to come back THROUGH HERE rather than be used
+    directly: this is the only place the downgrade guard lives, and a
+    path that skipped it skipped the guard. That is not theoretical, it
+    is what the first version did.
+
+    The rule this exists to enforce: an unanswerable question is a
+    refusal, never a default. One of upgrade and factory-reset destroys
+    data and the other does not, so guessing between them is the one
+    thing this must never do.
+
+    `installed_tag`, not `installed_version`, because installed_version
+    was also the name of a module-level function in this file and one of
+    the two silently shadowed the other inside this body.
+    """
+    if not installed:
+        # Nothing here, so nothing to decide, including for factory-reset:
+        # asking for a clean install on an already-clean host is not an
+        # error, it is just a fresh install with a stricter name.
+        return (requested or "fresh"), False
+
+    if requested == "fresh":
+        raise Refusal(
+            EXIT_EXISTING_INSTALL,
+            f"--mode fresh means nothing is installed here, and something is: "
+            f"version {installed_tag or 'unknown'} at {prefix}.",
+            "Use --mode upgrade to keep the users, backup sets and catalog, or "
+            "--mode factory-reset to discard them and start clean.",
+        )
+
+    if requested == "factory-reset":
+        return "factory-reset", False
+
+    if requested == "upgrade":
+        if compare_versions(installed_tag, target_version) == "newer":
+            raise Refusal(
+                EXIT_DOWNGRADE_REFUSED,
+                f"the install here is newer ({installed_tag}) than the version this "
+                f"installer carries ({target_version}), so this would move it backwards.",
+                "A catalog written by a newer build is not something this can promise to "
+                "read back. Install the newer version, or --mode factory-reset if the "
+                "data is genuinely disposable.",
+            )
+        # "unknown" deliberately proceeds. A host on :latest cannot be
+        # ordered, and refusing to touch it would strand it forever; the
+        # direction is unknown, which is not the same as backwards.
+        return "upgrade", False
+
+    if interactive:
+        return None, True
+
+    raise Refusal(
+        EXIT_EXISTING_INSTALL,
+        f"an install is already here (version {installed_tag or 'unknown'}), this "
+        f"installer carries {target_version}, and no mode was given.",
+        "There is no terminal to ask on, and guessing between keeping the data and "
+        "wiping it is not something this will do. Pass --mode upgrade to keep the "
+        "users, backup sets and catalog, or --mode factory-reset to discard them.",
+    )
+
+
+def archive_plan(args):
+    """Every path an archive captures, whether or not it exists yet.
+
+    A plan rather than a listing, so the same answer drives the upgrade
+    copy, the factory-reset move and the tests, and so a path that is
+    absent today cannot silently drop out of tomorrow's archive.
+
+    The retained artifacts under the backup root are deliberately absent.
+    They are the product's entire purpose and can be enormous, an upgrade
+    does not modify them, and copying them would double disk usage to
+    protect against nothing. Their location is reported instead.
+    """
+    return [
+        # local-auth.json FIRST, and the order is the point. archive_state
+        # moves these one at a time for a factory reset, so a failure
+        # partway through leaves everything before the failure moved and
+        # everything after it in place. With the database first, an ENOSPC
+        # between the two left the catalog gone and the administrator
+        # record present, which is the engine reporting "an administrator
+        # already exists", issuing no enrollment link, and nobody being
+        # able to log in. That is the exact lockout this archive exists to
+        # prevent, produced by the archive.
+        args.state_dir / "local-auth.json",
+        args.state_dir / "state.db",
+        # The journal, which is not optional. internal/state/state.go opens
+        # the database with journal_mode=WAL and container/compose.yaml
+        # says in as many words that -wal and -shm sit beside the main
+        # file. Archiving state.db alone copies a database whose most
+        # recent committed transactions are still in the WAL, so an
+        # upgrade's archive is torn, and a factory reset leaves a stale
+        # WAL sitting next to a database that is about to be replaced.
+        args.state_dir / "state.db-wal",
+        args.state_dir / "state.db-shm",
+        args.config_dir / "config.yaml",
+        args.config_dir / "ssh_keys",
+        args.config_dir / "known_hosts.d",
+    ]
+
+
+def _count_catalogued_artifacts(db: Path) -> int:
+    """Rows in the catalog, or -1 when it cannot be read.
+
+    Best effort on purpose: the schema belongs to the engine, not to this
+    installer, so the table is discovered rather than assumed and an
+    unreadable database reports that it is unreadable instead of zero.
+    Zero and "I could not tell" are different numbers to show an operator
+    about to destroy something.
+    """
+    if not db.is_file():
+        return 0
+    try:
+        import sqlite3
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            names = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for candidate in ("artifacts", "artifact", "catalog"):
+                if candidate in names:
+                    return int(con.execute(f"SELECT COUNT(*) FROM {candidate}").fetchone()[0])
+            return -1
+        finally:
+            con.close()
+    except Exception:
+        return -1
+
+
+def destroy_preview(args):
+    """What a factory reset is about to destroy, by name and by count.
+
+    The same reasoning as the sudo path printing every command before
+    asking for a password: "this will delete 1 administrator account and
+    47 catalogued artifacts" is a decision an operator can make, and
+    "Factory reset? [y/N]" is not.
+
+    The retained backups are never listed, because a factory reset does
+    not delete them. It drops the catalog that describes them, and the
+    files stay where they are. Claiming to destroy them would be worse
+    than saying nothing.
+    """
+    lines = []
+    auth = args.state_dir / "local-auth.json"
+    if auth.is_file():
+        lines.append("1 administrator account (state/local-auth.json)")
+    db = args.state_dir / "state.db"
+    if db.is_file():
+        n = _count_catalogued_artifacts(db)
+        counted = f"{n} catalogued artifact(s)" if n >= 0 else "an unreadable number of catalogued artifacts"
+        lines.append(f"the catalog and {counted} (state/state.db)")
+    cfg = args.config_dir / "config.yaml"
+    if cfg.is_file():
+        lines.append("every configured backup set (config/config.yaml)")
+    keys = args.config_dir / "ssh_keys"
+    if keys.is_dir():
+        n = len([p for p in keys.iterdir() if p.is_file()])
+        lines.append(f"{n} imported SSH key(s) (config/ssh_keys)")
+    known = args.config_dir / "known_hosts.d"
+    if known.is_dir():
+        n = len([p for p in known.iterdir() if p.is_file()])
+        lines.append(f"{n} pinned host key file(s) (config/known_hosts.d)")
+    if not lines:
+        lines.append("nothing: no administrator record, catalog or configuration is here to destroy")
+    # Named, not left to be discovered. Everything below survives a
+    # factory reset, and an operator standing in front of this list is
+    # entitled to know what it does NOT cover before typing the word.
+    lines.append(f"NOT destroyed: the retained backups under {args.backup_dir}, which stay where they are")
+    lines.append(f"NOT destroyed: {args.ssh_key}, the SFTP client key this deployment points at")
+    lines.append(f"NOT destroyed: {args.known_hosts}, the pinned host keys beside it")
+    return lines
+
+
+# How many archives may sit under --prefix before this refuses to make
+# another. Each one holds a copy of config/ssh_keys, which is where the
+# engine keeps the SSH keys an operator imported, so an unbounded pile is
+# an installer that multiplies private key material every time it runs.
+#
+# A refusal rather than a prune, and the choice is deliberate. This whole
+# path MOVES rather than deletes precisely so a destructive decision stays
+# recoverable; an installer that then quietly deleted the oldest recovery
+# copy on its own would be taking back the property it advertises. It
+# names them and the command instead, and the operator decides.
+ARCHIVE_LIMIT = 5
+
+
+def existing_archives(prefix: Path):
+    """Every archive directory this installer has left under `prefix`,
+    oldest name first. Nothing else, ever: the glob is anchored on the
+    prefix this run's own archives are named with."""
+    return sorted(p for p in prefix.glob("archive-*") if p.is_dir())
+
+
+def archive_state(args, *, move: bool):
+    """Put everything in archive_plan() into one timestamped directory.
+
+    One directory rather than a scatter of `.superseded` suffixes beside
+    the originals: it is one operation, it is one thing to point an
+    operator at afterwards, and it does not accumulate in the working
+    directories where the next run has to read past it.
+
+    `move` is the difference between the two modes that call this, and it
+    is the whole difference. An upgrade COPIES, because the state has to
+    survive into the upgraded install and the archive is only insurance.
+    A factory reset MOVES, because removing it is the point, and moving
+    rather than deleting is what makes the decision recoverable.
+
+    Every filesystem call here is inside the Refusal contract. shutil's
+    move, copytree and copy2 raise OSError on ENOSPC, EPERM and EXDEV,
+    main() catches Refusal and nothing else, so an unwrapped one reached
+    an operator as a Python traceback with no exit code of its own. Worse
+    for the moving case: a failure part way through leaves some of the
+    plan moved and the rest in place, so the refusal has to say which,
+    because "the archive failed" and "the archive failed after your
+    administrator record was moved" call for completely different next
+    steps.
+    """
+    archives = existing_archives(args.prefix)
+    if len(archives) >= ARCHIVE_LIMIT:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"{len(archives)} archives are already under {args.prefix}, and the limit is "
+            f"{ARCHIVE_LIMIT}:\n" + "\n".join(f"  {a}" for a in archives),
+            "Each one holds a copy of config/ssh_keys, which is where the engine keeps the SSH keys "
+            "you imported, so leaving them to pile up spreads private key material with every "
+            "upgrade. This will not delete them for you, because moving rather than deleting is the "
+            "whole reason the archive is recoverable. Look at what you still need, then remove the "
+            "rest by hand and re-run.",
+        )
+
+    # Second granularity collides. Two runs inside the same second reused
+    # the directory (mkdir was exist_ok=True), and then copytree, which is
+    # NOT exist_ok by default, raised FileExistsError into a traceback.
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    archive = args.prefix / f"archive-{stamp}"
+    suffix = 1
+    while archive.exists():
+        suffix += 1
+        archive = args.prefix / f"archive-{stamp}-{suffix}"
+
+    try:
+        # mode= on mkdir rather than a chmod afterwards. The chmod version
+        # left a window where an archive of the administrator record and
+        # every imported key sat at whatever the umask allowed, which on
+        # the NAS this was proven on is 0777.
+        archive.mkdir(mode=0o700, parents=True)
+    except OSError as exc:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"could not create the archive directory {archive}: {exc}",
+            "Nothing has been touched yet. Free some space, or fix the permissions on "
+            f"{args.prefix}, and re-run.",
+        ) from exc
+
+    captured = []
+    for src in archive_plan(args):
+        if not src.exists():
+            continue
+        dest = archive / src.parent.name / src.name
+        try:
+            dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if move:
+                shutil.move(str(src), str(dest))
+            elif src.is_dir():
+                # dirs_exist_ok, because the destination can already be
+                # there: nothing guarantees this directory is untouched,
+                # and raising FileExistsError out of a helper nobody wraps
+                # is how a copy became a traceback.
+                shutil.copytree(str(src), str(dest), dirs_exist_ok=True)
+            else:
+                shutil.copy2(str(src), str(dest))
+        except OSError as exc:
+            done = "\n".join(f"  {c}" for c in captured) or "  (nothing)"
+            verb = "moved out to" if move else "copied to"
+            raise Refusal(
+                EXIT_RUNTIME,
+                f"the archive failed on {src}: {exc}\n\n"
+                f"Already {verb} {archive}:\n{done}",
+                ("Everything listed above is IN THE ARCHIVE and no longer where the engine looks "
+                 "for it, so the install is half-taken-apart and starting the stack now would "
+                 "give you an engine reading state that is not all there. Move those paths back "
+                 "from the archive, or finish the job by hand, before doing anything else."
+                 if move and captured else
+                 "Nothing was removed from the install; the archive is incomplete and can be "
+                 "deleted. Free some space or fix the permissions, and re-run."),
+            ) from exc
+        captured.append(src)
+    return archive, captured
+
+
+# The two directories the ENGINE creates and owns inside the config
+# directory: the keys an operator imports through the Web UI, and the host
+# keys it pins per source. container/compose.yaml documents both as
+# siblings of config.yaml (issue #196).
+ENGINE_OWNED_CONFIG_DIRS = ("ssh_keys", "known_hosts.d")
+
+
+def prepare_engine_config_dirs(args) -> None:
+    """Create the engine's two on-demand stores, 0700, before it does.
+
+    This ran BEFORE stage_payload, when neither the prefix nor the config
+    directory existed yet, so on a fresh install every path it looked at
+    was absent and the whole function was a no-op. It runs after now,
+    which is the ordering the name always implied.
+
+    Neither of these is created by the installer's own staging: they are
+    the engine's, made on demand the first time a key is imported or a
+    host key pinned, with the CONTAINER's umask. On the UGREEN that
+    produced a 0777 config/ssh_keys, and the engine then refused its own
+    key over it and named the chmod, three cycles running. Creating them
+    here, correctly, means that first cycle does not have to fail.
+
+    Creating them is only safe while the container runs as this account,
+    which is the default: PUID and PGID come from os.getuid()/os.getgid()
+    in resolve(). Told otherwise, a 0700 directory owned by this uid is
+    one the engine cannot write, so this names them and the chmod instead
+    of manufacturing a different failure.
+    """
+    targets = [args.config_dir / name for name in ENGINE_OWNED_CONFIG_DIRS]
+    if args.puid != os.getuid() or args.pgid != os.getgid():
+        say(f"     Not creating {', '.join(str(t) for t in targets)}: this deployment runs as "
+            f"{args.puid}:{args.pgid} and the installer runs as {os.getuid()}:{os.getgid()}, so a "
+            f"directory made here would be one the engine cannot write. The engine creates them "
+            f"itself; if the first cycle refuses over their mode, run: chmod 700 {' '.join(str(t) for t in targets)}")
+        return
+    for d in targets:
+        try:
+            if d.is_dir():
+                d.chmod(d.stat().st_mode & ~0o022)
+            else:
+                d.mkdir(mode=0o700, parents=True)
+        except OSError as exc:
+            say(f"     (could not prepare {d}: {exc})")
+
+
+def read_env_file(path: Path) -> dict:
+    """The KEY=VALUE lines of a .env this installer wrote, as a dict.
+
+    Line oriented and unquoting nothing, because this only ever reads
+    back render_env()'s own output, which writes bare values and comment
+    lines and nothing else. Anything it cannot parse is skipped rather
+    than guessed at.
+    """
+    values = {}
+    if not path.is_file():
+        return values
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
 def detect_existing(args):
-    """What is already here, as three separate facts.
+    """What is already here, as four separate facts.
 
     "Is it installed" is not one question. The directory can exist with
     no stack, the stack can be running from a directory somebody deleted,
     and both are states an operator can genuinely be in.
+
+    The fourth fact is the .env the LAST install wrote, and it is here
+    because every other path in this file comes from this run's flags.
+    The installer wrote prefix/.env and never read it back, so an operator
+    who first installed with --state-dir /mnt/fast/state and re-ran
+    without repeating it got "Archived 0 item(s)", a rewritten .env and a
+    stack pointed at an empty state directory, while the real catalog sat
+    at the old path untouched and unreferenced. Reading it is what lets
+    check_layout_matches refuse instead.
     """
     payload = (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file()
     proc = run(["docker", "compose", "-p", args.project, "ps", "-a", "--format", "json"],
@@ -704,7 +1759,134 @@ def detect_existing(args):
                 say(f"     (docker compose ps -a line did not parse as JSON, ignoring it: {line!r})")
                 continue
             containers.extend(entry if isinstance(entry, list) else [entry])
-    return payload, containers
+    return payload, containers, read_env_file(args.prefix / ".env")
+
+
+def _same_directory(a: Path, b: Path) -> bool:
+    """Whether two path spellings name the same directory.
+
+    Resolved on both sides, because they routinely are not spelled the
+    same and neither spelling is wrong. resolve() canonicalises --prefix
+    and leaves --state-dir alone, and on macOS the temp root is handed
+    out as /var where the canonical name is /private/var, so a straight
+    string comparison refuses an install over a symlink. Non-strict, so a
+    directory that does not exist yet still compares.
+    """
+    try:
+        return a.expanduser().resolve() == b.expanduser().resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def check_layout_matches(args, installed_env: dict) -> None:
+    """Refuse when this run's directories are not the installed ones.
+
+    Adopting them silently would be the friendlier-looking answer and the
+    wrong one. The three paths below are where the catalog, the
+    administrator record and the backups actually live, so a run that
+    quietly took this invocation's values would archive nothing (there is
+    nothing at the new paths), rewrite .env to point at empty
+    directories, and bring a stack up that reports a healthy, empty
+    install while the real data sits somewhere nothing references any
+    more. Every signal would be green.
+
+    Adopting them silently in the OTHER direction is no better: it would
+    mean flags an operator typed were ignored. So it names the
+    disagreement and stops.
+    """
+    mismatched = []
+    for key, label, current in (
+        ("STATE_DIR", "--state-dir", args.state_dir),
+        ("BACKUP_DIR", "--backup-dir", args.backup_dir),
+        ("CONFIG_DIR", "--config-dir", args.config_dir),
+    ):
+        was = installed_env.get(key)
+        if was and not _same_directory(Path(was), Path(str(current))):
+            mismatched.append(f"  {label:<14} installed: {was}\n{'':16}this run: {current}")
+    if not mismatched:
+        return
+    raise Refusal(
+        EXIT_EXISTING_INSTALL,
+        "the install already here points at different directories than this run does:\n"
+        + "\n".join(mismatched),
+        "This installer will not adopt one over the other on its own: the installed paths are "
+        "where the catalog, the administrator record and the backups actually are, and taking "
+        "this run's values instead would archive nothing, rewrite .env, and bring up a stack "
+        "that looks healthy and empty while the real data sits somewhere nothing points at. "
+        "Pass the paths the install already uses, or `uninstall` first if you really are "
+        "moving it.",
+    )
+
+
+# The two .env keys that name a credential rather than a directory.
+# check_layout_matches holds STATE_DIR, BACKUP_DIR and CONFIG_DIR because
+# taking this run's value for those archives nothing; these two are the
+# same shape with a different consequence, and they were not held to
+# anything until an upgrade proved it.
+INSTALLED_CREDENTIAL_KEYS = (
+    ("SSH_KEY_FILE", "ssh_key", "--ssh-key"),
+    ("KNOWN_HOSTS_FILE", "known_hosts", "--known-hosts"),
+)
+
+
+def adopt_installed_credentials(args, installed_env: dict) -> None:
+    """Keep pointing at the key and known_hosts the deployment already uses.
+
+    #347 gave --ssh-key and --known-hosts defaults under <prefix>/secrets
+    so a bare `install` could work on a fresh host, and that is right. On
+    a host first installed with those flags pointing somewhere else it was
+    also how a later bare re-run generated a brand new keypair, rewrote
+    .env to name it, and brought the stack back up holding a key no source
+    has ever authorised, with the pinned host keys replaced by an empty
+    file. Nothing refused, nothing warned, the engine came up healthy, and
+    every backup afterwards failed to authenticate.
+
+    Adopting rather than refusing, and the difference from
+    check_layout_matches is the point. There the operator has typed a flag
+    and the two answers disagree, so naming the disagreement is the only
+    honest move. Here the operator has typed nothing: one side is a value
+    this run COMPUTED from --prefix and the other is what the deployment
+    actually runs on, and preferring the evidence over the guess ignores
+    nobody. A flag that was typed still wins, because that is #347's own
+    contract, and this says plainly that it is moving the deployment.
+
+    The one thing that is never filled in is a path the .env names with no
+    file at it. Generating a replacement there hands every source a key it
+    has never seen while reporting success, which is the exact failure
+    this whole function exists to stop, and container/compose.yaml mounts
+    both of these with `:?` so the stack could not start anyway.
+    """
+    for key, attr, flag in INSTALLED_CREDENTIAL_KEYS:
+        was = installed_env.get(key)
+        if not was or not hasattr(args, attr):
+            continue
+        installed = Path(was).expanduser()
+        current = getattr(args, attr)
+        if _same_directory(installed, current):
+            # Including the ordinary case: a previous no-argument install
+            # recorded exactly what this run computes. Nothing changed, so
+            # nothing is said.
+            continue
+        if getattr(args, f"{attr}_supplied", False):
+            say(f"==> {flag} moves this deployment off {installed}")
+            say(f"     onto {current}. Sources still trusting the old one will stop authenticating.")
+            continue
+        if not installed.exists():
+            raise Refusal(
+                EXIT_PREREQ_CREDENTIALS,
+                f"the install here names {installed} as its {flag} in {args.prefix / '.env'}, "
+                f"and there is no file there.",
+                f"This will not generate a replacement under that name: a new key is one no source "
+                f"has ever authorised, and it would install cleanly and fail every backup "
+                f"afterwards. Put the file back, or pass {flag} naming the one this deployment "
+                f"should use from now on. Nothing has been touched.",
+            )
+        setattr(args, attr, installed)
+        # Supplied from here on, because an .env naming a path IS this
+        # deployment stating one. It stops ensure_credentials generating
+        # into it and gives it the same refusal an operator-typed path gets.
+        setattr(args, f"{attr}_supplied", True)
+        say(f"==> Keeping the {flag} this install already uses: {installed}")
 
 
 def _other_containers_from_ps_ndjson(raw: str, project: str):
@@ -751,19 +1933,807 @@ def other_running_containers(project: str):
     return _other_containers_from_ps_ndjson(proc.stdout, project)
 
 
+# ---------------------------------------------------------------------
+# The embedded canonical runtime definition
+# ---------------------------------------------------------------------
+
+# GENERATED FROM container/compose.yaml. DO NOT EDIT BY HAND.
+#
+# Regenerate with:
+#     python3 scripts/install/embed_compose.py
+#
+# EMBEDDED_COMPOSE_SHA256 below is the sha256 of these bytes, written by
+# that same script. It is not decoration: check_payload verifies it before
+# anything is staged, so a copy of this installer that was edited in
+# transit refuses on the operator's machine rather than quietly deploying
+# a runtime topology nobody wrote. Truncation is loud (Python stops
+# parsing); a changed mount, network or healthcheck is not, and that is
+# the one this catches.
+#
+# Why this is carried here at all: copying install_docker_host.py to a NAS
+# and running it used to refuse with exit 19, because container/compose.yaml
+# only exists inside a git checkout, which is the one thing an operator
+# installing onto a NAS does not have. Everything else this script needs it
+# either finds or refuses clearly about, so that second file was the only
+# thing stopping it being genuinely one file.
+#
+# Why it is a COPY and not a template. stage_payload used to say "Copy,
+# never rewrite. distribution/compose holds this exact file to
+# runtime-contract.json, so shipping a modified copy would be shipping
+# something no gate has ever checked." That property is kept, not traded:
+# there is still exactly one canonical runtime definition, this is a
+# generated copy of it rather than a second opinion about it, and
+# TestEmbeddedComposeMatchesCanonical compares the two BYTE FOR BYTE (as
+# bytes, not as decoded text) and fails when they diverge.
+#
+# The gate is the whole point. The --image default was the one shipped
+# artifact nothing held to canonical.json, so cutting 0.2.0 moved all eight
+# packaged adapters and left the installer behind; installing 0.2.0 then
+# pulled 0.1.0 and reported complete success, because a stale default is
+# still a valid reference to an image that really exists. Nothing failed
+# and nothing said anything. This file describes mounts, networks,
+# healthchecks and the engine-to-UI topology the security posture depends
+# on, so the same silent drift here would be worse than a stale tag.
+EMBEDDED_COMPOSE_YAML = """\
+# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# issue #82/B4.1). See docs/deployment.md for the reasoning behind every
+# one of these settings and how to build and run it.
+#
+# This file builds for the machine running `docker compose`, i.e. it's meant
+# to be run ON the UGREEN NAS itself (or against a matching architecture).
+# To cross-build and publish a linux/amd64 + linux/arm64 image ahead of
+# time instead, use `docker buildx build --platform=...` directly; see
+# docs/deployment.md.
+#
+# Nothing below reads a secret from this file or from the environment: real
+# credential material (the SSH private key) lives only at the host path
+# SSH_KEY_FILE points to, mounted read-only into the container.
+#
+# TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
+# this issue merged): `rclone-manager` is the engine - core service,
+# scheduler, local authentication, and the versioned /api/v1 API, all in
+# one process sharing one shutdown context (§9.3) - and has NO published
+# port at all; it is reachable only from `web-ui`, over the `internal`
+# network below. `web-ui` serves the shared static UI and reverse-proxies
+# API requests to `rclone-manager`, and is the ONLY service with a
+# LAN-facing published port. Both run the exact same
+# `/backup-manager-web` binary from the exact same image - only `command:`
+# differs - matching the "one canonical image, vary command" principle
+# already applied to `/backup-manager` vs. `/backup-manager-web`
+# themselves; no nginx or other new runtime dependency was introduced for
+# this (see apps/common/webhost/serve's own doc comment for the plain
+# net/http/httputil.ReverseProxy this uses instead).
+#
+# Network isolation is plain compose topology, nothing more: `internal`
+# below is a private bridge network scoped to just this project (compose
+# creates one per project by default; this just names it explicitly for
+# clarity), so `rclone-manager` is reachable by `web-ui` (same network)
+# and by nothing else on the NAS - no other container, and nothing on the
+# host's own LAN interfaces, since it publishes no port and joins no
+# other network. This does NOT block `web-ui`'s own outbound internet
+# access (e.g. via a `internal: true` network or firewall rules) - that
+# is a further hardening step beyond what was asked for here.
+# ---------------------------------------------------------------------
+# THE CANONICAL RUNTIME CONTRACT (issue #167)
+#
+# This block is what makes this file authoritative rather than merely
+# canonical. distribution/compose holds the whole definition to
+# runtime-contract.json: every field the contract names has to be
+# declared here, and none of the prohibited host privileges may be
+# needed. Adapters derive from this file; distribution/packaging holds
+# them to its image reference, mount points, port and security posture.
+#
+# Nothing here is decoration. Deleting a line below fails
+# distribution/compose's own suite by name, with the reason the contract
+# gives for requiring it.
+# ---------------------------------------------------------------------
+x-canonical-runtime:
+  # The contract version this definition was written against, so a
+  # contract change is a visible edit here rather than a silent
+  # divergence.
+  contract: "1.2.0"
+
+  # The architectures this release claims. Checked against
+  # distribution/packaging/canonical.json and against
+  # container/release-manifest.json, so the three cannot drift.
+  architectures:
+    - amd64
+    - arm64
+
+  # The profiles `--profile=` below may name. Checked against the profile
+  # table the executable actually implements
+  # (apps/common/platform/profile), so a value nothing implements cannot
+  # be declared here.
+  profiles:
+    - generic
+    - ugos
+    # The five Phase 4 platforms, converted to thin adapters over this
+    # runtime by issue #169. Each one selects a profile here instead of
+    # carrying a code path of its own; what the profile changes is the
+    # platform identity the API reports, the deployment description, and
+    # which UI bridge the Web UI host serves.
+    - truenas
+    - unraid
+    - openmediavault
+    - proxmox
+    - synology
+
+  # How an operator pins a release. The tag in `image:` is mutable and is
+  # a convenience; the immutable reference is the digest, recorded per
+  # architecture in the manifest named here.
+  digest_policy:
+    manifest: container/release-manifest.json
+    pin: >-
+      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      with the registry reference plus the @sha256:... digest recorded for
+      your architecture in the manifest above, and verify the binary
+      SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
+
+  # Documented resource expectations, measured rather than guessed: the
+  # engine's idle RSS on the Phase 6 benchmark host is ~99 MB (see
+  # docs/perf/baselines/), and the UI host is a static file server plus
+  # one reverse proxy. These are what an operator should provision, not a
+  # limit this file imposes: a hard `deploy.resources.limits` here would
+  # turn a large catalogue into an OOM kill mid-backup.
+  resources:
+    engine:
+      memory_idle: 128Mi
+      memory_recommended: 512Mi
+      cpu_recommended: "1"
+    web-ui:
+      memory_idle: 32Mi
+      memory_recommended: 128Mi
+      cpu_recommended: "0.25"
+
+networks:
+  internal:
+
+# Shared hardening, identical for both services: neither one needs any
+# capability beyond what a plain non-root process gets by default.
+x-security: &security
+  privileged: false
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  rclone-manager:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+      args:
+        # Deterministic build stamps (see Dockerfile): pass the real values
+        # from a checkout, e.g.
+        #   VERSION=$(git -C .. describe --tags --always)
+        #   COMMIT=$(git -C .. rev-parse HEAD)
+        # Left unset, the binary reports "dev"/"none", which is fine for a
+        # local build but not what a release should ship.
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+    image: backup-manager:${VERSION:-dev}
+
+    # `/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
+    # §9.2's "Generic Web App host") is the engine: local authentication,
+    # the versioned /api/v1 API, and the backup scheduler, all in one
+    # process sharing one shutdown context (§9.3). No static UI - that is
+    # web-ui's job, over the `internal` network below, never a published
+    # port here. `/backup-manager` (no "-web") is still in this same image
+    # for headless-only use with no web listener at all: override
+    # `command` with `["/backup-manager", "daemon"]` for that, or `docker
+    # compose run --rm rclone-manager /backup-manager version` / `... check`
+    # for a one-shot check; see the `restart` note below, which assumes
+    # the default `serve` command specifically.
+    # `command` carries the runtime profile, which is one contract field
+    # and not two: a deployment that does not name its profile is a
+    # deployment whose host-dependent behaviour is implicit. `generic` is
+    # the profile with no host integration at all, so defaulting to it can
+    # only ever under-claim; RUNTIME_PROFILE in .env selects another one
+    # out of x-canonical-runtime.profiles above.
+    command: ["/backup-manager-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
+
+    <<: *security
+
+    # Non-root, with the uid/gid coming from the environment rather than
+    # baked into the image. The distroless runtime image's own default
+    # (65532:65532, its "nonroot" account) is fine in isolation, but this
+    # container also has to write into a directory that lives on the
+    # UGREEN NAS's filesystem (the state volume below), and that
+    # directory's ownership is whatever the NAS's own admin account happens
+    # to be, not whatever uid the image picked at build time. Hardcoding
+    # 1000 here would work for the common case (most Linux-based NAS
+    # distributions, UGOS included, give the first admin account uid/gid
+    # 1000) and then fail confusingly on any NAS where it doesn't. PUID and
+    # PGID below default to that common case but are meant to be
+    # overridden in .env for a host where it doesn't hold.
+    #
+    # This only maps to a real writable directory if the host paths bound
+    # below are already owned by PUID:PGID before the container's first
+    # start — this image has no shell, no root step, and no init process to
+    # chown them for you. See "Non-root and the NAS uid/gid" in
+    # docs/deployment.md.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    # Application filesystem is read-only. Nothing under / is meant to be
+    # written by this process; the two things it does write (the SQLite
+    # journal and whatever it fetches from the remote) both live on
+    # explicit volumes below, never on the container's own rootfs.
+    read_only: true
+
+    # SQLite (journal_mode=WAL, see internal/state/state.go) writes -wal and
+    # -shm files alongside the main database file, so the whole state
+    # directory has to be writable, not just the database file itself — a
+    # single-file bind mount here would break the first write. This was
+    # verified directly against a read-only rootfs + this exact mount
+    # shape, not assumed; see docs/deployment.md.
+    #
+    # /tmp is mounted as tmpfs for the same reason: a read-only rootfs makes
+    # Go's default temp directory unwritable (verified directly too), and
+    # while the specific SQLite operations this project currently exercises
+    # didn't turn out to need a real temp file on modernc.org/sqlite in
+    # testing, that's not a guarantee future queries or a future sqlite
+    # version won't need one. Size is small on purpose: this is scratch
+    # space, not somewhere state is meant to persist.
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      # Explicit, not just relying on the default search order SQLite's
+      # temp-file code falls back to (SQLITE_TMPDIR, then TMPDIR, then a
+      # hardcoded list ending in /tmp) — see docs/deployment.md.
+      TMPDIR: /tmp
+
+      # Retention is evaluated against calendar boundaries (FR-18's
+      # daily/weekly/monthly tiers), so the timezone is not cosmetic: left
+      # to the image's UTC default, the day an operator thinks a restore
+      # point belongs to and the day retention assigns it to are silently
+      # different for most of the world. The engine's own
+      # retention.timezone config setting is the authority; this makes the
+      # process-level default match the host rather than the image.
+      TZ: ${TZ:-UTC}
+
+      # `/backup-manager-web serve`'s own `--listen` flag defaults to this
+      # variable when set (falling back to :8080 otherwise), so it binds
+      # this address inside the container without it needing to be an
+      # explicit command-line argument above. Never published to the
+      # host (see the top-of-file note): only reachable from `web-ui`,
+      # over the `internal` network, at this same port via the service
+      # name `rclone-manager` (Docker's own embedded DNS).
+      LISTEN_ADDR: ":8080"
+
+      # This container has no published port at all (see the top-of-file
+      # note), so its OWN --listen address is never something an operator
+      # can actually open - `/backup-manager-web serve` used to print the
+      # one-time enrollment link against that internal address anyway,
+      # which was always wrong once this two-container split shipped
+      # (issue #119's review). PUBLIC_BASE_URL is what `web-ui`'s own
+      # published port actually looks like from outside this host;
+      # defaulting it from LISTEN_PORT below keeps the printed link's
+      # port correct even when LISTEN_PORT is overridden in .env.
+      # "localhost" only resolves correctly when opened on the NAS
+      # itself - override PUBLIC_BASE_URL directly in .env (e.g.
+      # http://your-nas.local:8080) to get a link that also works from
+      # another machine on the LAN.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${LISTEN_PORT:-8080}}
+
+      # Config.TrustForwardedHeaders (apps/common/auth/local): safe here
+      # SPECIFICALLY because `rclone-manager` joins only the `internal`
+      # network below, which only `web-ui` also joins - nothing else can
+      # ever be this container's direct peer, so trusting the
+      # X-Forwarded-For/X-Forwarded-Proto headers `web-ui`'s own reverse
+      # proxy sets (apps/common/webhost/serve.NewUI) is safe by network
+      # topology, not by convention. Never set this on `web-ui` itself
+      # (below) - that container IS the actual internet-facing edge and
+      # must never trust a forwarded header from just anyone hitting its
+      # published port.
+      TRUST_FORWARDED_HEADERS: "true"
+
+      # This container's own trusted peer, for a gateway runtime profile
+      # (RUNTIME_PROFILE=ugos). Empty for the default `generic` profile,
+      # which has no gateway at all and refuses this variable if it is
+      # set.
+      #
+      # A DIFFERENT variable from `web-ui`'s TRUSTED_GATEWAY_CIDRS below,
+      # and that is the whole point (issue #87's review, M1). The two hops
+      # need contradictory values:
+      #
+      #  - This container's only possible peer is `web-ui`, so this range
+      #    has to contain `web-ui`'s address on the `internal` network or
+      #    nothing authenticates. It names the INTERNAL NETWORK.
+      #  - `web-ui`'s range has to name the platform GATEWAY, and a range
+      #    containing this container or the internal network is the
+      #    LAN-forgery vulnerability restated as configuration.
+      #
+      # One variable feeding both hops has exactly one value that lets a
+      # ugos deployment authenticate, and it is the value that makes
+      # `web-ui` believe an identity header from anything on the internal
+      # bridge, which under Docker's userland port publishing includes LAN
+      # traffic arriving at the published port. That is the bug this
+      # container's own strip exists to close, reintroduced one layer up,
+      # so the two peer sets are two names.
+      #
+      # The usual value here is the compose bridge subnet (e.g.
+      # 172.16.0.0/12 for the default pools, or the `internal` network's
+      # own configured subnet). Widening it changes nothing an attacker
+      # can reach: only `web-ui` joins `internal`, and this container
+      # publishes no port at all.
+      TRUSTED_UPSTREAM_CIDRS: ${TRUSTED_UPSTREAM_CIDRS:-}
+
+    volumes:
+      # Persistent SQLite lifecycle journal (FR-9). A directory, per the
+      # WAL note above, not a single file. `/backup-manager-web serve` also
+      # keeps its local-authentication administrator record
+      # (apps/common/auth/local) at /data/state/local-auth.json — the
+      # Argon2id password hash only, never a plaintext password — so
+      # enrollment survives a container restart without a second volume.
+      - ${STATE_DIR:?set STATE_DIR in .env to a host path for the SQLite state directory}:/data/state
+
+      # Where completed artifacts land once pulled and verified. This is
+      # the NAS backup volume/share itself, so it's writable, not :ro.
+      - ${BACKUP_DIR:?set BACKUP_DIR in .env to the host backup storage path}:/data/backups
+
+      # Configuration: a WRITABLE DIRECTORY the application owns, with
+      # config.yaml inside it (issue #196). Not a read-only single-file
+      # mount, which is what this line used to be and what made three
+      # merged write paths inert in a packaged container: adding a backup
+      # set, saving settings and first-run setup all replace config.yaml
+      # through a temp file created in its own directory, and on a
+      # single-file mount that directory is this image's read-only
+      # rootfs. The engine's two on-demand stores, ssh_keys/ and
+      # known_hosts.d/, are siblings of config.yaml and were unwritable
+      # for the same reason.
+      #
+      # A directory is also the only shape that can honestly be EMPTY. A
+      # bind mount cannot say "not configured yet" about a file: Docker
+      # creates a directory at a source path that does not exist, so the
+      # state a fresh install actually starts in was not representable.
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+
+      # Credentials stay read-only single files. Nothing in this
+      # container writes them, and the shapes are two different claims.
+      # Nothing here is baked into the image or into this file — only
+      # host paths, resolved at `docker compose up` time.
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+
+    # `unless-stopped`: restart across crashes and NAS reboots, but stay
+    # down if an operator deliberately stops it — the right policy now that
+    # `command` above (`/backup-manager-web serve`) is a real long-running
+    # process rather than the immediately-exiting `version` this file used
+    # to default to. For a one-shot check, use `docker compose run --rm
+    # rclone-manager /backup-manager version` (or `... check`) instead of
+    # `up -d`, which bypasses `restart` entirely.
+    restart: unless-stopped
+
+    # Liveness, deliberately, and NOT `backup-manager status`.
+    #
+    # This is the check web-ui waits on: it declares `depends_on:
+    # rclone-manager: condition: service_healthy` below, so whatever this
+    # asks is what stands between an operator and the only LAN-facing
+    # listener in the deployment. `backup-manager status` answers backup
+    # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
+    # DEGRADED, STALE or FAILING set, and also when it cannot open the
+    # service at all - so gating on it means a stale backup set, or an
+    # instance nobody has configured yet, keeps the UI from ever
+    # starting. That is a real backup problem being reported as a broken
+    # web server, which is the worst moment to lose the page an operator
+    # would fix it from.
+    #
+    # /health/live is the engine's own bare liveness probe
+    # (apps/common/webhost/router.go, deliberately outside /api/v1 so it
+    # needs no authentication and no configuration). `healthcheck` is the
+    # same subcommand web-ui uses below, against a URL rather than its
+    # own default, and it needs no shell - distroless has none.
+    #
+    # Backup freshness is not lost, it moves back to being the thing it
+    # was built as: the image's own HEALTHCHECK instruction still runs
+    # `backup-manager status` (container/Dockerfile, so a plain `docker
+    # run` still reports backup health), the alerts block delivers it
+    # proactively, and an operator reads it directly with
+    # `docker compose exec rclone-manager /backup-manager status`.
+    #
+    # Declared here rather than inherited from the image (issue #167):
+    # the runtime contract requires an operator to be able to read what
+    # "healthy" means out of this file without also reading the
+    # Dockerfile, and distribution/compose fails the build if this key
+    # goes missing or stops naming a liveness probe.
+    #
+    # This line is the ONE place the engine's start gate is decided
+    # (issue #206). distribution/packaging/canonical.json restates it so
+    # derive.go can hold four metadata formats to it, and
+    # TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided fails
+    # the build if the restatement stops matching this. Every adapter
+    # declares it too, and must: the image's own instruction is the
+    # freshness verdict, so inheriting it here would be inheriting the
+    # wrong question.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # The declared graceful shutdown period (issue #167). `serve` cancels
+    # one shared shutdown context on SIGTERM and gives the HTTP server and
+    # the scheduler loop apps/common/webhost/serve.DefaultShutdownGrace to
+    # wind down; this is that budget plus room for the journal's final
+    # write, so Docker's own SIGKILL always arrives after the process has
+    # finished rather than during it. Without this line the value is
+    # Docker's 10s default, which is a default and not a contract.
+    stop_grace_period: 30s
+
+    # Deliberately NO ports: here: mapping this to a network is now
+    # web-ui's job, over `internal`, never to the host directly. This is
+    # the actual network-isolation requirement, not a comment - see the
+    # top-of-file note.
+    networks:
+      - internal
+
+  web-ui:
+    # SAME image as rclone-manager, no separate `build:` block: this
+    # service reuses whatever `rclone-manager`'s own build already
+    # produced and tagged (docker compose resolves `image:` against
+    # whatever is already built/pulled under that tag). Same digest, same
+    # binary, different command - never a second image to keep in sync.
+    image: backup-manager:${VERSION:-dev}
+
+    # Wait for the engine to report healthy before starting: a NAS reboot
+    # (or `docker compose up`) starting both containers at once would
+    # otherwise let web-ui begin proxying before rclone-manager is even
+    # listening, surfacing as a confusing "bad gateway" instead of a
+    # simple "please wait." What "healthy" means here is the engine's
+    # liveness probe and nothing else - see its healthcheck above for why
+    # backup freshness must never be the condition this waits on.
+    depends_on:
+      rclone-manager:
+        condition: service_healthy
+
+    # `/backup-manager-web serve-ui`: the shared static UI plus a reverse
+    # proxy to the engine (apps/common/webhost/serve's own doc comment has the
+    # full routing shape). --upstream defaults to
+    # http://rclone-manager:8080 (the engine's own compose service name,
+    # resolved through Docker's embedded DNS on the `internal` network
+    # below), set explicitly here via UPSTREAM_ADDR anyway so the
+    # dependency is visible in this file, not just in the binary's own
+    # default.
+    command: ["/backup-manager-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
+
+    <<: *security
+
+    # Same non-root reasoning as rclone-manager above, even though this
+    # service has no host directory of its own to write into: consistent
+    # hardening costs nothing, and this process may as well run with the
+    # same reduced privilege.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      TMPDIR: /tmp
+      TZ: ${TZ:-UTC}
+      # Published to the host (see `ports:` below); LISTEN_ADDR is this
+      # container's own internal bind address, always :8080 regardless of
+      # what host port LISTEN_PORT maps it to.
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
+
+      # THE trust boundary for a gateway runtime profile (issue #87).
+      # This is the only container with a published port, so this is the
+      # only hop where the network can still answer "did the platform
+      # gateway send this request, or did somebody on the LAN". Left
+      # empty, every provider-native identity header is stripped from
+      # every inbound request, which is what makes the default `generic`
+      # deployment safe without an operator having to know any of this.
+      #
+      # Two things a gateway deployment has to get right, because a CIDR
+      # range on its own does not settle either:
+      #
+      #  - Docker's userland port publishing can present traffic arriving
+      #    at `ports:` below as coming from the bridge gateway address
+      #    whoever sent it, which collapses "the platform gateway" and
+      #    "any LAN client" into one peer. Publish to loopback
+      #    (LISTEN_PORT bound as 127.0.0.1:8080) so the host's own gateway
+      #    is the only thing that can reach this port at all, or put the
+      #    gateway and this container on a network nothing else joins.
+      #  - The range names the GATEWAY, never the internal network. A
+      #    range containing `rclone-manager` or this container itself is
+      #    the vulnerability restated as configuration. That is why the
+      #    engine reads TRUSTED_UPSTREAM_CIDRS above and not this
+      #    variable: the two hops trust different peers, and a single
+      #    value correct for one of them is wrong for the other.
+      TRUSTED_GATEWAY_CIDRS: ${TRUSTED_GATEWAY_CIDRS:-}
+
+      # Runtime UI bundle selection (issue #180, owned by #167). Left
+      # unset, this container serves the bundle compiled into the binary,
+      # which is the shared UI's generic bridge. Set UI_DIR to a bundle
+      # directory mounted into this container, or UI_ROOT to a directory
+      # of per-profile bundles (the one served is <UI_ROOT>/<profile>), to
+      # serve a provider's own bridge instead.
+      #
+      # The reason this is an environment variable rather than a build
+      # argument is the whole point: section 3.7 requires every provider
+      # package to carry the exact same core binary, so the bridge has to
+      # be chosen at run time. apps/generic/tests/uibundle proves one
+      # built binary serves three different bridges with an unchanged
+      # sha256. An unusable UI_DIR/UI_ROOT is a hard start failure, never
+      # a silent fall back to the embedded bundle.
+      UI_DIR: ${UI_DIR:-}
+      UI_ROOT: ${UI_ROOT:-}
+
+    # No volumes at all: this service never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory - it only ever serves
+    # its own embedded static bundle and proxies HTTP requests. Smaller
+    # attack surface than the engine by construction, not by discipline.
+
+    restart: unless-stopped
+
+    # Overrides the image's own HEALTHCHECK (`/backup-manager status`,
+    # which needs a config file and a state database neither of which
+    # this container has): `/backup-manager-web healthcheck` just GETs
+    # its own listener and checks for a non-error response - "is this
+    # web server up," the only question that applies to a container with
+    # no backup state of its own to report on.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # Shorter than the engine's: this container holds no state and has
+    # nothing to flush, so all it has to finish is whatever request is
+    # already in flight through its reverse proxy.
+    stop_grace_period: 15s
+
+    # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2) -
+    # the ONLY published port in this file. Bind to a loopback-only host
+    # port (or omit `ports` entirely and reach it through your own
+    # reverse proxy/VPN) if this deployment should not be reachable
+    # directly from the LAN.
+    ports:
+      - "${LISTEN_PORT:-8080}:8080"
+
+    networks:
+      - internal
+"""
+
+# Written by scripts/install/embed_compose.py alongside the blob above.
+EMBEDDED_COMPOSE_SHA256 = "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+
+
+def embedded_compose_bytes() -> bytes:
+    """The embedded definition as the exact bytes that get staged.
+
+    UTF-8 explicitly, never the locale's encoding. container/compose.yaml
+    has a section sign and em dashes in it, so on a host with LC_ALL=C
+    `write_text` on this string raises UnicodeEncodeError and the install
+    dies mid-stage. It is also what makes the embedded path byte-identical
+    to the shutil.copyfile path rather than merely similar.
+    """
+    return EMBEDDED_COMPOSE_YAML.encode("utf-8")
+
+
+def embedded_compose_digest() -> str:
+    return hashlib.sha256(embedded_compose_bytes()).hexdigest()
+
+
+def checkout_compose_beside_this_installer():
+    """container/compose.yaml from the checkout this script is sitting in,
+    or None when it is not sitting in one.
+
+    Deliberately narrow: it looks at the one place a checkout puts it
+    relative to this file (scripts/install/ -> ../../container/) rather
+    than walking every ancestor, because an unrelated container/ directory
+    somewhere above a copied file is not this project's runtime contract.
+
+    Path.parents raises IndexError rather than answering for a file fewer
+    than three directories deep, and a copy sitting at /tmp/install.py is
+    exactly the standalone case this installer now supports, so "not in a
+    checkout" is an answer here and not an error.
+    """
+    here = Path(__file__).resolve()
+    try:
+        root = here.parents[2]
+    except IndexError:
+        return None
+    if here.parent.name != "install" or here.parents[1].name != "scripts":
+        return None
+    candidate = root / "container" / "compose.yaml"
+    return candidate if candidate.is_file() else None
+
+
+# The mode every directory this installer creates is born with.
+#
+# Not tightened afterwards, born correct. The engine refuses to use an SSH
+# key whose containing directory is group- or world-writable and it walks
+# the WHOLE ancestry to decide: installing onto the UGREEN it refused three
+# times in a row, naming config/ssh_keys, then config, then the install
+# root, printing the exact chmod each time. A directory that is writable by
+# anyone lets a local actor replace the key whatever the key file's own mode
+# says, so creating one and generating a key into it would move that failure
+# later rather than remove it.
+SECURE_DIR_MODE = 0o700
+
+
+def make_secure_dir(path: Path) -> None:
+    """Create a directory the engine will accept, and leave an existing
+    one as close to how the operator had it as the rule allows.
+
+    Two different cases, deliberately not collapsed:
+
+    A directory this installer CREATES is born 0700. mkdir applies the
+    process umask, which on a NAS is routinely permissive enough to
+    produce exactly the 0777 the engine refuses, so the mode is set
+    explicitly rather than trusted to the umask.
+
+    A directory that was ALREADY there only loses group and world write.
+    An operator may have deliberately made a backup directory group- or
+    world-READABLE, and that is their call and no risk to the key; write
+    is the bit the engine refuses over, because anyone holding it can
+    replace the key whatever the key file's own mode says. Forcing 0700
+    over an existing directory would quietly undo a decision the operator
+    made on purpose.
+    """
+    if path.is_dir():
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o022:
+            os.chmod(path, mode & ~0o022)
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, SECURE_DIR_MODE)
+
+
+def warn_about_writable_ancestors(path: Path, stop_at: Path) -> list:
+    """Name any directory ABOVE stop_at that the engine will refuse over.
+
+    Deliberately a warning and not a fix. Those directories belong to
+    whoever set the machine up, not to this installer, and silently
+    tightening a share root because a backup tool was installed under it
+    is not a decision an installer gets to make. Naming it, with the same
+    chmod the engine itself would print, is.
+    """
+    offenders = []
+    p = stop_at.parent
+    while True:
+        try:
+            if p.is_dir() and (p.stat().st_mode & 0o022):
+                offenders.append(p)
+        except OSError:
+            pass
+        if p == p.parent:
+            break
+        p = p.parent
+    return offenders
+
+
+def ensure_credentials(args) -> None:
+    """Create the key and known_hosts when they were defaulted and absent.
+
+    A fresh install has no sources configured, so there is nothing a
+    pre-existing key could authenticate against yet: generating one is the
+    step the operator was going to take anyway, and refusing until they
+    take it by hand is friction with no safety in it.
+
+    Nothing is ever overwritten. An existing key is reused whatever its
+    age, because replacing one silently would break every source already
+    trusting it.
+    """
+    # Each file's OWN parent, not just the key's. The two paths are
+    # independent flags and only coincide by default, so creating one
+    # directory and assuming it holds both leaves known_hosts landing in a
+    # directory nobody made whenever --ssh-key points elsewhere.
+    make_secure_dir(args.prefix)
+    for target in (args.ssh_key, args.known_hosts):
+        make_secure_dir(target.parent)
+
+    if not args.ssh_key.exists() and not args.ssh_key_supplied:
+        keygen = find_tool("ssh-keygen")
+        if keygen is None:
+            raise Refusal(
+                EXIT_PREREQ_CREDENTIALS,
+                f"no SSH key at {args.ssh_key} and ssh-keygen is not on {PRIVILEGED_PATH}.",
+                "Generate an ed25519 key by hand and point --ssh-key at it, or install openssh-client.",
+            )
+        run([keygen, "-q", "-t", "ed25519", "-N", "", "-C", "rclone-manager",
+             "-f", str(args.ssh_key)], timeout=120)
+        os.chmod(args.ssh_key, 0o600)
+        pub = args.ssh_key.with_suffix(args.ssh_key.suffix + ".pub")
+        say(f"==> Generated an ed25519 keypair at {args.ssh_key}")
+        say("")
+        say("    THIS PUBLIC KEY GOES ON THE HOST YOU ARE BACKING UP, in that account's")
+        say("    ~/.ssh/authorized_keys. Nothing can be pulled until it does.")
+        say("")
+        if pub.is_file():
+            say(f"      {pub.read_text().strip()}")
+            say("")
+        # Printed rather than left to be discovered. A keypair that appears
+        # silently is one nobody knows to deploy, and the operator's next
+        # step is blocked by something they were never told happened.
+
+    if not args.known_hosts.exists() and not args.known_hosts_supplied:
+        args.known_hosts.touch()
+        os.chmod(args.known_hosts, 0o600)
+        say(f"==> Created an empty {args.known_hosts}")
+        say("    Empty is correct before any source exists: host keys are pinned when a source")
+        say("    is added, which is what the host-key probe is for.")
+
+    for d in warn_about_writable_ancestors(args.ssh_key, args.prefix):
+        say(f"     WARNING: {d} is group- or world-writable, and the engine walks the whole")
+        say(f"              ancestry when it validates the key. If the first cycle refuses with")
+        say(f"              key_permissions, run: chmod go-w {d}")
+
+
+def note_replaced_compose(dest: Path, incoming: bytes) -> None:
+    """Say when the compose.yaml being replaced is not the one going in.
+
+    <prefix>/compose.yaml is this installer's own staged copy of a gated
+    artifact and is restaged on every run, which is how a runtime-contract
+    change reaches an installed host. That is right, and it is also how an
+    operator who edited it in place loses the edit with nothing said.
+
+    A notice and not a refusal, deliberately. Refusing would block every
+    upgrade carrying a legitimate runtime change, which is most of them,
+    and the file is the installer's to own: docs/install.md says in as
+    many words that it is staged byte for byte and that everything varying
+    per host belongs in the .env. So this names the file, names where
+    those settings do belong, and gets out of the way.
+
+    Silent when the bytes match, which is every ordinary re-run. A notice
+    on the unchanged case is noise that trains people not to read the one
+    that matters.
+    """
+    if not dest.is_file():
+        return
+    try:
+        if dest.read_bytes() == incoming:
+            return
+    except OSError:
+        # Unreadable is not the same as different, and this is a notice,
+        # not a check. The write below is what gets to fail about it.
+        return
+    say(f"     Replacing {dest}, which is not the definition this installer stages.")
+    say("     It is a staged copy of the canonical runtime contract and is rewritten on every")
+    say("     run, so an edit made here does not survive one. Per-host settings belong in the")
+    say(f"     .env beside it: {dest.parent / '.env'}")
+
+
 def stage_payload(args) -> None:
-    args.prefix.mkdir(parents=True, exist_ok=True)
+    # make_secure_dir, not a bare mkdir. host_dirs carries ssh_keys, and
+    # the engine walks that directory's whole ancestry before it will use
+    # the key: a plain mkdir here inherits the umask, which is how the
+    # UGREEN ended up with a 0777 ssh_keys and refused three cycles in a
+    # row before anyone worked out it was the installer that made it.
+    make_secure_dir(args.prefix)
     for path in args.host_dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
+        make_secure_dir(path)
 
     # Copy, never rewrite. distribution/compose holds this exact file to
-    # runtime-contract.json, so shipping a modified copy would be
-    # shipping something no gate has ever checked.
-    shutil.copyfile(str(args.compose_file), str(args.prefix / "compose.yaml"))
-    (args.prefix / "compose.image.yaml").write_text(render_image_override(args))
+    # runtime-contract.json, so shipping a modified copy would be shipping
+    # something no gate has ever checked.
+    #
+    # With no --compose-file the same rule still holds, because what gets
+    # written is EMBEDDED_COMPOSE_YAML, which is generated from that file
+    # and held to it byte for byte by a test. The installer still has no
+    # opinion of its own about the runtime; it just no longer needs a
+    # checkout on the host to state the one opinion there is.
+    dest = args.prefix / "compose.yaml"
+    # Bytes on both branches, not write_text on one and copyfile on the
+    # other. write_text encodes with the LOCALE's codec, and this file
+    # carries a section sign and em dashes, so under LC_ALL=C it raises
+    # UnicodeEncodeError partway through staging. One value also makes the
+    # two branches byte-identical rather than merely similar, which is what
+    # lets a test compare them, and gives the notice below something to
+    # compare against before anything is overwritten.
+    incoming = (embedded_compose_bytes() if args.compose_file is None
+                else args.compose_file.read_bytes())
+    note_replaced_compose(dest, incoming)
+    dest.write_bytes(incoming)
+    (args.prefix / "compose.image.yaml").write_text(render_image_override(args), encoding="utf-8")
 
     env_path = args.prefix / ".env"
-    env_path.write_text(render_env(args))
+    env_path.write_text(render_env(args), encoding="utf-8")
     os.chmod(env_path, 0o600)
 
 
@@ -835,6 +2805,11 @@ def probe_web_ui(args, timeout: int):
 
 
 def cmd_preflight(args) -> int:
+    # preflight is a dry run of install, so it has to be looking at the
+    # same paths install would. Without this it reports on the computed
+    # defaults while install runs on whatever the .env names, and the two
+    # answers disagree on exactly the host where the answer matters.
+    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
     say("==> Preflight")
     pf = Preflight(args)
     pf.check_all()
@@ -842,32 +2817,249 @@ def cmd_preflight(args) -> int:
     return EXIT_OK
 
 
+FACTORY_RESET_TOKEN = "factory-reset"
+
+
+def stop_stack(args, *, remove: bool) -> None:
+    """Bring the running stack down before its state is copied or moved.
+
+    Nothing used to. The only `docker compose down` in this file was in
+    cmd_uninstall, and all three consequences are real:
+
+      * an upgrade's shutil.copy2 snapshotted a LIVE database. The engine
+        opens it journal_mode=WAL, so the archive was a copy of a file
+        being written, with its most recent transactions in a -wal the
+        copy did not even take.
+      * a factory reset's shutil.move relocated state.db out from under an
+        engine holding an open fd, which on Linux keeps writing to the
+        moved inode. The "destroyed" catalog carries on being updated
+        inside the archive.
+      * and a factory reset at the SAME version with an unchanged .env did
+        not recreate the containers at all. `docker compose up -d` is a
+        no-op against a stack whose config has not changed, so the old
+        engine kept serving the old catalog out of its own memory and the
+        installer printed success over a reset that had not happened.
+
+    `down` for factory-reset rather than `stop`, because recreating the
+    containers is the point: removing them is what makes the next `up`
+    start a new engine against the new, empty state.
+
+    Never a refusal. A stack that will not come down is worth saying out
+    loud, and the caller decides what to do about it, but there are real
+    states (containers already gone, a project removed by hand) where the
+    command reports failure and there is nothing wrong.
+    """
+    verb = "down" if remove else "stop"
+    if (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file():
+        argv = compose_argv(args) + [verb]
+        cwd = str(args.prefix)
+    else:
+        argv = ["docker", "compose", "-p", args.project, verb]
+        cwd = None
+    if remove:
+        argv.append("--remove-orphans")
+    say(f"==> docker compose {verb}, so nothing is holding the state open while it is "
+        f"{'moved' if remove else 'copied'}")
+    proc = run(argv, check=False, timeout=600, cwd=cwd)
+    out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    if out:
+        say(f"     {out.splitlines()[-1]}")
+    if proc.returncode != 0:
+        say(f"     (docker compose {verb} exited {proc.returncode}; continuing, because a stack "
+            f"that is already gone reports the same thing)")
+
+
+def _ask_install_mode(here: str, target: str, preview) -> str:
+    """Ask, on a terminal, the question decide_install_mode() refused to
+    guess at.
+
+    The preview comes BEFORE the question, which is the whole point of
+    having one. It used to print after the mode was chosen and after
+    archive_state had already been called with move=True, so an operator
+    picked from a one-line menu and was then shown the counts for a
+    decision that was already irrevocable. A list you read afterwards is
+    a receipt, not a decision.
+
+    The answer is returned, never acted on here. decide_install_mode is
+    the only place the downgrade guard lives, so the caller feeds this
+    back through it rather than treating a prompt answer as settled.
+    """
+    say("")
+    say(f"    An install is already here (version {here or 'unknown'}) and no --mode was given.")
+    say("")
+    say(f"    upgrade        keep every user, backup set and catalogued artifact, moving to {target}")
+    say("    factory-reset  destroy, after archiving:")
+    for line in preview:
+        say(f"                     {line}")
+    say("    abort          change nothing")
+    say("")
+    for _ in range(3):
+        try:
+            answer = input(f"    upgrade / {FACTORY_RESET_TOKEN} / abort: ").strip().lower()
+        except EOFError:
+            answer = "abort"
+        if answer in ("upgrade", "u"):
+            return "upgrade"
+        if answer == FACTORY_RESET_TOKEN:
+            # The whole word, and no "f" or "factory". This is the answer
+            # that destroys the administrator record and the catalog, and
+            # a single keystroke next to the one that does not is not a
+            # confirmation, it is a typo waiting to happen.
+            return FACTORY_RESET_TOKEN
+        if answer in ("abort", "a", "", "n", "no"):
+            raise Refusal(EXIT_EXISTING_INSTALL, "aborted at the prompt; nothing was changed.", "")
+        say(f"    Answer upgrade, {FACTORY_RESET_TOKEN} in full, or abort.")
+    raise Refusal(EXIT_EXISTING_INSTALL, "no usable answer after three attempts; nothing was changed.", "")
+
+
+def confirm_factory_reset(args, preview) -> None:
+    """The typed confirmation for a factory reset asked for by flag.
+
+    Not needed when the mode came from the menu above, because the menu's
+    answer IS this word and the preview was above it. This is the other
+    path: `--mode factory-reset` on the command line, where nothing had
+    been read and nothing had been typed.
+
+    A typed token rather than [y/N]. `y` is what a finger presses to get
+    past a prompt; the word is what somebody types having read what is
+    above it. And with no terminal there is nothing to type on, so the
+    non-interactive path needs its own flag rather than a default, for
+    exactly the reason the mode itself does.
+    """
+    say("==> factory-reset will destroy:")
+    for line in preview:
+        say(f"     {line}")
+    if args.confirm_factory_reset:
+        say("==> --confirm-factory-reset was given, so this is not asked again.")
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise Refusal(
+            EXIT_EXISTING_INSTALL,
+            "--mode factory-reset destroys the list above and there is no terminal to confirm on.",
+            "Re-run with --confirm-factory-reset if that list is really what you want gone. "
+            "Nothing has been touched.",
+        )
+    try:
+        answer = input(f'    Type "{FACTORY_RESET_TOKEN}" to destroy the list above, '
+                       f"anything else to abort: ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer != FACTORY_RESET_TOKEN:
+        raise Refusal(EXIT_EXISTING_INSTALL, "not confirmed; nothing was changed.", "")
+
+
+def choose_install_mode(args, *, installed, here, target, interactive):
+    """The whole mode decision, prompt included, in one place.
+
+    A function rather than a run of statements inside cmd_install,
+    because the shape of the bug was the caller and not the callee. The
+    downgrade refusal lives inside decide_install_mode's upgrade branch
+    and nowhere else, so a caller that asked and then acted on the answer
+    walked straight past it: the guard was live for --mode upgrade and
+    absent for the identical word typed at the prompt. Nothing here can
+    be checked by a test that only ever calls decide_install_mode.
+
+    Returns (mode, came_from_prompt). The second half decides whether a
+    factory reset still needs confirming: an answer typed at the prompt
+    IS the confirmation, and was typed under the preview.
+    """
+    decide = dict(installed=installed, installed_tag=here, target_version=target,
+                  interactive=interactive, prefix=args.prefix)
+    mode, needs_prompt = decide_install_mode(requested=args.mode, **decide)
+    if not needs_prompt:
+        return mode, False
+    answer = _ask_install_mode(here, target, destroy_preview(args))
+    mode, _ = decide_install_mode(requested=answer, **decide)
+    return mode, True
+
+
+def prepare_for_mode(args, mode, *, installed):
+    """Everything between choosing a mode and staging the deployment.
+
+    One function for the same reason as choose_install_mode: the ORDER is
+    the fix, so it has to be somewhere a test can watch it happen. The
+    stack comes down BEFORE the state is copied or moved, and nothing
+    used to bring it down at all.
+
+    Returns (archive, captured), or (None, []) when there was nothing to
+    archive.
+    """
+    if mode not in ("factory-reset", "upgrade") or not installed:
+        return None, []
+
+    stop_stack(args, remove=(mode == "factory-reset"))
+
+    if mode == "factory-reset":
+        archive, captured = archive_state(args, move=True)
+        say(f"==> Moved {len(captured)} item(s) out to {archive}. Recoverable from there, "
+            f"and gone from here.")
+    else:
+        archive, captured = archive_state(args, move=False)
+        say(f"==> Archived {len(captured)} item(s) to {archive} before touching anything.")
+        say(f"     The retained backups under {args.backup_dir} are not copied: an upgrade does not "
+            f"modify them and duplicating them would protect nothing.")
+    return archive, captured
+
+
 def cmd_install(args) -> int:
+    # Read here rather than waiting for detect_existing, and the ordering
+    # is the whole fix. ensure_credentials CREATES a keypair when the
+    # defaults point at nothing, and it runs before anything has looked at
+    # what is installed, so a check bolted on afterwards would be refusing
+    # over a key that had already been generated. detect_existing reads
+    # this file again below for the layout check; it is a handful of lines
+    # and reading it twice is cheaper than threading it through.
+    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
+
+    # Before Preflight, because Preflight VALIDATES these and this CREATES
+    # them. A fresh host has neither, and validating first would refuse
+    # every no-argument install on exactly the machines this is meant to
+    # make easy.
+    ensure_credentials(args)
+
     say("==> Preflight")
     pf = Preflight(args)
     pf.check_all()
 
-    payload, containers = detect_existing(args)
+    payload, containers, installed_env = detect_existing(args)
     running = [c for c in containers if str(c.get("State", "")).lower() == "running"]
-    if payload or containers:
-        # The decision, stated rather than implied: a second run
-        # CONVERGES. It rewrites the deployment files from the current
-        # inputs and brings the stack up again, which `docker compose up
-        # -d` already does idempotently, and it never touches the state,
-        # config or backup directories. Those hold the SQLite journal, the
-        # administrator's Argon2id record and the backups themselves, and
-        # an installer that can destroy any of them by being run twice is
-        # an installer nobody can safely re-run after a reboot.
-        if args.if_installed == "refuse":
-            raise Refusal(
-                EXIT_EXISTING_INSTALL,
-                f"an install is already here: {len(containers)} container(s), "
-                f"{len(running)} running, payload at {args.prefix} "
-                f"{'present' if payload else 'absent'}.",
-                "Re-run without --if-installed=refuse to converge it in place, or `uninstall` first.",
-            )
-        say(f"==> An install is already here ({len(containers)} container(s), {len(running)} running). "
-            f"Converging it in place; state, config and backups are not touched.")
+    installed = bool(payload or containers)
+
+    # Before any decision, because every decision below is about paths
+    # this run may not be the authority on. A mismatch here means the
+    # archive would capture nothing and the stack would come up pointed
+    # at empty directories.
+    check_layout_matches(args, installed_env)
+
+    here, here_from = installed_image_tag(containers, args.prefix)
+    target = reference_version(args.image)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+
+    # Reported in every mode, including a plain fresh install, because
+    # "which version is this" is the first question anyone debugging a
+    # deployment asks and the installer is the one place that knows both
+    # halves of the answer at once. The SOURCE is reported with it: what
+    # is running and what the next `up` would start are different claims,
+    # and when the stack is down only the second one can be answered.
+    if installed:
+        say(f"==> An install is already here: {len(containers)} container(s), {len(running)} running, "
+            f"version {here or 'unknown'}"
+            f"{f' (from {here_from})' if here_from else ''}. This installer carries "
+            f"{target or 'unknown'} ({compare_versions(here, target)}).")
+
+    mode, from_prompt = choose_install_mode(
+        args, installed=installed, here=here, target=target, interactive=interactive)
+
+    if mode == "factory-reset" and not from_prompt:
+        # The prompt already showed the preview and already required the
+        # word to be typed, so asking again there would be theatre. This
+        # is --mode factory-reset, where nothing has been read yet.
+        confirm_factory_reset(args, destroy_preview(args))
+
+    say(f"==> Mode: {mode}")
+    prepare_for_mode(args, mode, installed=installed)
+    if mode == "upgrade" and installed and compare_versions(here, target) == "same":
+        say(f"==> Already {target}. Converging in place rather than claiming a version moved.")
 
     # Before anything is staged, and before the stack comes up, because a
     # host that cannot pass container-originated traffic fails the Web-UI
@@ -880,6 +3072,12 @@ def cmd_install(args) -> int:
 
     say(f"==> Staging the deployment under {args.prefix}")
     stage_payload(args)
+
+    # AFTER staging, because the config directory it works inside is one
+    # of the directories staging creates. Called before it, which is where
+    # it used to live, every path it looked at was absent on a fresh
+    # install and the whole thing was a no-op.
+    prepare_engine_config_dirs(args)
 
     if args.image_archive is not None:
         say(f"==> Loading {args.image_archive}")
@@ -1801,7 +3999,7 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
             say("    radius of a daemon restart below is unknown rather than confirmed small.")
         elif others:
             say("")
-            say(f"    Restarting the Docker daemon restarts EVERY container on this host, not only this")
+            say("    Restarting the Docker daemon restarts EVERY container on this host, not only this")
             say(f"    project's. {len(others)} other container(s) are currently running and will be")
             say("    restarted too:")
             for name, image in others:
@@ -1963,7 +4161,7 @@ def cmd_network_undo(args) -> int:
 
 
 def cmd_status(args) -> int:
-    payload, containers = detect_existing(args)
+    payload, containers, _env = detect_existing(args)
     say(f"payload at {args.prefix}: {'present' if payload else 'absent'}")
     if not containers:
         say("no containers for project " + args.project)
@@ -2027,7 +4225,7 @@ def cmd_uninstall(args) -> int:
     what this account already owns. So this prints the exact remedy
     instead of silently claiming a contract nothing here checks.
     """
-    payload, containers = detect_existing(args)
+    payload, containers, _env = detect_existing(args)
     if not payload and not containers:
         say("nothing to uninstall: no payload and no containers for project " + args.project)
         return EXIT_OK
@@ -2069,6 +4267,29 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
     pass
 
 
+class _RecordsThatItWasSupplied(argparse.Action):
+    """A plain store that also records that the operator typed the flag.
+
+    argparse offers no way to tell a default apart from a value that
+    happens to equal it, and --release has to know the difference. Its
+    whole contract is stated in terms of what the operator asked for: it
+    fills the tag of a reference nobody named, and it refuses rather than
+    overrule a tag somebody did. Comparing the value against
+    parser.get_default() cannot answer that, because the interesting
+    cases are exactly the ones where the two are equal.
+
+    The convention is already in this file for --ssh-key and
+    --known-hosts, where "the operator named this path" and "the default
+    filled it in" mean different things and resolve() records
+    ssh_key_supplied for it. This is the same distinction for flags whose
+    default is not None, so it cannot be recovered from the value later.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, self.dest + "_supplied", True)
+
+
 def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     """layout: every subcommand gets these, and only these, unconditionally.
 
@@ -2079,8 +4300,12 @@ def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     happens to need" the way this function used to define it.
     """
     layout = sp.add_argument_group("layout")
-    layout.add_argument("--prefix", type=Path, default=Path("/volume1/backup-manager"),
-                        help="Directory the deployment files and the default data directories live under.")
+    layout.add_argument("--prefix", type=Path, default=Path.home() / "rclone-manager",
+                        help="Directory the deployment files and the default data directories live under. "
+                             "Defaults to rclone-manager under the invoking user's home. It used to default "
+                             "to /volume1/backup-manager, a guessed path for one NAS layout that was wrong "
+                             "by a directory name on the actual UGREEN and wrong entirely on anything that "
+                             "is not Synology-shaped.")
     layout.add_argument("--state-dir", type=Path, default=None,
                         help="Host directory for the SQLite lifecycle journal. Defaults to <prefix>/state.")
     layout.add_argument("--backup-dir", type=Path, default=None,
@@ -2091,7 +4316,7 @@ def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     layout.add_argument("--project", default=DEFAULT_PROJECT, help="Compose project name.")
 
 
-def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
+def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     """credentials and the rest of runtime: only preflight and install read
     any of these (every check in the Preflight class, and everything
     cmd_install stages and brings up). status, uninstall, network-doctor
@@ -2100,8 +4325,10 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
     """
     creds = sp.add_argument_group("credentials (paths only, never contents)")
     creds.add_argument("--ssh-key", type=Path, default=None,
-                       help="Host path to the SFTP client private key. Never read, never generated, never "
-                            "printed. Defaults to <prefix>/secrets/id_ed25519.")
+                       help="Host path to the SFTP client private key. Never read and never printed; its "
+                            "PUBLIC half is printed when one is generated. Defaults to "
+                            "<prefix>/secrets/id_ed25519, and is generated there if absent. Naming a "
+                            "path explicitly that does not exist is still a refusal.")
     creds.add_argument("--known-hosts", type=Path, default=None,
                        help="Host path to the pinned known_hosts file. Defaults to <prefix>/secrets/known_hosts. "
                             "For a source on a non-default SSH port the entry is keyed [host]:port, and that "
@@ -2116,10 +4343,29 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
     # the opposite of what splitting the parser was for. It reads as runtime
     # anyway: it names the runtime definition, and its scope (preflight and
     # install only) is exactly this group's.
-    runtime.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
-                         help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.1.0",
+    runtime.add_argument("--compose-file", type=Path, default=None,
+                         help="The canonical runtime definition to copy. Not a template: it is copied "
+                              "verbatim. Defaults to the copy embedded in this installer, which is "
+                              "generated from container/compose.yaml and held to it byte for byte by a "
+                              "test, so this installer needs no checkout on the host. Supply it to install "
+                              "a locally modified runtime from a checkout; naming a path that does not "
+                              "exist is still a refusal.")
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.0",
+                         action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
+    runtime.add_argument("--release", default=CARRIED_RELEASE,
+                         action=_RecordsThatItWasSupplied, metavar="X.Y.Z",
+                         help="Install a previously published release instead of this one. It fills the "
+                              "tag in --image and nothing else, and when --image already names a "
+                              "different version it refuses rather than pick a winner: quietly "
+                              "installing a version other than the one you named is the whole failure "
+                              "this flag exists to prevent. Defaults to %(default)s, the release "
+                              "container/release-manifest.json records, which is the only version this "
+                              "installer can hold to a recorded identity. Until that release is pushed "
+                              "and its digest recorded there is no identity to hold it to, and "
+                              "preflight says so rather than passing over it. "
+                              "Refused together with --no-pull and with --image-archive, which are the "
+                              "offline paths and resolve nothing against a registry.")
     runtime.add_argument("--image-archive", type=Path, default=None,
                          help="A `docker save` tarball to load instead of pulling. For a host that cannot reach "
                               "the registry, or a release that is not published yet.")
@@ -2171,8 +4417,58 @@ def _add_fix_network_flag(sp: argparse.ArgumentParser, *, default: str, why_this
                           f"skips the check entirely and touches no firewall. {why_this_default}")
 
 
+class _IfInstalledRemoved(argparse.Action):
+    """--if-installed, kept in the parser for the sole purpose of
+    refusing usefully.
+
+    Deleting it outright made a scripted `--if-installed converge` die at
+    argparse's own exit 2 with "unrecognized arguments: --if-installed
+    converge", which names neither --mode nor the mapping, so whoever hit
+    it in a cron job had to come and read this file. The claim that the
+    failure was already loud and named the flag was only true for a
+    re-run with NO mode flag, which is a different command line from the
+    one every existing script actually has.
+
+    help=argparse.SUPPRESS, because it is not an option: it does not
+    appear in --help, it cannot be used, and the only thing it does is
+    say what to write instead. Exit 2 is kept deliberately, so a wrapper
+    already branching on a usage error keeps working and simply gets a
+    message it can act on.
+    """
+
+    TRANSLATION = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
+
+    def __init__(self, option_strings, dest, **kwargs):
+        kwargs.pop("nargs", None)
+        super().__init__(option_strings, dest, nargs="?", default=None,
+                         help=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        replacement = self.TRANSLATION.get(values)
+        if replacement:
+            detail = f"`--if-installed {values}` is `{replacement}` now."
+        else:
+            detail = ("Its converge is `--mode upgrade` and its refuse is `--mode fresh`.")
+        raise Refusal(
+            EXIT_USAGE,
+            "--if-installed was removed in issue #343 and replaced by --mode.",
+            f"{detail}\n\nupgrade keeps every user, backup set and catalogued artifact and "
+            "archives them first; fresh asserts nothing is installed here and refuses if "
+            "something is. There is also --mode factory-reset, which the old flag had no way "
+            "to ask for. See docs/install.md.",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
-    repo_root = Path(__file__).resolve().parents[2]
+    # No repo_root here any more. --compose-file used to default to
+    # <repo>/container/compose.yaml, computed as parents[2] of this file,
+    # which raises IndexError outright for a copy of this script sitting
+    # fewer than three directories deep. That is exactly the standalone
+    # case issue #346 exists to support: a single file on a NAS, in the
+    # operator's home directory, with no checkout anywhere near it. The
+    # default is None now, and the one place that still asks about a
+    # checkout (checkout_compose_beside_this_installer) answers "no"
+    # rather than raising.
     parser = argparse.ArgumentParser(
         prog="install_docker_host.py",
         description="Install rclone-manager on a Docker host (issue #262).",
@@ -2184,7 +4480,7 @@ def build_parser() -> argparse.ArgumentParser:
         "preflight", formatter_class=_HelpFormatter,
         help="Check every prerequisite and exit. Changes nothing on the host.")
     _add_shared_groups(sp_preflight)
-    _add_install_prereq_groups(sp_preflight, repo_root)
+    _add_install_prereq_groups(sp_preflight)
 
     sp_install = subparsers.add_parser(
         "install", formatter_class=_HelpFormatter,
@@ -2195,11 +4491,11 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.3.0\n"
         ),
     )
     _add_shared_groups(sp_install)
-    _add_install_prereq_groups(sp_install, repo_root)
+    _add_install_prereq_groups(sp_install)
     _add_fix_network_flag(
         sp_install, default="auto",
         why_this_default="auto is the default because a healthy host is a strict no-op either way, so "
@@ -2207,9 +4503,24 @@ def build_parser() -> argparse.ArgumentParser:
                           "(persist) is still a larger commitment than a runtime rule and needs asking for.")
     _add_probe_flags(sp_install)
     existing = sp_install.add_argument_group("existing install")
-    existing.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
-                          help="What to do when an install is already here. converge rewrites the deployment "
-                               "files and brings the stack up again, never touching state, config or backups.")
+    existing.add_argument("--mode", choices=list(INSTALL_MODES), default=None,
+                          help="What to do about what is already here. fresh (the default when nothing is "
+                               "installed) refuses to run over an existing install. upgrade keeps every user, "
+                               "backup set and catalogued artifact, archiving them first, and converges when "
+                               "the version already matches. factory-reset discards the administrator record, "
+                               "the catalog and the configuration, archiving them first, and leaves the "
+                               "retained backups on disk. Left unset with an install already here, this asks "
+                               "on a terminal and refuses without one, because guessing between keeping the "
+                               "data and wiping it is not something an installer should do. Replaces "
+                               "--if-installed: its converge is --mode upgrade and its refuse is --mode fresh.")
+    existing.add_argument("--confirm-factory-reset", action="store_true",
+                          help="Confirm --mode factory-reset without a terminal. On a terminal the word "
+                               "factory-reset is typed at the prompt instead, after the list of what is "
+                               "about to be destroyed. Without one of the two, factory-reset refuses.")
+    # Not an option, and not in --help. It exists only so a script still
+    # passing the flag it was told to pass gets a sentence rather than
+    # argparse's "unrecognized arguments".
+    existing.add_argument("--if-installed", action=_IfInstalledRemoved, dest="if_installed")
 
     sp_status = subparsers.add_parser(
         "status", formatter_class=_HelpFormatter,
@@ -2250,6 +4561,87 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_release(args) -> None:
+    """--release, settled here, with no network and no registry at all
+    (issue #484).
+
+    Deciding WHICH reference to install is a string question, and keeping
+    it one is what lets the whole suite resolve arguments 49 times over
+    without a socket. The registry only ever gets asked to CONFIRM the
+    answer, in Preflight, once, and never to produce it. An installer
+    that had to reach ghcr.io to know what it was installing would have
+    made a network round trip a precondition of `--help`-adjacent work
+    and of every offline path this file deliberately supports.
+
+    Every refusal below is here rather than in a check for the same
+    reason: they are all decidable from the command line alone, and a
+    contradiction an operator typed should come back before Docker has
+    been asked anything.
+    """
+    if not args.release_supplied:
+        # The default IS the tag the --image default already carries, so
+        # there is nothing to fill and nothing that can disagree. This is
+        # every invocation that predates the flag.
+        return
+
+    if _semver(args.release) is None:
+        raise Refusal(
+            EXIT_USAGE,
+            f"--release is {args.release!r}, which is not a version.",
+            "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
+            "(0.3.0-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "tag orders against nothing, so it would be written into the .env as the "
+            "installed version and leave this host un-orderable by every later installer. "
+            "Name the version you want.",
+        )
+
+    if args.image_archive is not None or args.no_pull:
+        offline = "--image-archive" if args.image_archive is not None else "--no-pull"
+        raise Refusal(
+            EXIT_RELEASE_OFFLINE,
+            f"--release resolves a reference against the registry and {offline} says not to go there.",
+            "The offline paths are a designed feature, not an oversight: they exist for a host "
+            "that cannot reach ghcr.io at all. Pick the release on the machine that CAN, with "
+            "`docker save`, and bring the tarball over with --image-archive. Or drop "
+            f"{offline} and let this resolve it.",
+        )
+
+    if image_digest(args.image):
+        raise Refusal(
+            EXIT_RELEASE_CONFLICT,
+            f"--image already pins {image_digest(args.image)}, and --release {args.release} "
+            f"names a version instead.",
+            "A digest names exactly one image and is the stronger claim of the two, so this "
+            "will not weaken it and will not decorate it with a tag that may describe "
+            "something else. Drop --release and keep the digest, or drop the digest and name "
+            "the release.",
+        )
+
+    tag = image_tag(args.image)
+    if not args.image_supplied:
+        # The common case: --image is sitting at the release this
+        # installer carries and --release is asking for a different one.
+        # Only the tag moves; the registry and repository are not this
+        # flag's to change.
+        args.image = f"{image_name(args.image)}:{args.release}"
+        return
+    if not tag:
+        # An operator's own registry, named without a tag. Filling it is
+        # exactly what this flag is for, and there is nothing to disagree
+        # with.
+        args.image = f"{args.image}:{args.release}"
+        return
+    if tag != args.release:
+        raise Refusal(
+            EXIT_RELEASE_CONFLICT,
+            f"--release says {args.release} and --image says {tag}.",
+            "Both name the version about to be installed and they do not agree, so this "
+            "refuses rather than pick one. Installing a version other than the one you "
+            "named, quietly, is the failure this flag exists to prevent. Drop one of the "
+            "two, or make them agree.",
+        )
+
+
 def resolve(args):
     """Fill in every default this installer computes from --prefix and the
     account it runs as.
@@ -2285,11 +4677,19 @@ def resolve(args):
         "--backup-dir": args.backup_dir,
         "--config-dir": args.config_dir,
     }
+    # Whether the operator NAMED these, recorded before the default fills
+    # them in. The difference decides what a missing file means: a default
+    # that is not there yet is something to create, and a path an operator
+    # typed that is not there is a mistake worth refusing over. Collapsing
+    # the two would either refuse every fresh install or silently install
+    # a different key than the one that was asked for.
     if hasattr(args, "ssh_key"):
+        args.ssh_key_supplied = args.ssh_key is not None
         args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
     if hasattr(args, "known_hosts"):
+        args.known_hosts_supplied = args.known_hosts is not None
         args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
-    if hasattr(args, "compose_file"):
+    if hasattr(args, "compose_file") and args.compose_file is not None:
         args.compose_file = args.compose_file.expanduser()
     if hasattr(args, "image_archive") and args.image_archive is not None:
         args.image_archive = args.image_archive.expanduser()
@@ -2303,16 +4703,23 @@ def resolve(args):
     if hasattr(args, "public_base_url") and args.public_base_url is None:
         args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
     if hasattr(args, "image"):
-        # The tag compose resolves for VERSION, taken from the reference so
-        # the .env cannot claim a different release from the image.
-        ref = args.image
-        args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
+        # _RecordsThatItWasSupplied only fires when the flag is on the
+        # command line, so the attribute is simply absent otherwise.
+        args.image_supplied = getattr(args, "image_supplied", False)
+        args.release_supplied = getattr(args, "release_supplied", False)
+        resolve_release(args)
+        # The version compose records as VERSION, read out of the
+        # reference so the .env cannot claim a different release from the
+        # image it pins. "unknown" rather than "latest" when the reference
+        # names none: _semver("latest") is None, so a host whose .env says
+        # latest is one no later installer can ever order, and a tagless
+        # --image used to write exactly that.
+        args.image_tag = reference_version(args.image) or "unknown"
         args.image_commit = "none"
     return args
 
 
 def main(argv) -> int:
-    args = resolve(build_parser().parse_args(argv))
     handlers = {
         "preflight": cmd_preflight,
         "install": cmd_install,
@@ -2322,6 +4729,11 @@ def main(argv) -> int:
         "network-undo": cmd_network_undo,
     }
     try:
+        # Parsing is inside the contract now. _IfInstalledRemoved refuses
+        # during parse_args, and a Refusal raised out here reached the
+        # operator as a traceback instead of as the two sentences that
+        # tell them which flag replaced theirs.
+        args = resolve(build_parser().parse_args(argv))
         return handlers[args.command](args)
     except Refusal as refusal:
         print(f"\nrefusing: {refusal.message}", file=sys.stderr)

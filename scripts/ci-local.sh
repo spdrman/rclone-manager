@@ -7,14 +7,15 @@
 # having been green, not on any GitHub-side check.
 #
 # Comprehensive on purpose, job-for-job with ci.yml, which means it is NOT
-# fast: the full core/ test suite (including the Docker-backed crash matrix
-# and SFTP integration tests), two cross-compiles, three separate frontend
+# fast: the full core/ test suite (including the Docker-backed crash matrix,
+# SFTP integration and MinIO integration tests), two cross-compiles, three separate frontend
 # installs/builds, and the dependency-rules worktree-deletion proofs. Needs
 # a running Docker daemon for the full run, and now says so instead of
 # quietly reporting on suites that skipped themselves.
 #
 # Set CI_LOCAL_FAST=1 for a quick iteration loop. It skips core/'s
-# ./tests/... (the crash matrix and the SFTP integration tests), both
+# ./tests/... (the crash matrix, the SFTP integration tests and the MinIO
+# integration tests), both
 # cross-compiles, the ui/shared and upk-proof production builds, the
 # apps/common/tests conformance suite, the structure proofs and this gate's
 # own self-test. It does NOT skip apps/generic, whose own tests bring a
@@ -33,11 +34,27 @@
 # because it is not merge evidence.
 #
 # The Docker daemon is the same story with a bigger blast radius: with it
-# down, the crash matrix, the SFTP integration suite and the whole
+# down, the crash matrix, the SFTP and MinIO integration suites and the whole
 # apps/generic/tests/dockercli package call t.Skip, go test still exits 0,
 # and nothing would reach the ledger. A full run refuses to start without
 # the daemon; CI_LOCAL_SKIP_DOCKER=1 is the out-loud opt-out and ends
 # INCOMPLETE.
+#
+# The daemon being up at the START is not the same claim as the daemon
+# being up for the RUN, and on a Mac they come apart on their own. Docker
+# Desktop's Resource Saver stops the hypervisor after five idle minutes,
+# and this script has several Docker-free stretches longer than that (the
+# compat self-test, the api, perf and architecture self-tests), so every
+# run used to cold-start the VM somewhere in the middle. Two runs died of
+# that on 2026-09-04 and neither looked like a failure, because a daemon
+# that goes away at minute 18 is invisible to a probe that ran at minute 0
+# and turns every Docker-backed suite into a t.Skip (#457). So: a sentinel
+# container sleeps for the life of the run, which means the daemon is
+# never idle and Resource Saver never fires, and every Docker-dependent
+# step re-probes the daemon before it runs, which costs about 100ms and
+# turns a VM that died mid-run into a named failure at the step that
+# needed it. CI_LOCAL_SENTINEL=0 turns the container off;
+# CI_LOCAL_SENTINEL_IMAGE picks a different one.
 #
 # A missing Playwright Chromium is the third instance of the same shape,
 # and gets the same answer: the browser e2e step refuses and names the
@@ -45,6 +62,48 @@
 # ledgers. See scripts/e2e/run-tests-repo-gate.sh, which is where that
 # suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
 # is why it runs at all).
+#
+# The two-machine end-to-end backup proof (#356) is the fourth, with one
+# extra state. Docker being absent is the same shape as everything above.
+# A Docker daemon that is present and refuses a PRIVILEGED container is a
+# capability question too: the manager machine is docker-in-docker, because
+# mounting the host socket instead would install onto the developer's own
+# host rather than onto a fresh machine. The script says CANNOT RUN and
+# exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
+# is the out-loud opt-out.
+#
+# Every `go test` in this script carries -race (#417), with one named
+# exception that says why on its own line (distribution/packaging, below).
+# It is a flag on the steps that already exist rather than a step of its
+# own, for two reasons.
+# A separate step would run the same suites twice, and -race replaces
+# nothing: everything the plain run asserted, the instrumented run asserts
+# too, plus the detector. And a separate step is one more thing that can be
+# commented out, skipped or quietly reordered, which is the failure this
+# gate is built around (#160); a flag on the step that has to run anyway
+# cannot be left out without deleting the step. It also settles what a
+# detected race does: the step it is on is the step this gate already had
+# to run, so a race is a red suite and a red suite is a FAILED verdict
+# naming it. There is no opt-out variable, and no ledger entry, because a
+# ledgered race would be this gate reporting on a defect it decided not to
+# act on.
+#
+# Measured on this machine rather than estimated, warm cache, with five
+# other worktrees running their own suites at the time, so the pairs are
+# the reading and not the absolutes:
+#
+#   core/ minus the four Docker-backed suites   135s, 128s -> 174s, 177s
+#   those four, under gotestwatch                     143s -> 147s
+#   distribution minus packaging                       69s ->  64s
+#   apps/generic                                       43s ->  51s
+#   apps/synology                                       9s ->  17s
+#   apps/common                                         6s ->  31s
+#   distribution/packaging (left out)                  44s -> 521s
+#
+# About ninety seconds added on a gate that runs for twenty-five. The four
+# Docker-backed suites were the ones worth measuring before committing
+# them, and they turned out to be the cheapest: they wait on containers and
+# on a real rclone, so the instrumentation is nearly free.
 #
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
@@ -59,6 +118,22 @@
 set -e
 
 export PATH="/opt/homebrew/bin:$PATH"
+
+# The marker every process this gate starts can read: "you are running inside
+# the local gate", as opposed to a developer running one suite by hand. The
+# Docker fixtures key on it to tell "this laptop has no Docker", an honest
+# skip when somebody runs one suite by hand, from "the daemon this gate
+# already used has gone away", which is a failure because a full run refuses
+# to start without one.
+#
+# CI_LOCAL_SKIP_DOCKER=1 is the exception at both ends. It is how a run says
+# out loud that it is proceeding without a daemon, this script ledgers it so
+# the run cannot end ok, and it is already in the environment of everything
+# below. A fixture that turns a skip into a failure under CI_LOCAL=1 has to
+# honour it, or that opt-out stops working.
+#
+# The name is load-bearing in core/tests; do not rename it here alone.
+export CI_LOCAL=1
 
 # Running as a git hook (pre-commit) means git has GIT_INDEX_FILE (a path
 # relative to the repo root, e.g. ".git/index"), GIT_DIR, GIT_WORK_TREE, etc.
@@ -80,10 +155,14 @@ FAST="${CI_LOCAL_FAST:-0}"
 # call itself ok should not depend on that holding.
 . "$(cd "$(dirname "$0")" && pwd)/lib/ci-local-gate.sh"
 
-# Every exit from here on carries a verdict line. Without this, a run that
-# died under `set -e` printed no "==> ci-local: ..." marker at all, so the
-# one outcome a reader most needs to grep for was the one with no marker.
-trap 'gate_exit_marker $?' EXIT
+# Every exit from here on carries a verdict line, and drops anything this run
+# started. Without the marker, a run that died under `set -e` printed no
+# "==> ci-local: ..." line at all, so the one outcome a reader most needs to
+# grep for was the one with no marker. Installed through one function rather
+# than as `trap ... EXIT` here, because a trap is set and not appended: a
+# second EXIT trap later in this file would silently replace this one. See
+# gate_install_traps.
+gate_install_traps
 
 if ! command -v golangci-lint >/dev/null 2>&1; then
   echo "==> golangci-lint not found. Install it (brew install golangci-lint) and re-run." >&2
@@ -105,9 +184,77 @@ if [ "$FAST" != "1" ]; then
   gate_require_docker
 fi
 
+# Not a refusal, and deliberately not one: Resource Saver being on is normal,
+# the sentinel below makes it harmless, and the per-step probes turn what it
+# still breaks into a named failure. It is printed because it is the first
+# thing to check when the daemon dies at minute 18 (#457).
+gate_warn_resource_saver
+
+# The daemon is now known good (or the run said out loud that it is not merge
+# evidence). Keep it that way: Docker Desktop's Resource Saver measures IDLE,
+# and this gate has several Docker-free stretches longer than its five-minute
+# timer, so every run used to cold-start the VM somewhere in the middle. One
+# container that sleeps for the life of the run means the daemon is never
+# idle, on any machine, without depending on a GUI setting (#457).
+gate_start_docker_sentinel
+
 if [ "$FAST" = "1" ]; then
-  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix and the SFTP integration tests), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
+
+# The mutation-anchor check (#458), added under separate work. An anchor here
+# is a verbatim copy of product source that a mutation selftest plants a
+# violation into, not a link in a document. scripts/compat/selftest.sh and
+# scripts/conformance/selftest.sh plant deliberate violations to prove each
+# cell of their gate can go red, and every plant is anchored to a verbatim
+# copy of product source that lives in a script the author of the product
+# change never opens. A refactor drifts the anchor, the mutation then plants
+# nothing, and that control is dead while still reporting ok. This dry-runs
+# every anchor in both selftests against the real tree in about a second,
+# which is why it runs here rather than at minute 20 where the selftests
+# themselves would have found the same drift one anchor at a time.
+#
+# Guarded on the file rather than assumed, because this branch and the branch
+# that writes it are in flight at the same time; once that one has landed the
+# guard can go and the step becomes unconditional, which is the shape every
+# other step here has for #160's reason (a step that quietly skips itself
+# when its own file is missing is a silent skip wearing a different hat).
+if [ -f scripts/selftest/check-anchors.sh ]; then
+  gate_step "mutation anchors in the compat, conformance and race selftests still match the tree (#458)"
+  bash scripts/selftest/check-anchors.sh
+else
+  echo "==> mutation anchors: scripts/selftest/check-anchors.sh is not in this tree yet, nothing to run (#458)"
+fi
+
+# Formatting, over every tracked Go file in the repository (#417). Half a
+# second, so it belongs up here with the anchors check rather than behind
+# twenty minutes of Go suites.
+#
+# It is not the same check as the gofmt formatter .golangci.yml now
+# enables, and neither one makes the other redundant. golangci-lint is
+# invoked per module below (`cd core && ...`, `cd apps/common && ...`), and
+# two Go files in this repository live outside every module and outside
+# go.work: scripts/api/gen-bindings.go and scripts/architecture/ownership.go.
+# No per-module lint run has ever been able to see either, and the
+# unformatted one of the pair was gen-bindings.go, which is how a file
+# stayed unformatted for its whole life with every gate step green.
+gate_step "every tracked Go file is gofmt-clean, including the ones outside every module (#417)"
+bash scripts/format/check-gofmt.sh
+
+# The same blind spot, for the checks that actually find bugs (#417). Being
+# outside every module does not only cost those two files their formatting:
+# this gate vets and lints per module too, so nothing has ever vetted or
+# linted them either. `go vet` needs no module when it is handed file
+# paths, and golangci-lint gets a throwaway module per unowned directory,
+# which resolves offline because every unowned file here is standard-library
+# only. A few seconds, and it belongs up here with the sweep for the same
+# reason.
+#
+# Deliberately NOT with the other scripts/architecture checks further down:
+# those run after the Go suites, and a Go file nobody checks is worth
+# hearing about before twenty minutes of Docker-backed tests, not after.
+gate_step "every Go file no module owns still passes go vet and golangci-lint (#417)"
+bash scripts/architecture/check-unowned-go.sh
 
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
@@ -119,57 +266,86 @@ gate_step "core/ golangci-lint"
 (cd core && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ "$FAST" = "1" ]; then
-  gate_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
-  (cd core && GOWORK=off go test ./internal/...)
+  gate_docker_step "core/ go test -race ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
+  (cd core && GOWORK=off go test -race ./internal/...)
 else
-  # tests/crashmatrix and tests/sftpintegration run separately, under
-  # cmd/gotestwatch instead of `go test`'s own default -timeout (10m per
-  # package). Both drive real Docker/SFTP work through a real subprocess
-  # (tests/crashmatrix's own harness, or a real rclone transfer against
-  # the SFTP fixture container), so their wall-clock time tracks real
-  # machine load rather than a fixed budget; issue #256 is a real gate
-  # run hitting go test's fixed 10m default under load. gotestwatch
-  # bounds them with a no-progress window derived from this run's own
-  # measured pace instead (issue #247's reasoning, one layer out; see
-  # core/cmd/gotestwatch/doc.go), so there is no fixed number to outgrow.
-  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration, run next)"
-  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration)$'))
+  # tests/crashmatrix, tests/sftpintegration and tests/miniointegration
+  # run separately, under cmd/gotestwatch instead of `go test`'s own
+  # default -timeout (10m per package). All three drive real Docker work
+  # through a real subprocess (tests/crashmatrix's own harness, a real
+  # rclone transfer against the SFTP fixture container, or a real S3
+  # round trip against the MinIO one), so their wall-clock time tracks
+  # real machine load rather than a fixed budget; issue #256 is a real
+  # gate run hitting go test's fixed 10m default under load. On a machine
+  # that has to PULL a fixture image first, the pull alone can eat most
+  # of that budget. gotestwatch bounds them with a no-progress window
+  # derived from this run's own measured pace instead (issue #247's
+  # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
+  # is no fixed number to outgrow.
+  gate_docker_step "core/ go test -race ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance + tests/machinegate, run next)"
+  (cd core && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance|machinegate)$'))
 
-  gate_step "core/ tests/crashmatrix + tests/sftpintegration under gotestwatch (issue #256: no fixed go test -timeout)"
-  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/...)
+  gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance + tests/machinegate under gotestwatch, -race (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -race -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/... ./tests/machinegate/...)
 fi
 
-gate_step "apps/common go build, vet, test"
-(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_step "apps/common go build, vet, test -race"
+(cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-gate_step "distribution go build, vet, test"
-(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+gate_docker_step "distribution go build, vet, test -race (every package but packaging, which runs next)"
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -v '/packaging$'))
+
+# The one Go suite in this gate that does NOT run under the detector, and
+# the only one, which is why it gets a paragraph rather than a flag.
+#
+# distribution/packaging is a static-analysis suite: it reads this
+# repository's own manifests, matrices, READMEs and release records and
+# asserts they agree with each other. It starts no goroutine of its own:
+# no `go` statement in product code or in tests, no t.Parallel anywhere,
+# and one sync.Once memoising a fixture. The only concurrency in the whole
+# package is os/exec's internal pipe plumbing, which is the standard
+# library's and is not what a race in this repository would look like. So
+# -race there has nothing of ours to report on.
+#
+# What it can do is cost. This is also the most CPU-bound package in the
+# repository (four of its epic-matrix cases alone are 14.5s, 7.4s, 7.1s and
+# 6.9s of pure graph and text analysis), which is exactly the shape race
+# instrumentation multiplies: 44s becomes 521s, and that one package was
+# the whole of this module's -race cost.
+#
+# So it is left out on purpose, marked on the command line so the gate's
+# own self-test can see it, and Group K of that self-test asserts this is
+# the ONLY line carrying that marker. A second one appearing without
+# somebody deciding to add it is the thing that would make this exclusion
+# rot.
+gate_step "distribution/packaging (the static-analysis suite, no -race: see above)"
+(cd distribution && GOWORK=off go test ./packaging/) # no -race: no goroutine of its own, so nothing here to detect, and 44s becomes 521s
 
 gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ -f apps/generic/go.mod ]; then
-  gate_step "apps/generic go build, vet, test"
-  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_docker_step "apps/generic go build, vet, test -race"
+  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/generic golangci-lint"
   (cd apps/generic && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/synology/go.mod ]; then
-  gate_step "apps/synology go build, vet, test"
-  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/synology go build, vet, test -race"
+  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/synology golangci-lint"
   (cd apps/synology && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/ugos/backend/go.mod ]; then
-  gate_step "apps/ugos/backend go build, vet, test"
-  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  gate_step "apps/ugos/backend go build, vet, test -race"
+  (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
 
   gate_step "apps/ugos/backend golangci-lint"
   (cd apps/ugos/backend && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
@@ -275,6 +451,48 @@ if [ "$FAST" != "1" ]; then
   fi
 fi
 
+# The two-machine end-to-end backup proof (#356). Everything between
+# "nothing installed" and "an artifact is on disk" was proven in pieces and
+# nowhere joined up, so the one claim a user actually makes (a fresh
+# install can be pointed at a machine and pull a backup off it) had no
+# test anywhere. This is that test: two throwaway containers on a temporary
+# network, the real installer, a backup set created through the CLI, and
+# the artifact compared to the source by digest.
+#
+# Non-FAST only, like the browser suite, and for the same reason: it costs
+# a container image build plus about a minute per case. CI_LOCAL_SKIP_TWO_MACHINE=1
+# is the separate out-loud opt-out, and it ledgers.
+#
+# Three outcomes, not two, which is the part that matters. The script exits
+# 3 when this machine CANNOT perform the proof (no Docker, or a daemon that
+# refuses a privileged container so docker-in-docker cannot start), and
+# that is neither a pass nor a failure: it is ledgered, exactly as a
+# missing browser or a stopped daemon is, so the run ends INCOMPLETE and
+# says which proof it could not perform. Reporting ok for a backup nobody
+# proved would be the single worst version of #160.
+if [ "$FAST" != "1" ]; then
+  if [ "${CI_LOCAL_SKIP_TWO_MACHINE:-0}" = "1" ]; then
+    gate_note_skip "the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install can pull a real backup off a real machine (CI_LOCAL_SKIP_TWO_MACHINE=1)"
+  else
+    gate_docker_step "two throwaway machines, one temporary network, one real backup (#356)"
+    # Not under `set -e`: exit 3 is a verdict this script has to READ, and
+    # `set -e` would end the run on it before the ledger ever saw it.
+    set +e
+    bash scripts/e2e/two-machine-backup.sh
+    two_machine_status=$?
+    set -e
+    case "$two_machine_status" in
+      0) ;;
+      3)
+        gate_note_skip "the two-machine end-to-end backup proof (#356): this machine could not perform it, and said why above"
+        ;;
+      *)
+        exit "$two_machine_status"
+        ;;
+    esac
+  fi
+fi
+
 # The static layer checks (issue #165) run even in FAST mode: none of them
 # builds, installs or deletes anything, so together they cost seconds, and
 # they are the ones a mid-refactor edit is most likely to break.
@@ -356,6 +574,54 @@ if [ "$FAST" != "1" ]; then
 
   gate_step "architecture rules can actually fail (mutation self-test)"
   bash scripts/architecture/selftest.sh
+
+  # The detector itself, shown to fire (#417). Every `go test` above now
+  # carries -race, and -race is the kind of check this repository has
+  # learnt to distrust on sight: it exits 0 whether it looked or not, so a
+  # tree with no race and a detector that was never asked produce the same
+  # output. This plants a real data race in real product source, in a copy
+  # of the tree, and requires the detector to catch it AND to name the
+  # write that planted it AND to be the reason it was caught, by showing
+  # the same mutant going green with the flag off. One package, one test,
+  # three runs: about ten seconds on a warm cache, because the mutant is
+  # one file deep in a leaf package and Go's build cache is
+  # content-addressed, so each copy rebuilds core/service and nothing
+  # under it.
+  gate_step "the race detector can actually catch a race (mutation self-test, #417)"
+  bash scripts/race/selftest.sh
+
+  # And the formatting gate, shown to fire (#417). Same argument as the
+  # block above, applied to the check that turned out to be missing
+  # altogether: two Go files in this tree were not gofmt-clean and nothing
+  # noticed, because `go build`, `go vet` and every linter that was enabled
+  # are all indifferent to layout. Both halves get a planted violation
+  # here, the sweep and .golangci.yml's own formatter, including one
+  # planted outside every module, which is the case the per-module linter
+  # cannot make. A second on a warm cache.
+  gate_step "the formatting gate can actually fail (mutation self-test, #417)"
+  bash scripts/format/selftest.sh
+
+  # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
+  # is a wall of "nothing about a medium-free deployment moved" assertions,
+  # and every one of them is the shape this repository keeps finding passing
+  # for the wrong reason. This runs each cell against a real planted
+  # violation in a copy of the tree, including the two the EPIC E spec's own
+  # section 4 table names by hand. It costs a few minutes because every
+  # mutant builds core/ and backup-manager and runs a real capture; that is
+  # the price of the corpus meaning anything.
+  gate_step "the FR-35 compatibility cells can actually fail (mutation self-test, #242)"
+  bash scripts/compat/selftest.sh
+
+  # EPIC E's composed conformance scenario, shown to fire (#242). Same
+  # argument as the block above, applied to the other half of that issue:
+  # core/tests/conformance runs the three-tier chain against MinIO and
+  # watches FR-30's standing invariant at every event that could falsify it,
+  # and a watcher nobody has watched catch something is a watcher that
+  # certifies nothing. This plants nine violations in real product files,
+  # including the gate line's own, and each one has to turn the suite red
+  # AND name the promise it broke.
+  gate_docker_step "the composed conformance cells can actually fail (mutation self-test, #242)"
+  bash scripts/conformance/selftest.sh
 
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh

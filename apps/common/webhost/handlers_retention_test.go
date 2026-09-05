@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -308,4 +309,301 @@ func TestPreviewRetention_VerdictsSayWhichPlacementSelectedEachTier(t *testing.T
 	if kept == 0 || deleted == 0 {
 		t.Fatalf("the fixture produced %d KEEP and %d DELETE verdicts; this test needs one of each or it proves nothing", kept, deleted)
 	}
+}
+
+// ------------------------------------------------- EPIC E, issue #430 ---
+//
+// #239 put FR-27's moves and FR-30's per-deletion medium on the
+// preview/apply envelope in core/service and on `backup-manager
+// retention`, and stopped at this boundary. Until these pass, an operator
+// can see a planned move and the medium a deletion happens on from the
+// CLI and not from the API, so the web surface silently under-reports what
+// retention is about to do.
+
+// planKeys is one response object's own key set, sorted, which is what
+// the two tests below assert against rather than field-by-field presence:
+// a key that appears where none used to is exactly as much of a change as
+// a key that goes missing, and only a whole-set comparison catches both.
+func planKeys(t *testing.T, obj map[string]json.RawMessage) []string {
+	t.Helper()
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func decodePlan(t *testing.T, rec *httptest.ResponseRecorder) map[string]json.RawMessage {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return obj
+}
+
+// placementPlan is the fixture EPIC E's own tests below drive: one artifact
+// the chain would relocate, one deletion that would happen in somebody
+// else's bucket, one deletion that would happen on this machine, and one
+// artifact nothing could place.
+func placementPlan(p service.RetentionPlan) service.RetentionPlan {
+	p.Verdicts = []service.RetentionArtifactVerdict{
+		{Artifact: "month-old.dump", Action: "KEEP", Medium: "local", Reason: "kept by the MONTHLY(discovery) tier (test fixture)"},
+		{Artifact: "offsite.dump", Action: "DELETE", Medium: "cold_offsite", Reason: "no GFS tier selects this artifact (test fixture)"},
+		{Artifact: "here.dump", Action: "DELETE", Medium: "local", Reason: "no GFS tier selects this artifact (test fixture)"},
+		{Artifact: "midmove.dump", Action: "REFUSE", Reason: "more than one ACTIVE placement, which is a move in flight (test fixture)"},
+	}
+	p.Moves = []service.RetentionMove{{Artifact: "month-old.dump", FromMedium: "local", ToMedium: "cold_offsite"}}
+	p.UnconfirmedPlacements = []string{"midmove.dump"}
+	return p
+}
+
+// TestPreviewRetention_CarriesEveryMoveWithBothMediums is FR-27 at the
+// HTTP boundary: the response names every artifact this plan would
+// relocate and both ends of the move, so an operator confirming a plan is
+// shown the bytes it would copy as well as the ones it would delete.
+func TestPreviewRetention_CarriesEveryMoveWithBothMediums(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.previewPlan = placementPlan
+
+	body := decodePlan(t, previewRetention(t, tr.router, "production", "postgres-primary"))
+
+	raw, ok := body["moves"]
+	if !ok {
+		t.Fatalf("the preview response carries no \"moves\" at all, so a UI cannot show what would move before a plan is confirmed: body=%s", mustJSON(t, body))
+	}
+	var moves []map[string]string
+	if err := json.Unmarshal(raw, &moves); err != nil {
+		t.Fatalf("decode moves: %v", err)
+	}
+	want := []map[string]string{{"artifact": "month-old.dump", "from_medium": "local", "to_medium": "cold_offsite"}}
+	if !reflect.DeepEqual(moves, want) {
+		t.Errorf("moves = %+v, want %+v", moves, want)
+	}
+}
+
+// TestPreviewRetention_CarriesThePlacementsItCouldNotConfirm is the other
+// half of FR-27's plan. "I could not confirm where this is" and "this is
+// already where it belongs" produce the same silence and are not the same
+// claim, and only one of them is a move already in flight.
+func TestPreviewRetention_CarriesThePlacementsItCouldNotConfirm(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.previewPlan = placementPlan
+
+	body := decodePlan(t, previewRetention(t, tr.router, "production", "postgres-primary"))
+
+	raw, ok := body["unconfirmed_placements"]
+	if !ok {
+		t.Fatalf("the preview response carries no \"unconfirmed_placements\" at all: body=%s", mustJSON(t, body))
+	}
+	var names []string
+	if err := json.Unmarshal(raw, &names); err != nil {
+		t.Fatalf("decode unconfirmed_placements: %v", err)
+	}
+	if !reflect.DeepEqual(names, []string{"midmove.dump"}) {
+		t.Errorf("unconfirmed_placements = %v, want [midmove.dump]", names)
+	}
+}
+
+// TestPreviewRetention_EveryDeletionNamesTheMediumItHappensOn is FR-30's
+// own sentence at this boundary: the dry-run explains per-artifact WHERE
+// the deletion would happen, not only whether. "Delete 40 artifacts" means
+// something very different when half of them are objects in a bucket
+// somebody else pays for.
+//
+// A deletion on the implicit local medium carries no `medium` key, and
+// that absence is the answer rather than a gap: it is what keeps a
+// deployment that declares no storage medium reading exactly as it did
+// before this field existed, and `backup-manager retention` spells the
+// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
+// retention.go).
+func TestPreviewRetention_EveryDeletionNamesTheMediumItHappensOn(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.previewPlan = placementPlan
+
+	body := decodePlan(t, previewRetention(t, tr.router, "production", "postgres-primary"))
+	verdicts := decodeVerdicts(t, body)
+
+	offsite, ok := verdicts["offsite.dump"]
+	if !ok {
+		t.Fatalf("no verdict for offsite.dump: %s", mustJSON(t, body))
+	}
+	var medium string
+	if err := json.Unmarshal(offsite["medium"], &medium); err != nil {
+		t.Fatalf("offsite.dump's verdict carries no usable \"medium\" (%v); an operator confirming this plan is authorising a delete against a bucket, and the plan has to say so", err)
+	}
+	if medium != "cold_offsite" {
+		t.Errorf("offsite.dump's verdict names medium %q, want %q", medium, "cold_offsite")
+	}
+
+	here, ok := verdicts["here.dump"]
+	if !ok {
+		t.Fatalf("no verdict for here.dump: %s", mustJSON(t, body))
+	}
+	if _, present := here["medium"]; present {
+		t.Errorf("here.dump's verdict carries a \"medium\" key (%s), want none: a deletion on the implicit local medium is spelled by the absence of the field, which is what keeps a medium-free deployment's response unchanged", here["medium"])
+	}
+}
+
+// TestApplyRetention_CarriesTheSamePlacementFactsThePreviewDid pins the
+// half of §15.6 that says a caller never has to reconcile two shapes for
+// "what would happen" and "what happened". The apply response is the same
+// projection, so an operator reading the outcome sees the moves and the
+// mediums they confirmed.
+func TestApplyRetention_CarriesTheSamePlacementFactsThePreviewDid(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.previewPlan = placementPlan
+
+	preview := decodePlan(t, previewRetention(t, tr.router, "production", "postgres-primary"))
+	var planID string
+	if err := json.Unmarshal(preview["plan_id"], &planID); err != nil {
+		t.Fatalf("decode plan_id: %v", err)
+	}
+
+	applied := decodePlan(t, applyRetention(t, tr.router, "production", "postgres-primary", `{"plan_id":"`+planID+`"}`))
+	for _, field := range []string{"moves", "unconfirmed_placements"} {
+		// Without this, two absent fields would compare equal and this
+		// test would pass hardest on the build that carries neither.
+		if _, ok := preview[field]; !ok {
+			t.Fatalf("the preview itself carries no %q, so comparing the apply response against it proves nothing", field)
+		}
+		if !reflect.DeepEqual(applied[field], preview[field]) {
+			t.Errorf("apply response %s = %s, want the preview's own %s", field, applied[field], preview[field])
+		}
+	}
+	if got, want := decodeVerdicts(t, applied)["offsite.dump"]["medium"], decodeVerdicts(t, preview)["offsite.dump"]["medium"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("apply response's offsite.dump medium = %s, want the preview's own %s", got, want)
+	}
+}
+
+// TestPreviewRetention_AMediumFreeDeploymentsResponseIsUnchanged is the
+// compatibility claim, asserted as a whole key set rather than as a list
+// of fields that must be present: a response that grew a key is exactly as
+// changed as one that lost a key, and only this comparison sees both.
+//
+// The fixture backend's plan is what core/service really returns for a
+// deployment that declares no storage medium: every verdict names the
+// implicit local medium, no move is planned, and nothing is unplaced. None
+// of the three may reach the wire, because every deployment written before
+// EPIC E is this one.
+func TestPreviewRetention_AMediumFreeDeploymentsResponseIsUnchanged(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+
+	body := decodePlan(t, previewRetention(t, tr.router, "production", "postgres-primary"))
+
+	wantTop := []string{
+		"backup_set_id", "config_revision", "delete_count", "expires_at",
+		"inventory_revision", "keep_count", "plan_id", "reclaim_bytes",
+		"retention", "retention_is_override", "verdicts",
+	}
+	if got := planKeys(t, body); !reflect.DeepEqual(got, wantTop) {
+		t.Errorf("a medium-free preview's top-level keys are %v, want exactly %v", got, wantTop)
+	}
+
+	verdicts := decodeVerdicts(t, body)
+	for name, want := range map[string][]string{
+		"kept.dump":   {"action", "artifact", "reason", "tier_selections", "tiers"},
+		"backup.dump": {"action", "artifact", "reason"},
+	} {
+		v, ok := verdicts[name]
+		if !ok {
+			t.Fatalf("no verdict for %s: %s", name, mustJSON(t, body))
+		}
+		if got := planKeys(t, v); !reflect.DeepEqual(got, want) {
+			t.Errorf("a medium-free preview's %s verdict has keys %v, want exactly %v", name, got, want)
+		}
+	}
+}
+
+// TestPreviewRetention_ThePlacementFieldsCarryNoCredentialCostOrETA is
+// FR-33's standing absence, checked over the shape this issue adds rather
+// than argued from the fact that nobody wrote such a field.
+//
+// A move names two places and an artifact. It never names the key material
+// that reaches either of them, what a provider would charge to run it, or
+// how long a provider might take: this product holds none of those three,
+// and a field for one would have to be filled with a guess.
+func TestPreviewRetention_ThePlacementFieldsCarryNoCredentialCostOrETA(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.previewPlan = placementPlan
+
+	rec := previewRetention(t, tr.router, "production", "postgres-primary")
+	body := decodePlan(t, rec)
+	if _, ok := body["moves"]; !ok {
+		t.Fatalf("this test needs a response that actually carries the placement fields to check them for absences: %s", rec.Body.String())
+	}
+
+	var decoded any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	forbidden := []string{
+		"credential", "secret", "password", "access_key", "token", "signed_url",
+		"cost", "price", "bill", "charge",
+		"eta", "estimate", "duration", "seconds_remaining",
+	}
+	for _, key := range jsonKeyPaths(decoded, "") {
+		lower := strings.ToLower(key)
+		for _, bad := range forbidden {
+			if strings.Contains(lower, bad) {
+				t.Errorf("the retention preview carries %q, which names a %s; this product holds no credential, no provider bill and no provider ETA, so a field for one could only be filled with a guess", key, bad)
+			}
+		}
+	}
+}
+
+// jsonKeyPaths lists every object key in a decoded JSON document, as a
+// dotted path, so the absence check above walks the whole response rather
+// than only its top level.
+func jsonKeyPaths(node any, prefix string) []string {
+	var out []string
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			path := k
+			if prefix != "" {
+				path = prefix + "." + k
+			}
+			out = append(out, path)
+			out = append(out, jsonKeyPaths(v, path)...)
+		}
+	case []any:
+		for _, v := range n {
+			out = append(out, jsonKeyPaths(v, prefix+"[]")...)
+		}
+	}
+	return out
+}
+
+// decodeVerdicts indexes a plan response's verdicts by artifact name, each
+// still a raw key/value map so a test can ask whether a key is PRESENT
+// rather than only what it decodes to.
+func decodeVerdicts(t *testing.T, body map[string]json.RawMessage) map[string]map[string]json.RawMessage {
+	t.Helper()
+	var verdicts []map[string]json.RawMessage
+	if err := json.Unmarshal(body["verdicts"], &verdicts); err != nil {
+		t.Fatalf("decode verdicts: %v", err)
+	}
+	out := make(map[string]map[string]json.RawMessage, len(verdicts))
+	for _, v := range verdicts {
+		var name string
+		if err := json.Unmarshal(v["artifact"], &name); err != nil {
+			t.Fatalf("decode verdict artifact: %v", err)
+		}
+		out[name] = v
+	}
+	return out
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(raw)
 }

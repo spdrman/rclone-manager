@@ -2,6 +2,26 @@ package rclone
 
 import "github.com/rclone/rclone/lib/atexit"
 
+// This file is two lines of code and a great deal of reason, which is why
+// it is its own file rather than a corner of adapter.go.
+//
+// Embedding rclone means embedding its process-level habits, and
+// lib/atexit is one: the first at-exit registration anywhere installs a
+// SIGINT/SIGTERM handler that ends THIS process with 128+signal. Nothing
+// in this repository asked for that, and it is invisible until a daemon an
+// operator stops routinely starts reporting 143 for a clean shutdown.
+//
+// So the pair below is a transfer of ownership, not a switch. Together
+// they say: this binary decides what a signal means, and it accepts the
+// obligation that comes with saying so, which is running rclone's exit
+// handlers itself. Calling one without the other is the bug this file
+// exists to make obvious, and each function's doc names which half it is.
+//
+// It is exported because the decision belongs to a command, not to the
+// adapter: `daemon` takes it and `run` deliberately does not. See
+// DisableSignalExit for why a one-shot cycle that was killed should keep
+// reporting that it was killed.
+
 // DisableSignalExit stops the embedded rclone from ending this process on
 // SIGINT/SIGTERM, leaving this binary's own handler in charge of what a
 // signal means (issue #190).

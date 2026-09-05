@@ -27,6 +27,23 @@ var ErrNotQuarantined = errors.New("app: artifact is not quarantined")
 // does serve it, by keeping the local copy rather than re-fetching.
 var ErrQuarantineIrrecoverable = errors.New("app: quarantined artifact has no remaining source to re-ingest")
 
+// ErrNotFailed is returned when an artifact named for RetryFailedIngestion
+// is not in FAILED. It is its own sentinel rather than a reuse of
+// ErrNotQuarantined, because the two say different things to an operator
+// and the API layer gives them different codes: one is "this backup is not
+// waiting for your judgement", the other is "this backup is not stuck".
+var ErrNotFailed = errors.New("app: artifact is not failed")
+
+// unconfiguredSet is the refusal all three actions below share for an
+// artifact whose backup set the configuration no longer names (issue
+// #391): the same *NotFoundError ListArtifacts returns for a filter over
+// such a set, so the layers above turn it into the same named 404
+// rather than a 500. The row itself still exists, which is why this is
+// not state.ErrArtifactNotFound.
+func unconfiguredSet(set model.BackupSetID) error {
+	return &NotFoundError{Kind: "backup set", Name: set.String()}
+}
+
 // RevalidateQuarantined re-runs the durable-local-copy checks against one
 // QUARANTINED or QUARANTINED_LOST artifact and reports the verdict,
 // writing nothing.
@@ -63,10 +80,10 @@ func (s *Service) RevalidateQuarantined(ctx context.Context, id model.ArtifactID
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
 	if !ok {
-		return ValidateResult{}, fmt.Errorf("app: revalidate: %s has no configured backup set", id.Set)
+		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", unconfiguredSet(id.Set))
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, ValidateOptions{})
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", err)
 	}
@@ -107,6 +124,17 @@ func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.Artifa
 		return fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, rec.State)
 	}
 
+	// The set has to be configured, and this is the one action of the
+	// three that did not check (issue #391). A retry hands the row back
+	// to the ordinary pipeline, and the pipeline walks configured sets:
+	// a row sent to DISCOVERED under a set the configuration no longer
+	// has is one no cycle will ever pick up, no longer quarantined so
+	// off that screen, and unreachable by every recovery path. It is
+	// refused before the write, like the other two.
+	if _, _, ok := s.backupSetConfigFor(id.Set); !ok {
+		return fmt.Errorf("app: retry ingestion: %w", unconfiguredSet(id.Set))
+	}
+
 	_, err = lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
 		Artifact: id,
 		Key:      fmt.Sprintf("app:retry-ingestion:%s:%s", id, s.now().Format(time.RFC3339Nano)),
@@ -116,6 +144,68 @@ func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.Artifa
 	})
 	if err != nil {
 		return fmt.Errorf("app: retry ingestion: %s: %w", id, err)
+	}
+	return nil
+}
+
+// RetryFailedIngestion puts one FAILED artifact back into DISCOVERED so
+// the ordinary pipeline attempts it again (issue #419).
+//
+// It is the FAILED counterpart of RetryQuarantinedIngestion above and is
+// deliberately a separate method rather than a widened one. The two refuse
+// different things, report different named errors, and answer different
+// questions for an operator: quarantine means a human has to decide
+// whether a backup is trustworthy, FAILED means an attempt did not finish.
+// Folding them together would give one entry point two vocabularies and
+// make the refusal an operator gets depend on a state they cannot see from
+// where they clicked.
+//
+// # Why the reason is read here
+//
+// internal/lifecycle cannot read it. FR-10 gives FAILED no reason field,
+// so the sentence lives only in the journal's state_transitions log, which
+// internal/state owns and lifecycle.Journal does not expose. This package
+// already reads it for issue #284's CLI detail view, so it reads it once
+// more here and hands it down, rather than lifecycle growing a second read
+// path or reconstructing something less true.
+//
+// A read that fails is not a reason to refuse the retry: the operator's
+// decision does not depend on this manager being able to quote the
+// previous failure back at them, so the retry proceeds with an empty
+// RecoveringFrom and the row simply carries nothing where it would have
+// carried the old sentence.
+func (s *Service) RetryFailedIngestion(ctx context.Context, id model.ArtifactID, note string) error {
+	rec, err := s.Journal.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("app: retry failed ingestion: %w", err)
+	}
+	if cur := lifecycle.State(rec.State); cur != lifecycle.Failed {
+		return fmt.Errorf("%w: %s is %s", ErrNotFailed, id, cur)
+	}
+
+	// The same refusal RetryQuarantinedIngestion makes, for the same
+	// reason (issue #391): a row sent to DISCOVERED under a backup set the
+	// configuration no longer names is one no cycle will ever walk, no
+	// longer FAILED so off that list, and unreachable by every recovery
+	// path there is.
+	if _, _, ok := s.backupSetConfigFor(id.Set); !ok {
+		return fmt.Errorf("app: retry failed ingestion: %w", unconfiguredSet(id.Set))
+	}
+
+	var recoveringFrom string
+	if detail, err := s.GetArtifactDetail(ctx, id); err == nil {
+		recoveringFrom = detail.FailureReason
+	} else {
+		s.logger().Error(ctx, "retry-failed", fmt.Errorf("reading %s's recorded failure reason: %w", id, err))
+	}
+
+	if _, err := lifecycle.RetryFailed(ctx, s.lifecycleDeps(), lifecycle.RetryFailedParams{
+		Artifact:       id,
+		AttemptKey:     fmt.Sprintf("app:retry-failed:%s:%s", id, s.now().Format(time.RFC3339Nano)),
+		RecoveringFrom: recoveringFrom,
+		Note:           note,
+	}); err != nil {
+		return fmt.Errorf("app: retry failed ingestion: %s: %w", id, err)
 	}
 	return nil
 }
@@ -198,10 +288,10 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
 	if !ok {
-		return ReinstateResult{}, fmt.Errorf("app: reinstate: %s has no configured backup set", id.Set)
+		return ReinstateResult{}, fmt.Errorf("app: reinstate: %w", unconfiguredSet(id.Set))
 	}
 
-	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, ValidateOptions{})
 	if err != nil {
 		return ReinstateResult{}, fmt.Errorf("app: reinstate: %w", err)
 	}

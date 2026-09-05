@@ -7,7 +7,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -107,12 +106,7 @@ func (b *BackupService) SetBackupSetEnabled(_ context.Context, id string, enable
 
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	b.adoptConfig(cfg)
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
@@ -208,12 +202,7 @@ func (b *BackupService) SetBackupSetReadOnly(_ context.Context, id string, readO
 
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	b.adoptConfig(cfg)
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
@@ -268,14 +257,27 @@ func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) 
 
 	r := found.Remote
 	src := transport.Source{
-		ID:                   "connection-test",
-		Type:                 r.Type,
-		Host:                 r.Host,
-		Port:                 r.Port,
-		User:                 r.User,
-		KeyFile:              r.Key.File,
-		KeyEnv:               r.Key.Env,
-		KeyCommand:           r.Key.Command,
+		ID:         "connection-test",
+		Type:       r.Type,
+		Host:       r.Host,
+		Port:       r.Port,
+		User:       r.User,
+		KeyFile:    r.Key.File,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
+		// The passphrase's own three sources travel too. Without them a
+		// set whose key is passphrase-protected cannot be tested at all:
+		// the adapter is handed a key it has no way to open, and the
+		// operator is told their host is unreachable.
+		PassphraseFile:    r.Key.Passphrase.File,
+		PassphraseEnv:     r.Key.Passphrase.Env,
+		PassphraseCommand: r.Key.Passphrase.Command,
+		// #355: this is the operator's REAL configured remote, so the
+		// ceiling they set on it has to come with it. A reachability
+		// check that runs uncapped against the one host they capped can
+		// fail where a cycle succeeds, or pass where a cycle fails, which
+		// makes the button worse than not having one.
+		MaxConnections:       r.MaxConnections,
 		KeyEncryptionFile:    st.inner.Config.KeyEncryption.File,
 		KeyEncryptionEnv:     st.inner.Config.KeyEncryption.Env,
 		KeyEncryptionCommand: st.inner.Config.KeyEncryption.Command,

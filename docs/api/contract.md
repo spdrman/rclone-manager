@@ -326,6 +326,139 @@ been the tenth.
 has started and moved nothing is a measured zero; `omitempty` on a plain
 `int64` would encode that identically to a field nobody measured.
 
+## Recorded decision: a placement is a copy, and absence is not presence
+
+Issue #240 (EPIC E, FR-34). An artifact's copies reach a client as
+`Artifact.placements`, and the shape is built so three different facts stay
+three different facts. They all read the same if a schema is careless, and the
+one that gets rendered as a green tick is the one an operator acts on.
+
+**A row means a DURABLE copy, so no row means no copy.** A placement exists
+because the journal recorded a finished copy. An artifact still transferring has
+none, and the `.partial` file `local_path` names is deliberately not one. The
+array is REQUIRED for the same reason: an optional array has three readings (a
+copy exists, no copy exists, the server did not say), and only two of them are
+ever true, so a client is always handed `[]` rather than a missing key it has to
+interpret.
+
+**A copy the journal knows is gone is not served at all.** `status` admits
+`ACTIVE` and `DELETE_PENDING` and nothing else. `DELETE_PENDING` is on the wire
+because the bytes are probably still there and an operator is entitled to know a
+copy is on its way out. A `GONE` row would read as a copy in every layout anyone
+would write for a list of copies, so it never leaves the read model.
+
+**`unreachable` is not "gone".** `access` says whether a copy can be READ right
+now, from the closed set `immediate` / `requires_restore` / `restoring` /
+`unreachable`, derived only from held facts. `unreachable` means this deployment
+cannot currently get to the place the copy is in, which today means the running
+configuration no longer declares that medium: no bucket, no endpoint, no
+credential. The product can then neither confirm the copy nor deny it, and those
+two call for opposite responses. Nothing here reaches the network to answer the
+question: this is rendered on every artifact list, so a network-backed answer
+would either be slow or be cached, and a cached answer about reachability is a
+stale answer presented as a current one.
+
+**An unverified copy has NO `verification_class`, rather than the weakest one.**
+The field is absent when nothing has verified the copy. The ladder's weakest
+rung, `existence`, is a claim that an object was seen at the recorded size, and
+for a copy nobody has looked at that claim is false. The enum does not admit the
+empty string either, so there is no way to spell a rung named nothing.
+`verified_at` is absent exactly when the class is.
+
+**`size_bytes` is `x-go-pointer`.** Same rule as `OperationProgress`'s byte
+fields above: an artifact can genuinely be zero bytes, so a recorded zero must
+not encode identically to a size nobody recorded.
+
+**Nothing is a price and nothing is an estimate.** There is no cost field and no
+restore ETA on any of these schemas, because the engine has no price list, does
+not know what an operator negotiated, and gets no progress report from the
+provider while a restore runs. What it serves instead is the bytes, the storage
+class, whether reads require a restore, and the two disclosure sentences, in the
+engine's own words. `apps/common/webhost/placements_contract_test.go` holds this
+structurally: it walks everything reachable from `Artifact`,
+`SettingsResponse`, `UpdateSettingsRequest`, `Operation` and `RetentionPlan`
+and refuses a number named for money or metered bandwidth, a field shaped like
+a prediction, and any property a credential could travel under. The same file pins the closed vocabularies to the engine's constants, so
+the generated TypeScript unions cannot drift from the strings the journal
+stores.
+
+## Recorded decision: on a retention verdict, no medium means local
+
+Issue #430 (EPIC E, FR-27 and FR-30). The retention preview carries three
+placement facts: `RetentionPlan.moves`, `RetentionPlan.unconfirmed_placements`,
+and `medium` on every verdict. Two of the three are spelled by absence, and I
+want the reason on the record rather than inferred from a diff.
+
+**A verdict on the implicit local medium carries no `medium` key.** The obvious
+alternative was to serve `"medium": "local"` everywhere, the way
+`Placement.medium` already does, and I did not take it. Every deployment
+written before EPIC E holds every copy locally, so that spelling would have put
+a new key on every verdict of every response those deployments serve, to say
+the only thing that was ever true of them. Absence says the same thing and
+leaves them byte for byte as they were. `backup-manager retention` made the
+same call for the same reason (`mediumSuffix`), so the two operator surfaces
+now read alike instead of each having its own convention.
+
+A move is the other way round: `from_medium` and `to_medium` are both verbatim,
+`"local"` included. A verdict answers "where would this happen", which has an
+implicit default, and a move answers "from where to where", which has none.
+
+**A deployment with no storage medium carries neither placement array.** This
+one is not a wire decision at all, it is `core/service` declining to compute
+them, and the boundary just carries the answer through with `omitempty`. A
+placement row records a DURABLE copy, so nothing ingested before FR-29's table
+existed has one, and the move planner reads a missing row as "I could not
+confirm where this is" rather than as absence, which is the only reading that
+cannot lose data. Serve that unfiltered and the first preview after an upgrade
+greets an operator with every backup they already had, listed under a heading
+that reads like a fault, in a deployment where there is nowhere else a copy
+could possibly be.
+
+**The moves array is inside the plan, not behind a second call.** An apply is
+confirmed against a `plan_id`, and what that id commits to has to be the whole
+of what was shown. A moves section fetched separately could be rendered beside
+verdicts it does not belong to. All three facts are already inside the plan's
+staleness fingerprint, so an apply naming a plan whose moves have changed since
+the operator read them is refused like any other stale plan.
+
+## Recorded decision: the settings write carries a consent, not a setting
+
+Issue #240 (FR-27). `UpdateSettingsRequest.acknowledge_medium_disclosure` is the
+only field on that request that asks for no change. It permits one.
+
+A write that newly sends a retention tier's artifacts to a non-local medium is
+refused with `MEDIUM_DISCLOSURE_REQUIRED` unless it carries the acknowledgment,
+and the refusal message IS the disclosure text. A client that renders the
+message has therefore shown the operator the right words by construction, rather
+than by keeping its own copy of them, which is the arrangement that goes stale.
+The same text is also served on `SettingsSchema.storage.medium_disclosure`, so a
+form can show it before the operator presses anything.
+
+The code is its own, not `INVALID_REQUEST`, because what a client does with the
+two is opposite: one is a field to fix, the other is a paragraph to put in front
+of a human. And the gate is server-side because what is being consented to is
+the deletion of the copy on the operator's own machine: a form that hid its Save
+button would be a gate one `curl` walks around.
+
+`acknowledge_medium_disclosure` is not counted towards a request naming
+something to change. A body carrying nothing but the tick still asks for
+nothing, and honouring it would rewrite the operator's configuration file and
+move `config_revision`, invalidating every outstanding retention preview, for a
+request with no content in it.
+
+**The same gate stands in front of a backup set's own chain.** `PUT
+/backup-sets/{source}/{set}/retention` takes the same field on
+`RetentionOverride` and refuses with the same code, because an override is a
+whole chain and can name a medium per tier exactly as the deployment's policy
+can (the config layer resolves per-set medium references for precisely this
+reason). A gate on the settings write alone would be a gate one `PUT` walks
+around. What counts as "first" there is decided against the chain currently
+deciding for THAT set: a set inheriting a policy that already sends `monthly`
+to a medium is not asked about `monthly` again, and a set whose override sends
+`daily` somewhere new is. The field is request-only in practice: it is never
+written to the file and never appears on the `override` half of a response,
+so a client that round-trips what it was served cannot re-consent by accident.
+
 ## Recorded decision: the two shapes `POST /system/first-run` declares
 
 Issue #176 adds the first-run setup pair, `GET` and `POST /system/first-run`.

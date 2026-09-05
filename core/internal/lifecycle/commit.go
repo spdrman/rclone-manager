@@ -148,6 +148,17 @@ type CommitInput struct {
 	CommittedKey  string
 }
 
+// validate refuses an input Commit cannot act on, before anything touches
+// the disk or the journal.
+//
+// The last clause is the one that is not just a missing-field check. The two
+// keys have to DIFFER, because they identify two separate durable writes and
+// the journal replays a repeated key as the same logical attempt. Given the
+// same key twice, the second write would be recognised as a replay of the
+// first and silently do nothing, so an artifact would be recorded as
+// COMMITTING and never as COMMITTED while every call reported success. That
+// is a caller bug with no visible symptom, which is exactly the kind worth
+// refusing up front.
 func (in CommitInput) validate() error {
 	switch {
 	case in.Artifact.Name == "" || in.Artifact.Set.IsZero():
@@ -182,8 +193,14 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		return state.Outcome{}, err
 	}
 
-	partial := partialPath(in.LocalDir, in.Artifact)
-	final := finalPath(in.LocalDir, in.Artifact)
+	partial, err := partialPath(in.LocalDir, in.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: resolving the .partial source: %w", in.Artifact, err)
+	}
+	final, err := finalPath(in.LocalDir, in.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: resolving where it belongs: %w", in.Artifact, err)
+	}
 
 	committing, err := Advance(ctx, d, state.Transition{
 		Artifact: in.Artifact,
@@ -246,6 +263,13 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		From:      string(Committing),
 		To:        string(Committed),
 		LocalPath: &final,
+		// This is the moment the durable local copy comes into being, so
+		// this is the transition that records where it is (EPIC E,
+		// FR-29). It is stated here rather than derived inside
+		// internal/state because only this package knows that LocalPath
+		// stops naming a .partial and starts naming the finished artifact
+		// exactly here; see state.PlacementUpdate's own doc.
+		Placement: localPlacementFor(committing.Record, final),
 	})
 	if err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: recording COMMITTED: %w", in.Artifact, err)
@@ -254,6 +278,34 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		return state.Outcome{}, err
 	}
 	return committed, nil
+}
+
+// localPlacementFor describes the durable local copy Commit has just
+// created, for the journal to record alongside the COMMITTED transition.
+//
+// The verification class is `content` when a local hash was recorded and
+// empty otherwise, and that is not a formality: FR-13's hash tier is
+// optional, so an artifact verified without hash: sha256 has a durable
+// copy that nothing has content-verified, and a placement claiming
+// otherwise would be the first lie in a chain that ends with a local copy
+// deleted against an unverified upload. Empty is the honest answer, and
+// #237 is where a stronger class can be earned.
+func localPlacementFor(rec state.Record, final string) *state.PlacementUpdate {
+	p := &state.PlacementUpdate{
+		Medium:   state.MediumLocal,
+		Location: final,
+		Hash:     rec.LocalHash,
+		HashAlg:  rec.LocalHashAlg,
+		Status:   state.PlacementActive,
+	}
+	if rec.Transfer != nil {
+		size := rec.Transfer.BytesTransferred
+		p.Size = &size
+	}
+	if rec.LocalHash != "" {
+		p.VerificationClass = state.VerificationContent
+	}
+	return p
 }
 
 // writeRecoveryManifest writes rec's EPIC-B section 19.3 sidecar recovery
@@ -295,11 +347,45 @@ func writeRecoveryManifest(localDir string, rec state.Record) error {
 		ChecksumAlgorithm:  rec.LocalHashAlg,
 		ValidationPassed:   rec.ValidationPassed,
 		ValidationDetail:   rec.ValidationDetail,
+		Placements:         manifestPlacements(rec),
 	}
 	if err := recovery.WriteManifest(localDir, m); err != nil {
 		return fmt.Errorf("lifecycle: commit %s: writing recovery manifest: %w", rec.Artifact, err)
 	}
 	return nil
+}
+
+// manifestPlacements copies rec's placements into the manifest's own
+// shape (EPIC E, FR-29).
+//
+// It is a copy rather than a shared type because internal/recovery depends
+// on internal/model and the standard library and nothing else, which is
+// what lets both this package and internal/app read it without importing
+// each other. The same reasoning already made recovery.Manifest a copy of
+// hand-picked state.Record fields rather than an embedded Record.
+//
+// Nothing about a MEDIUM travels here beyond its configured id and the
+// object's key: no endpoint, no bucket, no region, no credential
+// reference. For a local sidecar that is merely tidy; for the sidecar
+// object FR-29 puts in the bucket itself, it is the rule, because anything
+// written there is readable by everyone who can read the bucket.
+func manifestPlacements(rec state.Record) []recovery.ManifestPlacement {
+	if len(rec.Placements) == 0 {
+		return nil
+	}
+	out := make([]recovery.ManifestPlacement, 0, len(rec.Placements))
+	for _, p := range rec.Placements {
+		out = append(out, recovery.ManifestPlacement{
+			Medium:            p.Medium,
+			Location:          p.Location,
+			SizeBytes:         p.Size,
+			Checksum:          p.Hash,
+			ChecksumAlgorithm: p.HashAlg,
+			VerificationClass: p.VerificationClass,
+			Status:            p.Status,
+		})
+	}
+	return out
 }
 
 // commitFile performs FR-14 steps 3 through 5: fsync the transferred file's
@@ -493,10 +579,19 @@ var testHookAfterRename func() error
 // known-good backup." Neither the .partial file nor whatever already
 // exists at FinalPath is touched.
 type FinalPathCollisionError struct {
+	// Both paths are carried because the refusal is about their
+	// relationship: something is at FinalPath, it is not the file at
+	// PartialPath, and an operator has to look at both to decide which one
+	// is the real backup.
 	PartialPath string
 	FinalPath   string
 }
 
+// Error leads with the occupied path, because that is the file the operator
+// has to make a decision about, and says explicitly that it is not the
+// artifact being committed. Without that clause the message would read like
+// an ordinary "already exists" and invite somebody to delete the obstacle,
+// which is precisely the known-good backup FR-12 is protecting.
 func (e *FinalPathCollisionError) Error() string {
 	return fmt.Sprintf("lifecycle: %s already exists and is not %s, refusing to overwrite it", e.FinalPath, e.PartialPath)
 }
@@ -507,10 +602,18 @@ func (e *FinalPathCollisionError) Error() string {
 // Commit runs, so this is not a crash window Commit can retry through: the
 // local copy is actually gone, or the caller passed the wrong paths.
 type ArtifactFileMissingError struct {
+	// Both paths are named because the interesting fact is that NEITHER
+	// exists. Reporting one would leave the reader unsure whether the other
+	// had been looked at, and the two together are what distinguishes "the
+	// local copy is gone" from "Commit was handed the wrong directory".
 	PartialPath string
 	FinalPath   string
 }
 
+// Error names both paths for the reason the struct carries both: this is
+// not a crash window to retry through, so the message has to give an
+// operator enough to tell a vanished file from a misconfigured local_path,
+// and only seeing both candidates does that.
 func (e *ArtifactFileMissingError) Error() string {
 	return fmt.Sprintf("lifecycle: neither %s nor %s exists on disk", e.PartialPath, e.FinalPath)
 }

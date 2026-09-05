@@ -38,10 +38,50 @@ import (
 // A Config fresh out of Load has not been checked for semantic sense: call
 // Validate (or use LoadAndValidate) before anything reads it for real.
 type Config struct {
-	PollInterval  Duration      `yaml:"poll_interval"`
-	State         State         `yaml:"state"`
-	Sources       []Source      `yaml:"sources"`
-	Retention     Retention     `yaml:"retention"`
+	PollInterval Duration  `yaml:"poll_interval"`
+	State        State     `yaml:"state"`
+	Sources      []Source  `yaml:"sources"`
+	Retention    Retention `yaml:"retention"`
+
+	// StorageMediums declares the non-local destinations an artifact's
+	// durable copy may live on (EPIC E, FR-27). It sits at the top level
+	// rather than inside Retention because a medium is a place, not a
+	// policy: a tier NAMES one, and a medium no tier names yet is a
+	// legal, staged configuration.
+	//
+	// omitempty for the round-trip reason Retention.Tiers' own doc spells
+	// out at length: core/service's writeConfigAtomically re-marshals the
+	// whole Config on every settings save, and a config file that never
+	// heard of mediums must not come back from that with a
+	// "storage_mediums: []" injected into it, which an older binary then
+	// refuses outright under Load's KnownFields(true). FR-35 makes that a
+	// gate rather than an intention.
+	StorageMediums []StorageMedium `yaml:"storage_mediums,omitempty"`
+
+	// MaxMovesPerCycle bounds how many artifacts one retention cycle
+	// relocates between mediums (EPIC E, FR-30). It sits beside
+	// StorageMediums rather than inside Retention for the same reason
+	// StorageMediums does: a bound on machinery is not a policy about
+	// which backups are kept, and moving an artifact never changes a
+	// verdict.
+	//
+	// It is a pointer so that an absent key and an explicitly written
+	// zero are different facts. Absent means "I have not thought about
+	// this", which resolves to DefaultMaxMovesPerCycle; a written zero
+	// means "do nothing", which is a thing an operator can already say by
+	// pointing no tier at a medium, and which spelled here would read as
+	// a working configuration that silently never moves anything. So the
+	// zero is refused in words, and the key is refused outright in a
+	// deployment with no medium to move to (see validateMaxMovesPerCycle).
+	//
+	// omitempty for StorageMediums' round-trip reason: core/service
+	// re-marshals the whole Config on every settings save, and a config
+	// file that never heard of mediums must not come back from one with
+	// this key injected into it, which an older binary then refuses under
+	// Load's KnownFields(true). FR-35 makes that a gate rather than an
+	// intention.
+	MaxMovesPerCycle *int `yaml:"max_moves_per_cycle,omitempty"`
+
 	Alerts        Alerts        `yaml:"alerts"`
 	Capacity      Capacity      `yaml:"capacity,omitempty"`
 	KeyEncryption KeyEncryption `yaml:"key_encryption,omitempty"`
@@ -392,6 +432,66 @@ type BackupSet struct {
 	// twice.
 	ReadOnlyConfig *bool `yaml:"read_only,omitempty"`
 
+	// RetentionConfig is issue #333's per-set override of the top-level
+	// Retention policy: "retain THIS set on this chain, whatever the rest
+	// of the deployment does". It is a pointer for the same reason
+	// ReadOnlyConfig is, and the reason is sharper here: Retention's zero
+	// value is not a policy at all, so a plain struct could never tell an
+	// operator who wrote no retention block apart from one who wrote an
+	// empty one, and validateRetention would resolve the second into the
+	// documented 7/3/12 default chain rather than into inheritance. Nil
+	// means inherit; non-nil means this set decides for itself.
+	//
+	// The override is whole-policy, never a field-by-field merge with the
+	// global one. Merging would produce a chain nobody wrote and nobody
+	// could predict from reading either half, which is the same reasoning
+	// validateRetention already applies when it refuses a config that sets
+	// both the tiers list and the legacy scalars.
+	//
+	// An override has to name a WHOLE chain: a tiers list, or all three
+	// of daily_days, weekly_months and monthly_months. Naming two of the
+	// three would resolve the third to the product default rather than to
+	// the deployment's policy, which is how a set silently ends up
+	// retaining less than the operator who wrote the deployment's policy
+	// believes. resolveBackupSetRetention's doc has the whole rule,
+	// including what an omitted timezone inherits and why.
+	//
+	// Like ReadOnlyConfig, this field is never read directly outside
+	// Validate. Every other consumer reads the resolved Retention field
+	// below.
+	//
+	// Writing one is a one-way door for a deployment that might roll back:
+	// Load's KnownFields(true) makes any key it does not know a parse
+	// error, so a config file carrying a set-level retention block cannot
+	// be read at all by a build from before this field existed. The same
+	// is true of every key this schema has ever gained, which is why
+	// nothing here is emitted unless it was written (omitempty), but this
+	// one is worth saying out loud because retention is the surface an
+	// operator is most likely to reach for during an incident, which is
+	// also when a rollback is most likely.
+	RetentionConfig *Retention `yaml:"retention,omitempty"`
+
+	// Retention is the fully-resolved policy this backup set is actually
+	// retained under, filled in by Validate from RetentionConfig when it
+	// is set and from the Config's own top-level Retention otherwise, on
+	// the same before/after-Validate discipline ID and ReadOnly follow. An
+	// unvalidated BackupSet reads the zero Retention here regardless of
+	// what YAML said.
+	//
+	// This is a resolved copy rather than a pointer to the global policy
+	// on purpose: a later edit to the global Retention must not
+	// retroactively change what an already-resolved set was retained
+	// under without a Validate pass to make it so.
+	//
+	// The rule that falls out of that, and the one thing a caller holding
+	// a *Config has to remember: any mutation of the top-level Retention
+	// has to be followed by Validate (or ResolveBackupSetRetention), or
+	// every set goes on deciding under the policy that was in force when
+	// it was last resolved. cmd/backup-manager's retention override flags
+	// are the live instance of this, and were a silent no-op until they
+	// re-resolved.
+	Retention Retention `yaml:"-"`
+
 	// ReadOnly is the fully-resolved answer to "may this backup set's
 	// remote source ever be deleted", filled in by Validate from
 	// ReadOnlyConfig (when set) or the parent Source's ReadOnly default
@@ -466,6 +566,38 @@ type Remote struct {
 	// what this manager does, only what its own observability output is
 	// allowed to contain.
 	Sensitive bool `yaml:"sensitive_endpoint,omitempty"`
+
+	// MaxConnections caps how many simultaneous SFTP connections ONE
+	// OPERATION against this remote may open. Zero, including by omission,
+	// means unlimited, which is rclone's own default and is what every
+	// config written before this field existed means, so adding it changes
+	// no existing deployment.
+	//
+	// Read "one operation" literally, because the name promises more than
+	// the setting delivers and the difference is the kind that bites at
+	// three in the morning. rclone hands out connection tokens per Fs, and
+	// this manager builds a fresh Fs for every list, stat, copy, hash and
+	// delete (see internal/transport/rclone/adapter.go and #355). So this
+	// bounds an operation, not a remote: a scheduled cycle and an operator
+	// clicking "test connection" in the web UI are two operations, and a
+	// host that sees them at the same time sees up to twice this number.
+	//
+	// It is per remote rather than global because whether a host caps
+	// concurrent connections is a fact about that host, not about this
+	// manager: a hardened VPS and a NAS on the same LAN are free to differ,
+	// the same reasoning sensitive_endpoint above is built on.
+	//
+	// Setting it is a belt, not the braces. A host that caps connections
+	// usually REJECTS the surplus rather than queueing it, so exceeding
+	// the cap is not slow, it is a failed backup reported as a bare
+	// connection error (issue #264: both production sources reject a third
+	// simultaneous connection from one address with a TCP reset). What
+	// keeps this manager under such a cap is the adapter opening one
+	// connection per operation by construction, which it does whether or
+	// not this is set. This is what an operator can point rclone at
+	// directly, and it is what still holds if a future rclone or a future
+	// backend decides to open more.
+	MaxConnections int `yaml:"max_connections,omitempty"`
 }
 
 // Key names exactly one way for an sftp Remote to obtain its SSH private
@@ -759,26 +891,44 @@ type Revalidation struct {
 // left at its YAML zero value, and why those particular defaults were
 // chosen rather than the field's literal zero value.
 //
-// # Global, not per-backup-set (issue #111 decision)
+// # The deployment's policy, which a backup set may override
 //
-// This block is deliberately one policy for the whole Config, applied to
-// every backup set through GFSDecide/PruneDecide's shared cfg argument,
-// not a field on BackupSet. That is a decision, not an oversight: the
-// shared web UI's own BackupSet type (ui/shared/src/types/backup.ts)
-// already models a `retention` field per backup set, and its mock
-// fixtures (ui/shared/src/api/mock.ts) already give two backup sets
-// different override values, which could easily be mistaken for evidence
-// that per-set retention is already a real, working capability. It is
-// not: nothing in this package or internal/retention has ever supported
-// a per-backup-set override, and issue #111 keeps it that way rather than
-// letting the UI's already-drawn shape settle the question by accident.
-// Introducing real per-set overrides is a legitimate future capability,
-// but it is a separate, larger change (new schema, new validation, a new
-// resolution order between set-level and global values) that deserves its
-// own issue rather than riding in on a config/CLI-first change.
+// This block is the deployment-wide policy, and it is the default every
+// backup set is retained under. It is no longer the ONLY one: since issue
+// #362, BackupSet.RetentionConfig lets one set declare a whole chain of
+// its own, and Validate resolves each set's BackupSet.Retention from that
+// override when it exists and from this block otherwise.
+//
+// Nothing decides retention from this block directly any more. Every
+// consumer reads the set's own resolved BackupSet.Retention, and the rule
+// that falls out of that is written on that field: any mutation of this
+// block has to be followed by Validate, or every set goes on deciding
+// under the policy in force when it was last resolved.
+//
+// This doc used to say the opposite, at length, and it is worth recording
+// why rather than just deleting it. Issue #111 decided to KEEP retention
+// global for the time being, specifically so that the shared web UI's own
+// already-drawn per-set `retention` field (ui/shared/src/types/backup.ts,
+// and mock.ts's fixtures giving two sets different values) could not
+// settle the question by accident: a field the UI draws and nothing reads
+// is not evidence of a capability. #333 is that question answered
+// deliberately, with a schema, a validation seam and a resolution order,
+// which is exactly the "separate, larger change" this paragraph asked for.
 type Retention struct {
-	Timezone     string `yaml:"timezone"`
-	WeekStartsOn string `yaml:"week_starts_on"`
+	// Timezone and WeekStartsOn carry omitempty for the round-trip reason
+	// the three scalars below already document, and #333 made it matter
+	// rather than merely tidy. A per-set override that names neither
+	// INHERITS the deployment's, and this struct is what gets marshalled
+	// back into config.yaml: without omitempty a set that inherited the
+	// calendar came back from a save with `timezone: ""` written under it,
+	// which still resolves to inheritance but reads to an operator (and to
+	// anyone hand-editing the file afterwards) as a configured empty
+	// timezone. The file has to keep exactly what was submitted.
+	//
+	// Nothing changes at the top level, where Validate resolves both to a
+	// real value before anything decides with them.
+	Timezone     string `yaml:"timezone,omitempty"`
+	WeekStartsOn string `yaml:"week_starts_on,omitempty"`
 
 	// DailyDays, WeeklyMonths and MonthlyMonths are the original
 	// three-scalar spelling of FR-18's default chain, kept as sugar for
@@ -829,13 +979,39 @@ type Retention struct {
 	// (it fixes the order tier names appear in a KEEP verdict). Because
 	// KEEP is a union, order never changes which artifacts are kept.
 	//
+	// Order DOES decide where a kept artifact lives, and that is new
+	// with EPIC E's mediums (FR-27). The home-medium rule is that the
+	// first tier in chain order which currently selects an artifact names
+	// the medium that artifact belongs on. Two tiers selecting the same
+	// artifact is the common case rather than a corner (daily and monthly
+	// both claim the first backup of a month), so with a per-tier Medium
+	// the chain's order stops being purely presentational: reordering a
+	// chain can change where artifacts are stored even though it still
+	// cannot change which ones are kept. Operators write chains
+	// fine-to-coarse, so the first selecting tier is the warmest, which
+	// is the behaviour the daily-local, monthly-offsite story needs.
+	//
+	// Nothing acts on that rule yet. This package validates the mapping;
+	// the planner that reads it is EPIC E Phase 2 (#239), and the mover
+	// it feeds is #238. Saying it here rather than there is deliberate:
+	// the EPIC's own review rejected an earlier draft precisely for
+	// giving chain order a second, load-bearing meaning without saying so
+	// in the field's documentation.
+	//
 	// omitempty for the same round-trip reason as the three scalars
 	// above: a legacy config file must not come back from a wizard save
 	// with an empty "tiers: []" injected into it, which an older binary
 	// then rejects outright under Load's KnownFields(true).
 	Tiers []RetentionTier `yaml:"tiers,omitempty"`
 
-	ProtectLastKnownGood *bool `yaml:"protect_last_known_good"`
+	// ProtectLastKnownGood carries omitempty for the same round trip, and
+	// the pointer is what makes it safe: yaml omits a NIL pointer, never a
+	// pointer to false, so an operator who deliberately turned FR-19's
+	// protection off keeps an explicit `protect_last_known_good: false` in
+	// their file. Only "I said nothing about it" is omitted, which for a
+	// per-set override means "inherit the deployment's posture" and at the
+	// top level means the documented default of true.
+	ProtectLastKnownGood *bool `yaml:"protect_last_known_good,omitempty"`
 }
 
 // Retention granularity names. These are the values RetentionTier's
@@ -910,6 +1086,54 @@ type RetentionTier struct {
 	// to Granularity", which is the ordinary case, so a written-back
 	// config should not carry a window_unit: "" on every tier.
 	WindowUnit string `yaml:"window_unit,omitempty"`
+
+	// Medium names the storage medium this tier's artifacts live on: the
+	// id of one of Config.StorageMediums (EPIC E, FR-27).
+	//
+	// EMPTY MEANS LOCAL, the backup set's own local_path with exactly
+	// today's semantics, and empty is the ONLY spelling of local. A tier
+	// writing "medium: local" is refused rather than accepted as a
+	// synonym, which is what makes the round-trip rule structural instead
+	// of a promise: with local unspellable, the only way a medium: key
+	// reaches a config file at all is an operator opting into a real
+	// destination, so no settings save can inject one into a file that
+	// never asked for it. See Retention.Tiers' own omitempty note for
+	// what that injection would cost, and note that an older binary
+	// meeting an unknown medium: key fails Load outright.
+	//
+	// A medium that no storage_mediums entry declares is a validation
+	// error, not a fall-back to local. Silently storing artifacts
+	// somewhere other than where the operator wrote is the wrong
+	// direction on the one decision this field exists to make.
+	//
+	// The medium is only expressible in this, the tiers spelling. The
+	// three legacy daily_days/weekly_months/monthly_months scalars cannot
+	// name one and do not need to: adopting mediums means adopting the
+	// chain. The CLI's own -tier override cannot name one either (its
+	// syntax is name:granularity:keep[:window_unit]), so an override
+	// replaces the file's chain with an all-local one. That is inert
+	// while nothing reads this field, and it is #239's to answer when
+	// retention starts planning on it.
+	//
+	// omitempty, for the round-trip reason above.
+	Medium string `yaml:"medium,omitempty"`
+}
+
+// EffectiveMedium is the medium this tier's artifacts belong on: the id it
+// names, or MediumLocal when it names none.
+//
+// This is an accessor rather than a default Validate writes back into the
+// struct, and the distinction is the same one Retention.EffectiveTiers
+// makes. A resolved value written into the struct would be re-marshaled
+// into the operator's own config file by the next settings save, freezing
+// today's default into a file that never chose it (issue #294), and here
+// it would additionally break FR-35 outright by putting a medium: key on
+// every tier of a config that configured no mediums at all.
+func (t RetentionTier) EffectiveMedium() string {
+	if t.Medium == "" {
+		return MediumLocal
+	}
+	return t.Medium
 }
 
 // DefaultTierChain returns the three-tier chain the DailyDays,
@@ -959,6 +1183,36 @@ func DefaultRetentionTiers() []RetentionTier {
 	return DefaultTierChain(DefaultDailyDays, DefaultWeeklyMonths, DefaultMonthlyMonths)
 }
 
+// RetentionIsOverride reports whether this backup set declares its own
+// retention policy rather than inheriting the deployment's (issue #333).
+//
+// It reads the raw RetentionConfig rather than comparing the resolved
+// Retention against the global one, because those are different
+// questions: a set may legitimately declare a chain identical to the
+// global policy, and "the operator wrote this here" is what a preview
+// needs to report, not "these two happen to match today".
+func (b BackupSet) RetentionIsOverride() bool {
+	return b.RetentionConfig != nil
+}
+
+// clone returns a Retention that shares no mutable state with the
+// receiver, so resolving inheritance by assignment cannot leave a set's
+// resolved chain aliased to the global policy's backing array. Assigning
+// the struct alone would copy the slice header and leave both pointing at
+// the same tiers, where an edit through either would be visible through
+// the other.
+func (r Retention) clone() Retention {
+	out := r
+	if r.Tiers != nil {
+		out.Tiers = append([]RetentionTier(nil), r.Tiers...)
+	}
+	if r.ProtectLastKnownGood != nil {
+		v := *r.ProtectLastKnownGood
+		out.ProtectLastKnownGood = &v
+	}
+	return out
+}
+
 // EffectiveTiers returns the tier chain this policy actually decides
 // with: the explicit Tiers list when one is configured, and otherwise the
 // DefaultTierChain expansion of the three scalars.
@@ -973,6 +1227,387 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 		return r.Tiers
 	}
 	return DefaultTierChain(r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
+}
+
+// MediumLocal is the implicit storage medium every deployment already
+// has: the backup set's own local_path, with exactly today's semantics.
+//
+// It is reserved in both directions. A declared medium may not claim this
+// id (there would then be two answers to "where is local"), and a tier may
+// not name it either (absence is how local is spelled, see
+// RetentionTier.Medium). It exists as a named constant because a placement
+// record has to say where an artifact IS, and "local" is the answer for
+// every artifact in every deployment written before EPIC E.
+//
+// This is deliberately the same string as artifactstore.KindLocal, which
+// names the store that resolves a local placement. config does not import
+// artifactstore to say so (this package sits under everything and imports
+// nothing of the sort), so the agreement is pinned by a test instead.
+const MediumLocal = "local"
+
+// DefaultMaxMovesPerCycle is what Config.MaxMovesPerCycle resolves to in
+// a deployment that declares a medium and says nothing about the bound.
+//
+// It is small on purpose. One move copies a whole artifact to a medium and
+// then, under the default upload_verification, downloads it again to
+// re-hash it, so a cycle's worth of moves is bounded egress and bounded
+// wall-clock rather than a number that only matters in the abstract. A
+// backlog drains over consecutive cycles, which is the same shape
+// revalidation's max_per_cycle already has and the same reason it has it:
+// a backlog that all became due at once must not turn into one unbounded
+// sweep.
+//
+// Four rather than one so a small chain reaches steady state in a
+// reasonable number of cycles, and rather than a large number because the
+// cost of a low bound is latency and the cost of a high one is a cycle
+// that will not finish.
+const DefaultMaxMovesPerCycle = 4
+
+// StorageMediumTypeS3 is the one medium type this schema accepts.
+//
+// The set is closed and grows only by a future FR, because a new backend
+// is an architecture decision rather than an import line: EPIC E's FR-28
+// is that decision for s3, and it says the implementation is the embedded
+// rclone's own s3 backend behind the FR-3 transport boundary, with no AWS
+// SDK entering the tree in Go or in TypeScript. A type this package
+// accepted without that decision having been made would be a config an
+// operator could write and nothing could serve.
+const StorageMediumTypeS3 = "s3"
+
+// The closed set of S3 storage classes a medium may ask for (FR-27).
+//
+// These are spelled exactly as S3 spells them, upper case included, so
+// what an operator writes is what reaches the backend rather than
+// something this package case-folded on the way past. The archive classes
+// are in the set because EPIC E means to support them honestly (FR-34's
+// requires_restore access state), not because they behave like the rest:
+// GLACIER and DEEP_ARCHIVE objects cannot be read without an explicit
+// restore that takes hours, which is #241's subject.
+const (
+	StorageClassStandard           = "STANDARD"
+	StorageClassStandardIA         = "STANDARD_IA"
+	StorageClassOneZoneIA          = "ONEZONE_IA"
+	StorageClassIntelligentTiering = "INTELLIGENT_TIERING"
+	StorageClassGlacierIR          = "GLACIER_IR"
+	StorageClassGlacier            = "GLACIER"
+	StorageClassDeepArchive        = "DEEP_ARCHIVE"
+)
+
+// archiveStorageClasses is the subset of the classes above whose objects
+// cannot be read at all until somebody has asked for an explicit restore
+// and waited for it, in the fixed order StorageClasses uses.
+//
+// # Why this package carries a second copy of a fact it does not own
+//
+// internal/archive owns what a storage class MEANS: one table, one row per
+// class, and its own doc explains at length why meaning lives there and
+// the NAMES live here. This is a second copy of two rows of that table,
+// and it exists because the edge only runs one way. archive imports this
+// package (its table is keyed by the constants above), so this package
+// cannot import archive back to ask, and the alternative to copying is
+// leaving the validator unable to answer a question it has to answer at
+// load: does this retention tier deliver to somewhere an artifact can
+// never arrive?
+//
+// Two copies of a fact drift, so this one is pinned against the original
+// in BOTH directions by TestTheArchiveClassSetMatchesInternalArchive,
+// in the external test package, which is the only package that may import
+// both. That is the same arrangement archive/class_test.go already uses to
+// pin its table against StorageClasses(), one direction further round the
+// same loop.
+//
+// GLACIER_IR is deliberately not here. It carries the word Glacier and it
+// reads on demand, and a rule written against the name rather than against
+// the table would refuse a class that works perfectly well.
+var archiveStorageClasses = []string{StorageClassGlacier, StorageClassDeepArchive}
+
+// isArchiveStorageClass reports whether class holds objects that need a
+// restore before anything can read them.
+//
+// The empty string resolves to STANDARD, exactly as EffectiveStorageClass
+// resolves it, so a medium that named no class answers false rather than
+// falling through to the unknown-class branch.
+//
+// A class this build does not recognise answers FALSE here, which is the
+// opposite of the direction archive.IsArchive takes for the same input,
+// and the difference is about who is asking. archive.IsArchive is a
+// predicate in the middle of a decision about deleting a copy, where "you
+// cannot read this" is the answer whose cost when wrong is a refusal. This
+// one runs inside Validate, in the same pass that refuses an unrecognised
+// class at the key that carries it, so answering true would report one
+// typo twice and send the operator to the retention chain to fix a
+// mistake in the mediums block.
+func isArchiveStorageClass(class string) bool {
+	if class == "" {
+		class = StorageClassStandard
+	}
+	for _, c := range archiveStorageClasses {
+		if c == class {
+			return true
+		}
+	}
+	return false
+}
+
+// ArchiveStorageClasses returns every storage class whose objects need a
+// restore before they can be read, as a fresh slice the caller may keep or
+// sort without moving this package's own copy.
+//
+// Exported for StorageClasses' reason and for one more. A settings form
+// has to be able to grey out the mediums a retention tier cannot deliver
+// to, using the set Validate actually enforces rather than a list
+// transcribed into a frontend; and the pinning test that keeps this set
+// and internal/archive's table together has to be able to read it from
+// outside the package.
+func ArchiveStorageClasses() []string {
+	return append([]string(nil), archiveStorageClasses...)
+}
+
+// UploadVerificationReadback and UploadVerificationAttested are the two
+// ways a medium may be asked to prove an upload arrived intact before the
+// local copy is deleted (FR-31).
+//
+// Readback downloads the object again and re-hashes it against the hash
+// this product recorded when it ingested the artifact. It costs egress and
+// it is the DEFAULT, because the alternative asks the destination to grade
+// its own work: a hostile or broken endpoint can echo back the checksum it
+// was handed at upload without having stored a byte, and the reward for
+// believing it is a deleted local copy. EPIC E's security review rejected
+// an earlier draft over exactly that.
+//
+// Attested accepts the provider's own checksum. It is a per-medium opt-in
+// that names its trust assumption out loud, for an operator who has
+// decided their endpoint is trustworthy and their egress bill is not
+// negotiable.
+//
+// Neither is implemented here. This package decides only what a config may
+// say; #235 resolves it and the move engine (#238) acts on it.
+const (
+	UploadVerificationReadback = "readback"
+	UploadVerificationAttested = "attested"
+)
+
+// StorageMedium is one declared, non-local destination an artifact's
+// durable copy may live on (EPIC E, FR-27).
+//
+// A medium is a place, and this struct is the whole description of it:
+// which backend, which bucket, which key namespace, which storage class,
+// how an upload is proven, and where the credentials come FROM. It is not
+// a policy. Which artifacts end up here is decided by which retention
+// tiers name this medium's id, and by nothing in this struct.
+//
+// # Nothing reads this yet
+//
+// This is the schema slice of EPIC E and it lands ahead of everything that
+// acts on it, deliberately: #235 turns a medium into a MediumStore over
+// the rclone s3 backend, #236 records placements, and Phase 2 moves bytes.
+// Until then a configured medium is a declaration of intent that validates
+// and does nothing, which is the EPIC's own phasing (Phase 1 builds every
+// load-bearing wall and still cannot move or delete anything it could not
+// before). It is worth naming because this repository has removed
+// decorative config before (#299), and the difference is that these fields
+// have a scheduled reader rather than none.
+//
+// # There is no field for a secret, and there never will be
+//
+// See MediumCredentials. An access key spelled inline in config.yaml is an
+// UNKNOWN field, refused by Load's KnownFields(true) before validation
+// runs at all, which is the same custody model Key already applies to the
+// SSH private key.
+type StorageMedium struct {
+	// ID is how a retention tier names this medium. It must be
+	// lower_snake_case (StorageMediumIDPattern), unique across the list,
+	// and not MediumLocal, which is reserved.
+	//
+	// The lower_snake_case rule is the one RetentionTier.Name already
+	// follows, for the same reason: this id is not decoration, it is
+	// reported back to an operator as the place their artifacts live, and
+	// one canonical spelling per medium is what lets a settings form
+	// validate it client-side against the same rule Validate applies.
+	ID string `yaml:"id"`
+
+	// Type names the backend. The only value is StorageMediumTypeS3; see
+	// that constant for why the set is closed.
+	Type string `yaml:"type"`
+
+	// Region is the provider region, passed through to the backend
+	// unexamined.
+	//
+	// This package does not validate it, and that is a deliberate limit
+	// rather than an omission: the set of legal regions belongs to the
+	// provider and changes without this product being rebuilt, so a list
+	// here would be a second, staler copy that refuses a region that
+	// works. The same reasoning validAbsolutePath's doc gives for leaving
+	// key_file's expansion to transport applies: this package may not
+	// import rclone, so it cannot check what rclone accepts.
+	Region string `yaml:"region,omitempty"`
+
+	// Endpoint overrides the provider endpoint, for an S3-compatible
+	// service (MinIO, Ceph, Backblaze, a private gateway). Empty means the
+	// AWS endpoint for Region.
+	//
+	// Unvalidated here for Region's reason: what an endpoint may look like
+	// is rclone's s3 backend's question, and answering it twice, in two
+	// places, with two slightly different ideas of a URL, is how a config
+	// gets refused for a spelling that would have worked.
+	Endpoint string `yaml:"endpoint,omitempty"`
+
+	// Bucket is the bucket artifacts are written into. Required: a medium
+	// with no bucket names no destination at all, and there is no
+	// defensible default to invent for one.
+	//
+	// A bucket name carrying a "/" is refused, because that is one
+	// specific mistake worth catching in words an operator can act on:
+	// "nas-backups/rclone-manager" is a bucket and a prefix written into
+	// one field, and the refusal says so rather than letting the backend
+	// report a bucket name it cannot resolve.
+	Bucket string `yaml:"bucket"`
+
+	// Prefix is the key namespace inside Bucket, so one bucket can hold
+	// more than this product's artifacts. Optional; empty puts the key
+	// layout at the root of the bucket.
+	//
+	// FR-28 fixes that layout as <prefix>/<source>/<set>/<artifact-name>,
+	// joined with "/", which is why the shape rules exist: a leading or
+	// trailing slash, or a doubled one, produces an empty key segment and
+	// two spellings of the same object. A ".." segment is refused as well,
+	// even though S3 has no traversal to exploit, because a key is not
+	// only ever a key: restoring an artifact writes it to a local path
+	// derived from that key, and a namespace that cannot contain ".." is
+	// one fewer place for that to go wrong.
+	Prefix string `yaml:"prefix,omitempty"`
+
+	// StorageClass is the S3 storage class objects are written with, one
+	// of the StorageClass* constants. Empty means StorageClassStandard;
+	// resolve it through EffectiveStorageClass rather than reading this
+	// field directly.
+	StorageClass string `yaml:"storage_class,omitempty"`
+
+	// UploadVerification is how an upload is proven before the local copy
+	// is deleted: UploadVerificationReadback (the default) or
+	// UploadVerificationAttested. Empty means readback; resolve it through
+	// EffectiveUploadVerification.
+	//
+	// The default is the expensive one on purpose. See the constants.
+	UploadVerification string `yaml:"upload_verification,omitempty"`
+
+	// Credentials names where this medium's credentials come from. Exactly
+	// one of its three sources must be set.
+	Credentials MediumCredentials `yaml:"credentials"`
+}
+
+// EffectiveMaxMovesPerCycle is the per-cycle move bound this deployment
+// actually runs under: the number it wrote, or DefaultMaxMovesPerCycle
+// when it declared a medium and wrote none, or zero when it declared no
+// medium at all.
+//
+// Zero is load-bearing rather than a placeholder. placement.Engine.
+// RunCycle treats a non-positive bound as "do nothing at all", the same
+// fail-safe direction revalidate.SelectDue takes for the same field, so a
+// medium-free deployment gets a move engine that never plans anything
+// without the cycle needing a second "are mediums configured" test of its
+// own. That is what keeps FR-35's zero-behavioural-diff claim structural
+// here instead of conditional.
+//
+// An accessor rather than a value Validate fills in, for the reason
+// EffectiveStorageClass's own doc gives: a default written back into the
+// struct is a default frozen into the operator's file by the next settings
+// save.
+func (c *Config) EffectiveMaxMovesPerCycle() int {
+	if len(c.StorageMediums) == 0 {
+		return 0
+	}
+	if c.MaxMovesPerCycle == nil {
+		return DefaultMaxMovesPerCycle
+	}
+	return *c.MaxMovesPerCycle
+}
+
+// EffectiveStorageClass is the storage class this medium writes with:
+// whatever it names, or StorageClassStandard when it names none.
+//
+// An accessor rather than a value Validate fills in, for the reason
+// RetentionTier.EffectiveMedium's doc gives: a default written back into
+// the struct is a default frozen into the operator's file by the next
+// settings save.
+func (m StorageMedium) EffectiveStorageClass() string {
+	if m.StorageClass == "" {
+		return StorageClassStandard
+	}
+	return m.StorageClass
+}
+
+// EffectiveUploadVerification is how this medium proves an upload:
+// whatever it names, or UploadVerificationReadback when it names none.
+//
+// The unconfigured answer is the one that reads the object back and
+// re-hashes it. A medium that said nothing must never be the medium that
+// gets believed on its own word, because what follows a believed upload is
+// deleting the local copy.
+func (m StorageMedium) EffectiveUploadVerification() string {
+	if m.UploadVerification == "" {
+		return UploadVerificationReadback
+	}
+	return m.UploadVerification
+}
+
+// MediumCredentials names exactly one way to obtain a storage medium's
+// credentials: File, Env or Command (EPIC E, FR-33).
+//
+// It mirrors Key, Passphrase and KeyEncryption field for field, and that
+// is the whole point rather than a coincidence. This project already
+// decided how a secret is named in configuration, when the secret was an
+// SSH private key: three ways to say where it comes FROM, and no way at
+// all to paste one IN. S3 credentials are a bigger prize than an SSH key
+// scoped to one hardened account, since they unlock every retained
+// artifact on the medium at once, so they get the model that already
+// exists rather than a new one invented alongside it.
+//
+// # There is no field for a literal key, and that is the enforcement
+//
+// Search this type for access_key_id or secret_access_key; you will not
+// find them, on purpose, exactly as Key's own doc says about key_pem. That
+// absence is not a style preference, it is the mechanism: Load decodes
+// with KnownFields(true), so a config spelling a key inline is a PARSE
+// error before Validate is ever reached, and there is no path by which a
+// literal secret becomes a value this program holds from the config file.
+// A test plants that violation and proves it is refused.
+//
+// The runtime half of FR-33 is not here: resolving these sources, wrapping
+// what comes back in obs.Secret, and proving the resolved value never
+// reaches a log, an error, an API response or a manifest is #235's, with a
+// canary test. This type is the schema half, and its whole job is that
+// there is nothing here to leak.
+type MediumCredentials struct {
+	// File points at a credentials file on disk, in the AWS
+	// shared-credentials format rclone reads itself. This is the preferred
+	// source for Key.File's reason, which is stronger here than anywhere
+	// else in this schema: rclone opens the file, so the secret never
+	// enters this process's memory at all, and a secret this process never
+	// holds is a secret it cannot log.
+	//
+	// The file belongs under this manager's private state directory
+	// (/var/lib/backup-manager), never under the backup root: the backup
+	// root is what a NAS deployment exports over SMB or AFP, and #298 was
+	// filed over precisely that exposure for the SSH key. This package
+	// does not enforce that placement, the same way it does not enforce it
+	// for Key.File; it is stated here so the person writing the path reads
+	// it in the same place they type it.
+	File string `yaml:"file,omitempty"`
+
+	// Env names an environment variable the credentials are read from.
+	Env string `yaml:"env,omitempty"`
+
+	// Command is an argv array: Command[0] is the executable, invoked
+	// directly and never through a shell (so shell metacharacters in any
+	// element are inert literal bytes), and the rest are its arguments.
+	// Its stdout is treated as the credentials.
+	//
+	// Identical to Key.Command in shape and in intent: this is how a
+	// secrets manager (OpenBao, Vault, SOPS, 1Password, AWS Secrets
+	// Manager) is adopted without this project taking a dependency on any
+	// of their SDKs or picking a winner among them.
+	Command []string `yaml:"command,omitempty"`
 }
 
 // DefaultFileName is the configuration file's name inside the

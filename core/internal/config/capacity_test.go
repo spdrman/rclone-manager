@@ -15,6 +15,9 @@ import (
 // fields"; the cap Rom asked for IS those capacity fields, so adding one
 // and deferring the others would have meant writing this block twice.
 
+// gib keeps the byte counts below readable. Capacity is configured in raw
+// bytes, and a table of eleven-digit literals is one where a wrong digit is
+// invisible to a reviewer.
 const gib = int64(1) << 30
 
 // capacityConfig is a minimal valid config with the capacity block under

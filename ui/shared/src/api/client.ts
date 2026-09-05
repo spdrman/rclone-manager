@@ -14,6 +14,9 @@ import type {
   WireArtifact,
   WireArtifactReinstateResponse,
   WireBackupSet,
+  WireBackupSetRetention,
+  WireBackupSetEditHold,
+  WireBackupSetEditHoldState,
   WireBackupSetHealth,
   WireBackupSetSpec,
   WireCapacitySettings,
@@ -29,9 +32,14 @@ import type {
   WireListOperationsResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
+  WireMediumPreflightResponse,
   WireOperation,
+  WirePlacement,
+  WireRetentionOverride,
   WireRetentionPlan,
+  WireRetentionSettings,
   WireRetentionTier,
+  WireRunningWork,
   WireSettingsResponse,
   WireUpdateCapacitySettings,
   WireVersionResponse
@@ -40,6 +48,8 @@ import type {
   ApiError,
   AppSettings,
   BackupManagerApi,
+  BackupSetRetention,
+  BackupSetPatch,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -47,12 +57,17 @@ import type {
   CreateBackupSetRequest,
   CreatedBackupSet,
   ManagerStorage,
+  MediumPreflight,
+  RetentionOverride,
+  RetentionSettings,
   RetentionTierSetting,
+  RunningWork,
   SSHKeyImportResult,
   UpdateSettingsRequest
 } from "./contracts";
 import type {
   BackupArtifact,
+  BackupPlacement,
   BackupSet,
   CompletionMethod,
   QuarantineReason,
@@ -234,7 +249,16 @@ function wireBackupSetSpec(req: CreateBackupSetRequest): WireBackupSetSpec {
 }
 
 function wireCreateBackupSetRequest(req: CreateBackupSetRequest): WireCreateBackupSetRequest {
-  return { ...wireBackupSetSpec(req), run_immediately: req.runImmediately };
+  const body: WireCreateBackupSetRequest = {
+    ...wireBackupSetSpec(req),
+    run_immediately: req.runImmediately
+  };
+  // Only when the caller actually set it, exactly as wireBackupSetPatch
+  // does for the edit path's copy of this field: a create that carried it
+  // unconditionally would be pre-acknowledged, and the refusal it answers
+  // could then never fire at all.
+  if (req.acknowledgeRepoint !== undefined) body.acknowledge_repoint = req.acknowledgeRepoint;
+  return body;
 }
 
 function wireConnectionTestParams(params: ConnectionTestParams) {
@@ -307,9 +331,11 @@ const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
  * absent is a claim this type is allowed to make where a boolean was not
  * (issue #231).
  *
- * The join stops at the verdict on purpose. Retention, validations,
- * counters and the host fingerprint below stay placeholders because
- * nothing anywhere in core/service computes them yet. The health report
+ * The join stops at the verdict on purpose. Validations, counters and
+ * the host fingerprint below stay placeholders because nothing anywhere
+ * in core/service computes them yet. Retention used to be on that list
+ * and is not any more: `retention_is_override` is computed, so it is
+ * read rather than invented (issue #333). The health report
  * does carry two more facts this type has fields for, and neither is
  * taken here: `newest_good_backup_at` would map cleanly onto
  * `newestKnownGoodAt`, and `stale_after_seconds` onto
@@ -340,15 +366,17 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
     includePatterns: bs.include,
     excludePatterns: [],
     completionMethod: COMPLETION_STRATEGY_TO_METHOD[bs.completion_strategy] ?? "atomic-rename",
+    stableForSeconds: bs.stable_for_seconds,
     destination: bs.local_path,
-    retention: {
-      daily: 0,
-      weekly: 0,
-      monthly: 0,
-      timezone: "UTC",
-      weekStartsOn: "monday",
-      protectLastKnownGood: false
-    },
+    // Issue #333. This used to be a hardcoded zero policy, which the
+    // card and the detail page both drew: "0 / 0 / 0" and "0 kept",
+    // against every real deployment. That is exactly the decorative field
+    // #299 removed from the wizard, still here. What the server actually
+    // computes is which of the two policies is in force, and that is what
+    // this now carries; the chain itself is a separate, on-demand read
+    // (getBackupSetRetention) on the one page that can render a whole
+    // chain.
+    retentionIsOverride: bs.retention_is_override,
     validations: [],
     state: health ? HEALTH_STATE[health.state] ?? "degraded" : "stale",
     stateNote: health
@@ -388,10 +416,34 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
     deleteCount: wire.delete_count,
     reclaimBytes: wire.reclaim_bytes,
     operationId: wire.operation_id,
+    // Issue #333: the policy these verdicts were decided under, and
+    // whether it was this set's own or the deployment's. Read from the
+    // plan rather than fetched separately, because a plan is pinned to
+    // the configuration revision it was computed against and a second
+    // read is not: fetching the attribution on its own could render a
+    // chain beside the wrong source.
+    retention: fromWireRetentionSettings(wire.retention),
+    retentionIsOverride: wire.retention_is_override,
+    // Issue #430: EPIC E's placement facts. Both arrays are normalised to
+    // [], because the wire OMITS them for a deployment that declares no
+    // storage medium and an optional array has a third reading ("the
+    // server did not say") that is never true here.
+    moves: (wire.moves ?? []).map((m) => ({
+      artifact: m.artifact,
+      fromMedium: m.from_medium,
+      toMedium: m.to_medium
+    })),
+    unconfirmedPlacements: wire.unconfirmed_placements ?? [],
     verdicts: wire.verdicts.map((v) => ({
       artifact: v.artifact,
       action: v.action as RetentionVerdictAction,
       reason: v.reason,
+      // Carried through exactly as it arrives, undefined included: see
+      // RetentionVerdict.medium (types/backup.ts). Undefined means the
+      // implicit local medium on a DELETE, and means "nothing was
+      // established" on the two REFUSE shapes that name no place at all,
+      // so defaulting it here would turn the second into a claim.
+      medium: v.medium,
       // tier_selections, not tiers: the two carry the same tiers in the
       // same order and this UI needs the placement on every one of them
       // (issue #218), so reading the bare list as well would be a second
@@ -407,6 +459,64 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
 /** apps/common/webhost/router.go's `{source}/{set}` route params
  *  (model.BackupSetID's own composite shape), URL-encoded independently —
  *  see BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
+function fromWireRetentionSettings(r: WireRetentionSettings): RetentionSettings {
+  return {
+    timezone: r.timezone,
+    weekStartsOn: r.week_starts_on,
+    tiers: (r.tiers ?? []).map(fromWireTier),
+    protectLastKnownGood: r.protect_last_known_good
+  };
+}
+
+/** Issue #333: the raw override, unresolved. Every key the server omitted
+ *  stays undefined here rather than being normalised to "" or 0, which is
+ *  the same rule fromWireTier follows for a tier's two optional numbers
+ *  and for the same reason: an omitted field INHERITS, and sending a zero
+ *  back would turn an inherited field into an explicit one. */
+function fromWireRetentionOverride(o: WireRetentionOverride): RetentionOverride {
+  return {
+    timezone: o.timezone,
+    weekStartsOn: o.week_starts_on,
+    dailyDays: o.daily_days,
+    weeklyMonths: o.weekly_months,
+    monthlyMonths: o.monthly_months,
+    tiers: o.tiers ? o.tiers.map(fromWireTier) : undefined,
+    protectLastKnownGood: o.protect_last_known_good
+  };
+}
+
+function wireRetentionOverride(o: RetentionOverride): WireRetentionOverride {
+  return {
+    timezone: o.timezone || undefined,
+    week_starts_on: o.weekStartsOn || undefined,
+    daily_days: o.dailyDays || undefined,
+    weekly_months: o.weeklyMonths || undefined,
+    monthly_months: o.monthlyMonths || undefined,
+    // `tiers` is passed through unchanged when it is present, INCLUDING an
+    // empty array. An absent key and an empty list mean different things
+    // on this route (the second is "I removed every tier", which the
+    // server refuses by name because emptying a chain widens the policy
+    // rather than disabling it), and collapsing them here would turn a
+    // refusal into a silent no-op.
+    tiers: o.tiers ? o.tiers.map(wireTier) : undefined,
+    protect_last_known_good: o.protectLastKnownGood,
+    // Sent only when it is true, for the reason wireUpdateSettings gives:
+    // a consent, not a setting, and a literal false on every save would
+    // read as an operator repeatedly declining something nobody asked.
+    acknowledge_medium_disclosure: o.acknowledgeMediumDisclosure ? true : undefined
+  };
+}
+
+function fromWireBackupSetRetention(r: WireBackupSetRetention): BackupSetRetention {
+  return {
+    backupSetId: r.backup_set_id,
+    isOverride: r.is_override,
+    effective: fromWireRetentionSettings(r.effective),
+    deployment: fromWireRetentionSettings(r.deployment),
+    override: r.override ? fromWireRetentionOverride(r.override) : undefined
+  };
+}
+
 function fromWireTier(t: WireRetentionTier): RetentionTierSetting {
   return {
     name: t.name,
@@ -418,7 +528,12 @@ function fromWireTier(t: WireRetentionTier): RetentionTierSetting {
     // and get the whole policy refused.
     periodDays: t.period_days,
     keep: t.keep,
-    windowUnit: t.window_unit
+    windowUnit: t.window_unit,
+    // Carried through, unedited, for the reason RetentionTierSetting.medium
+    // documents: a chain write replaces the whole chain, so a field this
+    // mapper drops is a field the next save deletes from the operator's
+    // configuration file.
+    medium: t.medium
   };
 }
 
@@ -431,7 +546,8 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
     // omitted rather than sent as 0/"".
     period_days: t.periodDays && t.periodDays > 0 ? t.periodDays : undefined,
     keep: t.keep,
-    window_unit: t.windowUnit ? t.windowUnit : undefined
+    window_unit: t.windowUnit ? t.windowUnit : undefined,
+    medium: t.medium ? t.medium : undefined
   };
 }
 
@@ -455,7 +571,27 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
       protectLastKnownGood: body.retention.protect_last_known_good
     },
     capacity: fromWireCapacitySettings(body.capacity),
+    mediums: (body.mediums ?? []).map((m) => ({
+      id: m.id,
+      type: m.type,
+      bucket: m.bucket,
+      region: m.region,
+      storageClass: m.storage_class,
+      readsRequireRestore: m.reads_require_restore
+    })),
     schema: {
+      storage: {
+        // `class` is a reserved word in the wire shape's own spelling, so
+        // it becomes className here; nothing else is renamed.
+        verificationClasses: (body.schema.storage.verification_classes ?? []).map((c) => ({
+          className: c.class,
+          proves: c.proves,
+          requires: c.requires,
+          downloadsObject: c.downloads_object
+        })),
+        mediumDisclosure: body.schema.storage.medium_disclosure,
+        retrievalDisclosure: body.schema.storage.retrieval_disclosure
+      },
       retention: {
         granularities: body.schema.retention.granularities,
         windowUnits: body.schema.retention.window_units,
@@ -531,6 +667,13 @@ function wireUpdateSettings(req: UpdateSettingsRequest) {
     if (c.criticalFreeBytes !== undefined) capacity.critical_free_bytes = c.criticalFreeBytes;
     if (c.safetyMarginBytes !== undefined) capacity.safety_margin_bytes = c.safetyMarginBytes;
     body.capacity = capacity;
+  }
+
+  // Sent only when it is true. It is a consent, not a setting, and a
+  // literal `false` on every write would read as an operator repeatedly
+  // declining something nobody asked them.
+  if (req.acknowledgeMediumDisclosure) {
+    body.acknowledge_medium_disclosure = true;
   }
 
   return body;
@@ -730,6 +873,7 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     // does not carry.
     retentionClasses: retentionClassesFor(a.retention_tier),
     remoteSourceRemovedAt: stampOrNull(a.remote_source_removed_at),
+    placements: (a.placements ?? []).map(fromWirePlacement),
     quarantine: a.quarantined
       ? {
           reason: quarantineReasonFor(a),
@@ -738,6 +882,31 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
           remoteSourceRetained: true
         }
       : null
+  };
+}
+
+/**
+ * Maps one durable copy.
+ *
+ * Every absence on the wire stays an absence here. `verification_class` is
+ * omitted for a copy NOTHING has verified, and it becomes null rather than
+ * being helpfully defaulted to the weakest rung: "existence" is a claim
+ * that an object was seen at the recorded size, and for a copy nobody has
+ * looked at, that claim is false. `size_bytes` is omitted when nobody
+ * recorded a size and becomes null rather than 0, because a backup can
+ * genuinely be zero bytes.
+ */
+function fromWirePlacement(p: WirePlacement): BackupPlacement {
+  return {
+    medium: p.medium,
+    mediumType: p.medium_type,
+    location: p.location,
+    sizeBytes: p.size_bytes ?? null,
+    storageClass: p.storage_class ?? "",
+    verificationClass: p.verification_class ?? null,
+    verifiedAt: stampOrNull(p.verified_at),
+    access: p.access,
+    status: p.status
   };
 }
 
@@ -856,7 +1025,25 @@ function fromWireOperation(op: WireOperation): Operation {
     // durable local copy is committed and verified. It is not a
     // read-only pass, so this is false rather than a comforting default.
     nonDestructive: false,
-    startedAt: op.started_at ?? op.created_at ?? ""
+    startedAt: op.started_at ?? op.created_at ?? "",
+    // Absent for anything that is not a finished run cycle, and null
+    // rather than a pair of zeroes: "walked nothing, got nothing through"
+    // is the loudest thing this object can say, and saying it about a
+    // cycle that is merely still running would send an operator hunting a
+    // failure that has not happened.
+    cycle: op.cycle
+      ? {
+          backupSetsProcessed: op.cycle.backup_sets_processed,
+          artifactsWalked: op.cycle.artifacts_walked,
+          artifactsThrough: op.cycle.artifacts_through,
+          // Absent stays absent. The service omits this pair for a cycle
+          // whose recorded summary predates it, and filling in zeroes
+          // here would turn "nobody wrote it down" into "nothing moved".
+          moves: op.cycle.moves
+            ? { attempted: op.cycle.moves.attempted, landed: op.cycle.moves.landed }
+            : null
+        }
+      : null
   };
 }
 
@@ -937,6 +1124,56 @@ function fromWireCatalogReport(body: WireCatalogReportResponse): CatalogScanPrev
  * state note says the verdict is missing. The failure that matters, the
  * dashboard's own health call, still surfaces through getHealth().
  */
+/**
+ * Turns a BackupSetPatch into the PATCH body, dropping every key the
+ * caller left undefined.
+ *
+ * The dropping is the point, and it is why this is not a field-by-field
+ * object literal: an object literal with `port: patch.port` still carries
+ * the key with an undefined value, JSON.stringify removes it, and that
+ * happens to work, which is worse than either alternative because it
+ * works by accident. Doing it explicitly means a future field added here
+ * cannot be the one where it stops working.
+ *
+ * completionMethod is translated back to core's own strategy vocabulary
+ * (rename/marker/stable) here, in the one place this boundary is
+ * crossed, exactly as fromWireBackupSet translates it the other way.
+ */
+function wireBackupSetPatch(patch: BackupSetPatch): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  const put = (key: string, value: unknown) => {
+    if (value !== undefined) body[key] = value;
+  };
+  put("host", patch.host);
+  put("port", patch.port);
+  put("user", patch.username);
+  put("remote_path", patch.remoteFolder);
+  put("local_path", patch.destination);
+  put("include", patch.includePatterns);
+  put("completion_strategy", patch.completionMethod && COMPLETION_METHOD_TO_STRATEGY[patch.completionMethod]);
+  put("stable_for_seconds", patch.stableForSeconds);
+  put("stale_after_seconds", patch.staleAfterSeconds);
+  // Sent only when the caller actually set it, like every key above, so
+  // an ordinary save is never a pre-acknowledged one.
+  put("acknowledge_repoint", patch.acknowledgeRepoint);
+  return body;
+}
+
+/** The inverse of COMPLETION_STRATEGY_TO_METHOD, built from it rather
+ *  than written out again, so the two can never disagree about which
+ *  method means which strategy. */
+const COMPLETION_METHOD_TO_STRATEGY: Record<CompletionMethod, string> = Object.fromEntries(
+  Object.entries(COMPLETION_STRATEGY_TO_METHOD).map(([strategy, method]) => [method, strategy])
+) as Record<CompletionMethod, string>;
+
+/** null stays null: "nothing is running" and "something is running with
+ *  no name yet" are different facts, and collapsing them onto a
+ *  zero-valued object would make every Edit press warn. */
+function fromWireRunningWork(w: WireRunningWork | null | undefined): RunningWork | null {
+  if (!w) return null;
+  return { artifact: w.artifact, stage: w.stage };
+}
+
 function perSetHealth(): Promise<Map<string, WireBackupSetHealth>> {
   return request<WireHealthResponse>("/system/health")
     .then((r) => new Map((r.backup_sets ?? []).map((set) => [set.backup_set_id, set])))
@@ -1002,6 +1239,38 @@ export const httpApi: BackupManagerApi = {
   // against a configuration the caller has not seen.
   runCycle: (configRevision) =>
     post("/operations", { action: "run_cycle", config_revision: configRevision }),
+  // The same route as runCycle above, with a different action and its own
+  // parameter object. Not a route of its own, deliberately: a restore is
+  // a durable, idempotency-keyed, configuration-revision-checked
+  // operation whose row outlives the request, which is exactly what
+  // /operations was built for, and a second route would give this
+  // deployment two answers to "how does a long-running job get started".
+  //
+  // Nothing is read out of the response except the four fields below.
+  // In particular nothing here reads or invents a percentage: a restore
+  // has none, and the type it resolves to has nowhere to put one.
+  restoreCopy: async (req) => {
+    const r = await request<WireOperation>("/operations", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "restore_placement",
+        config_revision: req.configRevision,
+        restore: {
+          artifact_id: req.artifactId,
+          medium: req.medium,
+          window_days: req.windowDays,
+          acknowledged: req.acknowledged
+        }
+      })
+    });
+    return {
+      operationId: r.operation_id,
+      status: r.status,
+      windowDays: r.restore?.window_days ?? req.windowDays,
+      wait: r.restore?.wait ?? "",
+      billing: r.restore?.billing ?? ""
+    };
+  },
   // The persisted-set mode of the shared test-connection route. Sending
   // only the id is the point: this client neither knows nor should have to
   // echo back the key reference and trusted host line the set is
@@ -1014,6 +1283,46 @@ export const httpApi: BackupManagerApi = {
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
   setReadOnly: (source, set, readOnly) =>
     post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),
+
+  // Issue #350. The body carries ONLY the keys the caller set, which is
+  // what makes a per-box Save persist only that box: wireBackupSetPatch
+  // below drops every undefined rather than sending a zero, because a
+  // zero is a real answer for `port` and sending one for a field the
+  // operator never touched is exactly the silent clobber this route's
+  // sparse shape exists to prevent.
+  //
+  // It reads the whole set back, health included, the same pair getSet
+  // fetches, so a caller can put the persisted truth on the graph rather
+  // than the value it hoped it had written. Fetching health again is not
+  // wasted work: the freshness verdict can genuinely change as a result
+  // of the edit (a new stale_after, a moved local path), and a page that
+  // kept the old verdict beside a new value would be showing two moments
+  // at once.
+  updateBackupSet: (source, set, patch) =>
+    Promise.all([
+      request<WireBackupSet>(backupSetPath(source, set), {
+        method: "PATCH",
+        body: JSON.stringify(wireBackupSetPatch(patch))
+      }),
+      perSetHealth()
+    ]).then(([bs, health]) => fromWireBackupSet(bs, health.get(bs.id))),
+
+  // Issue #391. DELETE on the set itself, which coexists with the PATCH
+  // above on the same path because chi routes on the method too. The 204
+  // is already handled by `request` (it returns undefined rather than
+  // trying to parse an empty body), so there is nothing to map here.
+  removeSet: (source, set) => request<void>(backupSetPath(source, set), { method: "DELETE" }),
+
+  getEditHold: (source, set) =>
+    request<WireBackupSetEditHoldState>(backupSetPath(source, set) + "/edit-hold").then((r) => ({
+      held: r.held,
+      running: fromWireRunningWork(r.running)
+    })),
+  takeEditHold: (source, set) =>
+    request<WireBackupSetEditHold>(backupSetPath(source, set) + "/edit-hold", { method: "POST" }).then(
+      (r) => ({ expiresAt: r.expires_at, stopped: fromWireRunningWork(r.stopped) })
+    ),
+  releaseEditHold: (source, set) => post(backupSetPath(source, set) + "/edit-hold/release"),
 
   createBackupSet: (req) =>
     request<WireCreateBackupSetResponse>("/backup-sets", {
@@ -1054,6 +1363,14 @@ export const httpApi: BackupManagerApi = {
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
   retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
+  // Issue #419. A different path and a different refusal from the one
+  // above, because FAILED and QUARANTINED are different facts about a
+  // backup: one is not finished, the other is not trusted.
+  retryFailedIngestion: (id, note) =>
+    request<void>("/backups/" + id + "/retry", {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {})
+    }).then(() => undefined),
   // Unlike its two siblings this one reads its response. A reinstate that
   // reaches the backend and comes back saying the copy is bad is a 200,
   // not a rejection, so a caller that ignored the body could not tell that
@@ -1081,6 +1398,23 @@ export const httpApi: BackupManagerApi = {
       body: JSON.stringify({ plan_id: planId })
     }).then(fromWireRetentionPlan),
 
+  // Issue #333: three methods on one sub-resource. PUT replaces the whole
+  // policy (never PATCH: an override replaces the deployment's chain and
+  // is never merged with it), and DELETE is the only spelling of "go back
+  // to inheriting", which cannot be a value on an update where an absent
+  // field already means "leave this alone".
+  getBackupSetRetention: (source, set) =>
+    request<WireBackupSetRetention>(retentionPath(source, set)).then(fromWireBackupSetRetention),
+  setBackupSetRetention: (source, set, policy) =>
+    request<WireBackupSetRetention>(retentionPath(source, set), {
+      method: "PUT",
+      body: JSON.stringify(wireRetentionOverride(policy))
+    }).then(fromWireBackupSetRetention),
+  clearBackupSetRetention: (source, set) =>
+    request<WireBackupSetRetention>(retentionPath(source, set), { method: "DELETE" }).then(
+      fromWireBackupSetRetention
+    ),
+
   getSettings: () => request<WireSettingsResponse>("/settings").then(fromWireSettingsResponse),
   // PATCH, not POST or PUT: this applies exactly the settings the body
   // names and leaves the rest alone (apps/common/webhost/router.go
@@ -1091,6 +1425,25 @@ export const httpApi: BackupManagerApi = {
       method: "PATCH",
       body: JSON.stringify(wireUpdateSettings(req))
     }).then(fromWireSettingsResponse),
+
+  // Issue #443. Like reinstate above, this one reads its response: a
+  // preflight that reaches the backend and comes back saying the bucket
+  // denies writes is a 200, and a caller that ignored the body could not
+  // tell that from a medium that works.
+  preflightStorageMedium: (mediumId) =>
+    request<WireMediumPreflightResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/preflight",
+      { method: "POST" }
+    ).then((r) => ({
+      medium: r.medium,
+      ok: r.ok,
+      checks: r.checks.map((c) => ({
+        step: c.step as MediumPreflight["checks"][number]["step"],
+        outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
+        category: c.category ?? "",
+        detail: c.detail
+      }))
+    })),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

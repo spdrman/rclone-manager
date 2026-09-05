@@ -342,9 +342,56 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	//     shares. The values here match rclone's own documented defaults
 	//     (32KiB chunks, 64 concurrent requests per file) as of rclone
 	//     v1.75.0.
+	//   - idle_timeout: rclone only creates its pool drainer when this is
+	//     above zero (`if f.opt.IdleTimeout > 0 { f.drain = time.AfterFunc(
+	//     ...) }` in NewFsWithConnection), so at the Go zero value that
+	//     timer does not exist and nothing ever empties the pool on its
+	//     own. That is why the leak in #355 was unbounded rather than
+	//     bounded at a minute, and it is also the safety net behind
+	//     shutdownFs: rclone's Shutdown declines to close anything while a
+	//     session is still checked out, and this is what comes back for
+	//     it. The value matches rclone's own documented default.
 	cfg.Set("subsystem", "sftp")
 	cfg.Set("chunk_size", "32Ki")
 	cfg.Set("concurrency", "64")
+	cfg.Set("idle_timeout", "60s")
+
+	// #264: `connections` is a different setting from `concurrency` above,
+	// and the difference is the whole point. concurrency is the per-file
+	// request window inside ONE connection; connections is how many
+	// connections the pool may open at once, and rclone's default for it is
+	// 0, meaning unlimited. Against a host that caps simultaneous SSH
+	// connections and rejects the surplus, unlimited is not a performance
+	// setting, it is a failed transfer: listing needs one connection and
+	// succeeds, then the transfer opens more and gets a TCP reset, which
+	// surfaces as "connection refused" with nothing pointing at the cause.
+	//
+	// Left at zero this sets nothing at all, so rclone's default stands and
+	// no existing deployment changes.
+	//
+	// rclone's own help for this option says setting it "is very likely to
+	// cause deadlocks" and asks for one more than the sum of --transfers
+	// and --checkers, which for a ceiling of 1 reads as "never set 1".
+	// That warning is about rclone's sync engine, which holds several
+	// connections at once; this adapter is not that shape, and
+	// oneConnectionAtATime in adapter.go pins it at one connection per
+	// operation by construction.
+	//
+	// Measured rather than assumed, because "probably fine" is not
+	// something to leave for the next reader to trust:
+	// TestSFTPConnectionsAreReleasedAndBounded/EveryOperationCompletesAtEverySmallCeiling
+	// runs a recursive List, a Stat, an 8MiB copy and a RemoteHash at
+	// ceilings of 0, 1, 2 and 3, each under a 40s deadline that turns a
+	// deadlock into a failure rather than a hang. Nothing deadlocked at
+	// any of them, and the four runs came in between 7.2s and 9.1s with
+	// the SLOWEST being the highest ceiling, so nothing there points at
+	// the ceiling as a cost either. `max_connections: 1` is safe here.
+	if src.MaxConnections < 0 {
+		return nil, fmt.Errorf("source %q: max_connections is %d, but a connection ceiling cannot be negative (leave it unset, or zero, for rclone's unlimited default)", src.ID, src.MaxConnections)
+	}
+	if src.MaxConnections > 0 {
+		cfg.Set("connections", strconv.Itoa(src.MaxConnections))
+	}
 
 	return cfg, nil
 }
@@ -464,27 +511,51 @@ func checkKeyFileMode(sourceID, configuredPath string, info os.FileInfo) error {
 // positive this project has no reason to accept for a bit POSIX itself
 // already uses to neutralize the risk.
 func checkKeyDirChainMode(sourceID, configuredPath, keyFilePath string) error {
-	dir, err := filepath.Abs(filepath.Dir(keyFilePath))
+	dir, mode, err := firstWritableAncestor(keyFilePath)
 	if err != nil {
-		return fmt.Errorf("source %q: resolving the directory containing key_file %q: %w", sourceID, configuredPath, err)
+		return fmt.Errorf("source %q: checking the directories containing key_file %q: %w", sourceID, configuredPath, err)
+	}
+	if dir == "" {
+		return nil
+	}
+	return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+		"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
+			"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
+			"correct it (chmod go-w %s) or move the key",
+		sourceID, configuredPath, dir, mode.Perm(), dir,
+	))
+}
+
+// firstWritableAncestor walks from path's own directory to the filesystem
+// root and reports the first ancestor any account other than its owner can
+// write to, or "" when none of them is. It is the mechanism behind
+// checkKeyDirChainMode above and behind mediumcreds.go's identical check
+// on a credentials file: the RULE is shared, so it is written once, while
+// each caller keeps its own wording and its own FR-22 category.
+//
+// The sticky-bit exception is checkKeyDirChainMode's own, and it lives
+// here with the walk it qualifies: a directory carrying os.ModeSticky
+// (1777, /tmp on every mainstream Unix) is not refused for being
+// group- or world-writable, because POSIX restricts unlink and rename
+// inside a sticky directory to the entry's owner, the directory's owner or
+// root, which is exactly the attack this walk exists to close.
+func firstWritableAncestor(path string) (dir string, mode os.FileMode, err error) {
+	dir, err = filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return "", 0, fmt.Errorf("resolving the directory containing %q: %w", path, err)
 	}
 	for {
-		info, err := os.Stat(dir)
-		if err != nil {
-			return fmt.Errorf("source %q: checking permissions on %q, a directory containing key_file %q: %w", sourceID, dir, configuredPath, err)
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			return "", 0, fmt.Errorf("checking permissions on %q: %w", dir, statErr)
 		}
-		mode := info.Mode()
-		if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
-			return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
-				"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
-					"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
-					"correct it (chmod go-w %s) or move the key",
-				sourceID, configuredPath, dir, mode.Perm(), dir,
-			))
+		m := info.Mode()
+		if m.Perm()&0o022 != 0 && m&os.ModeSticky == 0 {
+			return dir, m, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil
+			return "", 0, nil
 		}
 		dir = parent
 	}

@@ -95,6 +95,34 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/ssh-keys":                    true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 
+	// Issue #419: the operator route out of FAILED. Same tier as the
+	// quarantine retry it sits beside, and for the same reason: it moves
+	// a journal row back into the pipeline and touches no backup datum at
+	// all. It is structurally incapable of reaching a remote delete,
+	// because FAILED is only ever reached before COMMITTED and COMMITTED
+	// is the only state a delete can be reached from
+	// (internal/lifecycle's Transitions table, and
+	// TestOnlyCommittedPrecedesRemoteDeletePending).
+	"POST /api/v1/backups/{source}/{set}/{name}/retry": true,
+
+	// Issue #443: the storage medium's equivalent of test-connection,
+	// and exempt for the same reason with one extra sentence, because
+	// unlike test-connection this one WRITES.
+	//
+	// What it writes is an object of its own: a fixed, tiny body at a
+	// randomly generated key under a reserved key segment
+	// (.rclone-manager-preflight) that no configured artifact can produce,
+	// because transport.MediumKey composes an artifact's key out of a
+	// source, a backup set and an artifact name and config lets none of
+	// the three carry a separator. The only object it deletes is that same
+	// one. It moves no journal row, changes no configuration, and cannot
+	// reach a remote source at all, so there is no backup datum anywhere
+	// in its blast radius, which is what the gate stands in front of.
+	// core/internal/mediumcheck pins the containment directly
+	// (TestProbeKey_LivesUnderASegmentNoArtifactCanReach, and the happy
+	// path asserts exactly one upload and one delete).
+	"POST /api/v1/storage-mediums/{id}/preflight": true,
+
 	// Issue #140 (B3.7): editing server-side configuration is §50's
 	// "state-changing but non-destructive" bucket, alongside "create/edit
 	// backup set" — nothing reachable from this route touches, moves or
@@ -105,6 +133,16 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// and is NOT on this list. See router.go's own comment on the route
 	// for the full argument.
 	"PATCH /api/v1/settings": true,
+
+	// Issue #391: removing one backup set's configuration. Same tier as
+	// the PATCH on the same path and as POST /backup-sets, and for the
+	// same reason: nothing reachable from here touches, moves or deletes
+	// a byte of backup data. core/service pins that directly
+	// (TestRemoveBackupSet_StopsCollectionAndKeepsEverythingAlreadyCollected,
+	// which removes a set, runs a cycle, and asserts the artifacts and
+	// the files are still there afterwards). The gate's own routes are
+	// run_immediately and retention apply, and this is neither.
+	"DELETE /api/v1/backup-sets/{source}/{set}": true,
 
 	// Issue #176 (B3.x): the setup submission of an instance that has no
 	// configuration yet. Gating it would be self-defeating in the literal
@@ -161,13 +199,65 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//     Scan is that same pass with nothing written.
 	//
 	// None of them can reach a deletion, which is what this list is for.
-	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
-	"POST /api/v1/backup-sets/{source}/{set}/read-only":        true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
-	"POST /api/v1/catalog/scan":                                true,
-	"POST /api/v1/catalog/rebuild":                             true,
+	"POST /api/v1/backup-sets/{source}/{set}/enabled":   true,
+	"POST /api/v1/backup-sets/{source}/{set}/read-only": true,
+
+	// Issue #350: editing a backup set is §50's "create/edit backup set"
+	// bucket, the same one POST /api/v1/backup-sets is already exempt
+	// under two entries above. Nothing reachable from here touches, moves
+	// or deletes a byte of backup data: it rewrites config.yaml and
+	// hot-reloads, and the next cycle acts on the new definition. Gating
+	// it would mean an operator who has not turned destructive operations
+	// on cannot fix a typo'd remote path, which is the opposite of what
+	// the gate protects. TestUpdateBackupSet_IsNotBehindTheDestructiveGate
+	// pins that directly, so this entry's justification is a test and not
+	// only this comment.
+	"PATCH /api/v1/backup-sets/{source}/{set}": true,
+
+	// Issue #350's edit hold. Both writes STOP a backup set's processing
+	// rather than starting or deleting anything: taking the hold cancels
+	// the pass currently running against that one set and keeps the
+	// scheduler from starting another, and releasing it lets normal
+	// scheduling resume. Neither can reach a deletion, which is what this
+	// list is for, and gating them would mean an operator who has not
+	// turned destructive operations on cannot safely edit a set at all.
+	// TestBackupSetEditHold_IsNotBehindTheDestructiveGate pins it.
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold":         true,
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold/release": true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate":  true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":       true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":   true,
+	"POST /api/v1/catalog/scan":                                 true,
+	"POST /api/v1/catalog/rebuild":                              true,
+	// Issue #333: giving one backup set its own retention policy, and
+	// taking that policy back off.
+	//
+	// This entry needs the second sentence reinstate needed, and for a
+	// sharper reason than any other line on this list. Every other entry
+	// argues that the route cannot reach a deletion in EITHER direction.
+	// These two cannot reach a deletion at all, they only write
+	// configuration, but they do change what a LATER retention apply
+	// would delete, and unlike read-only they can change it in the
+	// dangerous direction: clearing an override whose chain was WIDER
+	// than the deployment's leaves the set retaining less.
+	//
+	// They are exempt anyway, and PATCH /api/v1/settings above is the
+	// precedent that decides it rather than an argument invented here.
+	// Turning FR-19's protect_last_known_good off through that route
+	// widens what a later apply may delete in exactly the same way, and
+	// the reasoning recorded there applies here word for word: the apply
+	// is the gated act, it re-reads the policy at plan time, and no
+	// artifact is deleted without an operator confirming a plan computed
+	// under whatever policy is in force by then. Gating a policy edit
+	// here would gate the wrong thing while leaving the identical hazard
+	// reachable one route up.
+	//
+	// What that leaves is a surface obligation rather than a gate one:
+	// the client has to show the two chains before the change is made.
+	// Both responses carry the deployment's policy beside the set's own
+	// for exactly that (BackupSetRetention.deployment).
+	"PUT /api/v1/backup-sets/{source}/{set}/retention":    true,
+	"DELETE /api/v1/backup-sets/{source}/{set}/retention": true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

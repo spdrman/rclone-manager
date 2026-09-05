@@ -1,3 +1,53 @@
+// Every rule a configuration has to satisfy before anything is allowed to
+// act on it, and every default it picks up on the way through.
+//
+// The two belong in one pass because they are the same claim. FR-5 says
+// validation happens before any destructive processing, and the value of
+// that promise is that everything downstream can then read a field and
+// believe it. A retention pass that still had to work out what a zero in
+// daily_days means would be re-deriving the config's meaning at the moment
+// it deletes something, which is the scattered ad hoc checking this file
+// replaces. So Validate resolves in place: what comes back from a
+// successful call has no field left standing for "the operator did not say".
+//
+// Three properties hold across the whole file and are easy to break one
+// case at a time.
+//
+// It collects rather than returns early. A config wrong in three places
+// should cost one restart, not three, so a check that finds a problem
+// records it and carries on into the next check rather than unwinding.
+//
+// It is idempotent. Every default is applied only to a field still at its
+// zero value, and a conflict between two spellings of the same setting is
+// refused rather than resolved by precedence, so a second call over the
+// same Config changes nothing. That is not a nicety: ValidateRetention
+// hands the CLI's override path through the same code, and
+// TestValidateIsIdempotent pins it.
+//
+// It runs in two phases. Everything is validated and defaulted in
+// isolation first, in file order, and only then do the rules that read one
+// resolved thing to resolve another run. Which phase a rule belongs to
+// follows from where its parent is, and Validate's body names the two
+// examples that decide it.
+//
+// A closed vocabulary here is deliberately spelled twice, as a map for the
+// membership test and as a fixed-order slice for the message and for
+// exported readers. Ranging a map to build the "must be one of" list
+// reorders the sentence per run, which makes the message untestable and
+// the difference between two runs look like a change.
+//
+// One thing this file does not do: it never opens a file, runs a command
+// or reaches a network. Everything here is shape. Whether a key actually
+// decrypts, whether a host answers, whether a validator binary exists are
+// questions only the packages that can reach those things may answer, and
+// answering them here would mean a config that validates on one machine
+// and not on another.
+//
+// The messages are the product surface. An operator reads them in the
+// daemon's startup failure, so they are pinned byte for byte by FR-35 and
+// core/tests/compat: they say which key is wrong, what it should be, and
+// often why, and none of that may be reworded to make a diff tidier.
+
 package config
 
 import (
@@ -55,9 +105,40 @@ func (c *Config) Validate() error {
 		}
 		seenSourceNames[src.Name] = true
 
-		if len(src.BackupSets) == 0 {
-			v.addf("%s: at least one backup set is required", path)
-		}
+		// A source with no backup sets under it is legal, and that is a
+		// deliberate relaxation (issue #391) rather than a check that
+		// went missing. Removing a backup set's configuration has to
+		// persist a file that passes this exact function, because it is
+		// the same one the daemon runs at boot: a removal that wrote a
+		// config Validate would refuse is an operator who removes their
+		// last set through the UI and then finds the service will not
+		// start again.
+		//
+		// The alternative was to make removal delete the source too when
+		// its last set goes, which is the mirror image of CreateBackupSet
+		// inventing a source on demand for a name it has not seen. I
+		// rejected it because a Source is not only a name: it carries
+		// ReadOnly, issue #282's "pull from here, never delete here"
+		// declared once for a whole host. Cascading it away would throw
+		// that declaration out with the last set, and a later set created
+		// under the same source name would silently come back without
+		// it, which turns a config-only removal into a change of safety
+		// posture. Leaving the source in place keeps the declaration, and
+		// CreateBackupSet appends to the source it finds rather than
+		// building a fresh one, so a re-created set inherits it again.
+		//
+		// What is genuinely lost is that a hand-written source with no
+		// sets under it used to be a boot error and is now inert. That
+		// does not open a new way for this manager to back nothing up
+		// while looking fine, because one already exists and is one click
+		// away: disable every set and RunCycle visits nothing,
+		// reportBarrenSets iterates a report with no entries in it, and
+		// the cycle completes silently. Whatever fixes that should fix
+		// both, at the cycle, where the emptiness is observable.
+		//
+		// The whole-file rule above (at least one source) is untouched,
+		// and stays reachable, because removal never empties Sources now
+		// that the source stays behind.
 
 		for j := range src.BackupSets {
 			bsPath := fmt.Sprintf("%s.backup_sets[%d]", path, j)
@@ -65,7 +146,38 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	declaredMediums := v.validateStorageMediums(c.StorageMediums)
+	v.validateMaxMovesPerCycle(c.MaxMovesPerCycle, len(c.StorageMediums))
 	v.validateRetention(&c.Retention)
+
+	// --- Phase 2: inheritance ---
+	//
+	// Everything above is phase 1: each entity validated and defaulted in
+	// isolation, in the order it appears in the file. What follows needs
+	// phase 1 to have finished on the thing being inherited FROM, so it
+	// cannot be folded into the loop above however much it looks like it
+	// belongs there.
+	//
+	// Which phase a field belongs to is decided by where its parent is.
+	// BackupSet.ReadOnly inherits from its own Source, which
+	// validateBackupSet is already holding, so it resolves inline in phase
+	// 1. BackupSet.Retention inherits from the top-level policy, which is
+	// only resolved on the line above this comment, so a set resolved
+	// during phase 1 would inherit the raw policy an operator typed rather
+	// than the defaulted one. It gets its own pass here.
+	c.resolveBackupSetRetentions(v)
+
+	// Phase 2 as well, and for a related reason: resolving a tier's medium
+	// needs BOTH halves finished, the declared list and every chain that
+	// might name one. Per-set overrides (#333) are chains too, so this has
+	// to come after the line above or a set's own tiers go unchecked. Only
+	// a whole Config knows the declared list at all, which is why this is
+	// here rather than inside validateRetention; ValidateRetention, the
+	// CLI's own override entry point, holds a Retention and nothing else,
+	// so see validateTierMedium for how the rules are split to keep that
+	// path checking everything it can.
+	v.validateMediumReferences(c, declaredMediums)
+
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
 	v.validateKeyEncryption(&c.KeyEncryption)
@@ -200,6 +312,22 @@ func (v *validator) validateCapacity(c *Capacity) {
 	}
 }
 
+// validateBackupSet checks and resolves one backup set, the entity every
+// other part of this product is ultimately configured per.
+//
+// It takes more arguments than anything else here, and each one is
+// carrying something the set cannot see for itself. path is the dotted
+// position in the file, threaded down so a message names sources[1].
+// backup_sets[0].completion rather than "completion" and an operator with
+// four sets knows which one to open. sourceName is half of the FR-7
+// identity. sourceReadOnly is the default this set's own override falls
+// back to. seenSetIDs is shared across the whole file, because uniqueness
+// is a property of the config as a whole and a set on its own cannot know
+// whether another source already claimed its identity.
+//
+// It both validates and resolves, which is Validate's contract rather than
+// a shortcut: ID and ReadOnly come out of this call filled in, so nothing
+// downstream ever re-derives either.
 func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bool, bs *BackupSet, seenSetIDs map[string]string) {
 	if bs.Name == "" {
 		v.addf("%s: id must not be empty", path)
@@ -284,6 +412,20 @@ func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bo
 	v.validateRevalidation(path+".revalidation", &bs.Revalidation)
 }
 
+// validateRemote checks one backup set's remote, switching on the type
+// because the two kinds share a struct and almost no rules.
+//
+// The "local" arm is the interesting one: it refuses a config that sets
+// sftp-only fields rather than ignoring them. An operator who leaves a
+// host and a key file behind after switching a set to local believes
+// something about how that set connects, and the fields sitting there
+// unused mean this manager and the person who wrote the file disagree
+// about what the deployment does. Refusing is how they find out at boot
+// rather than after an incident.
+//
+// The default arm names the two types this build registers rather than
+// listing them from a table, because there is no table: FR-4 fixes the
+// set, and transport/rclone registers exactly these two.
 func (v *validator) validateRemote(path string, r *Remote) {
 	switch r.Type {
 	case "sftp":
@@ -306,9 +448,28 @@ func (v *validator) validateRemote(path string, r *Remote) {
 		if r.Port < 0 || r.Port > 65535 {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
+		// #264: zero is meaningful and correct (it is rclone's own
+		// unlimited default, and what every config written before this
+		// field existed means), so it is deliberately not refused here.
+		//
+		// Both ends are refused, though. A negative one rclone takes and
+		// then fails every backend operation with. A pathological
+		// positive one is not a no-op either: rclone builds a token
+		// dispenser of exactly this many tokens at every NewFs, filling
+		// the channel one send at a time (lib/pacer.NewTokenDispenser),
+		// so a fat-fingered 100000000 is a fill loop on every single
+		// operation. maxConnectionsCeiling is not a tuning limit, it is
+		// the point past which the value has stopped being a ceiling for
+		// any host that exists.
+		if r.MaxConnections < 0 {
+			v.addf("%s: max_connections %d cannot be negative (omit it, or set 0, for no ceiling)", path, r.MaxConnections)
+		}
+		if r.MaxConnections > maxConnectionsCeiling {
+			v.addf("%s: max_connections %d is above the %d this manager will accept (omit it, or set 0, for no ceiling)", path, r.MaxConnections, maxConnectionsCeiling)
+		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 {
-			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 || r.MaxConnections != 0 {
+			v.addf("%s: host, port, user, key_file/key, known_hosts and max_connections are not used for type \"local\"; remove them", path)
 		}
 	case "":
 		v.addf("%s: type must be set (\"local\" or \"sftp\")", path)
@@ -438,6 +599,21 @@ func (v *validator) validatePassphrase(path string, p *Passphrase) {
 	}
 }
 
+// validateCompletion checks how a backup set decides an artifact has
+// finished being written, which is the single most consequential choice in
+// a backup set's configuration: get it wrong and this manager copies half
+// a file and calls it a restore point.
+//
+// The shape is a switch per strategy, and each arm refuses the fields the
+// other strategies use rather than ignoring them. A stable_for left behind
+// on a set switched to "marker" is an operator believing there is a
+// settling window when there is not, so it is an error rather than dead
+// config.
+//
+// include comes in because one check needs it. A manifest marker that
+// matches the set's own include patterns would make a real artifact with
+// that name permanently invisible, and neither value is wrong on its own:
+// only the pair is.
 func (v *validator) validateCompletion(path string, c *Completion, include []string) {
 	switch c.Strategy {
 	case "stable":
@@ -563,6 +739,20 @@ func (v *validator) validateManifestMarker(path string, c *Completion, include [
 	}
 }
 
+// validateValidation checks the optional application-level validator a
+// backup set may run over a candidate restore point.
+//
+// Everything in here is optional, and the checks are about the shapes that
+// are worse than leaving it out. Naming both a validator id and an inline
+// command is two answers to which validator runs, with no precedence worth
+// inventing. A command with no timeout can hang the lifecycle it is
+// gating, and unlike the other duration fields in this package there is no
+// safe default to guess for "how long may an operator's own binary take",
+// so it is required whenever a command is configured at all.
+//
+// Whether the validator id resolves to anything, or the executable exists,
+// is not asked here. This package cannot see the registry or the
+// filesystem those answers live in.
 func (v *validator) validateValidation(path string, val *Validation) {
 	switch val.Hash {
 	case "", "sha256":
@@ -678,6 +868,17 @@ func validValidatorID(id string) error {
 	return nil
 }
 
+// validateState checks the one path this product cannot start without.
+//
+// It takes State by value, alone among the validators here, because there
+// is nothing to resolve: the journal path has no default worth inventing.
+// A guessed location would put an operator's authoritative record of every
+// backup somewhere they did not choose, and FR-9 makes that record the
+// thing every later phase trusts, so an empty value is refused instead.
+//
+// It returns after the empty check rather than falling through, so an
+// operator who left the key out reads one clear sentence instead of that
+// plus a complaint that "" is not an absolute path.
 func (v *validator) validateState(s State) {
 	if s.Database == "" {
 		v.addf("state.database: must not be empty")
@@ -688,6 +889,14 @@ func (v *validator) validateState(s State) {
 	}
 }
 
+// validWeekdays is the closed set retention.week_starts_on accepts,
+// matched after the value has been lowercased so an operator writing
+// "Monday" is not refused for capitalisation.
+//
+// These are English day names rather than anything derived from the
+// configured timezone's locale, and that is deliberate: the key is written
+// in a config file, not shown to an end user, and a setting whose accepted
+// spelling changed with the timezone would be unwritable.
 var validWeekdays = map[string]bool{
 	"monday":    true,
 	"tuesday":   true,
@@ -726,6 +935,172 @@ func ValidateRetention(r *Retention) error {
 	return v.err()
 }
 
+// ResolveBackupSetRetention runs Validate's retention-inheritance phase on
+// its own: every backup set's resolved Retention, from its own override
+// when it declares one and from c.Retention otherwise (issue #333).
+//
+// Validate already does this, and a config that came from
+// LoadAndValidate needs nothing else. This exists for a caller that builds
+// a Config by hand rather than loading one, which the fixtures in
+// internal/app and core/service both do: a hand-built set is left at the
+// zero Retention, and the zero Retention is not an unconfigured policy, it
+// is a chain that keeps nothing. Before this was exported both of those
+// packages carried their own loop claiming to resolve "the way Validate
+// does" and neither did, which is how a whole test layer ended up sharing
+// one tier backing array with the global policy.
+//
+// It assumes c.Retention is already resolved: it is phase 2 of Validate,
+// and phase 2 inherits from phase 1's output. Calling it on a raw policy
+// hands every inheriting set that raw policy.
+func (c *Config) ResolveBackupSetRetention() error {
+	v := &validator{}
+	c.resolveBackupSetRetentions(v)
+	return v.err()
+}
+
+// resolveBackupSetRetentions is the loop both entry points share.
+func (c *Config) resolveBackupSetRetentions(v *validator) {
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			path := fmt.Sprintf("sources[%d].backup_sets[%d]", i, j)
+			v.resolveBackupSetRetention(path, bs, c.Retention)
+		}
+	}
+}
+
+// resolveBackupSetRetention fills in one backup set's resolved Retention
+// (issue #333), from its own override when it declares one and from the
+// already-resolved global policy otherwise.
+//
+// # An override says the whole chain, and inherits everything else
+//
+// validateRetention reads a zero scalar as "fill in the documented
+// default" and an empty timezone as UTC. That rule is right at the top
+// level, where the alternative is no policy at all, and wrong one level
+// down, where there IS another policy: the deployment's, sitting in the
+// same file the override was written into. Left alone it
+// resolves a set writing `retention: {daily_days: 120}` inside a
+// deployment retaining 90/24/60 to 120/3/12, collapsing weekly from 24
+// months to 3 and monthly from 60 to 12, and reporting nothing.
+//
+// So the chain has to be written out in full: a tiers list, or all three
+// scalars. Half a chain is refused, on exactly the reasoning
+// validateRetention already applies to a policy that writes both
+// spellings at once, and for the same reason the PR that added this field
+// said the override is whole-policy rather than a field-by-field merge.
+// An empty `retention: {}` block falls out of that rule too, which is
+// what RetentionConfig's own doc wants: the pointer exists so "wrote no
+// retention block" and "wrote an empty one" stay distinguishable, and
+// silently resolving the second into the product defaults is that
+// confusion moved one layer down rather than removed.
+//
+// Everything that is not the chain is inherited from the resolved global
+// policy instead of being defaulted: the timezone and the week start
+// decide how ANY chain is reckoned rather than what the chain says, and
+// FR-19's protection is a deployment-wide posture. container/compose.yaml
+// already writes down what the timezone one costs when it goes wrong
+// ("the day an operator thinks a restore point belongs to and the day
+// retention assigns it to are silently different for most of the world"),
+// and an override that omits the key must not reintroduce exactly that
+// for one set inside a deployment that got it right.
+//
+// # It validates a copy
+//
+// validateRetention fills defaults in place, so running it over
+// bs.RetentionConfig would write UTC, monday and protect_last_known_good
+// into the operator's own override, which the next settings save would
+// then persist. That is invisible today only because core/service's
+// UpdateSettings happens to marshal before it validates, which makes the
+// round trip a property of one call site's statement order rather than of
+// this function. It resolves into its own copy instead.
+func (v *validator) resolveBackupSetRetention(path string, bs *BackupSet, global Retention) {
+	if bs.RetentionConfig == nil {
+		bs.Retention = global.clone()
+		return
+	}
+
+	v.validateOverrideNamesAWholeChain(path, bs.RetentionConfig)
+
+	resolved := bs.RetentionConfig.clone()
+	if resolved.Timezone == "" {
+		resolved.Timezone = global.Timezone
+	}
+	if resolved.WeekStartsOn == "" {
+		resolved.WeekStartsOn = global.WeekStartsOn
+	}
+	if resolved.ProtectLastKnownGood == nil && global.ProtectLastKnownGood != nil {
+		inherited := *global.ProtectLastKnownGood
+		resolved.ProtectLastKnownGood = &inherited
+	}
+
+	// A sub-validator rather than ValidateRetention's error, so each
+	// problem keeps its own message and its own line in the accumulated
+	// list. Wrapping the joined error instead would fold every problem
+	// with one policy into a single entry and bury the "invalid config:"
+	// header from the inner call inside the outer one's.
+	sub := &validator{}
+	sub.validateRetention(&resolved)
+	for _, p := range sub.problems {
+		v.addf("%s.%v", path, p)
+	}
+
+	bs.Retention = resolved
+}
+
+// validateOverrideNamesAWholeChain refuses a per-set retention block that
+// describes only part of a chain. See resolveBackupSetRetention's doc for
+// why half a chain cannot be resolved honestly; this function is only the
+// bookkeeping that says which halves are missing.
+//
+// A tiers list is whole by construction: it is the chain. The three
+// scalars are sugar for one specific three-tier chain, so all three have
+// to be present for that sugar to spell a whole one. Writing both
+// spellings is validateRetention's own refusal and is left to it.
+func (v *validator) validateOverrideNamesAWholeChain(path string, r *Retention) {
+	if len(r.Tiers) > 0 {
+		return
+	}
+
+	var missing []string
+	if r.DailyDays == 0 {
+		missing = append(missing, "daily_days")
+	}
+	if r.WeeklyMonths == 0 {
+		missing = append(missing, "weekly_months")
+	}
+	if r.MonthlyMonths == 0 {
+		missing = append(missing, "monthly_months")
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	v.addf("%s.retention: a backup set's own policy replaces the deployment's whole chain, so it has to name a whole one: "+
+		"either a tiers list, or all three of daily_days, weekly_months and monthly_months (missing %s). "+
+		"An unnamed tier here would fall back to the product default rather than to the deployment's policy, which is how a set ends up retaining less than the operator who wrote the deployment's policy believes. "+
+		"Remove the retention key from this backup set entirely to inherit the deployment's policy instead",
+		path, strings.Join(missing, ", "))
+}
+
+// validateRetention checks and resolves the whole FR-18 policy: the
+// calendar it is reckoned in, the chain of tiers, and FR-19's
+// last-known-good protection.
+//
+// This one has more resolution in it than any other validator here,
+// because retention is where an unresolved zero does real damage. A tier
+// left at zero would mean "keep none", and a policy that deletes
+// everything is exactly what an operator who omitted a key did not ask
+// for. So every field gets its documented default here, once, and
+// internal/retention reads the resolved values without a second opinion
+// about what a missing key means.
+//
+// It is reached from two directions, Validate for a whole config and
+// ValidateRetention for the CLI's override path, which is why it takes a
+// *Retention rather than a *Config. The rules that genuinely need the
+// whole file, which is only the check that a tier's medium was actually
+// declared, live in Validate's phase 2 instead. See validateTierMedium for
+// how the split keeps the override path checking everything it can.
 func (v *validator) validateRetention(r *Retention) {
 	if r.Timezone == "" {
 		r.Timezone = "UTC"
@@ -878,6 +1253,21 @@ func RetentionWindowUnits() []string {
 // single-source reason as RetentionGranularities above.
 var retentionTierNamePattern = regexp.MustCompile(RetentionTierNamePattern)
 
+// maxConnectionsCeiling is the largest per-remote connection ceiling this
+// manager accepts (#355 finding 10).
+//
+// It is not a tuning limit and there is nothing to tune towards: the field
+// exists to keep this manager UNDER a host's own limit, and no host caps
+// SSH connections from one address anywhere near a thousand. What the
+// bound actually buys is that a fat-fingered value cannot be handed to
+// rclone, which builds a token dispenser of exactly this many tokens at
+// every NewFs by sending into a channel one token at a time. An
+// unbounded field turns a typo into a fill loop on every operation, which
+// is the same "an out-of-range number has no business being unbounded in
+// the last check before real work" reasoning the retention ceilings below
+// are built on.
+const maxConnectionsCeiling = 1024
+
 // RetentionTierNamePattern is the regular expression source
 // retentionTierNamePattern is compiled from, in a syntax
 // (RE2/JavaScript-compatible: an anchored character-class repetition,
@@ -991,6 +1381,8 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 			v.addf("%s: keep must not exceed %d look-back units (got %d); a longer window overflows the calendar arithmetic that walks it back from today, and a tier that overflows selects nothing at all", path, retentionTierKeepMax, t.Keep)
 		}
 
+		v.validateTierMedium(path, t)
+
 		switch {
 		case t.WindowUnit == "":
 			// Defaults to the tier's own granularity.
@@ -1001,6 +1393,575 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 		}
 	}
 }
+
+// validateMaxMovesPerCycle checks FR-30's per-cycle move bound.
+//
+// The shape is validateRevalidation's, deliberately: a key that is only
+// meaningful when something else is configured is refused when that
+// something is absent, rather than accepted and quietly ignored. An
+// ignored key reads to the operator who wrote it as a setting that took
+// effect.
+//
+// The one difference from revalidation is that this key HAS a defensible
+// default (DefaultMaxMovesPerCycle) where a revalidation cadence does not,
+// so an absent key is fine here and a zero is not: nobody writes a bound
+// of zero meaning "default", and the way to move nothing is to point no
+// tier at a medium.
+func (v *validator) validateMaxMovesPerCycle(bound *int, declaredMediums int) {
+	if bound == nil {
+		return
+	}
+	if declaredMediums == 0 {
+		v.addf("max_moves_per_cycle: there are no storage_mediums declared, so there is nowhere to move an artifact to and this bound would do nothing; remove it, or declare the medium a retention tier names")
+		return
+	}
+	if *bound <= 0 {
+		v.addf("max_moves_per_cycle: must be a positive integer, and %d is not; to move nothing, point no retention tier at a medium rather than bounding the engine to zero", *bound)
+	}
+}
+
+// validateStorageMediums checks EPIC E's FR-27 medium declarations and
+// FR-33's credential custody shape, and returns the set of ids that were
+// successfully declared so validateTierMediumReferences can resolve a
+// tier's reference against it.
+//
+// It returns a set rather than recording one on the validator because
+// "which mediums exist" is an answer, not a problem, and the only caller
+// that needs it is three lines further down in Validate.
+//
+// An id that failed its own shape rules is still added to the set. That is
+// deliberate: an operator who typed "OffsiteS3" in both places has one
+// mistake, and reporting it as two (a malformed id AND a tier pointing at
+// nothing) buries the fix under a consequence of itself. The malformed id
+// is already refused, so nothing downstream can act on the pairing.
+func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]bool {
+	declared := make(map[string]bool, len(mediums))
+	seen := map[string]int{} // medium id -> the index that first declared it
+
+	for i := range mediums {
+		m := &mediums[i]
+		path := fmt.Sprintf("storage_mediums[%d]", i)
+
+		switch {
+		case m.ID == "":
+			v.addf("%s: id must not be empty", path)
+		case !storageMediumIDPattern.MatchString(m.ID):
+			v.addf("%s: id %q must be lower_snake_case (letters, digits and underscores, starting with a letter)", path, m.ID)
+		case m.ID == MediumLocal:
+			// Reserved. Two answers to "where is local" is a placement
+			// record nothing can interpret, and FR-29 stores exactly that
+			// string against every artifact in every deployment.
+			v.addf("%s: id %q is reserved for the implicit local medium (a backup set's own local_path) and cannot name a configured one", path, m.ID)
+		default:
+			if first, dup := seen[m.ID]; dup {
+				v.addf("%s: duplicate medium id %q (already used by storage_mediums[%d])", path, m.ID, first)
+			}
+			seen[m.ID] = i
+		}
+		if m.ID != "" {
+			declared[m.ID] = true
+		}
+
+		// The type set is closed and grows only by a future FR, because a
+		// new backend is an architecture decision rather than an import
+		// line (FR-28). Accepting a type nothing implements would let an
+		// operator write a config this product can validate and never
+		// serve.
+		if !validStorageMediumTypes[m.Type] {
+			if m.Type == "" {
+				v.addf("%s: type must be set to one of: %s", path, storageMediumTypeList)
+			} else {
+				v.addf("%s: type %q is not one of: %s", path, m.Type, storageMediumTypeList)
+			}
+		}
+
+		switch {
+		case m.Bucket == "":
+			v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
+		case strings.Contains(m.Bucket, "/"):
+			// One specific mistake, named in words an operator can act
+			// on rather than left to the backend to report as an
+			// unresolvable bucket.
+			v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
+		}
+
+		// Empty means the documented default in both of the next two, and
+		// the default is resolved by an accessor rather than written back
+		// into the struct here. Writing it back would freeze today's
+		// default into an operator's own file on the next settings save
+		// (issue #294), and for the same reason nothing below fills in a
+		// value: this function only ever refuses.
+		if m.StorageClass != "" && !validStorageClasses[m.StorageClass] {
+			v.addf("%s: storage_class %q is not one of: %s", path, m.StorageClass, storageClassList)
+		}
+		if m.UploadVerification != "" && !validUploadVerifications[m.UploadVerification] {
+			v.addf("%s: upload_verification %q is not one of: %s", path, m.UploadVerification, uploadVerificationList)
+		}
+		v.validateUploadVerificationIsAchievable(path, m)
+
+		v.validateMediumPrefix(path, m.Prefix)
+		v.validateMediumCredentials(path, m.Credentials)
+	}
+
+	return declared
+}
+
+// validateUploadVerificationIsAchievable refuses an upload_verification
+// mode the medium's own backend can never satisfy.
+//
+// # Why a schema check reaches into a backend capability
+//
+// Everything else in this function refuses a value that is malformed or
+// out of a closed set. This one refuses a value that is spelled perfectly
+// and cannot happen, and it is here rather than left to the move engine
+// because of WHERE the engine's refusal lands: at the verification step of
+// a move, after the object has already been uploaded, once per artifact
+// per cycle, in a log line, forever. `backup-manager check` says "config
+// OK" on the way in and the artifacts never arrive. That is a
+// configuration this product can validate and can never execute, which is
+// the one thing validation exists to prevent.
+//
+// # What cannot happen, and how that is known
+//
+// `attested` means the medium states its own full-object digest and this
+// product believes it without downloading the object (see the
+// UploadVerification constants). rclone v1.75.0's s3 backend reports
+// exactly one hash capability, MD5 (backend/s3's Fs.Hashes()), and FR-32
+// does not accept the value it serves there as a content hash at all.
+//
+// The reason it does not is spelled out in
+// transport.MediumStore.ObjectChecksum's own doc, and it is spelled out
+// THERE rather than repeated here on purpose. FR-32's first rule is that
+// nothing in this repository names what that value actually is, so there
+// is nothing to compare a hash against, and internal/placement's FR-32
+// scan (untrusted_test.go) enforces it across every production file with
+// a four-file allow list. Each of those four says the word to explain why
+// it carries none. This is not one of them, and a rewrite of this comment
+// that reaches for the obvious noun will be told so by the build.
+//
+// # This is a rule about the TYPE, not about s3 forever
+//
+// typesThatCanAttest is the set that decides, and it is empty on this
+// build rather than "s3 is excluded", so a second medium type whose
+// backend does serve a full-object SHA-256 becomes legal by being added to
+// it. The transport queries the capability live and will start working
+// with no adapter edit at that point (ObjectChecksum's doc), and this
+// table is what has to move deliberately alongside.
+//
+// A medium whose type this build has no backend for at all is left alone.
+// It cannot attest either, but its problem is the type, and reporting the
+// consequence beside the cause sends an operator to the wrong key: the
+// same reason validateStorageMediums does not report a malformed id twice.
+func (v *validator) validateUploadVerificationIsAchievable(path string, m *StorageMedium) {
+	if m.UploadVerification != UploadVerificationAttested {
+		return
+	}
+	if !validStorageMediumTypes[m.Type] || typesThatCanAttest[m.Type] {
+		return
+	}
+	v.addf("%s: upload_verification %q cannot be achieved on a %q medium, so every move to it would be refused "+
+		"at the verification step, after the upload, on every cycle: %q means the medium states its own full-object "+
+		"digest and this product believes it, and the embedded rclone's s3 backend reports one hash capability, MD5, "+
+		"whose value FR-32 does not accept as a content hash. Write upload_verification: %s instead, which downloads "+
+		"the object again and re-hashes it against what was uploaded, and is the default",
+		path, m.UploadVerification, m.Type, UploadVerificationAttested, UploadVerificationReadback)
+}
+
+// typesThatCanAttest names the medium types whose backend can produce the
+// full-object digest FR-31's `attested` class needs.
+//
+// It is EMPTY, and that is a measured fact rather than an unfinished
+// table: s3 is the only type this build has a backend for, and it cannot.
+// See validateUploadVerificationIsAchievable, which is its only reader and
+// carries the whole argument.
+var typesThatCanAttest = map[string]bool{}
+
+// validateMediumPrefix checks the key namespace a medium writes under.
+//
+// FR-28 fixes the key layout as <prefix>/<source>/<set>/<artifact-name>,
+// joined with "/". Every rule here is about that join: a leading, trailing
+// or doubled slash produces an empty key segment, which means two
+// spellings of the same object and a locator that does not round-trip.
+//
+// The ".." refusal is the one rule that is not about tidiness. S3 has no
+// traversal to exploit, but a key is not only ever a key: restoring an
+// artifact writes it to a local path derived from that key, and a key
+// namespace that cannot contain ".." is one fewer place for that to go
+// wrong. Refusing it in the schema costs an operator nothing, since a ".."
+// segment in a prefix has no meaning worth having.
+func (v *validator) validateMediumPrefix(path, prefix string) {
+	if prefix == "" {
+		return
+	}
+	if strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") {
+		v.addf("%s: prefix %q must not start or end with \"/\"; the key layout joins it with \"/\" already, so a slash here produces an empty key segment", path, prefix)
+		return
+	}
+	for _, seg := range strings.Split(prefix, "/") {
+		switch seg {
+		case "":
+			v.addf("%s: prefix %q must not contain an empty segment (\"//\")", path, prefix)
+			return
+		case ".", "..":
+			v.addf("%s: prefix %q must not contain a \".\" or \"..\" segment; a key namespace has no traversal to express, and a restore writes to a local path derived from the key", path, prefix)
+			return
+		}
+	}
+}
+
+// validateMediumCredentials checks FR-33's custody shape: three sources,
+// exactly one set.
+//
+// Exactly one, not at most one, which is where this differs from
+// validatePassphrase and validateKeyEncryption and matches validateKey
+// instead. Those two are optional by nature (most keys carry no
+// passphrase, most deployments encrypt nothing at rest), while a medium
+// with no credentials is a medium nothing can reach: there is no ambient
+// authentication in this schema, deliberately, since an instance-profile
+// or environment-inherited spelling is its own decision with its own
+// threat model and is not one this issue gets to make in passing.
+//
+// This never reads File's content and never runs Command. It is shape
+// only, on the principle validateKey's own doc states: whether a resolved
+// credential actually authenticates is a question only
+// internal/transport/rclone can answer, once it can reach the endpoint.
+//
+// Nothing here echoes a credential-bearing value into a message. File and
+// Env name where a secret lives rather than being one, but a path or a
+// variable name is close enough to the secret that quoting it in an error
+// is a habit worth not starting, and FR-33's rule is that a resolver
+// failure is reported by the shape of the problem rather than by the
+// content that failed. The one value quoted below is Command[0], an
+// executable path, which is the same thing validateKey already quotes.
+func (v *validator) validateMediumCredentials(path string, c MediumCredentials) {
+	credPath := path + ".credentials"
+
+	sources := 0
+	if c.File != "" {
+		sources++
+	}
+	if c.Env != "" {
+		sources++
+	}
+	if len(c.Command) != 0 {
+		sources++
+	}
+
+	switch {
+	case sources == 0:
+		v.addf("%s: one of file, env or command is required; there is no field for a literal key, on purpose, and no ambient-credential spelling in this schema", credPath)
+		return
+	case sources > 1:
+		v.addf("%s: exactly one of file, env or command may be set, not more than one", credPath)
+		return
+	}
+
+	if len(c.Command) != 0 {
+		cmdPath := credPath + ".command"
+		if c.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(c.Command[0]) {
+			// validateKey's identical rule, for the identical reason: a
+			// resolver has to resolve to exactly one binary regardless of
+			// the process's working directory or $PATH at the moment a
+			// credential is actually needed.
+			v.addf("%s: executable %q must be an absolute path", cmdPath, c.Command[0])
+		}
+	}
+}
+
+// validateTierMedium checks a tier's medium key for everything decidable
+// from the tier alone: its spelling, and that it is not the reserved local
+// id.
+//
+// The split between this and validateTierMediumReferences is what lets the
+// CLI's override path (ValidateRetention, which holds a Retention and no
+// Config) still catch a malformed medium name. Resolving the reference
+// needs the declared list, so that half can only run from Validate.
+func (v *validator) validateTierMedium(path string, t *RetentionTier) {
+	switch {
+	case t.Medium == "":
+		// Absent means local. See RetentionTier.Medium's own doc for why
+		// that is the only spelling of local.
+	case t.Medium == MediumLocal:
+		v.addf("%s: medium %q is the implicit local medium and cannot be named explicitly; omit the medium key instead, which is what keeps a settings save from writing this key into a config that never configured a medium", path, t.Medium)
+	case !storageMediumIDPattern.MatchString(t.Medium):
+		v.addf("%s: medium %q must be lower_snake_case (letters, digits and underscores, starting with a letter), the same rule a storage_mediums id follows", path, t.Medium)
+	}
+}
+
+// validateMediumReferences resolves every tier's medium, in every chain a
+// config can carry, against the mediums it declared.
+//
+// There are two such chains since #333, and missing the second is the
+// easy mistake: the deployment-wide policy, and a per-backup-set override.
+// An override is a whole chain in its own right, so a set writing
+// "retention: {tiers: [...]}" can name a medium exactly as the global
+// policy can, and a check that only walked the global one would accept a
+// dangling reference in the per-set chain and store the artifacts of that
+// set nowhere it could say.
+//
+// A set with no override is deliberately skipped rather than walked
+// through its RESOLVED chain, which is a clone of the global one: walking
+// it would report one dangling global medium once per backup set, turning
+// a single mistake into as many messages as the deployment has sets.
+func (v *validator) validateMediumReferences(c *Config, declared map[string]bool) {
+	archived := archiveClassMediums(c.StorageMediums)
+
+	v.validateTierMediumReferences("retention", &c.Retention, declared, archived)
+
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			if bs.RetentionConfig == nil {
+				continue
+			}
+			// The resolved chain rather than the raw override, because
+			// that is the one that decides, and the path still points at
+			// the operator's own key: an override that spells its chain
+			// with a tiers list resolves index for index.
+			path := fmt.Sprintf("sources[%d].backup_sets[%d].retention", i, j)
+			v.validateTierMediumReferences(path, &bs.Retention, declared, archived)
+		}
+	}
+}
+
+// archiveClassMediums maps each declared medium that writes with an
+// archive storage class onto the class it writes with.
+//
+// A class this build does not recognise is left out entirely, and that is
+// about the message rather than about safety. validateStorageMediums has
+// already refused it at storage_mediums[i].storage_class, which is the key
+// the operator has to edit; reporting it a second time as "this tier
+// delivers to an archive class" would send them to the retention chain to
+// fix a typo somewhere else, and the config fails to load either way.
+func archiveClassMediums(mediums []StorageMedium) map[string]string {
+	out := map[string]string{}
+	for i := range mediums {
+		m := &mediums[i]
+		class := m.EffectiveStorageClass()
+		if !validStorageClasses[class] {
+			continue
+		}
+		if isArchiveStorageClass(class) {
+			out[m.ID] = class
+		}
+	}
+	return out
+}
+
+// validateTierMediumReferences resolves each tier's medium against the
+// mediums the config actually declared.
+//
+// A dangling reference is an error rather than a fall-back to local,
+// because falling back would mean storing artifacts somewhere other than
+// where the operator wrote, silently, which is the wrong direction on the
+// one decision this field exists to make.
+//
+// Only the explicit chain is walked. The legacy daily_days/weekly_months/
+// monthly_months spelling cannot name a medium at all (it has no field
+// for one), so the chain those scalars stand for is local throughout, and
+// walking EffectiveTiers here would check three synthesised tiers that no
+// operator wrote.
+//
+// A declared medium that no tier references is deliberately NOT reported.
+// FR-27 calls it legal: an operator staging a destination before pointing
+// a tier at it has written a valid config, and refusing it would mean the
+// only way to add a medium is to adopt it in the same edit. An
+// archive-class one is the case that makes it more than a convenience;
+// see validateTierIsNotBoundToAnArchiveClass.
+func (v *validator) validateTierMediumReferences(path string, r *Retention, declared map[string]bool, archived map[string]string) {
+	for i := range r.Tiers {
+		t := &r.Tiers[i]
+		if t.Medium == "" || t.Medium == MediumLocal {
+			continue // resolved, or already refused by validateTierMedium
+		}
+		if !declared[t.Medium] {
+			v.addf("%s.tiers[%d]: medium %q is not declared by any storage_mediums entry; a tier's medium must name one, and there is no fall-back to local for a name that does not resolve", path, i, t.Medium)
+			continue
+		}
+		v.validateTierIsNotBoundToAnArchiveClass(fmt.Sprintf("%s.tiers[%d]", path, i), t, archived)
+	}
+}
+
+// validateTierIsNotBoundToAnArchiveClass refuses a retention tier that
+// delivers to a medium writing with an archive storage class (#442).
+//
+// # Why a schema check knows what a move does
+//
+// This is validateUploadVerificationIsAchievable's argument again, over a
+// different impossible pairing, and it is here for the same reason: the
+// value is spelled perfectly and describes something that can never
+// happen, and the place the product would otherwise say so is the middle
+// of a move, once per artifact per cycle, in a log line, for ever, while
+// `backup-manager check` said "config OK" on the way in.
+//
+// What cannot happen is #428's chain of four facts, and every link is
+// read from the code that defines it. A source copy is deleted only after
+// the destination reaches VERIFIED; VERIFIED means the destination
+// achieved the class its medium requires; upload_verification has exactly
+// two spellings and both map to a class that needs to READ the object; an
+// object written to GLACIER or DEEP_ARCHIVE is archived the instant it
+// lands, so nothing can read it until a restore has been asked for and has
+// finished. And even supposing the move were allowed to land, FR-30's
+// standing invariant needs an ACTIVE placement at content class, which an
+// archive-class copy cannot hold either.
+//
+// # It is not free while it sits there
+//
+// #437 made the engine refuse this pairing at plan time, so the loop it
+// used to drive (two uploads and three deletes per cycle, for ever, each
+// discarded DEEP_ARCHIVE copy billed for a 180-day minimum) has stopped.
+// This moves the same refusal one layer earlier, to the place an operator
+// finds out before the deployment starts rather than after it has run a
+// cycle, and the message deliberately reuses the engine's own words for
+// the mechanism so the two refusals cannot come to disagree.
+//
+// # The scope is the PAIRING, never the declaration
+//
+// A declared archive-class medium that no tier names stays valid, and
+// that is not leniency. An operator with objects already on DEEP_ARCHIVE
+// declares the medium so this product can see them and restore them, and
+// points no tier at it because nothing is going to be delivered there.
+// Refusing the declaration would make the one configuration the restore
+// operation exists for unwritable.
+func (v *validator) validateTierIsNotBoundToAnArchiveClass(path string, t *RetentionTier, archived map[string]string) {
+	class, ok := archived[t.Medium]
+	if !ok {
+		return
+	}
+	v.addf("%s: tier %q delivers to medium %q, which writes with storage_class %s; a copy written to %s is "+
+		"archived the instant it lands, so this product can never read it back to verify the copy, no move to "+
+		"this tier can reach VERIFIED, and FR-30's standing invariant has no readable ACTIVE copy to rest on. "+
+		"Point this tier at a medium whose storage_class is one of: %s. Leave the %s medium declared if you have "+
+		"objects on it already: a declared archive-class medium that no tier delivers to is legal, and restoring "+
+		"from one is what it is for",
+		path, t.Name, t.Medium, class, class, nonArchiveStorageClassList, class)
+}
+
+// validStorageMediumTypes is the closed set StorageMedium.Type accepts.
+// One entry today; see StorageMediumTypeS3 for why the set is closed and
+// what adding to it costs.
+var validStorageMediumTypes = map[string]bool{
+	StorageMediumTypeS3: true,
+}
+
+// storageMediumTypes is the same set in a fixed order, for the "must be
+// one of" message and for StorageMediumTypes' exported copy, and
+// storageMediumTypeList is that message's rendering built once at init.
+//
+// Two spellings of one set is the pattern every closed vocabulary in this
+// file follows, for the reason validStorageClasses states: ranging the map
+// would reorder the sentence per run.
+var storageMediumTypes = []string{StorageMediumTypeS3}
+
+var storageMediumTypeList = strings.Join(storageMediumTypes, ", ")
+
+// StorageMediumTypes returns every value StorageMedium.Type accepts. See
+// StorageClasses for why this is exported.
+func StorageMediumTypes() []string {
+	return append([]string(nil), storageMediumTypes...)
+}
+
+// validStorageClasses is the closed set StorageMedium.StorageClass
+// accepts, as a map for the membership test and as a fixed-order slice for
+// the error message and for callers outside this package. Same two
+// spellings, same reasons, as validRetentionGranularities above: a map
+// range would reorder the message per run and make it untestable.
+var validStorageClasses = map[string]bool{
+	StorageClassStandard:           true,
+	StorageClassStandardIA:         true,
+	StorageClassOneZoneIA:          true,
+	StorageClassIntelligentTiering: true,
+	StorageClassGlacierIR:          true,
+	StorageClassGlacier:            true,
+	StorageClassDeepArchive:        true,
+}
+
+var storageClasses = []string{
+	StorageClassStandard, StorageClassStandardIA, StorageClassOneZoneIA,
+	StorageClassIntelligentTiering, StorageClassGlacierIR,
+	StorageClassGlacier, StorageClassDeepArchive,
+}
+
+var storageClassList = strings.Join(storageClasses, ", ")
+
+// nonArchiveStorageClassList is every class a retention tier's medium may
+// write with, for the refusal that names the ones it may not.
+//
+// It is derived from the two lists rather than typed out a third time, so
+// a class added to either one cannot leave this message stale. A refusal
+// that says "use one of these instead" and omits a class an operator could
+// have used is a worse answer than no suggestion at all.
+var nonArchiveStorageClassList = strings.Join(nonArchiveStorageClasses(), ", ")
+
+// nonArchiveStorageClasses filters the ordered list rather than keeping a
+// third one, so a class added to storageClasses or to
+// archiveStorageClasses lands here without anybody remembering to.
+//
+// It preserves storageClasses' order, which is what lets the suggestion in
+// the refusal read the same way round as the full list the operator saw in
+// the message above it.
+func nonArchiveStorageClasses() []string {
+	out := make([]string, 0, len(storageClasses))
+	for _, c := range storageClasses {
+		if !isArchiveStorageClass(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// StorageClasses returns every value StorageMedium.StorageClass accepts,
+// in the fixed order above, as a fresh slice the caller may keep or sort
+// without moving this package's own copy.
+//
+// Exported for RetentionGranularities' reason: a settings form has to
+// build its picker from the set Validate actually enforces rather than
+// from a list transcribed by hand into a frontend, where nothing would
+// notice it going stale. That form is #240's; this is the source it will
+// read.
+func StorageClasses() []string {
+	return append([]string(nil), storageClasses...)
+}
+
+// validUploadVerifications and uploadVerificationModes are the same pair
+// for StorageMedium.UploadVerification.
+var validUploadVerifications = map[string]bool{
+	UploadVerificationReadback: true,
+	UploadVerificationAttested: true,
+}
+
+// The ordered half of the same pair, and its rendered message. See
+// storageMediumTypes.
+var uploadVerificationModes = []string{UploadVerificationReadback, UploadVerificationAttested}
+
+var uploadVerificationList = strings.Join(uploadVerificationModes, ", ")
+
+// UploadVerificationModes returns every value
+// StorageMedium.UploadVerification accepts. See StorageClasses.
+func UploadVerificationModes() []string {
+	return append([]string(nil), uploadVerificationModes...)
+}
+
+// StorageMediumIDPattern is the spelling rule a medium id follows, and it
+// is deliberately RetentionTierNamePattern itself rather than a second
+// copy of the same regular expression.
+//
+// A medium id and a tier name are different namespaces, but they are the
+// same KIND of thing: an operator-chosen identifier this product reports
+// back, which a settings form has to validate client-side against exactly
+// the rule the server applies. Aliasing means there is one answer to "what
+// does lower_snake_case mean here" for a client to implement, instead of
+// two that agree today.
+const StorageMediumIDPattern = RetentionTierNamePattern
+
+// storageMediumIDPattern is the compiled form, built once at init rather
+// than per medium per Validate call. MustCompile is right here because the
+// pattern is a constant in this package: a failure to compile is a build
+// mistake nobody can configure their way into, and it should stop the
+// process rather than be reported as an operator's problem.
+var storageMediumIDPattern = regexp.MustCompile(StorageMediumIDPattern)
 
 // validAbsolutePath rejects anything that is not an absolute, traversal-free
 // path.
@@ -1037,10 +1998,20 @@ type validator struct {
 	problems []error
 }
 
+// addf records one problem and carries on, which is the whole mechanism
+// behind Validate's promise that a config wrong in three places costs one
+// restart. Every check in this file reports through it and none of them
+// return an error, so there is no path where an early return could quietly
+// hide the checks after it.
 func (v *validator) addf(format string, args ...any) {
 	v.problems = append(v.problems, fmt.Errorf(format, args...))
 }
 
+// err is the one place a validator becomes an error, and it returns a nil
+// error interface rather than a typed nil *ValidationError when nothing
+// went wrong. Handing back a typed nil would leave an err != nil check
+// true on a config with no problems at all, which is the classic Go trap
+// and would stop the daemon on a perfectly good file.
 func (v *validator) err() error {
 	if len(v.problems) == 0 {
 		return nil
@@ -1055,6 +2026,13 @@ type ValidationError struct {
 	Problems []error
 }
 
+// Error renders one problem inline and several as an indented list.
+//
+// The two shapes exist because this text is what an operator sees when the
+// daemon refuses to start. One problem reads as a sentence; ten problems
+// on one line read as a wall, and the count in the header is what tells
+// somebody scrolling that they have seen the end of it. Both spellings are
+// pinned by the compatibility corpus.
 func (e *ValidationError) Error() string {
 	if len(e.Problems) == 1 {
 		return fmt.Sprintf("invalid config: %v", e.Problems[0])

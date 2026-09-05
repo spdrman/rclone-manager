@@ -164,17 +164,66 @@ func tightBounds(floor time.Duration, factor float64) harnessBounds {
 	}
 }
 
+// schedulingLagSampler measures the worst overshoot of a sleep of exactly
+// the watchdog's poll interval, for as long as it runs.
+//
+// It exists because the quantity this file has to bound, how long the
+// watchdog took to notice its window had closed, is measured BY the
+// watchdog's own poll goroutine, and on a starved host that goroutine is
+// precisely what stops being scheduled. A fixed allowance cannot be right
+// for both an idle laptop and a machine running nine builds at once. A
+// second goroutine asking the same host for the same interval can say how
+// much it is actually giving, and that number is what the bound is built
+// from.
+//
+// gotestwatch's own run_test.go carries an identical copy for the
+// identical reason. They are separate packages and this is a dozen lines,
+// so a shared home for it would cost more than it saves.
+type schedulingLagSampler struct {
+	done    chan struct{}
+	stopped chan time.Duration
+}
+
+func startSchedulingLagSampler(interval time.Duration) *schedulingLagSampler {
+	s := &schedulingLagSampler{done: make(chan struct{}), stopped: make(chan time.Duration, 1)}
+	go func() {
+		var worst time.Duration
+		for {
+			select {
+			case <-s.done:
+				s.stopped <- worst
+				return
+			default:
+			}
+			began := time.Now()
+			time.Sleep(interval)
+			if over := time.Since(began) - interval; over > worst {
+				worst = over
+			}
+		}
+	}()
+	return s
+}
+
+func (s *schedulingLagSampler) stop() time.Duration {
+	close(s.done)
+	return <-s.stopped
+}
+
 func TestHarnessWatchdog_CatchesAGenuineHang(t *testing.T) {
 	s := newLocalScenario(t, 4096)
 
 	const floor = 3 * time.Second
+	const poll = 25 * time.Millisecond
 	// Build first, so what is timed below is the watchdog and not a `go
 	// build` that may or may not have already happened in this package.
 	buildHarness(t)
+	lag := startSchedulingLagSampler(poll)
 	start := time.Now()
 	res, trip := runHarnessWatched(t, tightBounds(floor, defaultHarnessBounds.stepFactor),
 		append(s.baseArgs(), "-hang-at=discover-start")...)
 	elapsed := time.Since(start)
+	worstLag := lag.stop()
 
 	if trip == nil {
 		t.Fatalf("a harness planted to stop dead inside its first remote call was never caught (exit err=%v)\nstdout=%s\nstderr=%s", res.err, res.stdout, res.stderr)
@@ -185,14 +234,30 @@ func TestHarnessWatchdog_CatchesAGenuineHang(t *testing.T) {
 	if trip.lastEvent != "discover-start" {
 		t.Fatalf("trip.lastEvent = %q, want discover-start: a gate failure that does not name where the harness got stuck is the thing both issues complain about", trip.lastEvent)
 	}
-	// Promptly, not eventually. The window here is the floor, because the
-	// steps before the planted hang are milliseconds long. The bound
-	// asserted on is how long the watchdog took to notice its window had
-	// closed, rather than wall-clock time: this file must not reintroduce
-	// the very thing #247 is about by failing on a machine that was merely
-	// busy while it ran.
-	if trip.sinceLast > 2*floor {
-		t.Fatalf("the watchdog took %s to notice a %s window had closed; that is not a prompt failure", trip.sinceLast.Round(time.Millisecond), floor)
+	// Promptly, and promptly against the watchdog's OWN window (#379,
+	// which is the identical defect in gotestwatch's copy of this test).
+	//
+	// The comment this replaces said the window here is the floor,
+	// because the steps before the planted hang are milliseconds long.
+	// That holds on an idle machine and not on a busy one: those steps
+	// are real work, they measure slower under contention, and the window
+	// is derived as stepFactor x the slowest of them, so it grows with
+	// them by design. Bounding sinceLast by a multiple of the FLOOR
+	// therefore measured something unrelated to the decision the watchdog
+	// actually made, and it failed a perfectly prompt catch on a loaded
+	// machine (observed: 9.932s against a 6s bound, tripping on the first
+	// check after its own window closed).
+	//
+	// What promptness means is the overshoot past that window: a couple
+	// of poll intervals to notice, plus whatever this host stole from a
+	// goroutine trying to wake up on the same interval, which the sampler
+	// above measured rather than guessed.
+	promptness := trip.window + 3*poll + worstLag
+	if trip.sinceLast > promptness {
+		t.Fatalf("the watchdog took %s to notice its own %s window had closed, which is %s of overshoot; at most %s is prompt here (3 poll intervals plus the %s this host stole from a goroutine sleeping on the same interval)",
+			trip.sinceLast.Round(time.Millisecond), trip.window.Round(time.Millisecond),
+			(trip.sinceLast - trip.window).Round(time.Millisecond),
+			promptness.Round(time.Millisecond), worstLag.Round(time.Millisecond))
 	}
 	// cmd.Wait returned, which is the process being reaped: the watchdog
 	// does not leave behind the process it gave up on.

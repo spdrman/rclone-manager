@@ -7,7 +7,51 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
+
+// goldenRecords is the golden fixture's record set, extracted so a second
+// test can run the IDENTICAL records rather than a copy of them that
+// could drift. issue #239's medium-invariance test is that second reader:
+// "identical inputs" has to mean the same inputs, not the same intent.
+//
+// It exercises all three GFS tiers, the "not kept by anything" case,
+// last-known-good landing on an artifact a tier already kept, and the two
+// states that must never appear in a verdict at all.
+func goldenRecords(t *testing.T, set model.BackupSetID) []state.Record {
+	t.Helper()
+	return gfsBuildRecords(t, set, []gfsRecSpec{
+		// Outside every tier's window (before the 12-month monthly cutoff
+		// of 2025-09-01): a genuine "not kept by anything" case.
+		{"too-old-everything", lifecycle.Complete, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+		// Inside the monthly window, outside the weekly window (before
+		// its 2026-06-01 cutoff), alone in its calendar month: monthly
+		// tier only.
+		{"monthly-only", lifecycle.Committed, time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC)},
+		// Inside the weekly window, outside the daily window, alone in
+		// its Monday-start week bucket (2026-08-10..16): weekly tier
+		// only (August's monthly bucket is won by the newer
+		// "recent-daily" record below).
+		{"week-old-in-weekly", lifecycle.RemoteDeletePending, time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)},
+		// Inside the daily window (2026-08-23..29), and also the newest
+		// eligible record in both its week bucket (2026-08-24..30) and
+		// its calendar month (August 2026): daily + weekly + monthly, and
+		// (being the newest eligible record overall) last-known-good on
+		// top of that, so this one artifact proves LKG composes an extra
+		// tier onto an already-kept verdict rather than only ever adding
+		// a fresh one.
+		{"recent-daily", lifecycle.Complete, time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)},
+		// The "quarantined-newest" trap (see lastknowngood.go's package
+		// doc): the newest arrival by far, but QUARANTINED, so it must
+		// never appear in the output at all, must never be a GFS tier
+		// representative, and must never be mistaken for the
+		// last-known-good artifact.
+		{"quarantined-newest", lifecycle.Quarantined, time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)},
+		// FAILED: also never a completed backup, also absent entirely.
+		{"failed-record", lifecycle.Failed, time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)},
+	})
+}
 
 // TestDecideKeepGoldenBaselineForOmittedRetentionBlock is issue #111's
 // (B3.6) mandatory regression-safety test: "an operator who upgrades and
@@ -61,36 +105,7 @@ func TestDecideKeepGoldenBaselineForOmittedRetentionBlock(t *testing.T) {
 	set := gfsMustSet(t, "golden", "baseline")
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC) // fixed instant; see package doc's Determinism section
 
-	records := gfsBuildRecords(t, set, []gfsRecSpec{
-		// Outside every tier's window (before the 12-month monthly cutoff
-		// of 2025-09-01): a genuine "not kept by anything" case.
-		{"too-old-everything", lifecycle.Complete, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
-		// Inside the monthly window, outside the weekly window (before
-		// its 2026-06-01 cutoff), alone in its calendar month: monthly
-		// tier only.
-		{"monthly-only", lifecycle.Committed, time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC)},
-		// Inside the weekly window, outside the daily window, alone in
-		// its Monday-start week bucket (2026-08-10..16): weekly tier
-		// only (August's monthly bucket is won by the newer
-		// "recent-daily" record below).
-		{"week-old-in-weekly", lifecycle.RemoteDeletePending, time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)},
-		// Inside the daily window (2026-08-23..29), and also the newest
-		// eligible record in both its week bucket (2026-08-24..30) and
-		// its calendar month (August 2026): daily + weekly + monthly, and
-		// (being the newest eligible record overall) last-known-good on
-		// top of that, so this one artifact proves LKG composes an extra
-		// tier onto an already-kept verdict rather than only ever adding
-		// a fresh one.
-		{"recent-daily", lifecycle.Complete, time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)},
-		// The "quarantined-newest" trap (see lastknowngood.go's package
-		// doc): the newest arrival by far, but QUARANTINED, so it must
-		// never appear in the output at all, must never be a GFS tier
-		// representative, and must never be mistaken for the
-		// last-known-good artifact.
-		{"quarantined-newest", lifecycle.Quarantined, time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)},
-		// FAILED: also never a completed backup, also absent entirely.
-		{"failed-record", lifecycle.Failed, time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)},
-	})
+	records := goldenRecords(t, set)
 
 	verdicts, lkg, err := DecideKeep(now, resolved, set, records)
 	if err != nil {

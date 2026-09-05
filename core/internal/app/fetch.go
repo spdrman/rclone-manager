@@ -57,6 +57,13 @@ type FetchResult struct {
 	// honestly: --dry-run looks at the remote, never at the journal's
 	// per-artifact outcomes, so it has nothing to report here.
 	FailedArtifacts int
+
+	// Progress is issue #361's count of what this fetch actually
+	// achieved (see CycleProgress). It comes from the same walk `run`
+	// counts, so the two commands cannot disagree about whether a cycle
+	// got anything through. A dry-run never sets it, for the same reason
+	// it never sets FailedArtifacts.
+	Progress CycleProgress
 }
 
 // Fetch is `backup-manager fetch --source ... --backup-set ...`'s use
@@ -115,7 +122,13 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return result, fmt.Errorf("app: fetch: listing %s: %w", bs.ID, err)
 	}
-	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	walk := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = walk.Failed
+	// Exactly the arithmetic RunCycle does, through exactly the same
+	// function over exactly the same walk (issue #361), so the two
+	// commands cannot report different numbers for the same cycle.
+	result.Progress = foldDiscoveryErrors(walk, discRes)
+	s.reportBarrenSet(ctx, result.Verdict())
 
 	return result, nil
 }

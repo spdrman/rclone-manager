@@ -2,8 +2,39 @@ package lifecycle
 
 import "fmt"
 
+// This file is the graph: which state may follow which, and the two ways of
+// asking about it.
+//
+// The whole design decision is that the answer is a TABLE and not code.
+// Transitions is a slice of edges, and everything else here reads it:
+// Validate looks a pair up, the successor and predecessor helpers filter it,
+// and the tests walk it. Nothing branches on a state name, which is what
+// makes "these are all the legal moves" a statement a reader can check by
+// looking at one declaration instead of by finding every place a state is
+// mentioned.
+//
+// The cost of that choice is that the reasoning has to live somewhere, and
+// it lives in the comments on the table itself rather than being spread over
+// the code that consults it. Transitions' own doc is long for that reason:
+// the edges that are absent are as deliberate as the ones that are present,
+// and an absent edge leaves no code behind to hang an explanation on.
+//
+// Machine is the stateful wrapper for a caller walking one artifact through
+// several moves. Validate is the stateless question, and it is the one
+// Advance asks on every journal write, so it is the one that actually keeps
+// the journal honest.
+
 // Transition is one legal (From, To) edge in the lifecycle graph.
+//
+// It is a comparable struct on purpose: that is what lets the table be
+// turned into a set and the legality question be one map lookup, with no
+// nested maps and no string concatenation to build a key.
 type Transition struct {
+	// From is the state an artifact is in now, and To is where it is
+	// asking to go. Both are needed to answer legality, because several
+	// states are reachable from more than one place and the origin decides
+	// what may follow: QUARANTINED is the clearest case, where the exit an
+	// artifact is entitled to depends on the edge that brought it in.
 	From State
 	To   State
 }
@@ -34,6 +65,18 @@ type Transition struct {
 // before COMMITTED, which means the remote delete has never been issued and
 // the source is presumptively still there to recover from.
 //
+// The first of those two is taken now (issue #419: retryfailed.go), and
+// what took it so long is worth recording, because for a long time this
+// paragraph described exits nothing in the product ever used, so an
+// artifact that reached FAILED simply stopped being worked on. It is an
+// OPERATOR who takes it, not a cycle, and that half is deliberate rather
+// than unfinished: a retry re-runs the transfer, and there is nothing
+// durable on a FAILED row that says whether the cause has cleared, so
+// spending a re-download on a guess is a cost this product refuses to take
+// on its own. Every lineage into FAILED is offered it, on exactly the
+// safety argument the sentence above already makes. The second exit,
+// FAILED -> QUARANTINED, is still unused.
+//
 // # QUARANTINED vs. QUARANTINED_LOST: does a source still exist to recover from
 //
 // QUARANTINED covers content that's suspect while a remote copy still
@@ -48,6 +91,28 @@ type Transition struct {
 // before any delete is issued), so a fresh DISCOVERED attempt from either
 // has a real chance of finding the source. QUARANTINED's one exit, back to
 // DISCOVERED, is a genuine recovery path.
+//
+// Issue #419 added a fourth way in, out of VERIFYING, and it is worth
+// saying plainly because it stretches the word: an artifact whose
+// verification could not be COMPLETED, over and over, against a backend
+// that could not be reached. Nothing is suspect about those bytes. Nobody
+// has been able to prove anything about them at all, which is a different
+// sentence and a worse one, and the thing that has to be true next is the
+// same either way: they must not be committed, they must not authorise
+// deleting the source, and a human has to decide what happens. That is
+// exactly what QUARANTINED guarantees and it is why no fifth state was
+// invented for it. What it must not do is arrive on an operator's screen
+// wearing the words for a content failure, so QuarantineReason reports
+// this shape as what it is (see quarantine.go).
+//
+// The alternative was FAILED, and FAILED is where it used to go. That is
+// worse for a reason that has nothing to do with vocabulary: FAILED's two
+// exits below are FR-22's retry policy, FR-22's retry policy has never
+// been built, and nothing in this product takes either edge. So an
+// artifact sent there for a network condition that has very likely already
+// cleared stops being worked on permanently. QUARANTINED has three
+// operator actions wired to it end to end, one of which is a route back
+// into the pipeline.
 //
 // QUARANTINED_LOST is a different outcome, not another way into the same
 // state. It's entered only from COMPLETE, which is the one state in this
@@ -337,6 +402,13 @@ func HasReinstatementExit(from State) bool {
 	return false
 }
 
+// transitionSet is Transitions as a set, built once at init.
+//
+// Validate is on the path of every journal write this package makes, so the
+// legality question has to be a map lookup rather than a scan of a table
+// that grows with every state added. It is derived from Transitions rather
+// than written out again, so the table stays the single statement of what is
+// legal.
 var transitionSet = func() map[Transition]bool {
 	m := make(map[Transition]bool, len(Transitions))
 	for _, t := range Transitions {
@@ -354,6 +426,10 @@ type IllegalTransitionError struct {
 	To   State
 }
 
+// Error names both ends of the refused move. Both halves matter to whoever
+// reads it: the target alone would not say whether the caller had the wrong
+// destination or a stale idea of where the artifact currently is, and a
+// stale current state is the more common of the two after a crash.
 func (e *IllegalTransitionError) Error() string {
 	return fmt.Sprintf("lifecycle: %s -> %s is not a legal transition", e.From, e.To)
 }
@@ -367,6 +443,11 @@ type UnknownStateError struct {
 	Raw string
 }
 
+// Error quotes the raw string rather than interpolating it bare, because
+// the value that gets here is by definition one this package does not
+// recognise: it can be empty, contain whitespace, or have come from a
+// hand-edited row, and an unquoted empty string in a log line reads as if
+// the message itself is broken.
 func (e *UnknownStateError) Error() string {
 	return fmt.Sprintf("lifecycle: %q is not a known state", e.Raw)
 }

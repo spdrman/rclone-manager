@@ -1,3 +1,17 @@
+// These cover REMOTE_RETAINED, issue #282's terminal state for a backup set
+// whose source this manager is never allowed to delete from.
+//
+// The unusual test here is the first one, and it is unusual on purpose. The
+// claim being made is negative, that the transport is never touched, and the
+// way it is made is by handing RetainRemote a Deps with a nil Transport: any
+// expression in its call graph that reached for one would panic rather than
+// quietly succeed. That is the strongest form of the claim this package can
+// make on its own, since a double that failed when called would still be a
+// double somebody could later make lenient.
+//
+// The state it does this from is COMMITTED, which is exactly where
+// DeleteRemote would happily act, so the test is staged at the one point
+// where getting it wrong would delete a read-only source's data.
 package lifecycle
 
 import (
@@ -183,6 +197,10 @@ func TestRetainRemote_RefusesWhenJournalStateIsWrong(t *testing.T) {
 	}
 }
 
+// TestRetainRemote_RequiresAnAttemptKey pins the same precondition
+// RetryFailed has, and for the same reason: without a key the journal cannot
+// recognise a repeated call as the same one, so a retried retention would be
+// recorded twice.
 func TestRetainRemote_RequiresAnAttemptKey(t *testing.T) {
 	j := openTestJournal(t)
 	_, err := RetainRemote(context.Background(), Deps{Journal: j}, RetainRemoteRequest{Artifact: mustID(t)})
@@ -191,6 +209,11 @@ func TestRetainRemote_RequiresAnAttemptKey(t *testing.T) {
 	}
 }
 
+// TestRetainRemote_RequiresAJournal pins that a missing dependency is a
+// refusal rather than a panic. Every step in this package checks rather than
+// dereferencing, so a caller that wired its Deps wrong gets a sentence
+// naming what is missing instead of a stack trace from somewhere further
+// in.
 func TestRetainRemote_RequiresAJournal(t *testing.T) {
 	_, err := RetainRemote(context.Background(), Deps{}, RetainRemoteRequest{Artifact: mustID(t), AttemptKey: "x"})
 	if err == nil {

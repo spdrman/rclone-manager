@@ -7,6 +7,20 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file covers the carrier and not the numbers: whether a reporter put
+// on a context comes back off it, and what happens when there is none.
+// What a sample actually CONTAINS during a real transfer is proved in
+// internal/transport/rclone's progress_test.go, against a throttled rclone
+// copy, because that is the only place the accounting exists.
+//
+// The two cases about absence are the ones that matter most, and they read
+// as trivial only until you notice what they are protecting. Progress was
+// added late (#221) to a boundary every caller in this repository already
+// used; the design's whole claim is that a caller who never asked is
+// unaffected. A ProgressReporterFrom that returned a non-nil typed nil, or
+// a WithProgressReporter that attached one, would turn that claim into a
+// panic on the first sample, in the adapter, during a real transfer.
+
 // TestProgressReporter_AbsentByDefault is the property every existing
 // caller depends on without knowing it: a context nobody attached a
 // reporter to reports nothing, so an adapter that looks for one finds

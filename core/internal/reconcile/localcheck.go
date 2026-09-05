@@ -14,12 +14,45 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// localVerdict is what checkLocalFinal concluded about an artifact's local
+// copy. It has three values rather than a bool because "not valid" has
+// two meanings that reconcile must never confuse, and a bool cannot hold
+// both.
+type localVerdict string
+
+const (
+	// localValid: a readable local copy exists and passed every check.
+	localValid localVerdict = "valid"
+
+	// localInvalid: the artifact should have a readable local copy and
+	// does not, or has one that fails a check. This is the verdict that
+	// quarantines.
+	localInvalid localVerdict = "invalid"
+
+	// localOnMedium: there is no local copy to check, and that is not a
+	// fault. The artifact's durable copy is on a storage medium (an
+	// ACTIVE medium placement with no ACTIVE local one), which is what a
+	// completed move leaves behind. Reconcile has no way to read a medium
+	// and no mandate to: FR-31 makes anything beyond an existence check
+	// operator-initiated, and internal/revalidate is what runs that
+	// existence check. So this is not a verdict about the artifact at
+	// all, and a caller that treats it as localInvalid records a healthy
+	// backup as an irrecoverable loss.
+	localOnMedium localVerdict = "on-medium"
+)
+
 // localValidity is the outcome of checking one artifact's recorded local
 // final file against what the journal says it should be. Reason is
-// populated, and only meaningful, when Valid is false.
+// populated whenever Verdict is not localValid: for localInvalid it says
+// what failed, for localOnMedium it says where the copy is.
 type localValidity struct {
-	Valid  bool
-	Reason string
+	Verdict localVerdict
+	Reason  string
+}
+
+// invalid builds the quarantining verdict.
+func invalid(reason string) localValidity {
+	return localValidity{Verdict: localInvalid, Reason: reason}
 }
 
 // checkLocalFinal is FR-17's "is the final local copy still good" check,
@@ -28,8 +61,9 @@ type localValidity struct {
 // before a delete. I could not reuse that function directly, it is
 // unexported in a package I am not allowed to modify, so I reimplemented
 // the same three checks against the same journal fields here: the file
-// exists at rec.LocalPath, its size matches whichever of the journal's two
-// independent size records was captured, and, when a local hash was
+// exists where the artifact's own placement says it is, its size matches
+// whichever of the journal's two independent size records was captured,
+// and, when a local hash was
 // recorded at VERIFIED, its content still hashes to that value.
 //
 // A missing file counts as invalid, not as a separate "absent" case: by
@@ -38,46 +72,85 @@ type localValidity struct {
 // for these states, with no third option, and a final copy that is not
 // even there any more cannot honestly be called anything but invalid.
 func checkLocalFinal(rec state.Record) localValidity {
-	if rec.LocalPath == "" {
-		return localValidity{Reason: "no local final path is recorded in the journal"}
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly. The two are the same value
+	// for every artifact that has one in Phase 1; the difference is what
+	// happens once an artifact's only copy can be on a storage medium,
+	// which this check must not read as a missing local file.
+	//
+	// That sentence was written above the four lines that did precisely
+	// that: a false answer became "no local final path is recorded", which
+	// is localInvalid, and the first completed move in production was
+	// quarantined as lost on the next cycle. The bool cannot say WHY there
+	// is no readable local path, so the second question is asked here,
+	// before anything is called invalid.
+	localPath, ok := rec.ReadableLocalPath()
+	if !ok {
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			return localValidity{Verdict: localOnMedium, Reason: fmt.Sprintf(
+				"no local copy to check: the durable copy is on storage medium %s, which reconciliation does not read (revalidation existence-checks it, FR-31)",
+				describeMediumPlacements(mediums))}
+		}
+		if len(rec.Placements) > 0 {
+			return invalid("no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING")
+		}
+		return invalid("no local final path is recorded in the journal")
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(localPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return localValidity{Reason: fmt.Sprintf("local final file %s is missing", rec.LocalPath)}
+			return invalid(fmt.Sprintf("local final file %s is missing", localPath))
 		}
-		return localValidity{Reason: fmt.Sprintf("stat %s: %v", rec.LocalPath, err)}
+		return invalid(fmt.Sprintf("stat %s: %v", localPath, err))
 	}
 	if info.IsDir() {
-		return localValidity{Reason: fmt.Sprintf("local final path %s is a directory, not a file", rec.LocalPath)}
+		return invalid(fmt.Sprintf("local final path %s is a directory, not a file", localPath))
 	}
 
 	expected, source, err := expectedLocalSize(rec)
 	if err != nil {
-		return localValidity{Reason: err.Error()}
+		return invalid(err.Error())
 	}
 	if source != "" && info.Size() != expected {
-		return localValidity{Reason: fmt.Sprintf(
-			"local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)}
+		return invalid(fmt.Sprintf(
+			"local final file %s is %d bytes, expected %d (from %s)", localPath, info.Size(), expected, source))
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
-			return localValidity{Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}
+			return invalid(fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg))
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(localPath)
 		if err != nil {
-			return localValidity{Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, err)}
+			return invalid(fmt.Sprintf("hashing %s: %v", localPath, err))
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			return localValidity{Reason: fmt.Sprintf(
+			return invalid(fmt.Sprintf(
 				"local final file %s hash %s does not match the %s hash recorded at verification, %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)}
+				localPath, sum, rec.LocalHashAlg, rec.LocalHash))
 		}
 	}
 
-	return localValidity{Valid: true}
+	return localValidity{Verdict: localValid}
+}
+
+// describeMediumPlacements names each medium copy and the verification
+// class it has achieved, for the one reason an operator reads when
+// reconciliation leaves a moved artifact alone. The class is there
+// because "on cold_offsite, unverified" and "on cold_offsite, content
+// verified" are different facts about how safe that artifact is, and the
+// reason is the only place this package says either.
+func describeMediumPlacements(ps []state.Placement) string {
+	parts := make([]string, 0, len(ps))
+	for _, p := range ps {
+		class := p.VerificationClass
+		if class == "" {
+			class = "unverified"
+		}
+		parts = append(parts, fmt.Sprintf("%q (%s)", p.Medium, class))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // expectedLocalSize mirrors internal/lifecycle/remotedelete.go's helper of

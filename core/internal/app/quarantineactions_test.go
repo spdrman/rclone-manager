@@ -87,6 +87,43 @@ func newQuarantinedFixture(t *testing.T, target lifecycle.State) quarantinedFixt
 	return quarantinedFixture{svc: svc, journal: journal, artifact: rec.Artifact, localDir: localDir}
 }
 
+// TestQuarantineActions_RefuseAnArtifactWhoseSetIsNoLongerConfigured
+// (issue #391). A backup set's configuration can be removed while its
+// journal rows stay. Two of the three actions already looked the set up
+// and refused with an error nothing classified; the third did not look
+// at all, and moved the row to DISCOVERED under a set no cycle walks.
+// All three now refuse with the same *NotFoundError the artifact list
+// uses for a set the configuration does not have, so the layers above
+// can name it, and the row stays exactly where it was.
+func TestQuarantineActions_RefuseAnArtifactWhoseSetIsNoLongerConfigured(t *testing.T) {
+	fx := newQuarantinedFixture(t, lifecycle.Quarantined)
+	ctx := context.Background()
+
+	// The same journal under a configuration that no longer names the
+	// set: what a removal leaves behind.
+	svc := New(testConfig(t, testSource("production")), fx.journal, newFakeTransport(), nil)
+	svc.Now = fixedNow(epoch)
+
+	var notFound *NotFoundError
+	if _, err := svc.RevalidateQuarantined(ctx, fx.artifact); !errors.As(err, &notFound) {
+		t.Errorf("RevalidateQuarantined: err = %v, want *NotFoundError", err)
+	}
+	if _, err := svc.ReinstateQuarantined(ctx, fx.artifact, "test"); !errors.As(err, &notFound) {
+		t.Errorf("ReinstateQuarantined: err = %v, want *NotFoundError", err)
+	}
+	if err := svc.RetryQuarantinedIngestion(ctx, fx.artifact); !errors.As(err, &notFound) {
+		t.Errorf("RetryQuarantinedIngestion: err = %v, want *NotFoundError", err)
+	}
+
+	rec, err := fx.journal.Get(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.Quarantined) {
+		t.Errorf("state = %s after the refused retry, want QUARANTINED; a row sent to DISCOVERED under an unconfigured set is one nothing will ever pick up", rec.State)
+	}
+}
+
 // TestRevalidateQuarantined_ReportsAVerdictAndWritesNothing is the whole
 // contract of the operator-facing "Revalidate" action. The write assertion
 // is the load-bearing half: the lifecycle graph has no edge from

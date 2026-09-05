@@ -75,7 +75,7 @@ services:
   # scheduler in one process. Holds the state database and the
   # credentials, and publishes no port at all.
   backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.2.0
+    image: ghcr.io/spdrman/backup-manager:0.3.0
     command: ["/backup-manager-web", "serve", "--profile=generic"]
 
     user: "1000:1000"
@@ -187,7 +187,7 @@ services:
   # engine. The only container with a published port, and the app ZimaOS
   # opens when the tile is clicked.
   backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.2.0
+    image: ghcr.io/spdrman/backup-manager:0.3.0
     command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
 
     depends_on:

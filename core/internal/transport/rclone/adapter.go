@@ -1,9 +1,11 @@
 // Package rclone is the only package in this repository that imports rclone.
 //
-// Exactly two backends are registered. Importing all of them for convenience
-// would cost binary size, dependency surface, initialization complexity and
-// accidental configuration exposure, so a third backend is an architecture
-// decision rather than an import line (FR-4).
+// Exactly three backends are registered. Importing all of them for
+// convenience would cost binary size, dependency surface, initialization
+// complexity and accidental configuration exposure, so each one is an
+// architecture decision rather than an import line (FR-4). local and sftp
+// are FR-4's own two; s3 is EPIC E's FR-28, and it is the entire S3
+// implementation this product has, in Go and in TypeScript alike.
 package rclone
 
 import (
@@ -11,12 +13,16 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
-	// local and sftp are the two backends FR-4 requires. Importing them,
-	// together with fs/operations below, also registers crypt transitively.
-	// See backends.go for the traced cause, why it's accepted rather than
-	// removed, and the test that keeps this exact set enforced.
+	// local and sftp are the two backends FR-4 requires, and s3 is the
+	// third, added by EPIC E's FR-28 as the storage-medium implementation.
+	// Importing them, together with fs/operations below, also registers
+	// crypt transitively. See backends.go for the traced cause, why it's
+	// accepted rather than removed, the measured cost of s3, and the test
+	// that keeps this exact set enforced.
 	_ "github.com/rclone/rclone/backend/local"
+	_ "github.com/rclone/rclone/backend/s3"
 	_ "github.com/rclone/rclone/backend/sftp"
 
 	"github.com/rclone/rclone/fs"
@@ -28,19 +34,37 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
-// Adapter implements transport.Transport over embedded rclone packages.
+// Adapter implements transport.Transport over embedded rclone packages,
+// and (in medium.go and mediumrestore.go) transport.MediumStore as well.
+//
+// It is empty, and that is load-bearing rather than incidental. Every
+// method builds its own Fs from the Source or Medium it was handed and
+// releases it on the way out, so there is no cached connection, no cached
+// configuration and no cross-call state for one caller's settings to reach
+// another caller through. rclone captures the ambient ConfigInfo into an
+// Fs at construction and never re-reads it, so a field here holding a
+// reusable Fs would silently apply the first caller's bandwidth limit to
+// every later one for as long as the process ran. shutdownFs's doc argues
+// the same decision from the other end.
 type Adapter struct{}
 
 // New returns an adapter. It takes no rclone types, by design.
 func New() *Adapter { return &Adapter{} }
 
+// The compile-time assertion that this type really satisfies the
+// Transport half of the boundary; medium.go carries the matching one for
+// MediumStore. It is worth having because nothing here forces it:
+// production wiring hands rclone.New() straight to a constructor
+// (core/service's New, core/cmd/backup-manager's setup), so a method whose
+// signature drifted would fail over there, with an error about the caller
+// rather than one about the adapter.
 var _ transport.Transport = (*Adapter)(nil)
 
 // ErrUnsupportedHash is returned by RemoteHash when the requested algorithm
 // is one this adapter does not know how to translate to an rclone hash.Type
 // at all, or one the backend behind src cannot compute for this object.
 //
-// It exists so errors.go's Classify can recognize this case by identity
+// It exists so errors.go's classify can recognize this case by identity
 // (errors.Is) instead of matching this same package's own error strings a
 // second time. Matching a dependency's wording is unavoidable in a couple of
 // documented spots in errors.go because no typed value exists to reach for
@@ -67,6 +91,20 @@ func (a *Adapter) fsForHashing(ctx context.Context, src transport.Source) (fs.Fs
 	return a.newFs(ctx, src, true)
 }
 
+// newFs is what fsFor and fsForHashing both are. The boolean is not a flag
+// a caller passes; it is the difference between those two named entry
+// points, which exist so no call site ever has to decide what `true` means
+// here. See withSHA256 in ssh.go for why the hashing options must not
+// reach the Fs that copies.
+//
+// info.NewFs is called directly rather than through fs.NewFs, and that is
+// this adapter's whole premise rather than a shortcut: fs.NewFs layers in
+// a getter that reads the on-disk rclone config file for a stanza matching
+// the remote name, so an rclone config sitting in the service account's
+// home directory could otherwise change where a backup is read from. The
+// price is that no backend default applies either, which sftpConfig pays
+// explicitly (see the four options it pins) and medium.go pays with
+// withBackendDefaults.
 func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bool) (fs.Fs, error) {
 	info, err := fs.Find(src.Type)
 	if err != nil {
@@ -87,11 +125,205 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 
 	f, err := info.NewFs(ctx, src.ID, src.Root, cfg)
 	if err != nil {
+		// A backend may hand back a LIVE Fs alongside an error, and
+		// rclone's sftp backend does exactly that. NewFsWithConnection
+		// ends `return f, err`, and the err that reaches here can be
+		// fs.ErrorIsFile: the root named an existing file, so rclone
+		// re-points the Fs at the parent directory and reports it, with
+		// a connection already opened and sitting in that Fs's pool.
+		//
+		// Dropping it here is the one leak "release on the way out of
+		// each operation" does not catch, because there is no way out to
+		// release on: no caller ever sees this Fs, so no caller ever
+		// defers a shutdown for it. It is also the worst kind, since
+		// nothing recovers it short of a restart if rclone's own drainer
+		// is not running.
+		//
+		// Ordinary misconfiguration reaches it. config.Validate asks only
+		// that remote_path be a non-empty absolute path, so pointing it
+		// at a file is accepted, and the daemon then repeats it every
+		// poll interval for as long as it runs.
+		if f != nil {
+			shutdownFs(ctx, f)
+		}
 		return nil, fmt.Errorf("source %q: %w", src.ID, err)
 	}
 	return f, nil
 }
 
+// oneConnectionAtATime returns a context whose rclone configuration keeps
+// a single operation to a single SFTP connection.
+//
+// An Fs is not a connection, it is a pool, and two of rclone's own
+// settings decide how wide one operation opens that pool. Both default
+// above one, and both were measured against the real fixture in what is
+// now core/tests/machinegate/connections_test.go:
+//
+//   - Checkers (8 by default) is how many goroutines walk a tree that the
+//     backend cannot list recursively, and sftp has no ListR, so a plain
+//     recursive List over 24 subdirectories opened 8 connections. A
+//     directory per producer run (gitea-runs/<RUN_ID>/*.dump) is a normal
+//     FR-8 layout, so this is the ordinary case, not a deep-tree edge.
+//   - MultiThreadStreams (4 by default) is how many concurrent readers
+//     rclone splits a download across once the file is bigger than
+//     --multi-thread-cutoff (256Mi). Multi-GB database dumps are exactly
+//     what this manager fetches, so the default path for its own subject
+//     matter is four connections for one copy.
+//
+// Against a host that queues the surplus that is invisible. Against one
+// that rejects it, which is what #264 is about, it is a failed backup that
+// names nothing an operator can act on. Bounding both here means the
+// number of connections a source sees is a property of this adapter, not
+// something an operator has to discover and then defend against with a
+// per-remote ceiling.
+//
+// The throughput this gives up is small and worth naming rather than
+// hand-waving: sftpConfig pins concurrency at 64, which is 64 requests in
+// flight inside the one connection, so a single stream is not a single
+// request. What is given up is the parallelism ACROSS connections, and for
+// a backup manager pulling one artifact at a time from a hardened host
+// that parallelism was never the point.
+//
+// fs.AddConfig copies the caller's ConfigInfo rather than replacing it, so
+// everything else the caller configured (a bandwidth limit, in particular)
+// survives untouched. That matters more than it looks: rclone captures the
+// ambient ConfigInfo into an Fs at construction, so one caller's settings
+// reaching another operation would be permanent for that Fs's whole life.
+// TestOneConnectionAtATimeLeavesEverythingElseAlone is what holds it.
+//
+// It also caps ConnectTimeout, for a reason that has nothing to do with
+// connection counts but everything to do with being the one place every
+// operation passes through. See ConnectTimeout.
+func oneConnectionAtATime(ctx context.Context) context.Context {
+	ctx, ci := fs.AddConfig(ctx)
+	ci.Checkers = 1
+	ci.MultiThreadStreams = 1
+	if ci.ConnectTimeout <= 0 || ci.ConnectTimeout > fs.Duration(ConnectTimeout) {
+		ci.ConnectTimeout = fs.Duration(ConnectTimeout)
+	}
+	return ctx
+}
+
+// ConnectTimeout is the ceiling this adapter puts on rclone's own
+// --contimeout, which is the deadline both of rclone's dials are built
+// with: fs/fshttp's NewDialer sets net.Dialer.Timeout from it, and
+// backend/sftp sets ssh.ClientConfig.Timeout from the same value.
+//
+// # Why a ceiling exists at all
+//
+// rclone's default is 60 seconds, and app.DefaultRetryPolicy allows six
+// attempts. Since issue #388 correctly reclassified a connect timeout
+// rclone imposed on itself as Transient rather than as a cancellation
+// nobody asked for, those six attempts are all really spent, so a source
+// that blackholes costs six dials plus backoff before a cycle reports
+// FAILED. At rclone's 60s that is about six and a half minutes, against
+// the "a little over two minutes" DefaultRetryPolicy's own doc claims and
+// used to hold. Issue #415 is that gap: the bound still holds in the sense
+// that matters for safety, because the budget is per set and cycles are
+// sequential, but a doc describing a bound the code no longer keeps is the
+// same defect class as a comment describing a pragma that had stopped
+// being true.
+//
+// # Where fifteen seconds comes from
+//
+// From both ends, and neither of them is a preference.
+//
+// The ceiling is the budget the doc already claims. Six attempts and this
+// policy's backoff caps (1s, 2s, 4s, 8s, 16s) put at most 31 seconds of
+// waiting between them, so the dialling has to fit inside roughly 89
+// seconds for the whole thing to land near two minutes: (120s - 31s) / 6
+// is 14.8s per attempt. Fifteen gives a worst case of 2m1s, which is what
+// "a little over two minutes" means, and app.DefaultRetryBudget is the
+// test-pinned arithmetic rather than this sentence.
+//
+// The floor is a measured handshake.
+// TestConnectTimeoutLeavesARealHandshakeRoom dials the real Docker sshd
+// fixture through this exact code path and reports what a legitimate
+// connect actually costs on the host running it, so the margin between a
+// real connect and this ceiling is a number in the run's own output rather
+// than an assurance here. That fixture is loopback Docker, so it
+// establishes a floor and not a WAN worst case; what makes fifteen seconds
+// safe for a slow link is the size of the margin over it, which that test
+// prints and asserts.
+//
+// # Why it is a ceiling rather than an assignment
+//
+// A caller that has already asked for LESS keeps what it asked for. That
+// is what makes this a bound rather than a policy: errors_test.go's
+// connect-timeout evidence runs at 500ms so that six real dials into a
+// blackhole cost three seconds instead of ninety, and a bound that
+// overwrote it would make its own proof unaffordable.
+const ConnectTimeout = 15 * time.Second
+
+// shutdownFs releases the backend resources an Fs holds, which for sftp
+// means its pool of open SSH connections (#264).
+//
+// Every operation in this file builds its own Fs, and before this existed
+// nothing ever released one, so the connections a cycle held open grew with
+// the number of operations it performed and were bounded by nothing at all.
+// Against a host that queues connections that is merely wasteful. Against
+// one that rejects them it is a failed backup: both production sources this
+// manager pulls from reject a third simultaneous connection from one
+// address with a TCP reset, so listing succeeded on the first pool and the
+// transfer's pool was refused before it sent a byte.
+//
+// Releasing after each operation rather than caching the Fs is deliberate.
+// rclone captures the ambient ConfigInfo into an Fs at construction and
+// never re-reads it, so a cached Fs would silently apply the first caller's
+// settings, a bandwidth limit above all, to every later one for as long as
+// it lived. Nothing tests that directly, because there is no cache to test:
+// the discipline is what makes the question unaskable, and a backup tool
+// that quietly transfers at somebody else's limit is a worse outcome than a
+// connection setup per operation, which is what main was already paying
+// anyway (see this function's caller doc and #355: main opened a fresh pool
+// per operation too, it just never closed one).
+//
+// The error is swallowed for a future backend rather than for this one.
+// sftp's Shutdown is `return f.drainPool(ctx)` and drainPool has no path
+// that returns non-nil, so today there is no error here to swallow; the
+// `_ =` is what keeps that true when a backend that does report one is
+// added, since a failure to hang up cleanly, after the operation has
+// already produced its answer, must not turn a good backup into a reported
+// failure.
+//
+// What drainPool CAN do is decline: it returns nil early, closing nothing,
+// while f.getSessions() != 0. That would leak a pool while reporting
+// success, and the reason it does not is sftpConfig's idle_timeout, which
+// leaves rclone's own drain timer running to finish the job (see the
+// comment there, and #355's finding that with idle_timeout unset that
+// timer is never created at all).
+func shutdownFs(ctx context.Context, f fs.Fs) {
+	if do, ok := f.(fs.Shutdowner); ok {
+		_ = do.Shutdown(ctx)
+	}
+}
+
+// toArtifact carries the three attributes a LISTING can produce for free.
+//
+// It deliberately does not hash and does not ask for a stable id. Both are
+// per-object round trips on sftp (rclone computes a hash by running a
+// command on the server), and a listing is over every object under a
+// source root, so doing it here would turn discovery into one round trip
+// per artifact for attributes discovery has no use for yet. Stat is where
+// those get added, because Stat is the pre-delete recheck and that is the
+// one place the strong attributes decide something.
+//
+// Two details are worth knowing rather than rediscovering.
+//
+// The context.Background() is not a lost ctx. fs.Object.ModTime takes one
+// for backends that would have to fetch the time, and neither backend
+// reachable through a Source does: rclone v1.75.0's local and sftp Objects
+// both return a time they already hold and ignore the argument entirely.
+// A backend that did fetch would need the operation's own context
+// threaded here.
+//
+// And this does not guard against a zero time the way medium.go's
+// toObjectInfo does, so a backend reporting no modification time would
+// produce time.Time{}.Unix(), a large negative number, where
+// RemoteArtifact.ModTime documents 0. Nothing hits it today for the same
+// reason as above (both backends always report one), and the comparison
+// that would read it, model.CompareIdentity, compares two captures of the
+// same object and so would see the same wrong number twice.
 func toArtifact(o fs.Object) transport.RemoteArtifact {
 	return transport.RemoteArtifact{
 		Path:    o.Remote(),
@@ -136,14 +368,22 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 // for a caller to accidentally rely on; making that explicit here is
 // cheaper than leaving the answer to whatever ambient default happens to be
 // in effect.
+//
+// Full recursion is also where a plain listing turns into a fan-out of
+// connections, because sftp has no native recursive listing and rclone
+// walks what it cannot list recursively with one goroutine per --checkers.
+// oneConnectionAtATime below is what bounds that; see its doc for the
+// measurement.
 func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.RemoteArtifact, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
+	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
 	out := make([]transport.RemoteArtifact, 0, len(objs))
 	for _, o := range objs {
@@ -194,13 +434,15 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 // genuinely cannot answer, so the comparison stays Weak and the delete stays
 // refused, which is what FR-16 asks for.
 func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath string) (transport.RemoteArtifact, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
 
 	art := toArtifact(o)
@@ -220,19 +462,37 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 	return art, nil
 }
 
+// CopyToLocal fetches one remote object to localPartialPath, which is the
+// .partial file internal/lifecycle owns and later renames. This method
+// never chooses that path and never touches the final name: the rename is
+// the moment an artifact becomes real, and it belongs to the code that
+// records it in the journal, not to the code that moved the bytes.
+//
+// The destination Fs is built from the local DIRECTORY and the copy is
+// addressed by leaf name, because that is the shape operations.Copy takes.
+// splitPath below does that split rather than filepath.Split, deliberately.
+//
+// BytesTransferred is read off the destination object after the copy, so
+// it is what landed rather than what was sent. Checksummed is left false,
+// which transport.TransferResult's own doc explains: operations.Copy does
+// compare a hash when the two sides share one, but it does not report
+// whether it found one, so this cannot honestly claim a comparison
+// happened.
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
+	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
+	defer shutdownFs(ctx, srcFs)
 	o, err := srcFs.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	dstDir, dstName := splitPath(localPartialPath)
 	dstFs, err := fs.NewFs(ctx, dstDir)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	// Copy, never Move. The remote source is deleted later, by the lifecycle
 	// manager, and only after a durable commit (FR-11, FR-15).
@@ -249,19 +509,37 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 		dst, copyErr = operations.Copy(ctx, dstFs, nil, dstName, o)
 		return copyErr
 	}); err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil
 }
 
+// RemoteHash asks the backend to compute alg over the object at
+// remotePath, and refuses rather than degrades when it cannot (FR-13).
+//
+// It is the only method here that builds its Fs through fsForHashing, and
+// that separation is the point rather than a detail: the two sftp options
+// that make SHA-256 reachable would break the COPY path if they were on
+// the Fs that copies, because a hardened shell-less account would then
+// advertise a hash it cannot compute and rclone would report the resulting
+// mismatch as "corrupted on transfer". withSHA256's doc in ssh.go has the
+// measurement.
+//
+// Every refusal here joins ErrUnsupportedHash, so errors.go can classify
+// it by identity. The empty string is never returned with a nil error: a
+// caller comparing "" against a recorded digest gets a mismatch it would
+// read as corruption, which is the same silent-downgrade failure the
+// capability rule exists to prevent.
 func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsForHashing(ctx, src)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
 	var ht hash.Type
 	switch alg {
@@ -287,7 +565,7 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 		// and a failure to run it is the same fact the guard above reports:
 		// this account cannot compute this hash.
 		//
-		// Joining the sentinel keeps that fact classifiable. Classify is
+		// Joining the sentinel keeps that fact classifiable. classify is
 		// sentinel-based on purpose (see its doc), and without this a
 		// shell-less account's refusal would land in Permanent, which is
 		// the label for "we do not know what this was". The message keeps
@@ -308,18 +586,44 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	return sum, nil
 }
 
+// DeleteRemote removes exactly the object at remotePath from the source.
+//
+// It performs no safety proof of its own, and that is deliberate: FR-15
+// and FR-16's proof (the identity captured at discovery still matches the
+// object that is there now) is re-derived by internal/lifecycle
+// immediately before this is called, where the journal and the local copy
+// are both in hand. A second, weaker opinion here would be a second place
+// that decides a producer's file may be destroyed.
+//
+// An object that is already gone IS an error here, which is the opposite
+// of MediumStore.DeleteObject's rule and is not an inconsistency. A medium
+// object is one this manager wrote at a key it computed, so finding it
+// absent means an earlier attempt of its own already succeeded. A source
+// object is a producer's file this manager only ever read, so finding it
+// absent means the world moved underneath the proof that authorised the
+// delete, and the caller has to hear about it.
 func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remotePath string) error {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
-	return Wrap("delete_remote", o.Remove(ctx))
+	return WrapCtx(ctx, "delete_remote", o.Remove(ctx))
 }
 
+// splitPath splits a local path into the directory an Fs is built from and
+// the leaf name a copy is addressed by, returning "." for a bare name.
+//
+// It scans for "/" itself rather than calling filepath.Split because what
+// it produces is fed to rclone, whose remotes are "/"-separated on every
+// platform, and because filepath.Split keeps the trailing separator on the
+// directory it returns, which fs.NewFs would then treat as part of the
+// remote's name.
 func splitPath(p string) (dir, name string) {
 	for i := len(p) - 1; i >= 0; i-- {
 		if p[i] == '/' {

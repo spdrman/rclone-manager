@@ -65,6 +65,27 @@ var licenceMarkers = []struct {
 	{"GPL-3.0-only", []string{"GNU GENERAL PUBLIC LICENSE", "Version 3"}},
 	{"GPL-2.0-only", []string{"GNU GENERAL PUBLIC LICENSE", "Version 2"}},
 	{"MPL-2.0", []string{"Mozilla Public License Version 2.0"}},
+	// The same licence, spelled the way HashiCorp's projects spell it in
+	// their LICENSE files: "Mozilla Public License, version 2.0", with a
+	// comma and a lower-case v. It is a second exact phrase rather than a
+	// looser match on "Mozilla Public License" plus "2.0", because those
+	// two substrings co-occur in files that only MENTION the MPL, and a
+	// permissive dependency classified as copyleft is a wrong answer in
+	// the other direction.
+	//
+	// And it is a second ROW rather than a second needle on the row
+	// above, because the needles on one row are ANDed: every one of them
+	// has to be in the text. Both spellings on one row would match
+	// neither file. TestClassifyLicense_AMentionOfMozillaIsNotTheMPL is
+	// the control that keeps the second row exact.
+	//
+	// Registering rclone's s3 backend (#235) is what surfaced this:
+	// go-cleanhttp and go-retryablehttp arrive under it, both are
+	// MPL-2.0, and both landed in the generated NOTICE as NOASSERTION.
+	// An unclassified WEAK-COPYLEFT dependency in a shipped compliance
+	// record is the failure this table exists to prevent, so the spelling
+	// is added rather than the entries explained away.
+	{"MPL-2.0", []string{"Mozilla Public License, version 2.0"}},
 	{"EPL-2.0", []string{"Eclipse Public License - v 2.0"}},
 	{"CDDL-1.0", []string{"COMMON DEVELOPMENT AND DISTRIBUTION LICENSE"}},
 	{"Apache-2.0", []string{"Apache License", "Version 2.0"}},

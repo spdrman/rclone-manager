@@ -10,6 +10,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is two findings that arrived together, kept together because
+// each is the other's counterweight.
+//
+// The first is that Stat has to carry a hash. FR-15's pre-delete recheck
+// compares the identity captured at discovery against the one observed
+// now, and model.CompareIdentity cannot reach ConfidenceStrong without a
+// hash or a backend-supplied stable id. Stat returning only path, size and
+// modification time did not weaken that check, it made a successful delete
+// UNREACHABLE, on every backend, including ones that hash perfectly well.
+//
+// The second is that the fix is not "always hash". A backend that cannot
+// answer still has to refuse the delete rather than acquire confidence it
+// does not have, so the second case pins the other side: identical
+// identities with no hash on either side still preserve. Without it the
+// obvious over-fix (treat agreement as sufficient) would pass.
+//
+// The third case is the one that is easy to forget to write at all: every
+// error leaving this adapter carries a manager-owned category. Wrap
+// existed before anything called it, so the classification vocabulary was
+// complete and unreachable, and lifecycle code switching on Category saw
+// Unclassified for everything.
+
 // Stat feeds FR-15's pre-delete recheck. If it does not carry a hash, then
 // model.CompareIdentity can never reach ConfidenceStrong, Preserve() is always
 // true, and a delete is unreachable on every backend, including ones that hash

@@ -14,16 +14,29 @@
 // A link's public reachability is DERIVED from one recorded fact, the
 // source repository's visibility, instead of being asserted per link. Five
 // links each carrying their own "yes this resolves" boolean is five places
-// to forget, and the answer for all five is the same answer: this
-// repository is private, so every link into it is a 404 for a store
-// reviewer. One field, one truth, and flipping it is the operator action
-// that closes the criterion.
+// to forget, and the answer for all five is the same answer: whether the
+// repository they point into can be opened. One field, one truth. It reads
+// public today, and it read private for a while after the repository had
+// stopped being private, which is issue #484: the value is measured with
+// `gh repo view spdrman/rclone-manager --json visibility`, nothing in this
+// package can re-measure it, and a note claiming it was measured is not
+// evidence that it still is.
 //
-// A copyleft dependency is a hard refusal rather than a warning. The
-// project's own licence choice (Apache-2.0) is only available because the
-// whole linked graph is permissive, and that is a fact about today's
-// go.mod, not a property of the project. LicensePolicyComplaints is what
-// keeps the premise and the conclusion attached to each other.
+// A licence the project has not read is a hard refusal rather than a
+// warning. The premise behind the Apache-2.0 choice is that every
+// component linked into a shipped binary is either permissive or one of
+// the non-permissive licences this project accepts on purpose, with what
+// that acceptance obliges written down and discharged. That is a fact
+// about today's go.mod rather than a property of the project, so
+// LicensePolicyComplaints and LicenceObligationComplaints are what keep
+// the premise and the conclusion attached to each other.
+//
+// The graph is not wholly permissive and has not been since rclone's s3
+// backend was registered: two MPL-2.0 modules arrive under it and cannot
+// be unlinked from it. AcceptedNonPermissiveLicence is the category that
+// says so honestly instead of widening permissiveIds, which would have
+// cleared the same check by making this package's data file assert
+// something false.
 package packaging
 
 import (
@@ -70,8 +83,9 @@ type ComplianceLicense struct {
 	// it off is what stops it firing, which is the difference between a
 	// policy and a comment.
 	CopyleftBlocksTheLicenseChoice bool `json:"copyleftBlocksTheLicenseChoice"`
-	// PermissiveIDs is the allowlist, and it is the allowlist that
-	// makes the policy a refusal. CopyleftIDs is a denylist, and a
+	// PermissiveIDs is the allowlist of licences that are permissive,
+	// and it is the allowlist that makes the policy a refusal.
+	// CopyleftIDs is a denylist, and a
 	// denylist answers "is this one of the licences somebody thought
 	// of?", which is not the question: a bare GPL-3.0 out of npm
 	// registry metadata, a compound expression, or a recognised but
@@ -86,6 +100,169 @@ type ComplianceLicense struct {
 	// the two jobs apart is deliberate: editing this list must not be
 	// able to turn a refusal into a pass.
 	CopyleftIDs []string `json:"copyleftIds"`
+	// AcceptedNonPermissive is the third category: licences that are
+	// NOT permissive and that this project ships under anyway, each
+	// with the obligation that acceptance carries. It is deliberately
+	// not part of PermissiveIDs, and the reasoning is in
+	// AcceptedNonPermissiveLicence's own doc comment.
+	AcceptedNonPermissive []AcceptedNonPermissiveLicence `json:"acceptedNonPermissive"`
+}
+
+// AcceptedNonPermissiveLicence is one licence that is not permissive and
+// that this project ships under on purpose, with what that costs written
+// down next to it.
+//
+// It is a separate category because the alternative was one line: add
+// the id to permissiveIds and the refusal goes away. permissiveIds is a
+// statement about what a licence IS, and it is the list somebody reads
+// to find out whether this graph is permissive. MPL-2.0 is file-level
+// weak copyleft, so putting it there would make the one data file whose
+// whole job is to be true say something false, in the place it is least
+// true.
+//
+// The shape is the point: an entry here cannot be a bare id. It has to
+// name the clause the acceptance triggers, where a recipient obtains
+// the licence, where a recipient obtains the source, and which
+// artifacts carry that offer. An incomplete entry admits nothing
+// (LicensePolicyComplaints refuses the component), and a complete entry
+// whose artifacts do not actually carry the offer admits nothing either
+// (LicenceObligationComplaints reads them). Accepted here means accepted
+// and discharged, or it means refused.
+type AcceptedNonPermissiveLicence struct {
+	SPDXID string `json:"spdxId"`
+	// Scope says how far the licence's reciprocity reaches, in words.
+	// "Non-permissive" spans everything from per-file source
+	// availability to network-use copyleft, and that difference is the
+	// entire decision, so it is recorded rather than left to whoever
+	// recognises the id.
+	Scope string `json:"scope"`
+	// Obligation names the clause and says what somebody has to do
+	// about it. A section number on its own is a citation.
+	Obligation string `json:"obligation"`
+	// LicenceTextURL is where a recipient gets the licence itself.
+	// MPL-2.0 §3.1 asks for exactly this in as many words: recipients
+	// have to be told how to obtain a copy of the licence, not only
+	// that it governs the files.
+	LicenceTextURL string `json:"licenceTextUrl"`
+	// SourceRetrieval is where a recipient gets the Source Code Form,
+	// as a template over one component: {module} and {version} are
+	// substituted per component, so the offer names an exact release
+	// instead of a project. A template that does not vary by component
+	// is refused, because "the source is on GitHub somewhere" does not
+	// identify the source that was shipped.
+	//
+	// {module} and {version} are both escaped the way a Go module
+	// proxy escapes them, for Go components. An unescaped capital
+	// letter is a 404, and a containment check over a file would pass
+	// on that 404 happily.
+	SourceRetrieval string `json:"sourceRetrieval"`
+	// Components are the exact artifacts this acceptance covers, as
+	// "module@version".
+	//
+	// The acceptance is per RELEASE, not per licence, and this list is
+	// what makes that true rather than stated. Without it, accepting
+	// MPL-2.0 once would admit every future module that happens to
+	// carry the same id, which is a wider allowlist with extra steps.
+	// A different version is a different upload: different licence
+	// file bytes, different notices, nobody has read either, and its
+	// source address is a different address. So a version bump has to
+	// come back through here, which is the same reasoning permissiveIds
+	// is built on, one level finer.
+	Components []string `json:"components"`
+	// DischargedBy are the repository paths that carry the offer to a
+	// recipient. Recording an obligation is not discharging it, so
+	// each of these is read and checked for the id, for the licence
+	// text address, and for every affected component at its exact
+	// version with its own resolved source address.
+	DischargedBy []string `json:"dischargedBy"`
+	// Rationale is why this acceptance was taken rather than the
+	// alternatives, for the reader who wants the decision and not the
+	// mechanism.
+	Rationale []string `json:"rationale"`
+}
+
+// incompleteBecause says why an acceptance records too little to stand,
+// or returns "" when it records enough.
+func (a AcceptedNonPermissiveLicence) incompleteBecause() string {
+	switch {
+	case strings.TrimSpace(a.SPDXID) == "":
+		return "names no licence, so it accepts nothing in particular"
+	case strings.TrimSpace(a.Scope) == "":
+		return "names no scope, so a reader cannot tell how far the licence reaches"
+	case strings.TrimSpace(a.Obligation) == "":
+		return "names no obligation, which makes it an allowlist entry with a longer name"
+	case strings.TrimSpace(a.LicenceTextURL) == "":
+		return "says nowhere a recipient can obtain the licence text"
+	case strings.TrimSpace(a.SourceRetrieval) == "":
+		return "says nowhere a recipient can obtain the source"
+	case !strings.Contains(a.SourceRetrieval, "{module}") || !strings.Contains(a.SourceRetrieval, "{version}"):
+		return fmt.Sprintf("gives sourceRetrieval as %q, which does not vary by component; an offer that names a project rather than a release does not identify the source that shipped", a.SourceRetrieval)
+	case len(a.Components) == 0:
+		return "names no component, so it accepts a licence rather than the releases somebody read, and every future module carrying the same id with it"
+	case len(a.DischargedBy) == 0:
+		return "names no artifact that carries the offer, so the obligation is recorded and nothing discharges it"
+	}
+	return ""
+}
+
+// Accepts reports whether this acceptance covers one exact release.
+func (a AcceptedNonPermissiveLicence) Accepts(comp Component) bool {
+	return containsFold(a.Components, comp.Name+"@"+comp.Version)
+}
+
+// Covers reports whether this acceptance is the one for an SPDX id.
+func (a AcceptedNonPermissiveLicence) Covers(spdxID string) bool {
+	return strings.EqualFold(strings.TrimSpace(a.SPDXID), strings.TrimSpace(spdxID))
+}
+
+// SourceURLFor renders the source address for one component.
+func (a AcceptedNonPermissiveLicence) SourceURLFor(comp Component) string {
+	module, version := comp.Name, comp.Version
+	if comp.Ecosystem == EcosystemGo {
+		// Both halves, not just the path. golang.org/x/mod's
+		// EscapeVersion runs the same escapeString as EscapePath, so a
+		// pre-release tag like v2.0.0-RC1 needs it exactly as much as
+		// a capitalised module path does, and neither of this graph's
+		// two MPL versions happens to have an uppercase letter today.
+		// That is the reason to do it now rather than when one does:
+		// the failure is a rendered URL that 404s, and the check that
+		// reads the artifact only asks whether the string is there.
+		module, version = EscapeGoModulePath(module), EscapeGoModulePath(version)
+	}
+	url := strings.ReplaceAll(a.SourceRetrieval, "{module}", module)
+	return strings.ReplaceAll(url, "{version}", version)
+}
+
+// EscapeGoModulePath applies the module proxy's case encoding: an
+// uppercase letter becomes "!" followed by its lowercase form. Proxy
+// paths are case-folded, and the escape is how two modules differing
+// only in case stay distinct on a case-insensitive filesystem.
+//
+// This is not hypothetical here. github.com/IBM/go-sdk-core/v5 and
+// github.com/Max-Sum/base32768 are both in this project's own linked
+// graph, and unescaped their proxy URLs are 404s: I asked
+// proxy.golang.org both ways and the escaped path answers 200. A source
+// offer that renders a 404 is worse than none, because the check that
+// reads the artifact only asks whether the string is present.
+//
+// It is deliberately the same function for a path and for a version,
+// because golang.org/x/mod's EscapePath and EscapeVersion are the same
+// function too (both call escapeString). Only ASCII uppercase is
+// touched; a module path or version that reaches here with a "!" or a
+// non-ASCII rune in it would already have been rejected upstream by
+// CheckPath, and go list would never have produced one.
+func EscapeGoModulePath(path string) string {
+	var b strings.Builder
+	b.Grow(len(path) + 8)
+	for i := 0; i < len(path); i++ {
+		if c := path[i]; c >= 'A' && c <= 'Z' {
+			b.WriteByte('!')
+			b.WriteByte(c + ('a' - 'A'))
+			continue
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
 
 // SourceRepository is where the source lives and who can see it.
@@ -120,12 +297,34 @@ type ComplianceLink struct {
 type DistributionTarget struct {
 	Artifacts     []string `json:"artifacts"`
 	UnbuiltReason string   `json:"unbuiltReason"`
+	// LicenceDelivery is how a recipient of THIS target gets the
+	// licence, the notices and the third-party inventory. Empty is the
+	// same kind of refusal as an unbuilt target with no reason: the
+	// answer was "the image is shared, so probably the image", written
+	// in a note about something else and true of ten targets out of
+	// eleven. See LicenceDeliveryComplaints.
+	LicenceDelivery string `json:"licenceDelivery"`
+}
+
+// LicenceDelivery is what "the image carries them" means, in the form
+// the check can compare against container/Dockerfile.
+//
+// ImagePaths is repository path to in-image path, and it is a
+// declaration that has to agree with what the runtime stage actually
+// COPYs in both directions: a Dockerfile edited without this file is a
+// recipient told to look somewhere the file is not, and this file edited
+// without the Dockerfile is the same sentence from the other end.
+type LicenceDelivery struct {
+	Note       []string          `json:"note"`
+	ImagePaths map[string]string `json:"imagePaths"`
+	Labels     map[string]string `json:"labels"`
 }
 
 // Distribution is every shipping path.
 type Distribution struct {
-	Note    []string                      `json:"note"`
-	Targets map[string]DistributionTarget `json:"targets"`
+	Note            []string                      `json:"note"`
+	LicenceDelivery LicenceDelivery               `json:"licenceDelivery"`
+	Targets         map[string]DistributionTarget `json:"targets"`
 }
 
 // PerformanceMetric is one number the provenance bundle carries forward.
@@ -223,6 +422,30 @@ func (c Compliance) IsCopyleft(spdxID string) bool {
 // allowlist. This is the one that decides.
 func (c Compliance) IsPermissive(spdxID string) bool {
 	return containsFold(c.License.PermissiveIDs, spdxID)
+}
+
+// AcceptedNonPermissive returns the recorded acceptance for an SPDX id.
+//
+// It returns the entry rather than a bool so a caller cannot treat
+// "accepted" as the end of the question: the entry is what says whether
+// the acceptance records enough to stand.
+func (c Compliance) AcceptedNonPermissive(spdxID string) (AcceptedNonPermissiveLicence, bool) {
+	for _, a := range c.License.AcceptedNonPermissive {
+		if a.Covers(spdxID) {
+			return a, true
+		}
+	}
+	return AcceptedNonPermissiveLicence{}, false
+}
+
+// AcceptedNonPermissiveIDs returns the accepted non-permissive ids in
+// declaration order, for a message that has to list them.
+func (c Compliance) AcceptedNonPermissiveIDs() []string {
+	out := make([]string, 0, len(c.License.AcceptedNonPermissive))
+	for _, a := range c.License.AcceptedNonPermissive {
+		out = append(out, a.SPDXID)
+	}
+	return out
 }
 
 func containsFold(list []string, want string) bool {
@@ -337,11 +560,37 @@ func LinkComplaints(c Compliance, read ReadFileFunc) []string {
 // LicensePolicyComplaints says every way the third-party inventory
 // invalidates the project's own licence choice.
 //
-// The premise behind Apache-2.0 here is that nothing in the graph is
-// copyleft. This is that premise, executable. A component whose licence
-// could not be identified is refused too: an unidentified licence is not
-// evidence of a permissive one, and treating it as one is how a graph
-// silently acquires an obligation nobody accepted.
+// The premise behind Apache-2.0 here is that every linked component is
+// either permissive or one of the exact RELEASES this project accepts
+// under a non-permissive licence, with the obligation recorded. This is
+// that premise, executable. A component whose licence could not be
+// identified is refused too: an unidentified licence is not evidence of
+// a permissive one, and treating it as one is how a graph silently
+// acquires an obligation nobody accepted.
+//
+// Releases rather than licences, because an acceptance keyed on an SPDX
+// id would admit every future module carrying that id, and a version
+// bump would inherit an acceptance somebody gave a different upload.
+//
+// It is pure, and it judges the DECLARATION of an acceptance rather than
+// its discharge, because whether the NOTICE a recipient receives
+// actually carries the offer is a question about the tree and not about
+// compliance.json. LicenceObligationComplaints is that half.
+//
+// The acceptance is per release, and this half enforces that itself: an
+// entry names the exact releases it covers, so a brand-new module under
+// an accepted licence, or a recorded module at a version nobody read, is
+// refused here with no filesystem in the way. Measured both ways: with
+// the acceptance keyed on the id alone, vault-client-go@v0.4.3 and
+// go-retryablehttp bumped to v0.7.9 got zero complaints from this
+// function; with the release list they get one each.
+//
+// Never call this on its own to decide whether a graph is acceptable,
+// even so. What it cannot see is whether the artifacts carry the offer:
+// bump a recorded module, update the release list to match, and this
+// function is green while docs/compliance/source-offer.md still offers
+// the old version to a recipient. LicenceComplaints runs both halves and
+// is the entry point.
 func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 	var out []string
 	if len(inv.Components) == 0 {
@@ -363,8 +612,24 @@ func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 		case LicenseExpressionIsUndecided(comp.LicenseID):
 			out = append(out, fmt.Sprintf("%s@%s is listed as %q, which is an expression rather than a decided licence; a choice between licences is not evidence that the permissive branch is the one this project takes",
 				comp.Name, comp.Version, comp.LicenseID))
-		case !c.IsPermissive(comp.LicenseID):
-			out = append(out, fmt.Sprintf("%s@%s is %s, %s", comp.Name, comp.Version, comp.LicenseID, c.whyNotPermitted(comp.LicenseID)))
+		case c.IsPermissive(comp.LicenseID):
+			// Permitted by being named on the allowlist, which is
+			// the whole of what the allowlist means.
+		default:
+			accepted, ok := c.AcceptedNonPermissive(comp.LicenseID)
+			if !ok {
+				out = append(out, fmt.Sprintf("%s@%s is %s, %s", comp.Name, comp.Version, comp.LicenseID, c.whyNotPermitted(comp.LicenseID)))
+				break
+			}
+			if why := accepted.incompleteBecause(); why != "" {
+				out = append(out, fmt.Sprintf("%s@%s is %s, which compliance.json accepts as non-permissive, and the acceptance %s; a licence accepted without recording what it obliges is a wider allowlist wearing a longer name",
+					comp.Name, comp.Version, comp.LicenseID, why))
+				break
+			}
+			if !accepted.Accepts(comp) {
+				out = append(out, fmt.Sprintf("%s@%s is %s, and compliance.json accepts that licence for %s and not for this release; a different version is a different upload with its own licence bytes, its own notices and its own source address, so it comes back through acceptedNonPermissive rather than inheriting an acceptance somebody gave something else",
+					comp.Name, comp.Version, comp.LicenseID, strings.Join(accepted.Components, ", ")))
+			}
 		}
 	}
 	return out
@@ -374,10 +639,134 @@ func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 func (c Compliance) whyNotPermitted(spdxID string) string {
 	if c.IsCopyleft(spdxID) {
 		if c.License.CopyleftBlocksTheLicenseChoice {
-			return fmt.Sprintf("which is copyleft: the project's %s choice rests on the whole linked graph being permissive, and this component is the counter-example", c.License.SPDXID)
+			return fmt.Sprintf("which is copyleft: the project's %s choice rests on every linked component being permissive or an accepted non-permissive licence whose obligation is written down and discharged, and this component is neither", c.License.SPDXID)
 		}
 		return fmt.Sprintf("which is copyleft. copyleftBlocksTheLicenseChoice is off in compliance.json and it is refused regardless, because the %s choice rests on the allowlist rather than on a boolean in a data file", c.License.SPDXID)
 	}
-	return fmt.Sprintf("which is not on the permissive allowlist compliance.json declares (%s); an id nobody has read the terms of is not evidence of a permissive one",
-		strings.Join(c.License.PermissiveIDs, ", "))
+	accepted := "nothing"
+	if ids := c.AcceptedNonPermissiveIDs(); len(ids) > 0 {
+		accepted = strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("which is not on the permissive allowlist compliance.json declares (%s) and is not one of the non-permissive licences it accepts on purpose (%s); an id nobody has read the terms of is not evidence of a permissive one",
+		strings.Join(c.License.PermissiveIDs, ", "), accepted)
+}
+
+// LicenceObligationComplaints says every way an accepted non-permissive
+// licence's obligation is recorded and not actually discharged.
+//
+// This is the half that reads the tree. An acceptance whose artifacts do
+// not name the licence, do not say where the licence text is, or do not
+// give the exact release and the exact address of the source that
+// shipped, is an obligation somebody wrote down and nobody met, and this
+// project would rather have a red build than a compliance record that
+// reads well.
+//
+// Two rules here are about the mechanism rather than the paperwork. An
+// id on permissiveIds AND on acceptedNonPermissive is refused, because
+// the allowlist decides first and the obligation recorded here would
+// never be looked at again. And an acceptance nothing in the inventory
+// is under is refused, because a standing acceptance for a licence the
+// graph does not contain is a permission granted in advance, which is
+// the one thing this category must never become.
+//
+// Never call this on its own either. It reads the artifacts for the
+// components the inventory carries under an ACCEPTED licence, so a
+// component under a licence nobody accepted is not its question, and a
+// graph with a GPL module in it produces nothing here. LicenceComplaints
+// runs both halves and is the entry point.
+//
+// One thing the artifact list is not: two independent proofs. NOTICE is
+// rendered by buildNotice from the same register this function reads,
+// and TestComplianceArtifactsMatchThisTree keeps the checked-in file
+// byte-identical to that render, so on a data change the NOTICE arm
+// cannot fail. It still earns its place, because it catches a renderer
+// change that stops emitting one of the strings a recipient needs. The
+// hand-written source-offer.md is the arm that can disagree with the
+// register.
+func LicenceObligationComplaints(c Compliance, inv Inventory, read ReadFileFunc) []string {
+	if read == nil {
+		return []string{"no reader was supplied to the obligation check, so no artifact was read and nothing was checked; an unread artifact is not a discharged obligation"}
+	}
+	var out []string
+	for _, a := range c.License.AcceptedNonPermissive {
+		if why := a.incompleteBecause(); why != "" {
+			out = append(out, fmt.Sprintf("compliance.json accepts %q as non-permissive and the acceptance %s", a.SPDXID, why))
+			continue
+		}
+		if c.IsPermissive(a.SPDXID) {
+			out = append(out, fmt.Sprintf("%s is on permissiveIds and on acceptedNonPermissive at once; the allowlist decides first, so the obligation recorded against it would never be checked and the acceptance would be a wider allowlist wearing a longer name", a.SPDXID))
+		}
+		if LicenseExpressionIsUndecided(a.SPDXID) {
+			out = append(out, fmt.Sprintf("acceptedNonPermissive carries %q, which is an expression rather than a decided licence, so it can never match a component id and accepts nothing", a.SPDXID))
+			continue
+		}
+		var affected []Component
+		for _, comp := range inv.Components {
+			if a.Covers(comp.LicenseID) {
+				affected = append(affected, comp)
+			}
+		}
+		if len(affected) == 0 {
+			out = append(out, fmt.Sprintf("compliance.json accepts %s as non-permissive and nothing in the inventory is under it; an acceptance with nothing to justify it is a permission granted in advance, so it is removed rather than kept warm", a.SPDXID))
+			continue
+		}
+		// The other direction. A release listed here and gone from the
+		// graph is a permission left lying around, and the version bump
+		// that removed it is exactly when somebody should have to look
+		// at the offer again.
+		inInventory := map[string]bool{}
+		for _, comp := range affected {
+			inInventory[strings.ToLower(comp.Name+"@"+comp.Version)] = true
+		}
+		for _, want := range a.Components {
+			if !inInventory[strings.ToLower(strings.TrimSpace(want))] {
+				out = append(out, fmt.Sprintf("compliance.json accepts %s for %s and the inventory has no such release under that licence; an acceptance for something the graph no longer links is a permission left lying around", a.SPDXID, want))
+			}
+		}
+		for _, rel := range a.DischargedBy {
+			data, err := read(rel)
+			if err != nil {
+				out = append(out, fmt.Sprintf("%s's obligation is declared as discharged by %s, which is not in the tree: %v", a.SPDXID, rel, err))
+				continue
+			}
+			body := string(data)
+			if !strings.Contains(body, a.SPDXID) {
+				out = append(out, fmt.Sprintf("%s never names %s, so it is not what tells a recipient which licence governs those files", rel, a.SPDXID))
+			}
+			if !strings.Contains(body, a.LicenceTextURL) {
+				out = append(out, fmt.Sprintf("%s never gives %s, so a recipient is told %s applies and not how to read it", rel, a.LicenceTextURL, a.SPDXID))
+			}
+			for _, comp := range affected {
+				if !strings.Contains(body, comp.Name+"@"+comp.Version) {
+					out = append(out, fmt.Sprintf("%s never names %s@%s, which is %s and is linked into %s", rel, comp.Name, comp.Version, a.SPDXID, strings.Join(comp.LinkedInto, " and ")))
+				}
+				if url := a.SourceURLFor(comp); !strings.Contains(body, url) {
+					out = append(out, fmt.Sprintf("%s never gives %s, so the offer for %s@%s names no address a recipient can fetch that source from", rel, url, comp.Name, comp.Version))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// LicenceComplaints says every way the third-party inventory invalidates
+// the project's licence choice, and it is the only function here that
+// answers that question on its own.
+//
+// It is two halves because they need different inputs, and neither is
+// closed alone. LicensePolicyComplaints is pure and judges what the
+// inventory says against what compliance.json declares: a licence nobody
+// accepted, an acceptance that records too little, a module or a version
+// the acceptance does not name. What it cannot see is the tree, so an
+// offer that still names last release's version passes it. Measured: a
+// recorded module bumped with the release list updated in step gets zero
+// complaints from it while the written offer is four complaints stale.
+// LicenceObligationComplaints reads the artifacts and refuses exactly
+// that, but it never looks at a component under a licence that is not
+// accepted, so a graph with a GPL module in it gets zero complaints from
+// it, measured too. So the pair is the gate, and a caller that runs one
+// half has a hole the width of the other.
+func LicenceComplaints(c Compliance, inv Inventory, read ReadFileFunc) []string {
+	out := LicensePolicyComplaints(c, inv)
+	return append(out, LicenceObligationComplaints(c, inv, read)...)
 }

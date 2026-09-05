@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   BackupManagerApi,
+  BackupSetRetention,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -9,6 +10,10 @@ import type {
   FirstRunResult,
   HostKeyProbeResult,
   ManagerStorage,
+  MediumPreflightCheck,
+  RetentionOverride,
+  RetentionSettings,
+  RetentionTierSetting,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -30,33 +35,87 @@ import type {
  *  "empty" one with a configuration and no backup sets. Toggle scenarios
  *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run";
+export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
 
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run"];
+  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
 const GB = 1024 ** 3;
 const TB = 1024 ** 4;
 
-const defaultRetention = {
-  daily: 7,
-  weekly: 13,
-  monthly: 12,
+/**
+ * The deployment's retention policy this mock reports, and the one every
+ * inheriting set is retained under (issue #333).
+ *
+ * Deliberately NOT the product's own 7/3/12 default: a bug that reaches
+ * for the documented defaults instead of this deployment's policy is the
+ * failure #362 was written to stop, and it is invisible against a fixture
+ * where the two agree.
+ *
+ * The monthly tier names a storage medium, the same one defaultSettings'
+ * chain names, so the per-set page and the Settings page agree about
+ * where monthly backups go. It is here because a chain write REPLACES the
+ * whole chain, so it is the fixture that would catch an editor which
+ * dropped the field on the way back out, and because a set that inherits
+ * it must NOT be asked to consent to it again.
+ */
+const deploymentRetention: RetentionSettings = {
   timezone: "Europe/Berlin",
-  weekStartsOn: "monday" as const,
-  protectLastKnownGood: true
+  weekStartsOn: "monday",
+  protectLastKnownGood: true,
+  tiers: [
+    { name: "daily", granularity: "day", keep: 7 },
+    { name: "weekly", granularity: "week", keep: 13, windowUnit: "month" },
+    { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
+  ]
 };
 
+/**
+ * Which sets declare a policy of their own, keyed by "source/set", and
+ * what that raw (unresolved) policy says.
+ *
+ * Two fixture sets override, and each one is a different spelling: the
+ * media archive names a tiers chain, the auth config names the three
+ * scalars. Both are legal, so a surface that could only render one of
+ * them would look correct against half the fixtures.
+ */
+const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride]> = ([
+  [
+    "media/weekly-archive",
+    {
+      tiers: [
+        { name: "weekly", granularity: "week", keep: 8 },
+        { name: "monthly", granularity: "month", keep: 24, medium: "offsite_cold" }
+      ]
+    }
+  ],
+  ["production/auth-config", { dailyDays: 7, weeklyMonths: 4, monthlyMonths: 6 }]
+] as const);
+
+/**
+ * The fixture backup sets, and the ONE piece of state in this module that
+ * survives a createMockApi() call, because two of the fake's methods
+ * genuinely change it: createBackupSet appends (so a set created in a
+ * session shows up in a later listSets, the behaviour the real backend
+ * has) and, since issue #350, updateBackupSet applies its patch (so a
+ * per-box Save that sent the wrong field is visible instead of being
+ * echoed back as though it had worked).
+ *
+ * That makes test ORDER matter, which it did not before. resetMockFixtures
+ * below is the way out, and a test that asserts against a fixture's
+ * current values should call it rather than assume it is looking at the
+ * declaration on this page.
+ */
 const SETS: BackupSet[] = [
   {
     id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
-    excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker",
-    destination: "/data/backups/production/postgres/", retention: defaultRetention,
+    excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker", stableForSeconds: 0,
+    destination: "/data/backups/production/postgres/", retentionIsOverride: false,
     validations: ["transfer", "checksum", "application"],
     state: "healthy",
     stateNote: "Verified nightly dump; application validation passed 42 minutes ago.",
@@ -72,8 +131,8 @@ const SETS: BackupSet[] = [
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
-    excludePatterns: ["*.part"], completionMethod: "atomic-rename",
-    destination: "/data/backups/production/billing/", retention: defaultRetention,
+    excludePatterns: ["*.part"], completionMethod: "atomic-rename", stableForSeconds: 0,
+    destination: "/data/backups/production/billing/", retentionIsOverride: false,
     validations: ["transfer", "checksum"],
     state: "stale",
     stateNote: "No verified backup received for 31 hours. Expected within 24 hours.",
@@ -89,9 +148,9 @@ const SETS: BackupSet[] = [
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
-    excludePatterns: [], completionMethod: "stable-size",
+    excludePatterns: [], completionMethod: "stable-size", stableForSeconds: 300,
     destination: "/data/backups/production/auth/",
-    retention: { ...defaultRetention, weekly: 4, monthly: 6 },
+    retentionIsOverride: true,
     validations: ["transfer", "checksum"],
     state: "failing",
     stateNote: "Halted — the SSH host key changed. Remote artifacts are untouched.",
@@ -107,9 +166,9 @@ const SETS: BackupSet[] = [
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
-    excludePatterns: [], completionMethod: "completion-marker",
+    excludePatterns: [], completionMethod: "completion-marker", stableForSeconds: 0,
     destination: "/data/backups/media/",
-    retention: { ...defaultRetention, daily: 0, weekly: 8, monthly: 24 },
+    retentionIsOverride: true,
     validations: ["transfer", "checksum"],
     state: "healthy", stateNote: "Weekly cold archive; checksum verification only.",
     // This fixture is the one read-only set (issue #282, #316): a cold
@@ -127,6 +186,36 @@ const SETS: BackupSet[] = [
   }
 ];
 
+/** A copy of SETS as declared, taken at module load and never written to,
+ *  so resetMockFixtures has something pristine to restore from. */
+const PRISTINE_SETS: BackupSet[] = SETS.map((set) => ({
+  ...set,
+  includePatterns: [...set.includePatterns],
+  excludePatterns: [...set.excludePatterns]
+}));
+
+/**
+ * Puts the fixture backup sets back exactly as this module declares them.
+ *
+ * Call it in a test's afterEach when the test drives a mutating method
+ * (createBackupSet, updateBackupSet). Without it, a suite's Nth test sees
+ * whatever its predecessors wrote, which is not a hypothetical: the
+ * inline-edit suite's "never send a hidden field" case first failed
+ * because an earlier case in the same file had already switched the
+ * fixture's completion method to the very value it was checking was
+ * absent.
+ *
+ * The clone is deep enough for what these fixtures hold: the arrays are
+ * arrays of strings, so copying them is what stops a patch that replaces
+ * includePatterns leaking into the pristine copy.
+ */
+export function resetMockFixtures(): void {
+  SETS.length = 0;
+  for (const set of PRISTINE_SETS) {
+    SETS.push({ ...set, includePatterns: [...set.includePatterns], excludePatterns: [...set.excludePatterns] });
+  }
+}
+
 const ARTIFACTS: BackupArtifact[] = [
   {
     id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
@@ -138,7 +227,26 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
-    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
+    // Two copies, and deliberately not two matching ones: the local copy
+    // has been read back and hashed, the copy on the medium has only been
+    // seen to exist. That difference is what the Copies card is for.
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "",
+        verificationClass: "content", verifiedAt: "2026-08-28T02:00:59+02:00",
+        access: "immediate", status: "ACTIVE"
+      },
+      {
+        medium: "offsite_s3", mediumType: "s3",
+        location: "rclone-manager/production/postgres-primary/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "STANDARD_IA",
+        verificationClass: "existence", verifiedAt: "2026-08-28T06:00:02+02:00",
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -150,7 +258,19 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly"],
-    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
+    // The archive case: the bytes are there and cannot be read without a
+    // restore, and nothing has ever verified them, so there is no class
+    // and no verified-at. Both absences are real answers.
+    placements: [
+      {
+        medium: "offsite_cold", mediumType: "s3",
+        location: "rclone-manager/production/billing-mysql/billing-20260827.sql.gz",
+        sizeBytes: 3650722201, storageClass: "DEEP_ARCHIVE",
+        verificationClass: null, verifiedAt: null,
+        access: "requires_restore", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
@@ -169,7 +289,16 @@ const ARTIFACTS: BackupArtifact[] = [
         "sha256 mismatch: local file hashes to c19f3ba7..., remote reports 91a4d02e...",
       detectedAt: "2026-08-26T04:14:10+02:00",
       remoteSourceRetained: true
-    }
+    },
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
+        sizeBytes: 44040192, storageClass: "",
+        verificationClass: null, verifiedAt: null,
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -186,7 +315,20 @@ const ARTIFACTS: BackupArtifact[] = [
       detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
       detectedAt: "2026-08-24T02:19:02+02:00",
       remoteSourceRetained: true
-    }
+    },
+    // The case this whole feature exists for: the journal says a copy was
+    // made, and this deployment no longer declares the medium, so nothing
+    // can confirm it. mediumType is empty because the configuration no
+    // longer describes what kind of place that was.
+    placements: [
+      {
+        medium: "decommissioned_s3", mediumType: "",
+        location: "rclone-manager/production/billing-mysql/billing-20260824.sql.gz",
+        sizeBytes: 3543348838, storageClass: "",
+        verificationClass: "existence", verifiedAt: "2026-07-14T02:20:00+02:00",
+        access: "unreachable", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
@@ -198,7 +340,11 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["weekly"],
-    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
+    // No copies at all. This one is still arriving, and the partial file
+    // on disk is not a copy, so the dev server can show the empty state
+    // the same way a real backend produces it.
+    placements: []
   }
 ];
 
@@ -225,13 +371,31 @@ const OPERATIONS: Operation[] = [
       bytesTotal: 15246903296,
       bytesPerSecond: 123731968
     },
-    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
+    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00",
+    // Still running, so there is nothing to report yet. Null, not zeroes.
+    cycle: null
   },
   {
     id: "op_recon_1", setId: "media/weekly-archive", setName: "Media archive",
     kind: "reconciliation", label: "Reconciling catalog against storage",
     status: "running", progress: null,
-    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
+    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00",
+    cycle: null
+  },
+  // A finished cycle that walked backups and got none of them through.
+  // This is what issue #361 looked like from the outside, and what the
+  // dashboard now has to be able to show.
+  {
+    id: "op_cycle_1", setId: "", setName: "All backup sets",
+    kind: "transfer", label: "run cycle", status: "completed", progress: null,
+    nonDestructive: false, startedAt: "2026-08-29T01:00:00+02:00",
+    cycle: {
+      backupSetsProcessed: 4, artifactsWalked: 12, artifactsThrough: 0,
+      // And what FR-30's version of the same thing looks like beside it:
+      // three artifacts were due to move to the medium their tier names
+      // and none arrived.
+      moves: { attempted: 3, landed: 0 }
+    }
   }
 ];
 
@@ -351,6 +515,94 @@ const VERSION: VersionInfo = {
 };
 
 /**
+ * Resolves one backup set's retention answer the way core/internal/config
+ * does (issue #333): its own policy when it declares one, the
+ * deployment's otherwise, and the calendar inherited either way.
+ *
+ * The inheritance is modelled here rather than faked with two flat
+ * fixtures because it is the behaviour the surface is about: an override
+ * that omits the timezone is reckoned in the DEPLOYMENT's, and a mock
+ * that quietly answered UTC would make the UI look right against a rule
+ * it was breaking.
+ */
+/** Projects the shared backup set fixtures through one mock instance's own
+ *  override map, so the list card and the detail page agree after a write
+ *  the way they would against a real backend that computes both from one
+ *  configuration.
+ *
+ *  Read-time projection rather than a mutation of SETS, because SETS is
+ *  module state shared by every createMockApi() in a test run: writing
+ *  through it would make one test's override visible to the next, which
+ *  is a test-order dependency nothing in the file would explain. */
+function withRetentionAttribution(overrides: Map<string, RetentionOverride>, sets: BackupSet[]): BackupSet[] {
+  return sets.map((s) => ({ ...s, retentionIsOverride: overrides.has(s.id) }));
+}
+
+/**
+ * core/service's consent gate (FR-27), as the dev server enforces it: the
+ * tier-to-medium mappings `submitted` would ADD to the chain `inForce`,
+ * matched per tier by name. A mapping the chain already has is not asked
+ * about again; a tier that is new or that moves to a different medium is.
+ * The refusal carries the same words the real backend's does, because a
+ * form that renders the message has then shown the operator the right
+ * thing by construction.
+ */
+function mediumDisclosureRefusal(
+  submitted: RetentionTierSetting[],
+  inForce: RetentionTierSetting[],
+  acknowledged: boolean
+): BackupManagerError | null {
+  const introduced = submitted.filter((t) => {
+    if (!t.medium) return false;
+    const was = inForce.find((b) => b.name === t.name);
+    return !was || (was.medium ?? "") !== t.medium;
+  });
+  if (introduced.length === 0 || acknowledged) return null;
+  const storage = defaultSettings().schema.storage;
+  return new BackupManagerError({
+    code: "MEDIUM_DISCLOSURE_REQUIRED",
+    message:
+      "This write sends " + introduced.map((t) => t.name + " -> " + t.medium).join(", ") + ". " +
+      storage.mediumDisclosure + " " + storage.retrievalDisclosure,
+    correlationId: "cid_mockdisclosure"
+  });
+}
+
+function mockBackupSetRetention(
+  overrides: Map<string, RetentionOverride>,
+  source: string,
+  set: string
+): BackupSetRetention {
+  const id = source + "/" + set;
+  const override = overrides.get(id);
+  if (!override) {
+    return { backupSetId: id, isOverride: false, effective: deploymentRetention, deployment: deploymentRetention };
+  }
+  return {
+    backupSetId: id,
+    isOverride: true,
+    override,
+    deployment: deploymentRetention,
+    effective: {
+      timezone: override.timezone ?? deploymentRetention.timezone,
+      weekStartsOn: override.weekStartsOn ?? deploymentRetention.weekStartsOn,
+      protectLastKnownGood: override.protectLastKnownGood ?? deploymentRetention.protectLastKnownGood,
+      tiers:
+        override.tiers ??
+        // The three scalars are sugar for exactly this chain
+        // (config.DefaultTierChain), expanded here because the real
+        // backend always reports the RESOLVED chain and a form that had
+        // to know the sugar exists would need two layouts for one policy.
+        [
+          { name: "daily", granularity: "day", keep: override.dailyDays ?? 0 },
+          { name: "weekly", granularity: "week", keep: override.weeklyMonths ?? 0, windowUnit: "month" },
+          { name: "monthly", granularity: "month", keep: override.monthlyMonths ?? 0 }
+        ]
+    }
+  };
+}
+
+/**
  * A fresh RetentionPlan, as apps/common/webhost's real handler would return
  * it (see fromWireRetentionPlan/client.ts) — no `stale` field. `tick` fingerprints
  * "the world as of this preview" the same way the real service's
@@ -358,9 +610,28 @@ const VERSION: VersionInfo = {
  * world, so applyRetention below only ever honors the MOST RECENT tick's
  * plan_id, exactly like ApplyRetentionPlan's own single-use, revision-
  * checked contract (core/service/retention.go).
+ *
+ * declaresAMedium is the "no-medium" scenario's own switch, and it gates
+ * exactly what core/service gates (summarizeRetentionPlan, issue #430): a
+ * deployment with one place to put anything says nothing about placement,
+ * so no move, no unconfirmed placement, and no medium on any verdict.
+ * Without that, dev mode would show a Moves section to the one scenario
+ * that exists to prove the product still works without the feature.
  */
-function retentionPlan(source: string, set: string, tick: number): RetentionPlan {
+function retentionPlan(
+  overrides: Map<string, RetentionOverride>,
+  source: string,
+  set: string,
+  tick: number,
+  declaresAMedium: boolean
+): RetentionPlan {
+  const attribution = mockBackupSetRetention(overrides, source, set);
   return {
+    // Issue #333: which policy decided these verdicts. Taken from the
+    // same per-set state the retention sub-resource serves, so giving a
+    // set its own policy in dev mode moves the preview too.
+    retention: attribution.effective,
+    retentionIsOverride: attribution.isOverride,
     planId: "retplan_mock_" + tick,
     backupSetId: source + "/" + set,
     inventoryRevision: "inv_" + tick,
@@ -385,13 +656,46 @@ function retentionPlan(source: string, set: string, tick: number): RetentionPlan
       { artifact: "backup-20260813.dump.zst", action: "REFUSE", reason: "sibling-prefix directory found at the computed path; refusing to delete", tiers: [] },
       { artifact: "backup-20260806.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
       { artifact: "backup-20260723.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
-      { artifact: "backup-20260716.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
-    ]
+      // Issue #430: the one deletion that would NOT happen on this
+      // machine. A dev fixture where every deletion is local renders the
+      // FR-30 distinction as an empty column, which is the same thing as
+      // not having built it.
+      {
+        artifact: "backup-20260716.dump.zst",
+        action: "DELETE",
+        reason: "Not selected by current retention policy",
+        tiers: [],
+        medium: declaresAMedium ? "offsite_s3" : undefined
+      }
+    ],
+    // Issue #430. The monthly tier's home is offsite_s3 and both monthly
+    // keeps are still local, so one is a move and the other is a move
+    // already in flight, which is the pair a placement section exists to
+    // tell apart.
+    moves: declaresAMedium
+      ? [{ artifact: "backup-20260801.dump.zst", fromMedium: "local", toMedium: "offsite_s3" }]
+      : [],
+    unconfirmedPlacements: declaresAMedium ? ["backup-20260701.dump.zst"] : []
   };
 }
 
 const delay = <T,>(value: T, ms = 180): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+/** The refusal every by-identity backup-set operation owes when the pair
+ *  it was handed names nothing. The CONTRACT's code, BACKUP_SET_NOT_FOUND,
+ *  not the "unknown" some callers here used to invent: the removal dialog
+ *  branches on that code to tell "somebody already removed this" from
+ *  every other refusal, and a mock that could not produce it would leave
+ *  that branch untestable through the mock. */
+const notFound = <T,>(): Promise<T> =>
+  Promise.reject(
+    new BackupManagerError({
+      code: "BACKUP_SET_NOT_FOUND",
+      message: "no such backup set",
+      correlationId: "cid_mock404"
+    })
+  );
 
 /** Issue #146 (B2.7): a deterministic in-memory stand-in for the real
  *  create-backup-set/import/probe/test-connection endpoints, mirroring
@@ -433,8 +737,12 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     includePatterns: req.include,
     excludePatterns: [],
     completionMethod: completionMethodFromStrategy(req.completionStrategy),
+    stableForSeconds: req.stableForSeconds ?? 0,
     destination: req.localPath,
-    retention: defaultRetention,
+    // A newly created set has no policy of its own: it is retained under
+    // the deployment's, which is what a set with no retention block in
+    // config.yaml means.
+    retentionIsOverride: false,
     validations: ["transfer"],
     state: "healthy",
     stateNote: "Created just now; no runs yet.",
@@ -503,12 +811,63 @@ function defaultSettings(): AppSettings {
       tiers: [
         { name: "daily", granularity: "day", keep: 7 },
         { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
-        { name: "monthly", granularity: "month", keep: 12 }
+        { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
       ],
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
+    // Two mediums, one of them an archive class, so the dev server shows
+    // both halves of the picker: a place that serves on demand and a place
+    // that cannot be read at all without a restore.
+    mediums: [
+      {
+        id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
+        storageClass: "STANDARD_IA", readsRequireRestore: false
+      },
+      {
+        id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
+        storageClass: "DEEP_ARCHIVE", readsRequireRestore: true
+      }
+    ],
     schema: {
+      // The words come from core/internal/placement in a real deployment.
+      // They are reproduced here because this is a mock of the SERVER, and
+      // a mock that served different words would hide exactly the drift
+      // the real surface is built to prevent.
+      storage: {
+        verificationClasses: [
+          {
+            className: "content",
+            proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
+            requires: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+            downloadsObject: true
+          },
+          {
+            className: "attested",
+            proves: "the provider's stored full-object checksum equals the recorded hash",
+            requires: "one metadata call, no egress, trusting the endpoint's own checksum",
+            downloadsObject: false
+          },
+          {
+            className: "existence",
+            proves: "an object exists at the recorded key, at the recorded size",
+            requires: "one HEAD request, which says nothing about the bytes",
+            downloadsObject: false
+          }
+        ],
+        mediumDisclosure:
+          "Backups that only this tier keeps will live only on that storage medium. " +
+          "After a backup uploads and I verify it, I delete the copy on this machine. " +
+          "That deletion is what the setting is for, and once this is saved it happens " +
+          "automatically whenever retention runs, with no further prompt. " +
+          "A medium on an archive storage class cannot be read on demand at all: getting a " +
+          "backup back means asking for a restore and waiting hours, and the provider " +
+          "reports no progress while it waits.",
+        retrievalDisclosure:
+          "Reading a copy back off a storage medium is billed by your provider. " +
+          "I hold no price list and no knowledge of your rates, so I report the bytes and the " +
+          "storage class and stop there rather than showing you a number I made up."
+      },
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
         windowUnits: ["day", "week", "month", "quarter", "half_year", "year"],
@@ -585,15 +944,55 @@ function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => bo
 
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
+  // Every deployment written before storage mediums existed, which is the
+  // compatibility case FR-35 pins: no medium declared anywhere, so every
+  // backup has exactly one local copy, no tier names a medium, and the
+  // pages have no Medium column and no medium picker at all. It is a
+  // scenario rather than a variant of "empty" because the point is a
+  // FULLY populated instance that simply never heard of the feature.
+  const noMedium = scenario === "no-medium";
   // Every previewRetention call advances this backup set's "inventory" by
   // one tick and issues a plan captured against it. applyRetention only
   // ever honors the plan_id from the LATEST tick — anything older is,
   // correctly, stale — mirroring ApplyRetentionPlan's real revision check.
   let retentionTick = 0;
+  // Issue #333: which sets declare a policy of their own, per mock
+  // instance. A copy of the fixture rather than the fixture itself, so a
+  // write in one test cannot be seen by the next.
+  const retentionOverrides = new Map<string, RetentionOverride>(SET_RETENTION_OVERRIDES);
   // Held per mock instance so a PATCH is visible to the next GET, the
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
   const settings = defaultSettings();
+  if (noMedium) {
+    // The FR-35 case: no medium declared, and no tier naming one. The
+    // storage SCHEMA stays, because the verification ladder is a property
+    // of the product rather than of a configuration, and a deployment with
+    // one local copy per backup still has copies whose class means
+    // something.
+    settings.mediums = [];
+    settings.retention.tiers = settings.retention.tiers.map((t) => ({ ...t, medium: undefined }));
+  }
+  // Every backup keeps exactly one local copy under that scenario: the
+  // shape migration 0007's backfill leaves every pre-EPIC-E deployment in.
+  const artifacts = noMedium
+    ? ARTIFACTS.map((a) => ({
+        ...a,
+        placements: [
+          {
+            medium: "local",
+            mediumType: "local",
+            location: a.localPath,
+            sizeBytes: a.sizeBytes,
+            storageClass: "",
+            verificationClass: "content" as const,
+            verifiedAt: a.receivedAt,
+            access: "immediate" as const,
+            status: "ACTIVE" as const
+          }
+        ]
+      }))
+    : ARTIFACTS;
   // Issue #176: a fresh app-store install has no configuration at all.
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
@@ -655,7 +1054,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getStorage: () =>
       delay(empty ? STORAGE_EMPTY : scenario === "storage-critical" ? STORAGE_CRITICAL : STORAGE),
 
-    listSets: () => delay(empty ? [] : SETS),
+    listSets: () => delay(empty ? [] : withRetentionAttribution(retentionOverrides, SETS)),
     getSet: (id) => {
       const found = SETS.find((s) => s.id === id);
       // A rejected promise, not a synchronous throw: getSet's own type
@@ -671,12 +1070,103 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
           })
         );
-      return delay(found);
+      return delay(withRetentionAttribution(retentionOverrides, [found])[0]);
     },
     runCycle: () => delay(undefined),
+    // The mock ECHOES the window it was given rather than a fixed one, so
+    // a screen that dropped windowDays on the way to the client looks
+    // wrong here rather than plausible. It says the class's published
+    // figure and that a bill exists, and says neither a percentage, a
+    // finishing time nor an amount, because there is nowhere in the type
+    // to put one.
+    restoreCopy: (req) =>
+      delay({
+        operationId: "op_mock_restore_1",
+        status: "running",
+        windowDays: req.windowDays,
+        wait: "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours, and a bulk one up to forty eight; S3 reports a restore as in progress or finished and never reports a percentage or a finishing time",
+        billing:
+          "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
+      }),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
-    setEnabled: () => delay(undefined),
-    setReadOnly: () => delay(undefined),
+    // Both APPLY to the SETS fixture rather than resolving and leaving it
+    // alone, for the reason updateBackupSet's own comment below gives:
+    // a mock that answers "fine" without changing anything makes every
+    // toggle look correct in the browser suite whatever the page sent.
+    // That was cheap to ignore while the only enable/disable control sat
+    // on a page that re-read the set afterwards, and stopped being cheap
+    // when the same control landed on every row of the sets list, where
+    // "did the badge change" is the whole observable outcome.
+    setEnabled: (source: string, set: string, enabled: boolean) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return notFound();
+      found.enabled = enabled;
+      return delay(undefined);
+    },
+    setReadOnly: (source: string, set: string, readOnly: boolean) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return notFound();
+      found.readOnly = readOnly;
+      return delay(undefined);
+    },
+
+    // Issue #350. The mock APPLIES the patch to its own SETS entry
+    // rather than echoing the request, and applies only the keys the
+    // patch carries. Echoing would make every per-box Save look correct
+    // in the browser suite no matter what the page sent, which is
+    // exactly the class of green-by-construction the e2e harness has
+    // been caught by before: a page that sent every field on every Save
+    // would be indistinguishable from one that sent only the dirty box.
+    updateBackupSet: (source, set, patch) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
+          })
+        );
+      if (patch.host !== undefined) found.host = patch.host;
+      if (patch.port !== undefined) found.port = patch.port;
+      if (patch.username !== undefined) found.username = patch.username;
+      if (patch.remoteFolder !== undefined) found.remoteFolder = patch.remoteFolder;
+      if (patch.destination !== undefined) found.destination = patch.destination;
+      if (patch.includePatterns !== undefined) found.includePatterns = [...patch.includePatterns];
+      if (patch.completionMethod !== undefined) found.completionMethod = patch.completionMethod;
+      return delay({ ...found });
+    },
+
+    // Issue #391. The mock actually REMOVES the set from its own SETS
+    // fixture rather than resolving and leaving it there, for the reason
+    // updateBackupSet above applies the patch rather than echoing it: a
+    // page that never called this would be indistinguishable, in the
+    // browser suite, from one that did, which is precisely the
+    // green-by-construction the no-op confirm handler already got away
+    // with once. Removing it also means a test can assert the set is gone
+    // afterwards instead of only that a spy was called.
+    //
+    // A set that is not there is rejected with the CONTRACT's code for
+    // it, BACKUP_SET_NOT_FOUND, and not the "unknown" its siblings above
+    // use: the detail page branches on that code to tell "already gone"
+    // from every other refusal, and a mock that could not produce it
+    // would leave that branch untestable through the mock, which is the
+    // green-by-construction shape check-client-paths.sh's own header
+    // warns about, one layer down.
+    removeSet: (source: string, set: string) => {
+      const at = SETS.findIndex((s) => s.source === source && s.set === set);
+      if (at < 0) return notFound();
+      SETS.splice(at, 1);
+      return delay(undefined);
+    },
+
+    // Nothing is ever running in the mock, so edit mode opens with no
+    // prompt. That is the honest default rather than a convenience: a
+    // fixture that claimed a transfer was in flight would make every
+    // Edit press in the browser suite go through a confirmation the real
+    // product only shows sometimes. A test that wants the warning stubs
+    // this one call.
+    getEditHold: () => delay({ held: false, running: null }),
+    takeEditHold: () => delay({ expiresAt: new Date(Date.now() + 90_000).toISOString(), stopped: null }),
+    releaseEditHold: () => delay(undefined),
 
     createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
       const set = mockBackupSetFromCreateRequest(req);
@@ -712,14 +1202,15 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
 
     listArtifacts: (setId) =>
-      delay(empty ? [] : ARTIFACTS.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
-    getArtifact: (id) => delay(ARTIFACTS.find((a) => a.id === id) ?? ARTIFACTS[0]),
+      delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
+    getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () => delay(empty ? [] : ACTIVITY),
-    listQuarantine: () => delay(empty ? [] : ARTIFACTS.filter((a) => a.quarantine)),
+    listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
+    retryFailedIngestion: () => delay(undefined),
     reinstate: () =>
       delay({
         reinstated: true,
@@ -731,14 +1222,61 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     previewRetention: (source, set) => {
       retentionTick += 1;
-      return delay(retentionPlan(source, set, retentionTick));
+      return delay(retentionPlan(retentionOverrides, source, set, retentionTick, !noMedium));
+    },
+
+    // Issue #333's three per-set retention operations. The write half
+    // really applies: setBackupSetRetention stores the submitted policy
+    // and clearBackupSetRetention removes it, so the page re-renders from
+    // state that changed rather than from an echo of its own request, and
+    // a following previewRetention is decided under the new policy.
+    //
+    // The whole-chain rule is NOT modelled here. It lives in
+    // config.Validate and is proved against the real service in
+    // core/service/backupsetretention_test.go; a copy of it in a fixture
+    // would be a second rule that could pass while the real one failed.
+    // The one refusal this mock does carry is the one a form can produce
+    // by itself, which is an empty chain.
+    getBackupSetRetention: (source, set) => delay(mockBackupSetRetention(retentionOverrides, source, set)),
+    setBackupSetRetention: (source, set, policy) => {
+      if (policy.tiers && policy.tiers.length === 0)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message:
+              'retention.tiers must name at least one tier; an empty chain is not "keep nothing", it reinstates the default daily/weekly/monthly policy.',
+            correlationId: "cid_mockchain"
+          })
+        );
+      // FR-27's consent gate, against the chain deciding for THIS set,
+      // exactly as core/service.SetBackupSetRetention decides it. This is
+      // the second refusal a form can produce by itself, and it is
+      // modelled for the same reason the empty chain is: a fixture that
+      // accepted an unacknowledged mapping would let a UI ship a save
+      // the real backend refuses.
+      const refusal = mediumDisclosureRefusal(
+        policy.tiers ?? [],
+        mockBackupSetRetention(retentionOverrides, source, set).effective.tiers,
+        policy.acknowledgeMediumDisclosure === true
+      );
+      if (refusal) return Promise.reject(refusal);
+      // The consent is not part of the policy, so it is not stored: the
+      // real backend never writes it to the file and never serves it back.
+      const { acknowledgeMediumDisclosure: _consent, ...stored } = policy;
+      void _consent;
+      retentionOverrides.set(source + "/" + set, stored);
+      return delay(mockBackupSetRetention(retentionOverrides, source, set));
+    },
+    clearBackupSetRetention: (source, set) => {
+      retentionOverrides.delete(source + "/" + set);
+      return delay(mockBackupSetRetention(retentionOverrides, source, set));
     },
     applyRetention: (source, set, planId) => {
       // This has to REJECT, not throw synchronously. applyRetention is a
       // Promise, so a bare throw escapes before a promise exists and a
       // caller's .catch() never runs — the one path that must not fail open
       // for a stale retention plan.
-      const current = retentionPlan(source, set, retentionTick);
+      const current = retentionPlan(retentionOverrides, source, set, retentionTick, !noMedium);
       if (planId !== current.planId)
         return Promise.reject(new BackupManagerError({
           // The literal code apps/common/webhost/handlers_retention.go
@@ -806,6 +1344,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           settings.retention.protectLastKnownGood = r.protectLastKnownGood;
         }
         if (r.tiers !== undefined) {
+          const refusal = mediumDisclosureRefusal(r.tiers, settings.retention.tiers, req.acknowledgeMediumDisclosure === true);
+          if (refusal) return Promise.reject(refusal);
           if (r.tiers.length === 0)
             // The literal refusal core/service returns for this
             // (settings.go): an emptied chain is not "keep nothing", it
@@ -867,6 +1407,57 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       }
 
       return delay(structuredClone(settings));
+    },
+
+    // Issue #443. The fixture answers about a medium the fixture's own
+    // settings declare and rejects anything else with the same named
+    // refusal the backend gives, so a settings form that renders a
+    // preflight is exercised against both outcomes rather than against a
+    // fixture that says yes to every id.
+    preflightStorageMedium: (mediumId: string) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      if (!medium)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_NOT_FOUND",
+          message: "this configuration declares no storage medium with that id",
+          correlationId: "cid_mockpreflight404"
+        }));
+      // An archive-class medium cannot take delivery, and the fixture
+      // says so at the same step the engine does rather than reporting a
+      // uniform green: a form built against an always-passing fixture
+      // never renders the one answer an operator has to act on.
+      const deliverable = !medium.readsRequireRestore;
+      const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+        ({ step, outcome: "skipped", category: "", detail });
+      const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+        ({ step, outcome: "passed", category: "", detail });
+      const checks: MediumPreflightCheck[] = [
+        passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
+        passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
+        deliverable
+          ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
+          : {
+              step: "deliverable",
+              outcome: "failed",
+              category: "",
+              detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+            }
+      ];
+      const rest: [MediumPreflightCheck["step"], string][] = [
+        ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
+        ["read_back", "the object was read back and is byte for byte what was written"],
+        ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
+        ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
+        ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
+      ];
+      for (const [step, detail] of rest) {
+        checks.push(
+          deliverable
+            ? passed(step, detail)
+            : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
+        );
+      }
+      return delay({ medium: medium.id, ok: deliverable, checks }, 700);
     },
 
     scanCatalog: () =>

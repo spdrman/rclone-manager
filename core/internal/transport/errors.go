@@ -5,6 +5,28 @@ import (
 	"fmt"
 )
 
+// This file is the vocabulary half of FR-22's error classification, and it
+// is deliberately the half that knows nothing about rclone.
+//
+// Classifying a failure is two jobs: deciding what an error IS, in words
+// this project owns, and working out which of those words an
+// rclone-shaped error deserves. Only the first is here. The second lives
+// in transport/rclone, beside the sentinels it matches on, and the split
+// is what turns failure-safety invariant 13 from a convention somebody has
+// to remember into a fact about the import graph: internal/lifecycle
+// imports this package to read a Category and has no path from here to the
+// adapter that produced it, so there is no line through which an rclone
+// type could arrive.
+//
+// The thing to know before adding anything below: a Category is not a
+// label, it is a branch. Retryable is written against this set, so is
+// internal/app/halt.go's haltReasonFor, so is every consumer that decides
+// whether a failure stops a cycle. A new value is a decision about what
+// lifecycle policy DOES, and every one of those switches has to be asked
+// about it. That is why ErrCredentialsUnavailable further down is a
+// sentinel wrapped into a cause chain rather than a fourteenth category:
+// it needed to be distinguishable, not decided upon.
+
 // Category is the manager-owned classification of a transport failure
 // (FR-22). Lifecycle code switches on Category, never on the underlying
 // error's text or type. That is failure-safety invariant 12 ("Lifecycle
@@ -16,7 +38,7 @@ import (
 // convention someone has to remember.
 //
 // The concrete translation from an rclone error to one of these values
-// lives in transport/rclone (see Classify there). This file only owns the
+// lives in transport/rclone (see ClassifyCtx there). This file only owns the
 // vocabulary both sides agree on.
 type Category int
 
@@ -42,6 +64,21 @@ const (
 	KeyPermissions
 	NotFound
 	PermissionDenied
+	// Configuration is EPIC E's addition (FR-28): the request cannot
+	// succeed as configured, and nothing about credentials, the network or
+	// the object itself is the reason. A bucket that does not exist, and an
+	// endpoint that cannot be resolved to a service at all, are the two
+	// shapes the s3 backend produces.
+	//
+	// It sits apart from Authentication and from Permanent on purpose.
+	// Authentication says the caller is not who the endpoint wants;
+	// Configuration says the caller named a place that is not there, which
+	// a different credential does not fix and a retry does not either. And
+	// Permanent is this classifier's "I could not place this at all", which
+	// is exactly what an operator cannot act on: NoSuchBucket landing there
+	// would tell someone their backup failed permanently without telling
+	// them the one line of config to change.
+	Configuration
 	IntegrityFailure
 	Conflict
 	UnsupportedCapability
@@ -49,6 +86,19 @@ const (
 	Cancelled
 )
 
+// categoryNames is written as an indexed literal, keyed BY the constants
+// above rather than listed in their declaration order. That is not style:
+// a positional list silently renames every category below the point where
+// somebody inserts one, and the categories are inserted in the middle
+// (Configuration went in between PermissionDenied and IntegrityFailure
+// when EPIC E added it). Keying by the constant makes an insertion a
+// no-op for every other name, and leaves a new one rendering as "" rather
+// than as its neighbour's word, which is the failure that is at least
+// visible.
+//
+// The names are snake_case because they are read by machines as well as
+// people: they land in log lines and in operator-facing surfaces beside
+// the rest of this project's machine-readable values.
 var categoryNames = [...]string{
 	Unclassified:          "unclassified",
 	Transient:             "transient",
@@ -57,6 +107,7 @@ var categoryNames = [...]string{
 	KeyPermissions:        "key_permissions",
 	NotFound:              "not_found",
 	PermissionDenied:      "permission_denied",
+	Configuration:         "configuration",
 	IntegrityFailure:      "integrity_failure",
 	Conflict:              "conflict",
 	UnsupportedCapability: "unsupported_capability",
@@ -79,12 +130,36 @@ func (c Category) String() string {
 // property of the request that a retry cannot change (NotFound,
 // PermissionDenied, HostVerification, Authentication, KeyPermissions,
 // IntegrityFailure, Conflict, UnsupportedCapability), a decision already
-// made by the caller (Cancelled), or a case this classifier could not
-// place at all (Unclassified, Permanent), which must never be treated as
-// safe to retry just because it wasn't recognized.
+// made by the caller (Cancelled), a fact about the configuration that
+// only a person can change (Configuration), or a case this classifier
+// could not place at all (Unclassified, Permanent), which must never be
+// treated as safe to retry just because it wasn't recognized.
 func (c Category) Retryable() bool {
 	return c == Transient
 }
+
+// ErrCredentialsUnavailable marks a Configuration failure that happened
+// while OBTAINING a medium's credentials, before anything was sent
+// anywhere (EPIC E, FR-33; issue #443).
+//
+// It exists because the medium preflight has to tell two questions apart
+// that share the Configuration category and cannot otherwise be separated:
+// "this manager could not get hold of the credential this medium declares"
+// and "this manager got the credential and the endpoint says the bucket
+// named here is not there". Both are a person's job to fix and they are
+// different jobs, so an operator has to be told which one.
+//
+// It is a sentinel wrapped into the Cause chain rather than a new
+// Category, and rather than something read off Error.Op, because Op is
+// documented as being for logs and never meant to be parsed back out, and
+// a new Category would have to answer Retryable, halt classification and
+// every switch that already covers the set. errors.Is against this is a
+// structural question with one answer.
+//
+// It never carries the credential, or the name of where the credential
+// came from: it marks the SHAPE of a failure and nothing else, which is
+// the same discipline the adapter that produces it already follows.
+var ErrCredentialsUnavailable = errors.New("the medium's credentials could not be obtained")
 
 // Error is what an adapter returns to lifecycle code once it has classified
 // a failure. Category is the only field lifecycle may branch on. Cause is
@@ -102,6 +177,10 @@ type Error struct {
 	Cause error
 }
 
+// Error renders the operation, the category and the cause. Op is dropped
+// when it is empty rather than printed as an empty field, because a
+// classified error built without one (retry.Do's cancellation, for
+// instance) still has to read as a sentence.
 func (e *Error) Error() string {
 	if e.Op != "" {
 		return fmt.Sprintf("%s: %s: %v", e.Op, e.Category, e.Cause)

@@ -11,7 +11,9 @@
 package webhost
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -37,6 +39,15 @@ type artifactResponse struct {
 	RemotePath string `json:"remote_path"`
 	LocalPath  string `json:"local_path"`
 
+	// Placements is every durable copy this backup currently has.
+	//
+	// An empty array means there is no copy anywhere yet, which is the
+	// honest answer for a backup still arriving, and is emphatically not
+	// "we could not work it out". local_path above is the path ingestion
+	// landed on and is not evidence that a readable file is sitting
+	// there: a client asking where the bytes are reads this.
+	Placements []placementResponse `json:"placements"`
+
 	State        string `json:"state"`
 	DiscoveredAt string `json:"discovered_at"`
 	UpdatedAt    string `json:"updated_at"`
@@ -58,6 +69,35 @@ type artifactResponse struct {
 	QuarantineReason        string `json:"quarantine_reason,omitempty"`
 
 	RetentionTier string `json:"retention_tier,omitempty"`
+}
+
+// placementResponse is one durable copy on the wire, a field-for-field
+// mirror of core/service.Placement.
+//
+// Three fields are omitted rather than emptied, and each omission is a
+// distinct statement: storage_class is absent for a local copy, which has
+// no such thing; verification_class is absent when NOTHING has verified
+// this copy, which is a different fact from a weak pass and must never be
+// rendered as one; verified_at is absent exactly when verification_class
+// is. A zero-valued spelling of any of the three would hand a client a
+// value to render, and every value it could render would be a claim
+// nobody made.
+//
+// size_bytes is a pointer for the reason core/service.Placement.SizeBytes
+// is one: an artifact can genuinely be zero bytes, so a zero must stay
+// distinguishable from nothing recorded.
+type placementResponse struct {
+	Medium     string `json:"medium"`
+	MediumType string `json:"medium_type"`
+	Location   string `json:"location"`
+	SizeBytes  *int64 `json:"size_bytes,omitempty"`
+
+	StorageClass      string `json:"storage_class,omitempty"`
+	VerificationClass string `json:"verification_class,omitempty"`
+	VerifiedAt        string `json:"verified_at,omitempty"`
+
+	Access string `json:"access"`
+	Status string `json:"status"`
 }
 
 // listArtifactsResponse is the body of both GET /api/v1/backups and GET
@@ -111,6 +151,7 @@ func toArtifactResponse(a service.Artifact) artifactResponse {
 		QuarantineIrrecoverable: a.QuarantineIrrecoverable,
 		QuarantineReason:        a.QuarantineReason,
 		RetentionTier:           a.RetentionTier,
+		Placements:              toPlacementResponses(a.Placements),
 	}
 	resp.DiscoveredAt = formatTime(a.DiscoveredAt)
 	resp.UpdatedAt = formatTime(a.UpdatedAt)
@@ -271,6 +312,66 @@ func (h *handlers) retryArtifactIngestion(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxRetryFailedBodyBytes bounds POST /api/v1/backups/{id}/retry's body.
+// The only field is an operator's own sentence, so this is orders of
+// magnitude more headroom than any legitimate request needs while still
+// bounding how much of a malformed or hostile body is read before giving
+// up.
+const maxRetryFailedBodyBytes = 8 << 10 // 8 KiB
+
+// retryFailedIngestionRequest is POST /api/v1/backups/{id}/retry's
+// optional body. Nothing in it changes what the retry does: the note is
+// recorded alongside the transition so a later failure of the same backup
+// carries the context of what was tried last time.
+type retryFailedIngestionRequest struct {
+	Note string `json:"note,omitempty"`
+}
+
+// retryFailedIngestion is POST /api/v1/backups/{id}/retry: put one failed
+// backup back into the pipeline so it is attempted again (issue #419).
+//
+// FAILED declares two exits in the lifecycle graph and nothing in this
+// product had ever taken either, so a backup that reached it stopped being
+// worked on permanently. This is the first of the two, and it is
+// deliberately something an operator asks for rather than something a
+// cycle does: see core/internal/lifecycle/retryfailed.go for why a blind
+// re-transfer is a cost this product does not take on its own.
+//
+// It carries requireCSRF and NOT requireDestructiveGate, for
+// retryArtifactIngestion's reason one state along: it moves a journal row
+// from FAILED back to DISCOVERED and touches no backup data, no local file
+// and no remote object. It cannot reach a remote delete at all, because
+// FAILED is only reachable before COMMITTED and COMMITTED is the only
+// state a delete can be reached from.
+//
+// An empty body is legitimate and is what a client with no note to add
+// sends, so a missing body is not a 400.
+func (h *handlers) retryFailedIngestion(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRetryFailedBodyBytes)
+
+	// An absent body is legitimate and is what a client with no note to
+	// add sends, so io.EOF is not an error here. Decoding unconditionally
+	// rather than gating on ContentLength is the difference between
+	// honouring a note and silently dropping it: a chunked request carries
+	// a body and a ContentLength of -1, and a gate on the length would
+	// have accepted that request, ignored what it said, and reported 204.
+	var req retryFailedIngestionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeDecodeError(w, err, maxRetryFailedBodyBytes)
+		return
+	}
+	if err := h.backend.RetryFailedArtifact(r.Context(), artifactIDFrom(r), req.Note); err != nil {
+		if errors.Is(err, service.ErrArtifactNotFailed) {
+			writeError(w, http.StatusConflict, "ARTIFACT_NOT_FAILED",
+				"this backup is not stuck: it is making progress, already finished, or quarantined and waiting for a judgement")
+			return
+		}
+		writeArtifactActionError(w, err, "failed to return the backup to the pipeline")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // artifactIDFrom rebuilds the three-part "source/set/name" identity from
 // chi's three path parameters.
 //
@@ -306,6 +407,13 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 	case errors.Is(err, service.ErrArtifactNotQuarantined):
 		writeError(w, http.StatusConflict, "ARTIFACT_NOT_QUARANTINED",
 			"this backup is not quarantined")
+	case errors.Is(err, service.ErrBackupSetNotFound):
+		// Issue #391. The backup exists; the set that owned it does not,
+		// any more. The same code every other surface answers for a
+		// removed set, so a client already knows what it means, and the
+		// remedy is the one the removal itself named.
+		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND",
+			"this backup's set is no longer configured; create a backup set with the same source and name to act on it again")
 	case errors.Is(err, service.ErrReinstatementRefused):
 		// The one refusal whose text an operator genuinely needs: it says
 		// which evidence was missing, and repairing that is the whole
@@ -320,4 +428,29 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 		// default case gives.
 		writeError(w, http.StatusInternalServerError, "INTERNAL", fallback)
 	}
+}
+
+// toPlacementResponses projects an artifact's copies onto the wire.
+//
+// The result is always a non-nil slice, so a backup with no copy serves
+// [] rather than null. That is not cosmetic: a client that has to handle
+// null as well as [] is a client with two code paths for one fact, and
+// the one somebody forgets is the one that renders "no copies" as a
+// crash or, worse, as nothing at all.
+func toPlacementResponses(placements []service.Placement) []placementResponse {
+	out := make([]placementResponse, 0, len(placements))
+	for _, p := range placements {
+		out = append(out, placementResponse{
+			Medium:            p.Medium,
+			MediumType:        p.MediumType,
+			Location:          p.Location,
+			SizeBytes:         p.SizeBytes,
+			StorageClass:      p.StorageClass,
+			VerificationClass: p.VerificationClass,
+			VerifiedAt:        formatTime(p.VerifiedAt),
+			Access:            p.Access,
+			Status:            p.Status,
+		})
+	}
+	return out
 }

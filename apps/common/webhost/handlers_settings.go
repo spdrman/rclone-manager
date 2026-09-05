@@ -47,6 +47,18 @@ const maxSettingsBodyBytes = 64 << 10
 type settingsRequest struct {
 	Retention *retentionUpdateRequest `json:"retention"`
 	Capacity  *capacityUpdateRequest  `json:"capacity"`
+
+	// AcknowledgeMediumDisclosure is the operator's acknowledgment of the
+	// storage-medium disclosure (EPIC E, FR-27), required on a write that
+	// first sends a retention tier's artifacts to a non-local medium.
+	//
+	// It is NOT a pointer, unlike everything else on this type, and the
+	// difference is deliberate: absent and false mean the same thing here
+	// (nobody acknowledged anything), so there is no third state for a
+	// pointer to carry. It is also not a setting, which is why
+	// toUpdateSettingsRequest does not count it towards a request naming
+	// something to change.
+	AcknowledgeMediumDisclosure bool `json:"acknowledge_medium_disclosure,omitempty"`
 }
 
 // capacityUpdateRequest is FR-21's block on the write side (issue #286).
@@ -129,6 +141,33 @@ type retentionTierBody struct {
 	PeriodDays  int    `json:"period_days,omitempty"`
 	Keep        int    `json:"keep"`
 	WindowUnit  string `json:"window_unit,omitempty"`
+
+	// Medium names the storage medium this tier's artifacts live on
+	// (FR-27), empty meaning the local backup root.
+	//
+	// It is on the wire for the reason service.RetentionTier.Medium's own
+	// doc gives, which is stronger than symmetry with the config schema:
+	// a chain write REPLACES the operator's whole chain, so a field this
+	// shape cannot hold is a field a save DELETES from their file. Before
+	// this key existed, editing daily's keep through the settings form
+	// would have quietly moved monthly's artifacts back onto local disk.
+	// A lossy boundary between the file and the form is a configuration
+	// change nobody asked for, made by the act of changing something else.
+	Medium string `json:"medium,omitempty"`
+}
+
+// toService projects one tier off the wire. Shared by the settings write
+// and by issue #333's per-set retention write, so the two cannot come to
+// carry different subsets of a tier.
+func (t retentionTierBody) toService() service.RetentionTier {
+	return service.RetentionTier{
+		Name:        t.Name,
+		Granularity: t.Granularity,
+		PeriodDays:  t.PeriodDays,
+		Keep:        t.Keep,
+		WindowUnit:  t.WindowUnit,
+		Medium:      t.Medium,
+	}
 }
 
 // settingsResponse is what both GET and PATCH /api/v1/settings return:
@@ -143,7 +182,35 @@ type retentionTierBody struct {
 type settingsResponse struct {
 	Retention retentionSettingsBody `json:"retention"`
 	Capacity  capacitySettingsBody  `json:"capacity"`
-	Schema    settingsSchemaBody    `json:"schema"`
+	// Mediums is every storage medium this configuration declares, in
+	// declaration order, and empty for every configuration written before
+	// they existed. See storageMediumBody for what is deliberately not in
+	// it.
+	Mediums []storageMediumBody `json:"mediums"`
+	Schema  settingsSchemaBody  `json:"schema"`
+}
+
+// storageMediumBody describes one configured storage medium: what it is
+// called, what kind of place it is, which bucket and region, and which
+// class artifacts are written with.
+//
+// There is no field here for key material, and there is not going to be
+// (FR-33). The absence is structural rather than achieved by a filter:
+// core/service.StorageMediumSummary has no credential field either, and
+// config.MediumCredentials is not reachable from this shape at all, so
+// there is nothing for a future edit to accidentally start copying
+// across.
+type storageMediumBody struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	Bucket       string `json:"bucket"`
+	Region       string `json:"region,omitempty"`
+	StorageClass string `json:"storage_class"`
+	// ReadsRequireRestore says this medium's class cannot be read on
+	// demand. It is computed by the engine rather than derived by a
+	// client from storage_class, so one product decides what archive
+	// means.
+	ReadsRequireRestore bool `json:"reads_require_restore"`
 }
 
 // capacitySettingsBody is FR-21's block as it is actually deciding.
@@ -175,6 +242,31 @@ type retentionSettingsBody struct {
 
 type settingsSchemaBody struct {
 	Retention retentionSchemaBody `json:"retention"`
+	Storage   storageSchemaBody   `json:"storage"`
+}
+
+// storageSchemaBody is the vocabulary and the consent text a
+// storage-medium mapping is written against, served for exactly the reason
+// retentionSchemaBody is: a form that keeps its own copy of what
+// "existence" proves eventually tells an operator something the engine
+// does not, and the sentence somebody reads while deciding whether a
+// backup is safe is the worst place in the product for a stale paraphrase.
+type storageSchemaBody struct {
+	VerificationClasses []verificationClassBody `json:"verification_classes"`
+	MediumDisclosure    string                  `json:"medium_disclosure"`
+	RetrievalDisclosure string                  `json:"retrieval_disclosure"`
+}
+
+// verificationClassBody is one rung of the ladder with the engine's own
+// words. downloads_object is the same predicate the engine refuses
+// automatic medium revalidation on, served rather than restated: it is a
+// mechanism, and this is where a surface reads it from. Neither field is
+// called cost, on purpose: see service.VerificationClassInfo.
+type verificationClassBody struct {
+	Class           string `json:"class"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
+	DownloadsObject bool   `json:"downloads_object"`
 }
 
 type retentionSchemaBody struct {
@@ -276,6 +368,11 @@ func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
 // core/service, which is the only layer that knows an empty chain
 // reinstates the default policy and therefore has to refuse it.
 func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsRequest, error) {
+	// AcknowledgeMediumDisclosure is deliberately not counted here. It
+	// asks for no change; it consents to one. A body carrying nothing but
+	// the tick still names no setting, and honouring it would rewrite the
+	// operator's file and move ConfigRevision for a request with no
+	// content.
 	namedSomething := (body.Retention != nil && !body.Retention.namesNothing()) ||
 		(body.Capacity != nil && !body.Capacity.namesNothing())
 	if !namedSomething {
@@ -290,7 +387,7 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 		return service.UpdateSettingsRequest{}, errors.New("a settings section was sent with no field in it; omit the section instead of sending an empty one")
 	}
 
-	var out service.UpdateSettingsRequest
+	out := service.UpdateSettingsRequest{AcknowledgeMediumDisclosure: body.AcknowledgeMediumDisclosure}
 
 	if body.Retention != nil {
 		update := service.RetentionUpdate{
@@ -301,13 +398,7 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 		if body.Retention.Tiers != nil {
 			update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
 			for _, t := range body.Retention.Tiers {
-				update.Tiers = append(update.Tiers, service.RetentionTier{
-					Name:        t.Name,
-					Granularity: t.Granularity,
-					PeriodDays:  t.PeriodDays,
-					Keep:        t.Keep,
-					WindowUnit:  t.WindowUnit,
-				})
+				update.Tiers = append(update.Tiers, t.toService())
 			}
 		}
 		out.Retention = &update
@@ -326,15 +417,31 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 }
 
 func toSettingsResponse(s service.Settings) settingsResponse {
-	tiers := toTierBodies(s.Retention.Tiers)
 	schema := service.RetentionSchema()
+	storage := service.StorageSchema()
+	classes := make([]verificationClassBody, 0, len(storage.VerificationClasses))
+	for _, c := range storage.VerificationClasses {
+		classes = append(classes, verificationClassBody{
+			Class:           c.Class,
+			Proves:          c.Proves,
+			Requires:        c.Requires,
+			DownloadsObject: c.DownloadsObject,
+		})
+	}
+	mediums := make([]storageMediumBody, 0, len(s.Mediums))
+	for _, m := range s.Mediums {
+		mediums = append(mediums, storageMediumBody{
+			ID:                  m.ID,
+			Type:                m.Type,
+			Bucket:              m.Bucket,
+			Region:              m.Region,
+			StorageClass:        m.StorageClass,
+			ReadsRequireRestore: m.ReadsRequireRestore,
+		})
+	}
 	return settingsResponse{
-		Retention: retentionSettingsBody{
-			Timezone:             s.Retention.Timezone,
-			WeekStartsOn:         s.Retention.WeekStartsOn,
-			Tiers:                tiers,
-			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
-		},
+		Mediums:   mediums,
+		Retention: toRetentionSettingsBody(s.Retention),
 		Capacity: capacitySettingsBody{
 			CapBytes:             s.Capacity.CapBytes,
 			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
@@ -344,6 +451,11 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 			BackupRootConfigured: s.Capacity.BackupRootConfigured,
 		},
 		Schema: settingsSchemaBody{
+			Storage: storageSchemaBody{
+				VerificationClasses: classes,
+				MediumDisclosure:    storage.MediumDisclosure,
+				RetrievalDisclosure: storage.RetrievalDisclosure,
+			},
 			Retention: retentionSchemaBody{
 				Granularities:    schema.Granularities,
 				WindowUnits:      schema.WindowUnits,
@@ -369,9 +481,23 @@ func toTierBodies(tiers []service.RetentionTier) []retentionTierBody {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
 		})
 	}
 	return out
+}
+
+// toRetentionSettingsBody projects a resolved policy onto the wire.
+// Shared by GET/PATCH /settings and by issue #333's per-set retention
+// routes, which report the same resolved shape twice (this set's
+// effective policy, and the deployment's).
+func toRetentionSettingsBody(r service.RetentionSettings) retentionSettingsBody {
+	return retentionSettingsBody{
+		Timezone:             r.Timezone,
+		WeekStartsOn:         r.WeekStartsOn,
+		Tiers:                toTierBodies(r.Tiers),
+		ProtectLastKnownGood: r.ProtectLastKnownGood,
+	}
 }
 
 // writeSettingsDecodeError extends writeDecodeError
@@ -403,6 +529,19 @@ func writeSettingsDecodeError(w http.ResponseWriter, err error) {
 // onto this package's one error envelope.
 func writeSettingsError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrMediumDisclosureRequired):
+		// Its own code, at the same status as a malformed body, because
+		// what a client does with it is completely different: this is not
+		// a field to fix, it is a paragraph to put in front of a human.
+		// The message IS that paragraph (see
+		// core/service.mediumDisclosureRefusal), so a client that renders
+		// it has shown the operator the product's own words rather than
+		// its own summary of them.
+		//
+		// Safe to echo for writeBackupSetError's reason: the text is
+		// core/service's own, plus tier names and medium ids the caller
+		// itself submitted.
+		writeError(w, http.StatusBadRequest, "MEDIUM_DISCLOSURE_REQUIRED", err.Error())
 	case errors.Is(err, service.ErrInvalidRequest):
 		// Safe to echo, for exactly the reason writeBackupSetError gives
 		// for the identical line: an ErrInvalidRequest from this path is

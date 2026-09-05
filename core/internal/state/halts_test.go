@@ -25,6 +25,11 @@ func haltSetID(t *testing.T, source, set string) model.BackupSetID {
 	return id
 }
 
+// haltsBySet turns the listing into a map keyed by rendered set id, so an
+// assertion can say "this set is refused and that one is not" without
+// depending on the order rows come back in. ListBackupSetHalts does order
+// its result, but nothing in this table's contract promises that, and a
+// test that quietly relies on it is asserting more than the product owes.
 func haltsBySet(t *testing.T, j *Journal) map[string]BackupSetHalt {
 	t.Helper()
 	halts, err := j.ListBackupSetHalts(context.Background())

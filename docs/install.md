@@ -5,12 +5,58 @@ up on a machine you have SSH on, or refuses and tells you exactly which prerequi
 stopped it.
 
 ```
+python3 scripts/install/install_docker_host.py install
+```
+
+That is the whole command on a bare host (issue #347). It installs under
+`~/rclone-manager`, generates an SSH keypair and an empty `known_hosts` under
+`<prefix>/secrets` if they are not there, and prints the public half with a note that
+it belongs in the `authorized_keys` of whichever host you are backing up.
+
+Every flag is still there when you want it, and naming one changes only that one:
+
+```
 python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
     --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.2.0
+    --image ghcr.io/spdrman/backup-manager:0.3.0
 ```
+
+**One file, and no checkout.** Copy
+`scripts/install/install_docker_host.py` to the machine on its own and run it: it needs
+no repository beside it, nothing else from this project on disk, and nothing outside the
+Python standard library. It used to refuse with exit 19 here, because it copied
+`container/compose.yaml` and that file only exists inside a git checkout, which is the
+one thing an operator installing onto a NAS does not have. It now carries that
+definition itself (see [It derives from the canonical
+definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
+what keeps the copy honest).
+
+### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
+
+It defaults to `~/rclone-manager`. If you have a script that relied on the old default
+being applied for you, pass `--prefix /volume1/backup-manager` explicitly. The old
+default was a guess at one NAS vendor's share layout that was wrong by a directory name
+on the actual UGREEN this was proven on, and wrong entirely on anything not
+Synology-shaped, so it never once saved anybody a flag.
+
+### What is generated, and what is still a refusal
+
+A **defaulted** credential path that does not exist is created. An **explicitly named**
+one that does not exist is still a refusal, and deliberately: generating a different key
+under a path you typed would hand you one the far host has never seen, while reporting
+success. An existing key is never regenerated over, whatever its age, because replacing
+one silently breaks every source already trusting it.
+
+The private half is still never read and never printed. Only the public half is.
+
+Directories the installer creates are born `0700`. Directories that already exist only
+lose group and world **write**, so read bits you set on purpose survive. That is not
+cosmetic: the engine refuses to use an SSH key if any directory in its whole ancestry is
+group- or world-writable, since anyone holding that bit can replace the key whatever the
+key file's own mode says. Ancestors *above* `--prefix` belong to whoever set the machine
+up, so those are named in a warning with the exact `chmod go-w` rather than changed.
 
 Six subcommands: `preflight` checks and creates nothing, `install` checks then
 installs, `status` reports, `uninstall` removes what the installer made,
@@ -60,10 +106,11 @@ parsing prose.
 | 14 | a host directory is missing, is not a directory, or is owned by another uid |
 | 15 | the listen port is held by something that is not this project |
 | 16 | too little free space on the backup volume |
-| 17 | the SSH key or `known_hosts` is missing, is not a file, or the key is readable beyond its owner |
+| 17 | an explicitly named SSH key or `known_hosts` is missing, or the installed `.env` names one that is no longer there, either is not a regular file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
-| 19 | `container/compose.yaml` is not where the installer was told to find it |
-| 20 | an install is already here and `--if-installed=refuse` was given |
+| 19 | `--compose-file` names a path that is not there, or this installer's own embedded runtime definition does not match the digest recorded beside it |
+| 20 | an install is already here and the mode did not settle what to do about it, a factory reset was not confirmed, or this run's directories are not the installed ones |
+| 21 | the install here is newer than the version this installer carries |
 | 30 | a Docker command failed |
 | 31 | the stack started but did not reach the state that counts as installed |
 | 40 | sudo has no terminal to prompt on |
@@ -72,17 +119,257 @@ parsing prose.
 | 43 | bridge networking is broken and was not repaired (`--fix-network=never`, or `diagnose`) |
 | 44 | the correction was applied and a bridged container still cannot originate traffic |
 | 45 | bridge networking is broken and the responsible rule could not be identified |
+| 50 | `--release` and `--image` name different versions, or `--image` already pins a digest |
+| 51 | `--release` was given together with `--no-pull` or `--image-archive` |
+| 52 | the tag being installed no longer points at the digest this release recorded |
 
 Compose v1 is refused rather than tolerated because the deployment gates the Web UI on
 `depends_on: condition: service_healthy`, and v1 ignores that. It would appear to work
 and would start the UI before the engine was listening.
 
+## Naming a previous release, and proving the one it carries
+
+`--release X.Y.Z` installs a published release other than the one this installer
+carries:
+
+```
+python3 install_docker_host.py install --release 0.2.0
+```
+
+It fills the tag in `--image` and nothing else. It is not `--version`: that name
+belongs to "print your own version", and this program's identity is the release
+it carries.
+
+When `--image` already names a version, the two have to agree. If they do not,
+this refuses with exit 50 rather than pick a winner, because installing a version
+other than the one you typed, quietly, is the failure the flag exists to prevent.
+An `--image` that already pins an `@sha256:` digest is refused the same way: a
+digest names exactly one image and is the stronger claim of the two, so `--release`
+will not weaken it and will not decorate it with a tag that may describe something
+else. An `--image` with no tag at all is the one case it fills in.
+
+`--no-pull` and `--image-archive` are the offline paths and resolve nothing against
+a registry, so `--release` alongside either of them is exit 51. Pick the release on
+a machine that can reach the registry, `docker save` it, and bring the tarball over.
+
+`latest` is refused, and so is anything else that is not an orderable version.
+A host installed from a moving tag records `VERSION=latest` in its `.env`, which
+orders against nothing, so no later installer can tell whether it is moving that
+host forwards or backwards. There is no `latest` tag to install anyway.
+
+### The digest, and why the default does not float
+
+Preflight prints the reference it is about to install before anything is created,
+and then proves it:
+
+```
+  ok   installing ghcr.io/spdrman/backup-manager:0.3.0
+  ok   ghcr.io/spdrman/backup-manager:0.3.0 is sha256:..., the identity the release
+       manifest records for 0.3.0
+```
+
+A registry tag is a mutable pointer, which `scripts/release/publish-image.sh` says
+in its own words, so "install this version" is a claim about a name until something
+compares the name to a recorded identity. `container/release-manifest.json` records
+that identity at push time, the installer carries a copy of it, and one anonymous
+HEAD against the registry settles it. If the tag has moved, this refuses with exit
+52 and tells you how to install the recorded digest by identity instead. No cosign,
+no dependency: the installer is standard library only because a NAS may not let you
+install anything.
+
+**Read the version you have before you expect that line.** A release is cut before it
+is pushed, and in that window the manifest records `index_digest: null`, the installer
+carries no digest, and what preflight prints is this instead:
+
+```
+  ok   installing ghcr.io/spdrman/backup-manager:0.3.0
+  !!   0.3.0 is cut and not pushed, so container/release-manifest.json records no
+       identity for it and there is nothing here to hold
+       ghcr.io/spdrman/backup-manager:0.3.0 to.
+```
+
+That is 0.3.0 today. It is a warning and never a refusal, and the difference is the
+whole design: the alternative was to move the version and leave 0.2.0's digest behind,
+which compares a perfectly correct 0.3.0 image against the previous release's identity
+and hands every operator exit 52 on a good install. The digest is filled in, and this
+installer reissued with it, when the release workflow has pushed and the digests are
+recorded back into the manifest. Until then, `--release 0.2.0` installs the last
+release this can prove, or `--image-archive` installs a build you made yourself.
+
+That proof only covers the release the installer carries, and a release cut after
+this installer was written can never have a digest in it. That is why the `--image`
+default is pinned rather than floating onto whatever is newest: a floating default
+would install on the registry's word alone, which is the posture the digest exists
+to replace.
+
+What the installer does instead is tell you. Preflight lists the published releases,
+ordered by version rather than by push order and with prereleases excluded, and says
+so when a newer one exists and where to get its installer. That check is read-only,
+it never changes what is installed, and if it cannot reach the registry the only
+consequence is a missing line.
+
+## Install modes, and what each one keeps
+
+`install` has three modes, chosen with one flag rather than three, because two knobs
+for one decision is how they end up disagreeing.
+
+| `--mode` | keeps | destroys | archives first |
+|---|---|---|---|
+| `fresh` | nothing to keep | nothing | nothing |
+| `upgrade` | users, backup sets, catalog, retained backups | nothing | state, users, config, imported keys, pinned host keys |
+| `factory-reset` | retained backups | administrator record, catalog, configuration | the same set, moved rather than copied |
+
+`fresh` is the default when nothing is installed, and it refuses when something is:
+fresh means the host is empty, so meeting an install contradicts the instruction.
+
+`upgrade` copies the state aside before touching anything and reports where. It does
+not copy the retained backups: they are the point of the product, they can be
+enormous, and an upgrade does not modify them, so duplicating them would double the
+disk usage and protect against nothing. Upgrading onto the version already installed
+converges and says so, rather than claiming a version moved. Upgrading onto an
+**older** version is refused, because a catalog written by a newer build is not
+something this can promise to read back.
+
+`factory-reset` prints what it will destroy, by name and count, **before** it asks, and
+it has to be confirmed in as many words: the literal word `factory-reset` typed at the
+prompt on a terminal, or `--confirm-factory-reset` where there is no terminal to type
+on. `y` is what a finger presses to get past a prompt; the word is what somebody types
+having read the list above it. It moves that state into a timestamped archive rather
+than deleting it, so the decision stays recoverable. It leaves the retained backups on
+disk (it drops the catalog that describes them, not the files), and it leaves
+`<prefix>/secrets` alone, so `--ssh-key` and `--known-hosts` survive a reset. The
+preview names all three.
+
+Both modes **stop the stack first**, and this is not housekeeping. The engine opens the
+state database with `journal_mode=WAL`, so copying it while the engine is running
+produces a torn snapshot whose newest committed transactions are in a `-wal` beside it,
+and moving it out from under an open file descriptor does not stop the engine writing
+to it. A factory reset uses `down` rather than `stop` for a third reason: `docker
+compose up -d` against a stack whose configuration has not changed is a no-op, so a
+reset back onto the same version with an unchanged `.env` left the old engine serving
+the old catalog while the installer printed success.
+
+The archive captures `state.db`, `state.db-wal` and `state.db-shm` together, because
+the first without the other two is a database missing its most recent commits. It puts
+`state/local-auth.json` **first**, because the plan is executed in order and a failure
+part way through a move otherwise leaves the catalog gone and the administrator record
+present, which is an engine that reports an administrator already exists, issues no
+enrollment link, and locks everyone out. That is the exact failure the archive exists
+to prevent.
+
+Archives are not pruned, and they are not unlimited either. Each one holds a copy of
+`config/ssh_keys`, which is where the engine keeps the keys imported through the Web UI,
+so an unbounded pile is an installer that multiplies private key material every time it
+runs. Past five, `install` refuses and names them: deleting one for you would take back
+the recoverability that moving rather than deleting is there to provide.
+
+## It will not adopt a layout you did not ask for
+
+Every directory the installer archives, destroys or rewrites used to come from the
+current run's flags, and it wrote `<prefix>/.env` without ever reading it back. So an
+operator who first installed with `--state-dir /mnt/fast/state` and re-ran without
+repeating it got "Archived 0 item(s)", a rewritten `.env`, and a stack pointed at an
+empty state directory, while the real catalog sat at the old path with nothing pointing
+at it. Every signal was green.
+
+`install` now reads the installed `.env` and refuses (exit 20) when `STATE_DIR`,
+`BACKUP_DIR` or `CONFIG_DIR` disagree with this run, naming both sides. It refuses
+rather than adopting either: taking the installed paths would ignore flags you typed,
+and taking yours would quietly abandon the data.
+
+**With an install already here and no `--mode` given**, the installer asks on a
+terminal and refuses without one. It will not guess, because one of the two answers
+destroys data and the other does not, and a prompt that blocks a cron job forever is
+worse than a refusal that names the flag.
+
+### The credentials in that same `.env` are kept, not re-guessed
+
+`SSH_KEY_FILE` and `KNOWN_HOSTS_FILE` are in the same file and were not held to
+anything, and giving `--ssh-key` and `--known-hosts` defaults is what made that bite. A
+host first installed with those flags pointing at, say, `~/.ssh/backup_ed25519` and
+then re-run bare took the defaults instead, generated a fresh keypair under
+`<prefix>/secrets`, rewrote the `.env` to name it, and brought the stack back up
+holding a key no source has ever authorised, with the pinned host keys replaced by an
+empty file. Nothing refused, the engine came up healthy, and every backup after it
+failed to authenticate.
+
+So `preflight` and `install` now read those two keys back and keep them. The asymmetry
+with the three directories above is deliberate. There you typed a flag and the two
+answers disagree, so naming the disagreement is the only honest move. Here you typed
+nothing: one side is a value computed from `--prefix` and the other is what the
+deployment actually runs on, and preferring the evidence over the guess ignores nobody.
+Each adoption is printed.
+
+A flag you do type still wins, and the line it prints names the path being left behind,
+because rotating a key is a real operation and doing it without saying so is not.
+
+The one case that is never filled in is an `.env` naming a path with no file at it:
+that refuses (exit 17) and names both the path and the `.env` it came from. Generating
+a replacement there is the same silent wrong key by another route, and
+`container/compose.yaml` mounts both with `:?` so the stack could not start anyway.
+
+## Compatibility: `--if-installed` is gone
+
+`--if-installed {converge,refuse}` was removed and reconciled into `--mode`:
+
+- `--if-installed converge` is now `--mode upgrade`. Converging is the no-op end of
+  upgrading, which is why upgrading onto the same version still runs that path.
+- `--if-installed refuse` is now `--mode fresh`.
+
+**This is a breaking change for scripted re-runs.** The old default converged
+silently; the new behaviour refuses rather than guess. A script or cron job that
+re-runs the installer over an existing deployment must now pass `--mode upgrade`
+explicitly.
+
+The flag itself is still registered, hidden from `--help`, for the sole purpose of
+saying so. Deleting it outright meant a scripted `--if-installed converge` died at
+argparse's own exit 2 with "unrecognized arguments: --if-installed converge", which
+names neither `--mode` nor the mapping, so whoever hit it in a cron job had to come and
+read the source. It still exits 2, and now it says which flag replaced theirs. A re-run
+with no mode flag at all is the other case, and that one exits 20 and names `--mode`.
+
 ## It derives from the canonical definition, it does not restate it
 
 `container/compose.yaml` is the canonical runtime contract (issue #167), and
 `distribution/compose` fails the build when a derived artifact stops matching it. The
-installer copies that file byte for byte and lays one override beside it carrying two
+installer stages that file byte for byte and lays one override beside it carrying two
 keys per service: `image`, and `pull_policy: never`.
+
+Byte for byte, from one of two places, and never a template. Templating a compose file
+here would create a second definition of the runtime that no gate compares to the first,
+and the two would drift the moment either changed.
+
+| `--compose-file` | what gets staged |
+|---|---|
+| not given | the copy embedded in the installer, generated from `container/compose.yaml` |
+| a real file | that file, copied verbatim |
+| a path with no file there | nothing: exit 19 |
+
+The embedded copy is generated, not written. `scripts/install/embed_compose.py` is the
+only supported way to move it, the block it writes carries a `DO NOT EDIT BY HAND`
+banner naming that command, and two tests hold it to the canonical file: one compares
+the two as **bytes** (not as decoded text, which would normalise line endings and cannot
+even be read in a non-UTF-8 locale, since the file has a section sign and em dashes in
+it), and one compares the recorded `EMBEDDED_COMPOSE_SHA256` against the same file.
+
+Those tests only exist inside a checkout, and the point of embedding is that the
+installer travels without one, so the shipped artifact also checks itself: `preflight`
+and `install` verify the embedded definition against that digest before anything is
+staged, and refuse with exit 19 if the script has been edited since it was generated.
+Truncation would be loud anyway, because Python stops parsing. A changed mount, network
+or healthcheck would not be, and that is the one the digest catches.
+
+`<prefix>/compose.yaml` is restaged on every run, which is how a runtime-contract
+change reaches an installed host. When the file being replaced is not the one going in,
+the installer says so and points at the `.env` beside it, because that is where
+anything varying per host belongs. It is a notice and not a refusal: refusing would
+block every upgrade carrying a legitimate runtime change, which is most of them.
+
+Running the installer **from inside a checkout does not install that checkout's**
+`container/compose.yaml`. It installs the embedded copy, like everywhere else, because
+"whichever directory the script happens to sit in" is exactly the location-dependent
+behaviour embedding removed. Preflight says so when the two differ, and names the flag:
+pass `--compose-file container/compose.yaml` to install an uncommitted runtime change.
 
 `pull_policy` is there because the canonical file has a `build:` block, which is right
 for a file written to be built from a checkout and wrong for a host that has no

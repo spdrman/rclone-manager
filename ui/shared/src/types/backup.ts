@@ -1,3 +1,6 @@
+import type { RetentionSettings } from "@shared/api/contracts";
+import type { WirePlacement } from "@shared/api/generated/contract";
+
 export type HealthState = "healthy" | "degraded" | "stale" | "failing";
 
 export type CompletionMethod =
@@ -10,29 +13,22 @@ export type RetentionClass = "daily" | "weekly" | "monthly" | "protected";
 export type ValidationKind = "transfer" | "checksum" | "application";
 
 /**
- * Mirrors core's config.Retention (core/internal/config/config.go) shape,
- * field for field.
+ * Issue #299's rule, applied to the field that used to sit here.
  *
- * This type is modeled per BackupSet below, and mock.ts's fixtures give
- * different backup sets different values, but that is not evidence a
- * per-set override is a real, working capability: the actual backend
- * (internal/config, internal/retention) has exactly one Retention block
- * for the whole Config, applied to every backup set. Issue #111 (B3.6)
- * decided, explicitly, to keep retention policy global for now rather
- * than let this type's already-drawn per-set shape settle the question by
- * accident; see config.go's own "Global, not per-backup-set" doc for the
- * full reasoning. A real per-backup-set override is a legitimate future
- * capability, but it needs its own schema/validation/resolution-order
- * design on the backend first, which this type alone does not provide.
+ * This type carried a full per-set `RetentionPolicy` (daily/weekly/
+ * monthly, timezone, week start, protection) that NOTHING computed:
+ * client.ts's own mapper filled it with zeros and "UTC" for every set, so
+ * the backup set card and the detail page both drew "0 / 0 / 0" and
+ * "0 kept" against real deployments. A field the UI draws and nothing
+ * reads is exactly what #299 removed from the wizard, and it was still
+ * here.
+ *
+ * #333 replaced it with the answer that is actually computed. A backup
+ * set carries whether it is retained under its own policy or the
+ * deployment's (below); the policy itself is served by
+ * `getBackupSetRetention`, on demand, on the page that can show a whole
+ * chain rather than three numbers that only fit one shape of chain.
  */
-export interface RetentionPolicy {
-  daily: number;
-  weekly: number;
-  monthly: number;
-  timezone: string;
-  weekStartsOn: "monday" | "sunday";
-  protectLastKnownGood: boolean;
-}
 
 export interface BackupSet {
   id: string;
@@ -56,8 +52,23 @@ export interface BackupSet {
   includePatterns: string[];
   excludePatterns: string[];
   completionMethod: CompletionMethod;
+  /**
+   * The window `stable-size` waits for before it treats a file as
+   * finished, in seconds, and 0 for every other completion method.
+   *
+   * It is here (issue #350) because the inline editor offers the
+   * completion method, and offering that method without its window would
+   * be offering a Save that can only fail: core refuses a backup set
+   * whose strategy is "stable" and whose window is zero, exactly as it
+   * refuses one at creation.
+   */
+  stableForSeconds: number;
   destination: string;
-  retention: RetentionPolicy;
+  /** Whether this set declares its own retention policy rather than being
+   *  retained under the deployment's (issue #333, config.BackupSet's own
+   *  RetentionIsOverride). The chain itself is not here: see the note
+   *  above this interface. */
+  retentionIsOverride: boolean;
   validations: ValidationKind[];
   state: HealthState;
   /** Human sentence explaining the state. Never rely on colour alone. */
@@ -132,6 +143,73 @@ export interface BackupSet {
   fingerprintTrustedAt: string | null;
 }
 
+/**
+ * Whether one copy of a backup can be READ right now
+ * (core/internal/placement.Access, FR-34), narrowed from the generated
+ * wire union so this UI cannot invent a fifth value or misspell one of
+ * the four.
+ *
+ * "unreachable" is the value this whole feature exists for: it means this
+ * deployment cannot currently get to the place the copy is in, so it can
+ * neither confirm the copy nor deny it. It is NOT "the copy is gone", and
+ * a surface that renders the two the same way has told an operator
+ * something false about the only thing they will care about.
+ */
+export type PlacementAccess = WirePlacement["access"];
+
+/**
+ * Which rung of the verification ladder a copy has ACHIEVED (FR-31),
+ * or `null` when NOTHING has verified it.
+ *
+ * Null is the load-bearing value. The wire omits the field entirely for an
+ * unverified copy, and this type keeps that distinguishable rather than
+ * defaulting it to the weakest rung: "existence" is a claim that an object
+ * was seen at the recorded size, and for a copy nobody has looked at, that
+ * claim is simply untrue.
+ */
+export type VerificationClass = NonNullable<WirePlacement["verification_class"]>;
+
+/**
+ * One DURABLE copy of one backup, and where it actually is (FR-29).
+ *
+ * A value of this type exists because the backend recorded a finished
+ * copy. An artifact with no copies has an EMPTY array, which is an
+ * ordinary answer for one still transferring: the partial file on disk is
+ * not a copy and deliberately has no entry here. So a surface reads the
+ * three cases apart rather than collapsing them:
+ *
+ *   - `placements` empty            -> there is no copy anywhere yet
+ *   - `access === "unreachable"`    -> there is a copy nobody can confirm
+ *   - `verificationClass === null`  -> there is a copy nobody has checked
+ */
+export interface BackupPlacement {
+  /** "local", or the id of a configured storage medium. */
+  medium: string;
+  /** What kind of place holds it, or "" when the configuration no longer
+   *  describes the medium at all. Served rather than derived from
+   *  `medium === "local"`, so this UI holds no copy of a reserved id. */
+  mediumType: string;
+  /** An absolute path for a local copy, an object key for a medium copy.
+   *  Never a credential and never a signed URL. */
+  location: string;
+  /** What this copy measures, or null when nobody recorded it. Null is
+   *  not zero: a backup can genuinely be empty. */
+  sizeBytes: number | null;
+  /** The medium's storage class, or "" for a local copy. */
+  storageClass: string;
+  /** The strongest class ACHIEVED, or null when nothing has verified this
+   *  copy. See VerificationClass. */
+  verificationClass: VerificationClass | null;
+  /** When that class was last achieved, or null. Null exactly when
+   *  verificationClass is. */
+  verifiedAt: string | null;
+  access: PlacementAccess;
+  /** "ACTIVE", or "DELETE_PENDING" for a copy whose removal is recorded
+   *  and may not have happened yet. A copy the backend knows is gone is
+   *  not served at all, so there is no third value to render. */
+  status: WirePlacement["status"];
+}
+
 export interface BackupArtifact {
   id: string;
   setId: string;
@@ -155,6 +233,11 @@ export interface BackupArtifact {
   /** Remote deletion is a lifecycle FACT, never a user action. */
   remoteSourceRemovedAt: string | null;
   quarantine: QuarantineRecord | null;
+  /** Every durable copy this backup currently has. Empty means there is
+   *  no copy anywhere yet; see BackupPlacement. `localPath` above is the
+   *  path ingestion landed on and is not evidence that a readable file is
+   *  sitting there. */
+  placements: BackupPlacement[];
 }
 
 export type QuarantineReason =
@@ -241,6 +324,25 @@ export interface RetentionVerdict {
   action: RetentionVerdictAction;
   reason: string;
   /**
+   * Where the copy this verdict is about lives, when that is a configured
+   * storage medium (EPIC E FR-30, issue #430). The wire's `medium`,
+   * carried through exactly as it arrives, undefined included.
+   *
+   * UNDEFINED MEANS LOCAL, with one documented exception, and the
+   * exception is why this is not resolved to "local" here. The two REFUSE
+   * shapes that establish nothing at all, a location the journal records
+   * twice and an artifact whose local path could not be resolved, also
+   * arrive undefined, and defaulting them would put a place on a verdict
+   * that deliberately names none.
+   *
+   * A DELETE always establishes its medium, so for the question FR-30
+   * asks, "where would this deletion happen", `medium ?? "local"` is the
+   * whole answer and is safe to render. "Delete 40 backups" means
+   * something very different when half of them are objects in a bucket
+   * somebody else pays for.
+   */
+  medium?: string;
+  /**
    * Populated only for a KEEP verdict: which retention tier(s) selected
    * it, and which placement selected it for each. Empty for
    * DELETE/REFUSE.
@@ -252,6 +354,34 @@ export interface RetentionVerdict {
    * nothing here reads.
    */
   tiers: RetentionTierSelection[];
+}
+
+/**
+ * One backup a retention plan would relocate, and both ends of the move
+ * (EPIC E FR-27, issue #430; service.RetentionMove, via the wire's
+ * `moves`).
+ *
+ * A move is a statement about PLACEMENT and nothing else. Planning one
+ * never adds a backup to the keep set and never removes one, which is why
+ * these travel beside the verdicts rather than inside them, and why a
+ * dialog that renders both must not present a move as a third kind of
+ * verdict.
+ *
+ * Both mediums are spelled out, "local" included, unlike
+ * RetentionVerdict.medium above. A verdict answers "where would this
+ * happen", which has an implicit default; a move answers "from where to
+ * where", which has none.
+ */
+export interface RetentionMove {
+  /** The backup's own filename, scoped to the plan's backup set, exactly
+   *  as RetentionVerdict.artifact is. */
+  artifact: string;
+  /** Where the one confirmed copy is today. */
+  fromMedium: string;
+  /** The medium the first tier that selects this backup names as its
+   *  home. Always different from fromMedium: a backup already at home is
+   *  not a move. */
+  toMedium: string;
 }
 
 /**
@@ -285,4 +415,49 @@ export interface RetentionPlan {
    *  a preview returned — a preview creates no operation. */
   operationId?: string;
   verdicts: RetentionVerdict[];
+
+  /**
+   * Every backup this plan would relocate, in verdict order (EPIC E
+   * FR-27, issue #430).
+   *
+   * ALWAYS an array. The wire omits the field entirely for a deployment
+   * that declares no storage medium, and this normalises that to [] for
+   * the reason `tiers` is normalised: an optional array has three
+   * readings and only two of them are ever true, so nothing downstream
+   * should have to tell "no moves" from "the server did not say".
+   */
+  moves: RetentionMove[];
+
+  /**
+   * Every kept backup whose current location could not be established, in
+   * verdict order: the journal holds no confirmed copy of it, or holds
+   * more than one, which is a move already in flight.
+   *
+   * No move is planned for one, and that is exactly why this list exists
+   * rather than the backup being quietly skipped. "I could not confirm
+   * where this is" and "this is already where it belongs" produce the
+   * same silence and are not the same claim, and only one of them is
+   * something an operator acts on.
+   *
+   * ALWAYS an array, for `moves`' reason.
+   */
+  unconfirmedPlacements: string[];
+
+  /** The policy these verdicts were decided under, resolved (issue #333).
+   *
+   *  It travels with the plan rather than being fetched beside it because
+   *  a plan is pinned to the configuration revision it was computed
+   *  against and a second read is not: a dialog that fetched the policy
+   *  on its own could show a chain that did not decide the verdicts
+   *  underneath it. */
+  retention: RetentionSettings;
+
+  /** Whether `retention` above is this backup set's OWN policy rather
+   *  than the deployment's.
+   *
+   *  "Why is this backup about to be deleted" has a different answer, and
+   *  a different place to go and change it, depending on which one was in
+   *  force, and that is the question this dialog exists to answer before
+   *  an operator authorises a deletion. */
+  retentionIsOverride: boolean;
 }

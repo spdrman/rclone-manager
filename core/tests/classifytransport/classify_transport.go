@@ -1,10 +1,10 @@
 // Package classifytransport decorates a transport.Transport so every error
 // it returns has already been through internal/transport/rclone's own
-// Classify/Wrap.
+// ClassifyCtx/WrapCtx.
 //
 // It exists to work around a real defect this issue's test suites found:
-// internal/transport/rclone.Adapter never calls Wrap on anything it
-// returns (see internal/transport/rclone/error_classification_gap_a213_test.go
+// internal/transport/rclone.Adapter never classified anything it
+// returned (see internal/transport/rclone/error_classification_gap_a213_test.go
 // and internal/reconcile/a213_defect_test.go for the two tests that prove
 // it, and the PR description for the full writeup and the fix this
 // package recommends but does not itself apply, since adapter.go is
@@ -16,7 +16,7 @@
 // about the lifecycle/reconcile logic those suites actually exist to
 // exercise.
 //
-// This is not a production-code change: Classify and Wrap are already
+// This is not a production-code change: ClassifyCtx and WrapCtx are already
 // public, already-tested API of internal/transport/rclone (see
 // errors.go/errors_test.go there). This file only calls that public API
 // from outside the package, exactly as any other caller of
@@ -33,8 +33,10 @@ import (
 )
 
 // Wrap decorates tr so every error it returns carries the category
-// rclone.Classify assigns it, the same as if tr's own methods called
-// rclone.Wrap internally.
+// rclone.ClassifyCtx assigns it, the same as if tr's own methods called
+// rclone.WrapCtx internally. The call's own context is passed straight
+// through, which is what keeps a deadline rclone set for itself out of
+// transport.Cancelled (see rclone.ClassifyCtx and issue #388).
 func Wrap(tr transport.Transport) transport.Transport {
 	return classifying{tr: tr}
 }
@@ -45,25 +47,25 @@ var _ transport.Transport = classifying{}
 
 func (c classifying) List(ctx context.Context, source transport.Source) ([]transport.RemoteArtifact, error) {
 	out, err := c.tr.List(ctx, source)
-	return out, rclone.Wrap("list", err)
+	return out, rclone.WrapCtx(ctx, "list", err)
 }
 
 func (c classifying) Stat(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 	out, err := c.tr.Stat(ctx, source, remotePath)
-	return out, rclone.Wrap("stat", err)
+	return out, rclone.WrapCtx(ctx, "stat", err)
 }
 
 func (c classifying) CopyToLocal(ctx context.Context, source transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	out, err := c.tr.CopyToLocal(ctx, source, remotePath, localPartialPath)
-	return out, rclone.Wrap("copy_to_local", err)
+	return out, rclone.WrapCtx(ctx, "copy_to_local", err)
 }
 
 func (c classifying) RemoteHash(ctx context.Context, source transport.Source, remotePath string, algorithm transport.HashAlgorithm) (string, error) {
 	out, err := c.tr.RemoteHash(ctx, source, remotePath, algorithm)
-	return out, rclone.Wrap("remote_hash", err)
+	return out, rclone.WrapCtx(ctx, "remote_hash", err)
 }
 
 func (c classifying) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	err := c.tr.DeleteRemote(ctx, source, remotePath)
-	return rclone.Wrap("delete_remote", err)
+	return rclone.WrapCtx(ctx, "delete_remote", err)
 }

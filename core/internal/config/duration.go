@@ -1,3 +1,15 @@
+// The one YAML scalar type this package defines for itself: a duration
+// written the way an operator writes one, "15m" or "30h", rather than as a
+// number nobody can read a unit off.
+//
+// It is a type rather than a helper because the refusal has to happen
+// inside the YAML decode, before Validate ever sees the value. Every field
+// using it gives its own zero a specific, checked meaning in validate.go,
+// so a bare integer silently decoding as nanoseconds would turn a typo in
+// a unit suffix into a duration field that is permanently zero, and the
+// zero is the value each of those checks reads as "the operator did not
+// say". A loud parse error naming the line is the cheaper failure.
+
 package config
 
 import (
@@ -22,6 +34,14 @@ type Duration time.Duration
 // Duration returns the underlying time.Duration.
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
+// String hands the rendering straight to time.Duration rather than
+// formatting anything of its own.
+//
+// That is worth saying because this output is not only for debugging: the
+// validation messages in validate.go interpolate durations with %s, so
+// what this returns is text an operator reads out of a startup failure and
+// is pinned by the compatibility corpus. Anything prettier here would be
+// a change to that surface.
 func (d Duration) String() string { return time.Duration(d).String() }
 
 // UnmarshalYAML requires a duration string and parses it with

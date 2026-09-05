@@ -100,21 +100,21 @@ func TestSummarize_RepeatedQuarantineIsVisible(t *testing.T) {
 	}
 
 	report := Summarize(records, now)
-	if report.RepeatOffenders != 1 {
-		t.Fatalf("RepeatOffenders = %d, want 1", report.RepeatOffenders)
+	if report.PreviouslyAttempted != 1 {
+		t.Fatalf("PreviouslyAttempted = %d, want 1", report.PreviouslyAttempted)
 	}
 	byName := map[string]Entry{}
 	for _, e := range report.Entries {
 		byName[e.Artifact.Name] = e
 	}
-	if byName["first-timer.dump"].Repeated {
-		t.Fatal("a RetryCount=0 artifact was reported as Repeated")
+	if byName["first-timer.dump"].Retried {
+		t.Fatal("a RetryCount=0 artifact was reported as having been attempted before")
 	}
-	if !byName["repeat-offender.dump"].Repeated {
-		t.Fatal("a RetryCount=3 artifact was not reported as Repeated")
+	if !byName["repeat-offender.dump"].Retried {
+		t.Fatal("a RetryCount=3 artifact was not reported as having been attempted before")
 	}
-	if got := byName["repeat-offender.dump"].TimesReturned; got != 3 {
-		t.Fatalf("TimesReturned = %d, want 3", got)
+	if got := byName["repeat-offender.dump"].AttemptsSpent; got != 3 {
+		t.Fatalf("AttemptsSpent = %d, want 3", got)
 	}
 }
 

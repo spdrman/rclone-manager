@@ -1,3 +1,17 @@
+// One aggregate query: how many bytes of local disk this manager is
+// occupying, as the journal knows it.
+//
+// It gets a file to itself for the same reason the query is an aggregate
+// rather than a listing. The FR-21 capacity guard asks this before every
+// transfer, so the answer has to cost the same on a tree of ten artifacts
+// and a tree of ten thousand, and it has to count only what this manager
+// put there rather than whatever else shares the mount.
+//
+// Everything else worth knowing about the measurement lives on
+// LocalBytesInUse: which of two recorded sizes it prefers, where it
+// deliberately over-counts, why over-counting is the only safe direction
+// for a number a cap is enforced from, and why the list of states holding
+// a local copy arrives as an argument instead of being restated here.
 package state
 
 import (

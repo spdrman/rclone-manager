@@ -10,7 +10,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 // readOnlyReproRetention mirrors app package's own testRetention helper:
@@ -35,7 +35,8 @@ func readOnlyReproRetention() config.Retention {
 // SFTP fixture with the flag set, leaves the remote directory intact."
 //
 // The scenario mirrors the issue's own repro as closely as this suite's
-// existing fixtures allow: a real sshd in a container (sftpfixture.Start),
+// existing fixtures allow: a real sshd on a source machine (machines.Start,
+// which is the one way a test here gets a machine, #447),
 // an artifact that transfers, verifies and commits, and then a second call
 // to RunCycle standing in for the issue's "cycle 2" -- the point at which,
 // on an unprotected backup set, the remote source would ordinarily be
@@ -46,7 +47,7 @@ func readOnlyReproRetention() config.Retention {
 //
 // # Why the control case is a refusal, not a completed delete
 //
-// sftpfixture.Start runs the project's own recommended hardened posture
+// The source machine runs the project's own recommended hardened posture
 // (atmoz/sftp, forced internal-sftp, no shell), which is exactly the
 // deployment remotedelete.go's own package doc says routinely refuses a
 // delete on weak remote-identity confidence -- the "usually refuses"
@@ -60,7 +61,11 @@ func readOnlyReproRetention() config.Retention {
 // permanent REMOTE_RETAINED terminal state instead of sitting at
 // REMOTE_DELETE_PENDING forever being re-offered and re-refused.
 func TestReadOnlyBackupSet_RealSFTPFixture(t *testing.T) {
-	f := sftpfixture.Start(t)
+	// The worked example for #447: one call names the tier, and everything
+	// this test read off the fixture before (UploadDir, Host, Port, User,
+	// KeyFile, KnownHostsFile, Context) is still there on the source
+	// machine, unchanged.
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
 	ctx := f.Context()
 
@@ -81,7 +86,7 @@ func TestReadOnlyBackupSet_RealSFTPFixture(t *testing.T) {
 		// transport.Source out of bs.Remote/bs.RemotePath, unlike
 		// discovery.Discover elsewhere in this file, which is handed an
 		// already-built transport.Source directly. "upload" matches what
-		// Fixture.Source's own root-joining does (root == "" here, since
+		// Source.TransportSource's own root-joining does (root == "" here, since
 		// every backup set in this test shares the fixture's one upload
 		// directory).
 		return config.BackupSet{

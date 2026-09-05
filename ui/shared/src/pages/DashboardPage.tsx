@@ -5,7 +5,7 @@ import type { AsyncState } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
 import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
-import type { SystemHealth } from "@shared/types/operation";
+import type { CycleOutcome, SystemHealth } from "@shared/types/operation";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthSummary } from "@shared/components/HealthSummary";
 import { MetricCard } from "@shared/components/MetricCard";
@@ -13,6 +13,7 @@ import { StorageGauge } from "@shared/components/StorageGauge";
 import { OperationProgress } from "@shared/components/OperationProgress";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { StatusBadge } from "@shared/components/StatusBadge";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
@@ -56,6 +57,21 @@ export function DashboardPage({
   // Filtering here rather than in the client keeps the node holding what
   // the endpoint actually returns.
   const active = operations.data?.filter((op) => op.status === "running" || op.status === "queued") ?? null;
+  // The most recent FINISHED run cycle that carries counts, newest first
+  // (GET /api/v1/operations returns recent operations in that order).
+  //
+  // A cycle "completed" when it ran to the end, which is much narrower
+  // than it reads: a backup's own quarantine is a business outcome rather
+  // than an operation failure, so a cycle that backed nothing up finishes
+  // with exactly the same status as one that backed everything up. Issue
+  // #361 was that lie told to a cron job; #368 recorded the two counts
+  // that tell them apart, and nothing rendered them until this.
+  //
+  // `cycle` is null for an operation still running, and that is why the
+  // filter is on the counts and not on the status: a pair of zeroes drawn
+  // for a cycle nobody has measured yet is the loudest possible wrong
+  // answer.
+  const lastCycle = operations.data?.find((op) => op.cycle !== null) ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
   // Issue #286: a separate fetch, not derived from `health` above. GET
   // /system/storage's `manager` object answers a different question than
@@ -205,6 +221,10 @@ export function DashboardPage({
         </WarningBanner>
       ) : null}
 
+      {lastCycle && lastCycle.cycle ? (
+        <LastCycleOutcome outcome={lastCycle.cycle} />
+      ) : null}
+
       <section className="card" aria-label="Active operations">
         <div className="card__header">
           <h2 className="eyebrow">Active operations</h2>
@@ -267,5 +287,113 @@ export function DashboardPage({
         </div>
       </section>
     </>
+  );
+}
+
+/**
+ * What the last finished run cycle actually got done.
+ *
+ * Two numbers, and a sentence that says what they mean. There is
+ * deliberately no percentage and no rate: a cycle discovers what it will
+ * find as it goes, so there is no honest denominator for the whole until
+ * it ends, and a "success rate" is exactly the kind of confident figure
+ * issue #211 removed from this UI once already.
+ */
+function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
+  // Walked something and got none of it through. That is the reading the
+  // counts exist for, and it is the only one this panel raises its voice
+  // about: zero walked is a quiet cycle with nothing to do, which is not
+  // a problem.
+  const barren = outcome.artifactsWalked > 0 && outcome.artifactsThrough === 0;
+  const short = !barren && outcome.artifactsThrough < outcome.artifactsWalked;
+
+  // FR-30's half. A move pass is only worth a word when there was
+  // something to move: a deployment that declares no storage medium
+  // records a real zero here, every cycle, and a permanent "0 of 0 moved"
+  // row on its dashboard would be a new thing to explain that says
+  // nothing. A null pair is a cycle recorded before these counts existed
+  // and is not a cycle that moved nothing, so it is silent too.
+  const moves = outcome.moves && outcome.moves.attempted > 0 ? outcome.moves : null;
+  const barrenMoves = moves !== null && moves.landed === 0;
+  const shortMoves = moves !== null && !barrenMoves && moves.landed < moves.attempted;
+
+  return (
+    <section
+      className="card"
+      aria-label="Last run cycle"
+      style={barren || barrenMoves ? { borderColor: "var(--warn)" } : undefined}
+    >
+      <div
+        className="card__header"
+        style={barren || barrenMoves ? { borderBottomColor: "var(--warn)" } : undefined}
+      >
+        <h2 className="eyebrow">Last run cycle</h2>
+        {barren ? (
+          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing got through</StatusBadge>
+        ) : barrenMoves ? (
+          // A cycle can back everything up perfectly and put none of it
+          // where the chain says it belongs, and this is the badge for
+          // exactly that: the backups happened, the moves did not.
+          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing moved</StatusBadge>
+        ) : short ? (
+          <StatusBadge tone="warn" glyph={"\u25b2"}>Some did not get through</StatusBadge>
+        ) : (
+          <StatusBadge tone="ok" glyph={"\u25cf"}>All through</StatusBadge>
+        )}
+      </div>
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", gap: 28, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div>
+            <div className="mono" style={{ fontSize: "var(--text-2xl)", fontWeight: 500 }}>
+              {outcome.artifactsWalked}
+            </div>
+            <div className="eyebrow">walked</div>
+          </div>
+          <div>
+            <div
+              className="mono"
+              style={{
+                fontSize: "var(--text-2xl)", fontWeight: 500,
+                color: barren || short ? "var(--warn)" : "var(--ok)"
+              }}
+            >
+              {outcome.artifactsThrough}
+            </div>
+            <div className="eyebrow">got through</div>
+          </div>
+          <div style={{ marginLeft: "auto", textAlign: "right" }}>
+            <div className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+              {outcome.backupSetsProcessed + (outcome.backupSetsProcessed === 1 ? " backup set" : " backup sets")}
+            </div>
+          </div>
+        </div>
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-2)", maxWidth: "72ch" }}>
+          {barren
+            ? "This cycle had a reason to touch " + outcome.artifactsWalked +
+              " backups and none of them ended it with their bytes on durable storage. It is recorded as completed because it ran to the end."
+            : short
+              ? "This cycle walked " + outcome.artifactsWalked + " backups and " +
+                outcome.artifactsThrough + " of them ended it with their bytes on durable storage."
+              : "Every backup this cycle had a reason to touch ended it with its bytes on durable storage."}
+        </p>
+        {moves !== null && (
+          <p
+            style={{
+              margin: 0, fontSize: "var(--text-sm)", maxWidth: "72ch",
+              color: barrenMoves || shortMoves ? "var(--warn)" : "var(--text-2)"
+            }}
+          >
+            {barrenMoves
+              ? moves.attempted + " backups were due to move to the medium their retention tier names, and none arrived. " +
+                "They are still on the medium they were on, and nothing was deleted."
+              : shortMoves
+                ? moves.attempted + " backups were due to move to the medium their retention tier names, and " +
+                  moves.landed + " of them arrived."
+                : moves.attempted + " backups were due to move to the medium their retention tier names, and all " +
+                  moves.landed + " arrived."}
+          </p>
+        )}
+      </div>
+    </section>
   );
 }

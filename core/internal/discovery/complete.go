@@ -10,6 +10,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file answers the one question FR-8 turns on: is this remote object
+// finished being written, or am I looking at a producer mid-flight?
+//
+// Everything else in this package is bookkeeping around that answer, and
+// the answer is worth isolating because getting it wrong is not
+// symmetrical. Saying "not yet" about a finished artifact costs a delay
+// until the next pass. Saying "done" about a half-written one journals a
+// truncated backup as a real one, and every later stage, verification,
+// retention, the eventual delete of the remote original, then acts on that
+// claim.
+//
+// So the three strategies here are ordered by how much they ask this
+// package to INFER, and the code follows that order rather than
+// alphabetical: rename asks nothing (the producer's own atomic rename is
+// the proof), marker asks for a second object to exist, and stable asks
+// this package to guess from a clock. The package doc says why stable is
+// the weakest, and isComplete's default branch says why a fourth,
+// unrecognised strategy is never treated as complete.
+//
+// The literal conventions in here (a ".complete" sibling, the ".tmp"
+// family, "_SUCCESS") are this package's own choices, not FR-8's words,
+// because a real producer is usually something an operator cannot
+// reconfigure. Each constant says so where it is defined, and
+// ManifestMarker is the one an operator can override.
+
 // markerSuffix is this package's convention for FR-8's "producer completion
 // marker" strategy variant: a sibling object at <artifact-path>+markerSuffix
 // signals that specific artifact is finished being written. FR-8 does not
@@ -64,7 +89,16 @@ func isMarkerObject(base string, c config.Completion) bool {
 	return base == effectiveManifestMarker(c) || strings.HasSuffix(base, markerSuffix)
 }
 
-// isProducerTempName reports whether base carries one of inProgressSuffixes.
+// isProducerTempName reports whether base carries one of
+// inProgressSuffixes.
+//
+// It is deliberately a suffix test on the BASENAME only, which means a
+// producer that stages into a directory ("run.tmp/backup.dump") is not
+// caught here. That is the right split rather than an oversight: this test
+// exists to recognise the one convention that says "these bytes are still
+// arriving", and a staging directory that gets renamed as a unit makes the
+// artifact appear at its final path atomically, which is the rename
+// strategy's case and needs no help from this.
 func isProducerTempName(base string) bool {
 	for _, suf := range inProgressSuffixes {
 		if strings.HasSuffix(base, suf) {

@@ -72,6 +72,39 @@
 //     needs an application validator instead (one that does not depend on
 //     a remote hash call), not this switch.
 //
+// # A check that could not be completed (issue #419)
+//
+// The capability-absence decision above is about a backend that ANSWERED,
+// and answered that it cannot do this. There is a third case, and it is
+// the one #419 found: a backend that could not be asked at all. A connect
+// timeout rclone imposed on itself is the shape it takes, and since #408
+// it classifies, correctly, as transport.Transient.
+//
+// A retry-exhausted Transient failure is not evidence about the artifact.
+// internal/revalidate had already written the rule down one package over,
+// for the same situation on the other side of a move: "an unreachable
+// bucket is not evidence that a backup is gone", so a placement it could
+// not ask about is an error rather than a verdict. This file did the
+// opposite, and recorded FAILED. That is wrong twice over. It contradicts
+// FAILED's own documented meaning (machine.go: "a permanent, non-retryable
+// error", where transport.Category.Retryable is this product's own answer
+// to whether a failure is permanent), and it strands the artifact, because
+// FAILED's declared exits are FR-22's retry policy and FR-22's retry
+// policy has never been built, so nothing takes them.
+//
+// So a required check that could not be COMPLETED records no verdict. The
+// artifact stays exactly where it honestly is, at VERIFYING, and Verify
+// returns a *VerificationStalledError. That is the pre-#388 self-healing
+// behaviour back, without the cancellation nobody asked for that #388 was
+// about: the category is honest, the log line is honest, and the next
+// cycle simply asks again.
+//
+// It is bounded rather than endless, and the bound is VerifyParams.
+// StallBudget, counted on the journal row's own FR-22 RetryCount. Once it
+// is spent the artifact goes to QUARANTINED, never to FAILED: see
+// recordStall for why that is the honest destination and what it does and
+// does not claim about the bytes.
+//
 // The existing config.Validation.Hash field is the explicit switch FR-13
 // asks this decision to live in: which of the two honest postures above
 // applies is the operator's choice, recorded in configuration, not a
@@ -124,6 +157,20 @@ var remoteHashRetryPolicy = retry.Policy{MaxAttempts: 3}
 // from another lifecycle step sharing the same AttemptKey base.
 const keyVerifySuffix = ":verify"
 
+// keyVerifyStallSuffix is appended to VerifyParams.AttemptKey to build the
+// one write a stalled attempt makes (issue #419).
+//
+// A fixed suffix, like keyVerifySuffix, and it stays correct across
+// successive stalls for a reason worth stating rather than assuming: the
+// stall write is what increments state.Record.RetryCount, and
+// internal/app's attemptKey derives the base from RetryCount, so the next
+// attempt against a still-unreachable backend arrives here with a base
+// that has already moved. Replaying the SAME attempt (a crash between the
+// write landing and this call returning) reuses the same base and the same
+// key, so the journal replays it instead of spending a second attempt on
+// one outage.
+const keyVerifyStallSuffix = ":verify-stall"
+
 // VerifyParams is what Verify needs beyond Deps.
 type VerifyParams struct {
 	// Artifact is the artifact to verify. It must currently have a
@@ -144,6 +191,79 @@ type VerifyParams struct {
 	// resume, a new one for a genuinely new attempt (see TransferParams's
 	// doc for the full contract, which Verify shares).
 	AttemptKey string
+
+	// StallBudget is how many consecutive attempts this artifact's
+	// verification may STALL, on a check that could not be completed at
+	// all, before Verify stops leaving it in progress and hands it to a
+	// human (issue #419). See "A check that could not be completed" in
+	// this file's package doc for what a stall is and why it is not a
+	// verdict.
+	//
+	// It is counted against state.Record.RetryCount, FR-22's own "how many
+	// times has this artifact been sent back to try again from an
+	// exceptional state" counter, which internal/lifecycle/quarantine.go
+	// already designed to be shared rather than duplicated. So an artifact
+	// an operator has already released from quarantine twice reaches a
+	// human two stalls sooner, which is the right direction: an artifact
+	// that keeps needing attention should get it earlier, not later.
+	//
+	// Zero or negative means the caller granted no tolerance at all and
+	// the first exhausted attempt is the outcome. internal/app derives the
+	// real value from the same retry policy that already bounds one
+	// attempt's own retries; see verifyOne there.
+	StallBudget int
+}
+
+// VerificationStalledError reports that a REQUIRED check could not be
+// completed, as opposed to completing and producing a verdict.
+//
+// It is its own type rather than a wrapped transport error because the two
+// answer different questions. transport.Category says what went wrong on
+// the wire; this says what it means for the artifact, which is nothing:
+// the check never ran, so there is no finding, and the journal row is
+// exactly where it honestly was. A caller reads Attempt/Budget to say how
+// close this artifact is to being handed to a human.
+//
+// Unwrap keeps the underlying classified failure reachable, so
+// transport.CategoryOf and errors.Is still answer for it.
+type VerificationStalledError struct {
+	Artifact model.ArtifactID
+
+	// Attempt is how many consecutive stalls this artifact has now
+	// recorded, including this one.
+	Attempt int
+
+	// Budget is the StallBudget this attempt was measured against.
+	Budget int
+
+	// Err is the classified failure that stopped the check.
+	Err error
+}
+
+// Error puts the attempt count and the budget in the message rather than
+// leaving them to a caller that might not print them. This error is the one
+// an operator sees repeatedly for the same artifact, once per cycle, and
+// "attempt 3 of 5" is what turns a wall of identical lines into something
+// with a visible end: it says both that the artifact is not being ignored
+// and how long it has before somebody has to look at it.
+func (e *VerificationStalledError) Error() string {
+	return fmt.Sprintf(
+		"lifecycle: verify: %s could not be checked (attempt %d of %d before this is handed to an operator): %v",
+		e.Artifact, e.Attempt, e.Budget, e.Err)
+}
+
+// Unwrap keeps the classified failure reachable, so a caller can still ask
+// errors.Is what actually went wrong. The stall bookkeeping is a fact about
+// this artifact's history; the wrapped error is the fact about the world,
+// and losing the second to report the first would make an unreachable NAS
+// indistinguishable from a backend that cannot hash.
+func (e *VerificationStalledError) Unwrap() error { return e.Err }
+
+// AsVerificationStalled reports whether err is, or wraps, a
+// *VerificationStalledError.
+func AsVerificationStalled(err error) (*VerificationStalledError, bool) {
+	var e *VerificationStalledError
+	return e, errors.As(err, &e)
 }
 
 // verifyOutcome is the terminal disposition decide has reached, before
@@ -188,9 +308,19 @@ func Verify(ctx context.Context, d Deps, p VerifyParams) (state.Outcome, error) 
 		return state.Outcome{}, fmt.Errorf("lifecycle: verify: looking up %s: %w", p.Artifact, err)
 	}
 
-	out, cancelErr := decide(ctx, d, p.Source, rec, p.Validation)
-	if cancelErr != nil {
-		return state.Outcome{}, fmt.Errorf("lifecycle: verify: %w", cancelErr)
+	out, halted := decide(ctx, d, p.Source, rec, p.Validation)
+	if halted != nil {
+		// Two different reasons decide declines to produce a verdict, and
+		// they are routed differently. A cancellation is the caller's own
+		// decision and is propagated untouched, leaving the journal
+		// exactly where it is. A check that could not be COMPLETED is not
+		// anybody's decision: it is recorded, bounded and eventually
+		// handed to an operator (see recordStall).
+		var unfinished *unfinishedCheck
+		if errors.As(halted, &unfinished) {
+			return recordStall(ctx, d, p, rec, unfinished.err)
+		}
+		return state.Outcome{}, fmt.Errorf("lifecycle: verify: %w", halted)
 	}
 
 	result, err := Advance(ctx, d, state.Transition{
@@ -206,6 +336,111 @@ func Verify(ctx context.Context, d Deps, p VerifyParams) (state.Outcome, error) 
 		return state.Outcome{}, fmt.Errorf("lifecycle: verify: recording %s: %w", out.to, err)
 	}
 	return result, nil
+}
+
+// unfinishedCheck is decide's way of saying "a required check could not be
+// completed", which is neither a verdict nor a cancellation and so needs a
+// third answer rather than being folded into either.
+//
+// It is unexported because it is a signal between two functions in one
+// file. What a CALLER sees is VerificationStalledError, which carries the
+// attempt bookkeeping this type has no way to know.
+type unfinishedCheck struct{ err error }
+
+// Error passes the underlying message straight through, adding no prefix of
+// its own. This type is a marker rather than a wrapper: it exists so decide
+// can return a third kind of answer, and any text it added would end up
+// duplicated inside the VerificationStalledError that a caller actually
+// sees.
+func (u *unfinishedCheck) Error() string { return u.err.Error() }
+
+// Unwrap keeps the cause reachable, which is what lets Verify classify the
+// failure after unwrapping the marker.
+func (u *unfinishedCheck) Unwrap() error { return u.err }
+
+// recordStall is what Verify does with a check that could not be
+// completed: it counts the attempt on the journal row, and either leaves
+// the artifact exactly where it honestly is or, once the budget is spent,
+// hands it to an operator.
+//
+// # Why the exhausted case is QUARANTINED and not FAILED
+//
+// FAILED is documented, in machine.go, as "a permanent, non-retryable
+// error", and transport.Category.Retryable is this product's own answer to
+// whether a failure is permanent. A transient failure recorded as FAILED
+// contradicts both. It also strands the artifact: FAILED's two declared
+// exits, back to DISCOVERED and into QUARANTINED, are the FR-22 retry
+// policy that has never been built, so nothing in this product takes
+// either one and the row stops being worked on permanently, on the
+// strength of a network condition that has very likely already cleared
+// (issue #419).
+//
+// QUARANTINED is where an artifact waits for a human, and it already has
+// three operator actions wired to it end to end, one of which
+// (RetryQuarantinedIngestion) is exactly the route back into the pipeline
+// this case needs. Sending an artifact there says something true about it,
+// as long as the words are right: what is being held is not "these bytes
+// are suspect" but "nobody has been able to prove anything about these
+// bytes, and until somebody does they must not be committed and must not
+// authorise deleting the source". QUARANTINED guarantees precisely that,
+// which is why no new state was invented for it. See machine.go's package
+// doc, which now says so beside the table, and QuarantineReason, which
+// reports this shape as what it is rather than as a content check that
+// failed.
+//
+// # What is deliberately NOT recorded
+//
+// No hash update. Layer 1 computed the local file's SHA-256 as a side
+// effect of reading it, and attaching it here would leave the row carrying
+// exactly the evidence QuarantineReason reads to decide whether to say "a
+// content check failed", about a comparison that never happened.
+func recordStall(ctx context.Context, d Deps, p VerifyParams, rec state.Record, cause error) (state.Outcome, error) {
+	attempt := rec.RetryCount + 1
+	// The category, once. transport.Error renders it itself, so prefixing
+	// unconditionally produced "transient: remote_hash: transient: ..." on
+	// the one path that always has one; this names it only where the
+	// message does not already.
+	reason := cause.Error()
+	if category, ok := transport.CategoryOf(cause); ok && !strings.Contains(reason, category.String()) {
+		reason = fmt.Sprintf("%s: %s", category, reason)
+	}
+	lastError := "verification could not be completed: " + reason
+
+	if attempt >= p.StallBudget {
+		out, err := Advance(ctx, d, state.Transition{
+			Artifact: rec.Artifact,
+			Key:      p.AttemptKey + keyVerifyStallSuffix,
+			From:     rec.State,
+			To:       string(Quarantined),
+			Detail: fmt.Sprintf(
+				"verification could not be completed on %d of %d attempts, so this artifact is held for an operator rather than left in progress or reported as a verdict nobody measured: %s",
+				attempt, max(attempt, p.StallBudget), reason),
+			Retry: &state.RetryUpdate{Count: attempt, LastError: lastError},
+		})
+		if err != nil {
+			return state.Outcome{}, fmt.Errorf("lifecycle: verify: recording %s after %d unfinished checks: %w", Quarantined, attempt, err)
+		}
+		return out, nil
+	}
+
+	if _, err := Advance(ctx, d, state.Transition{
+		Artifact: rec.Artifact,
+		Key:      p.AttemptKey + keyVerifyStallSuffix,
+		From:     rec.State,
+		To:       rec.State,
+		Detail: fmt.Sprintf(
+			"verification could not be completed (attempt %d of %d): %s", attempt, p.StallBudget, reason),
+		Retry: &state.RetryUpdate{Count: attempt, LastError: lastError},
+	}); err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: verify: recording an unfinished check for %s: %w", rec.Artifact, err)
+	}
+
+	return state.Outcome{}, &VerificationStalledError{
+		Artifact: rec.Artifact,
+		Attempt:  attempt,
+		Budget:   p.StallBudget,
+		Err:      cause,
+	}
 }
 
 // decide runs every configured check and returns the single terminal
@@ -268,8 +503,18 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 			hashErr = errors.New("backend returned an empty hash with no error")
 		}
 		if hashErr != nil {
+			category, classified := transport.CategoryOf(hashErr)
+			if classified && category.Retryable() {
+				// The backend was not able to ANSWER. See "A check that
+				// could not be completed" in this file's package doc: a
+				// retryable failure that outlasted its own retry budget
+				// says the network is down, not that this artifact is
+				// bad, so no verdict is recorded here at all and no hash
+				// is attached to a row nothing compared.
+				return verifyOutcome{}, &unfinishedCheck{err: hashErr}
+			}
 			reason := hashErr.Error()
-			if category, ok := transport.CategoryOf(hashErr); ok {
+			if classified {
 				reason = fmt.Sprintf("%s: %v", category, hashErr)
 			}
 			return verifyOutcome{
@@ -353,18 +598,31 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 
 // isCancellation reports whether err represents this call being stopped
 // externally (a caller's context being cancelled or timing out) rather than
-// the operation itself failing. It checks transport.CategoryOf first
-// (retry.Do wraps a cancellation it observes as transport.Cancelled), and
-// falls back to a raw context error check for a transport implementation
-// that returns ctx.Err() unwrapped: capability-absence and every other
+// the operation itself failing. Capability-absence and every other
 // classified failure must still fall through to a real Failed/Quarantined
 // verdict, so this must never match anything but an actual cancellation.
+//
+// A classified error answers for itself and the raw check never runs on it.
+// That ordering is the whole point rather than a tidiness preference:
+// transport.Error keeps its cause reachable through Unwrap, so an error a
+// transport already looked at and called Transient still answers
+// errors.Is(err, context.DeadlineExceeded) if a deadline is what it was
+// underneath. A connect timeout rclone imposed on itself is exactly that
+// shape (see transport/rclone.ClassifyCtx and issue #388), and reading it
+// here as a stop request would leave the journal at VERIFYING with no
+// verdict at all, for a failure nobody asked for and everybody wants
+// recorded.
+//
+// The raw check is still the right answer for an error nothing classified,
+// which is what a transport implementation returning ctx.Err() unwrapped
+// produces, and what runValidator returns when the context it was given
+// expires.
 func isCancellation(err error) bool {
 	if err == nil {
 		return false
 	}
-	if category, ok := transport.CategoryOf(err); ok && category == transport.Cancelled {
-		return true
+	if category, ok := transport.CategoryOf(err); ok {
+		return category == transport.Cancelled
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
@@ -529,6 +787,15 @@ type boundedWriter struct {
 	limit int
 }
 
+// Write always reports the full length as accepted, even for the bytes it
+// throws away.
+//
+// That is the whole point of the type. The writer is on the far end of a
+// pipe from an untrusted process, and reporting a short write or an error
+// would surface to that process as a failed write or a blocked pipe, which
+// changes its behaviour: a validator that logs verbosely would start failing
+// for reasons that have nothing to do with the artifact it was asked about.
+// So the excess is discarded silently and the process is never told.
 func (w *boundedWriter) Write(p []byte) (int, error) {
 	if room := w.limit - w.buf.Len(); room > 0 {
 		if room > len(p) {
@@ -539,6 +806,13 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// String marks a truncated buffer as truncated.
+//
+// Without the marker, output that was cut off is indistinguishable from
+// output that simply ended, and the difference matters exactly when it is
+// least obvious: a validator whose real error message arrived after the
+// limit would leave a journal detail that reads as a complete but
+// unhelpful explanation.
 func (w *boundedWriter) String() string {
 	if w.buf.Len() >= w.limit {
 		return w.buf.String() + "... (truncated)"

@@ -110,6 +110,22 @@ SELFTEST_STUB='SELFTEST-STUB-RAN'
 # self-test stub.
 E2E_STUB='E2E-GATE-STUB-RAN'
 
+# The same, for the two-machine end-to-end backup proof (#356). Group I
+# asserts on it in both directions. The real script builds a container
+# image and stands up docker-in-docker; this fixture measures which steps
+# the gate chooses to run, so the stub prints a marker and succeeds.
+TWO_MACHINE_STUB='TWO-MACHINE-STUB-RAN'
+
+# And for the repository-wide gofmt sweep (#417), which Group L watches in
+# both directions.
+GOFMT_STUB='GOFMT-SWEEP-STUB-RAN'
+
+# The same, for the check that vets and lints the Go files no module owns
+# (#417). It lives in scripts/architecture/ but runs near the top of the
+# gate with the sweep rather than with the other architecture checks, and
+# Group L is where that placement is pinned.
+UNOWNED_STUB='UNOWNED-GO-STUB-RAN'
+
 make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   # mktemp, not a counter: this runs inside $( ), so a counter would increment
   # in the subshell and every caller would get the same directory back. That
@@ -198,6 +214,12 @@ make_full_tree() {
   # the gate dies on `cd distribution` in every full-tree case, which is the
   # same shape of miss the two comments further down record.
   add_go_module "$tree" distribution stubdistribution
+  # And distribution/packaging as a package of that module, because #417
+  # gave it a step of its own: it is the one Go suite the gate runs without
+  # -race, so `go test ./packaging/` is now a real path the gate walks and
+  # a tree without it dies on it, which is the same miss again.
+  add_go_module "$tree" distribution/packaging stubpackaging
+  rm -f "$tree/distribution/packaging/go.mod"
 
   add_workspace "$tree" ui/shared installed
   add_workspace "$tree" apps/common/tests installed
@@ -228,9 +250,16 @@ make_full_tree() {
   for arch in check-layer-manifest check-core-dependency-rule \
               check-layer-ownership check-ui-shared-provider-imports \
               selftest verify-core-without-apps verify-core-without-distribution \
-              verify-ui-shared-without-provider-sdks verify-ugos-removable; do
+              verify-ui-shared-without-provider-sdks verify-ugos-removable \
+              check-unowned-go; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/architecture/$arch.sh"
   done
+  # check-unowned-go prints a marker on top of that, because Group L
+  # watches for it in both directions the way Group G watches the browser
+  # e2e stub. The real one vets and lints every Go file outside every
+  # module, through a throwaway module per directory.
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$UNOWNED_STUB" \
+    >"$tree/scripts/architecture/check-unowned-go.sh"
 
   # The performance baseline gate and its own self-test (#165), stubbed for
   # the same reason: this fixture measures which steps the gate chooses to
@@ -250,6 +279,37 @@ make_full_tree() {
   for api in check-contract-drift check-client-paths selftest; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/api/$api.sh"
   done
+
+  # EPIC E's FR-35 compatibility mutation self-test (#242), stubbed for the
+  # third time for the third identical reason. The real one copies the tree
+  # sixteen times and builds core/ in each copy; this fixture measures which
+  # steps the gate chooses to run, not what they do, and a missing path here
+  # exits 127 under `set -e` and takes every case below it with it.
+  mkdir -p "$tree/scripts/compat"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/compat/selftest.sh"
+
+  # And EPIC E's composed conformance mutation self-test (#242), for the
+  # same reason: the real one copies the tree nine times, builds core/ in
+  # each copy and stands up MinIO containers.
+  mkdir -p "$tree/scripts/conformance"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/conformance/selftest.sh"
+
+  # The race detector's own mutation self-test (#417), stubbed for the
+  # seventh time for the seventh identical reason: the real one copies the
+  # tree twice, plants a data race in core/service and runs the detector
+  # over it, and `bash` on a path that does not exist exits 127 under
+  # `set -e` and takes every case below it down with it.
+  mkdir -p "$tree/scripts/race"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/race/selftest.sh"
+
+  # The formatting sweep and its own mutation self-test (#417), for the
+  # eighth and ninth time for the same reason. The sweep prints a marker
+  # because Group L watches for it in both directions; the real one reads
+  # every tracked .go file in the repository.
+  mkdir -p "$tree/scripts/format"
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$GOFMT_STUB" \
+    >"$tree/scripts/format/check-gofmt.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/format/selftest.sh"
 
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
@@ -296,6 +356,16 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$E2E_STUB" \
     >"$tree/scripts/e2e/run-tests-repo-gate.sh"
 
+  # The two-machine end-to-end backup proof (#356), stubbed for exactly the
+  # reason the four comments above give, and this is the sixth time that
+  # lesson has had to be written down here: `bash` on a path that does not
+  # exist exits 127, the gate runs under `set -e`, and every full-tree case
+  # below the step would die for a reason that has nothing to do with what
+  # it measures. The real script builds an image from the working tree and
+  # stands up two containers on a temporary network.
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$TWO_MACHINE_STUB" \
+    >"$tree/scripts/e2e/two-machine-backup.sh"
+
   printf '%s\n' "$tree"
 }
 
@@ -310,6 +380,7 @@ run_hook() { # <tree> [VAR=VAL ...]
   shift
   out="$(cd "$hook_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
     -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
+    -u CI_LOCAL_SKIP_TWO_MACHINE \
     PATH="$hook_tree/bin:$PATH" "$@" sh .husky/pre-commit 2>&1)"
   status=$?
 }
@@ -323,6 +394,7 @@ run_gate() { # <tree> [VAR=VAL ...]
   # every synthetic run as an inherited skip.
   out="$(cd "$gate_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
     -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
+    -u CI_LOCAL_SKIP_TWO_MACHINE \
     PATH="$gate_tree/bin:$PATH" "$@" bash scripts/ci-local.sh 2>&1)"
   status=$?
 }
@@ -783,6 +855,587 @@ assert_nonzero "H1 a red installer suite fails the run" "$status"
 assert_not_contains "H1 a red installer suite cannot report success" 'ci-local: ok' "$out"
 assert_contains "H1 the verdict line names the step that failed" \
   'ci-local: FAILED (installer prerequisite refusals' "$out"
+
+# ------------- Group I: the two-machine backup proof is a real signal
+
+echo "==> I. the two-machine end-to-end backup proof (#356)"
+
+# I1 is the control for everything below it, and the same control G1 is:
+# without it, I3's absence assertion would also pass against a gate that
+# had lost the step entirely.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "I1 a complete run invokes the two-machine step" \
+  'two throwaway machines' "$out"
+assert_contains "I1 the step really ran (and was the stub)" "$TWO_MACHINE_STUB" "$out"
+assert_contains "I1 a complete run still reports success" 'ci-local: ok' "$out"
+
+# I2: the out-loud opt-out ledgers rather than printing a note and carrying
+# on, the same shape as CI_LOCAL_SKIP_DOCKER and CI_LOCAL_SKIP_E2E.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_SKIP_TWO_MACHINE=1
+assert_not_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 does not run the step" "$TWO_MACHINE_STUB" "$out"
+assert_not_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 cannot report success" 'ci-local: ok' "$out"
+assert_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 ends INCOMPLETE" 'ci-local: INCOMPLETE' "$out"
+assert_contains "I2 the summary names the proof that did not run" \
+  'two-machine end-to-end backup proof' "$out"
+assert_eq "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 exits $INCOMPLETE" "$INCOMPLETE" "$status"
+
+# I3: FAST leaves it out, under the never-merge-on-FAST rule D4 owns.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_FAST=1
+assert_not_contains "I3 CI_LOCAL_FAST=1 does not run the two-machine step" "$TWO_MACHINE_STUB" "$out"
+
+# I4: a failed proof refuses the commit rather than annotating it.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "the digests did not match"\nexit 1\n' \
+  >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+assert_nonzero "I4 a failed backup proof fails the run" "$status"
+assert_not_contains "I4 a failed backup proof cannot report success" 'ci-local: ok' "$out"
+assert_contains "I4 the verdict line names the step that failed" \
+  'ci-local: FAILED (two throwaway machines' "$out"
+
+# I5 is the case this step has that no other step here has, and the one
+# worth the most. "This machine cannot perform the proof" is neither a pass
+# nor a failure: no Docker, or a daemon that refuses a privileged container
+# so docker-in-docker cannot start. The script says so and exits 3. The
+# gate has to LEDGER that, which means neither reporting ok nor dying on
+# it, and the distinction is invisible in the exit status alone, which is
+# why it is asserted in all three directions.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "==> two-machine: CANNOT RUN. no privileged containers here" >&2\nexit 3\n' \
+  >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+assert_not_contains "I5 a proof this machine cannot perform cannot report success" 'ci-local: ok' "$out"
+assert_contains "I5 it ends INCOMPLETE rather than FAILED" 'ci-local: INCOMPLETE' "$out"
+assert_contains "I5 the summary names what could not be performed" \
+  'this machine could not perform it' "$out"
+assert_eq "I5 it exits $INCOMPLETE" "$INCOMPLETE" "$status"
+
+# I6 is I5's positive control. Without it, I5 would also pass against a
+# gate that treated EVERY non-zero status as a ledgered skip, which would
+# turn a real digest mismatch into an INCOMPLETE nobody reads. I4 asserts
+# the failure half; this asserts that the two statuses are actually told
+# apart rather than collapsed.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+three_status="$status"
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+if [ "$three_status" = "$INCOMPLETE" ] && [ "$status" != "$INCOMPLETE" ]; then
+  pass "I6 exit 3 and exit 1 from the proof are told apart"
+else
+  fail "I6 exit 3 and exit 1 from the proof are told apart, got $three_status and $status"
+fi
+
+# I7: every container the proof creates is removed WITH its volumes.
+#
+# Not a stub test, because the property is in the real script rather than
+# in the gate's handling of it. docker:28-dind declares
+# VOLUME /var/lib/docker, so each manager machine gets an anonymous host
+# volume carrying that machine's whole inner Docker state, and
+# `docker rm -f` leaves it behind. Nothing references a leftover, so
+# nothing complains, and the shared Docker disk fills silently until an
+# install refuses on free space. That is not hypothetical: it is how a
+# full run failed, with the installer's own preflight reporting 912 MiB
+# free against its 2048 MiB floor on a Docker VM at 98%.
+#
+# Asserted on the source rather than by running a case, because running
+# one costs a container image build and this has to hold for a removal
+# site somebody adds later, not only for the two that exist today.
+proof_script="$(dirname "$0")/../e2e/two-machine-backup.sh"
+if [ ! -f "$proof_script" ]; then
+  fail "I7 the two-machine proof script is where this expects it"
+else
+  # Comment lines are excluded, and the prose above the teardown quotes
+  # `docker rm -f` on purpose to explain why it is wrong; a check that
+  # cannot tell a command from its own explanation is not a check.
+  bare_removals="$(grep -vE '^[[:space:]]*#' "$proof_script" | grep -nE 'docker rm ' | grep -v -- '-fv' || true)"
+  if [ -z "$bare_removals" ]; then
+    pass "I7 every docker rm in the proof removes the container's volumes too"
+  else
+    fail "I7 every docker rm in the proof removes the container's volumes too, but these do not:
+$bare_removals"
+  fi
+  assert_contains "I7 the proof says why -v is load-bearing" \
+    'VOLUME /var/lib/docker' "$(cat "$proof_script")"
+fi
+
+# ------------- Group J: a daemon that dies in the middle of a run (#457)
+
+echo "==> J. the Docker daemon during the run, not only at the preflight"
+
+# Docker Desktop's Resource Saver stops the hypervisor after five idle
+# minutes and cold-starts it on the next API call. This gate has several
+# Docker-free stretches longer than that, so every run was restarting the VM
+# somewhere in the middle, and two runs on 2026-09-04 died of it: one VM came
+# up and died 86ms later racing the previous hypervisor over Docker.raw, and
+# one `images/create` returned HTTP 500 for 2m31s.
+#
+# Neither showed up as a failure. The gate probed the daemon once, at the
+# top, so a VM that died at minute 18 turned every Docker-backed suite into a
+# t.Skip, `go test` exited 0, and the run reported on tests that never ran.
+# That is #160's defect again, arriving through the machine rather than
+# through the checkout.
+#
+# This stub is that shape exactly: a daemon that answers the preflight probe
+# and then stops answering. It also records every call, which is how the two
+# sentinel cases below watch a container they cannot create for real.
+set_docker_recording() { # <tree>
+  cat >"$1/bin/docker" <<'STUB'
+#!/bin/sh
+# Records every invocation, and stops answering `docker info` after
+# DOCKER_STUB_MAX_INFO of them. Everything else always succeeds, so the
+# number of non-info calls the gate makes cannot change what a case measures.
+if [ -n "${DOCKER_STUB_LOG:-}" ]; then printf '%s\n' "$*" >>"$DOCKER_STUB_LOG"; fi
+if [ "${1:-}" = info ]; then
+  count_file="${DOCKER_STUB_LOG:-/dev/null}.info"
+  n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" >"$count_file" 2>/dev/null || true
+  if [ "$n" -gt "${DOCKER_STUB_MAX_INFO:-99}" ]; then exit 1; fi
+fi
+exit 0
+STUB
+  chmod +x "$1/bin/docker"
+}
+
+# J1: the headline. One `docker info` answered, every one after it refused,
+# and the run must FAIL by name at the step that needed the daemon.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=1
+assert_nonzero "J1 a daemon that dies mid-run fails the run" "$status"
+assert_not_contains "J1 a daemon that dies mid-run cannot report success" \
+  'ci-local: ok' "$out"
+assert_not_contains "J1 a daemon that dies mid-run is not a ledgered skip" \
+  'ci-local: INCOMPLETE' "$out"
+assert_contains "J1 the failure names the step that needed the daemon" \
+  'ci-local: FAILED (core/ go test -race ./...' "$out"
+assert_contains "J1 the failure says the daemon died during the run" \
+  'it was at the start of this run' "$out"
+assert_contains "J1 the failure points at Resource Saver" 'Resource Saver' "$out"
+# The positive control for "this is a mid-run failure and not the preflight
+# refusal wearing a different hat": the run really did get past the preflight
+# and do work first.
+assert_contains "J1 the run got past the preflight before it failed" \
+  'core/ go build' "$out"
+
+# J2: J1's control. Same tree, same stub, same everything except that the
+# daemon keeps answering. Without this, J1 would also pass against a gate
+# that had simply lost the ability to finish at all.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=99
+assert_contains "J2 a daemon that stays up reports success" 'ci-local: ok' "$out"
+assert_eq "J2 a daemon that stays up exits 0" 0 "$status"
+
+# J3: the sentinel. Resource Saver measures IDLE, so the fix that does not
+# depend on anyone's GUI settings is to never be idle. J2's run is reused
+# through its recorded call log: one `docker run` of a sleeping container,
+# and one removal of that same container on the way out.
+docker_log="$(cat "$tree/docker.log" 2>/dev/null || true)"
+assert_contains "J3 the gate starts a sentinel container" \
+  'run -d --rm --name ci-local-sentinel-' "$docker_log"
+assert_contains "J3 the sentinel just sleeps" 'sleep infinity' "$docker_log"
+assert_contains "J3 the sentinel is labelled" \
+  '--label rclone-manager-ci-local-sentinel=1' "$docker_log"
+assert_contains "J3 the gate removes the sentinel on the way out" \
+  'rm -f ci-local-sentinel-' "$docker_log"
+# Same container, not just some container of each shape: a start and a
+# removal that name different containers is the leak this case is about.
+sentinel_started="$(printf '%s\n' "$docker_log" | sed -n 's/.*--name \(ci-local-sentinel-[0-9]*\).*/\1/p' | head -1)"
+sentinel_removed="$(printf '%s\n' "$docker_log" | sed -n 's/^rm -f \(ci-local-sentinel-[0-9]*\)$/\1/p' | head -1)"
+if [ -n "$sentinel_started" ] && [ "$sentinel_started" = "$sentinel_removed" ]; then
+  pass "J3 the container that was started is the container that was removed"
+else
+  fail "J3 the container that was started is the container that was removed" \
+    "started [$sentinel_started], removed [$sentinel_removed]"
+fi
+# Nothing after the removal, so the sentinel cannot outlive the run.
+assert_eq "J3 the removal is the last thing the gate asks docker for" \
+  "rm -f $sentinel_started" "$(printf '%s\n' "$docker_log" | tail -1)"
+
+# J4: the removal is not conditional on the run going well. A sentinel that
+# survives a failed run is #150's leak wearing a different label, and a
+# failed run is the common case for a gate that runs on every commit.
+tree="$(make_full_tree)"
+set_docker_recording "$tree"
+printf 'package stub\n\nthis is not go\n' >"$tree/core/stub.go"
+run_gate "$tree" DOCKER_STUB_LOG="$tree/docker.log" DOCKER_STUB_MAX_INFO=99
+assert_nonzero "J4 the broken tree fails the run" "$status"
+docker_log="$(cat "$tree/docker.log" 2>/dev/null || true)"
+assert_contains "J4 a failed run still starts its sentinel" \
+  'run -d --rm --name ci-local-sentinel-' "$docker_log"
+assert_contains "J4 a failed run still removes its sentinel" \
+  'rm -f ci-local-sentinel-' "$docker_log"
+
+# J5: the sentinel's label must NOT be the one core/tests/dockerlease
+# sweeps. That sweep removes labelled containers older than fifteen minutes,
+# and a full gate run is twenty-five, so sharing the label would delete the
+# sentinel out from under the run it exists to protect, at almost exactly the
+# halfway point. Read out of the Go source rather than copied here, because
+# the failure this guards against is the two constants drifting together.
+lease_source="$REPO_ROOT/core/tests/dockerlease/dockerlease.go"
+if [ ! -f "$lease_source" ]; then
+  fail "J5 core/tests/dockerlease/dockerlease.go is where this expects it"
+else
+  lease_key="$(sed -n 's/^[[:space:]]*LabelKey = "\(.*\)"$/\1/p' "$lease_source" | head -1)"
+  sentinel_key="$(sh -c ". '$GATE_LIB' && printf '%s' \"\$GATE_SENTINEL_LABEL_KEY\"")"
+  if [ -n "$lease_key" ] && [ -n "$sentinel_key" ] && [ "$lease_key" != "$sentinel_key" ]; then
+    pass "J5 the sentinel does not carry the label dockerlease sweeps"
+  else
+    fail "J5 the sentinel does not carry the label dockerlease sweeps" \
+      "dockerlease LabelKey [$lease_key], sentinel [$sentinel_key]"
+  fi
+fi
+
+# J6: an interrupt is the other way a sentinel outlives its run, and it is
+# not a rare path on a gate that takes twenty-five minutes from a pre-commit
+# hook. Driven against the library directly, because run_gate has no way to
+# send a signal into the middle of a run.
+int_log="$SANDBOX/interrupt-docker.log"
+cat >"$SANDBOX/interrupt-docker" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$DOCKER_STUB_LOG"
+exit 0
+STUB
+chmod +x "$SANDBOX/interrupt-docker"
+mkdir -p "$SANDBOX/intbin"
+cp "$SANDBOX/interrupt-docker" "$SANDBOX/intbin/docker"
+cat >"$SANDBOX/interrupted-run.sh" <<'RUN'
+set -e
+. "$1"
+gate_install_traps
+gate_start_docker_sentinel >/dev/null
+gate_step "core/ tests/crashmatrix under gotestwatch" >/dev/null
+kill -INT $$
+echo "REACHED-THE-LINE-AFTER-THE-SIGNAL"
+RUN
+int_out="$(DOCKER_STUB_LOG="$int_log" PATH="$SANDBOX/intbin:$PATH" \
+  sh "$SANDBOX/interrupted-run.sh" "$GATE_LIB" 2>&1)"
+int_status=$?
+assert_eq "J6 an interrupted run exits 130" 130 "$int_status"
+assert_not_contains "J6 an interrupted run stops where it was interrupted" \
+  'REACHED-THE-LINE-AFTER-THE-SIGNAL' "$int_out"
+assert_contains "J6 an interrupted run still prints a verdict naming the step" \
+  'ci-local: FAILED (core/ tests/crashmatrix under gotestwatch, interrupted by SIGINT)' "$int_out"
+assert_contains "J6 an interrupted run removes its sentinel" \
+  'rm -f ci-local-sentinel-' "$(cat "$int_log" 2>/dev/null || true)"
+
+# J7: CI_LOCAL=1 reaches the processes the gate starts. The Docker fixtures
+# key on it to tell "this laptop has no Docker", which is an honest skip
+# outside the gate, from "the daemon this gate already used has gone away",
+# which is a failure. Measured through a child process rather than in this
+# shell, because being exported is the whole point.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "CI-LOCAL-ENV=[${CI_LOCAL:-unset}]"\nexit 0\n' \
+  >"$tree/scripts/perf/selftest.sh"
+run_gate "$tree"
+assert_contains "J7 the gate exports CI_LOCAL=1 to the steps it runs" \
+  'CI-LOCAL-ENV=[1]' "$out"
+
+# J8: the mutation-anchor step (#458). The file is written under separate
+# work, so the gate guards on its existence; these two cases are what stops
+# that guard from being a permanent silent skip. A tree that has the script
+# must run it, and a tree whose script fails must fail the run. The label is
+# asserted, not just the exit status: this step goes red when a mutation
+# anchor in the compat or conformance selftest has drifted off the code it
+# names, and the person reading the verdict line has to know that is what
+# broke.
+tree="$(make_full_tree)"
+mkdir -p "$tree/scripts/selftest"
+printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-RAN"\nexit 0\n' \
+  >"$tree/scripts/selftest/check-anchors.sh"
+run_gate "$tree"
+assert_contains "J8 a tree with an anchors script runs it" 'ANCHORS-STUB-RAN' "$out"
+assert_contains "J8 the anchors step is announced, and says mutation anchors" \
+  'mutation anchors in the compat, conformance and race selftests' "$out"
+assert_eq "J8 a passing anchors script leaves the run green" 0 "$status"
+
+tree="$(make_full_tree)"
+mkdir -p "$tree/scripts/selftest"
+printf '#!/usr/bin/env bash\necho "ANCHORS-STUB-FAILED"\nexit 1\n' \
+  >"$tree/scripts/selftest/check-anchors.sh"
+run_gate "$tree"
+assert_nonzero "J8 a failing anchors script fails the run" "$status"
+assert_contains "J8 the failure names the anchors step" \
+  'ci-local: FAILED (mutation anchors in the compat, conformance and race selftests' "$out"
+# And it fails EARLY: the point of putting a one-second check near the top is
+# that nobody waits twenty-five minutes to hear about a broken link.
+assert_not_contains "J8 a failing anchors script fails before the Go suites" \
+  'core/ go test' "$out"
+
+# J9: the Resource Saver reading, both answers and both ways of having no
+# answer. It is a warning and never a refusal, so every one of these paths
+# has to return 0: a gate that refused over a Docker Desktop preference
+# would be unrunnable on the machine that has it on, which is this one.
+rs_dir="$SANDBOX/resource-saver"
+mkdir -p "$rs_dir"
+printf '{"UseResourceSaver": true, "Other": 1}\n' >"$rs_dir/on.json"
+printf '{"UseResourceSaver":false}\n' >"$rs_dir/off.json"
+printf '{"SomethingElse":true}\n' >"$rs_dir/nokey.json"
+for rs_case in on off nokey missing; do
+  case "$rs_case" in
+    on) want=on ;;
+    off) want=off ;;
+    *) want=unknown ;;
+  esac
+  got="$(GATE_DOCKER_SETTINGS_FILE="$rs_dir/$rs_case.json" \
+    sh -c ". '$GATE_LIB' && gate_resource_saver_state")"
+  assert_eq "J9 Resource Saver reads $rs_case as $want" "$want" "$got"
+  warn_out="$(GATE_DOCKER_SETTINGS_FILE="$rs_dir/$rs_case.json" \
+    sh -c ". '$GATE_LIB' && gate_warn_resource_saver" 2>&1)"
+  assert_eq "J9 the $rs_case warning never fails the run" 0 $?
+  if [ "$rs_case" = on ]; then
+    assert_contains "J9 the warning names the setting" 'Resource Saver' "$warn_out"
+    assert_contains "J9 the warning says where it lives" \
+      'Docker Desktop > Settings > Resources > Advanced' "$warn_out"
+  else
+    assert_eq "J9 $rs_case prints no warning" "" "$warn_out"
+  fi
+done
+
+# ------------- Group K: every Go suite in the gate runs under -race (#417)
+
+echo "==> K. the race detector is on, and on everything"
+
+# The gate ran no -race anywhere until #417. That is the same shape as every
+# other hole this suite exists for: `go test` exits 0 whether the detector
+# looked or not, so "this tree has no data race" and "nobody asked" were the
+# same output. Turning it on found two real things in one package on the
+# first run, one of them a genuine data race in a dependency.
+#
+# It is a flag on the steps that already exist rather than a step of its
+# own, which is the decision these cases pin down. A separate step can be
+# commented out and the suites still run and still report ok; a flag cannot
+# be removed without the step going with it. So the assertion is not "there
+# is a race step" but "no `go test` in this gate runs without the detector",
+# which is a rule a new module cannot be added around by accident.
+
+# race_flag_problems <path to a ci-local.sh> -> one line per invocation
+# that runs a Go suite without the detector and without saying why.
+#
+# It reads command lines only: `GOWORK=off go test` is how every suite in
+# this gate is actually invoked, and `cmd/gotestwatch` is the one that runs
+# through the progress-bounded wrapper instead. Step headings and comments
+# are prose about those commands and are skipped, which matters because at
+# least one heading says "go test -timeout" while describing the flag it
+# does NOT pass.
+#
+# A trailing `# no -race: <reason>` on the command line itself is the one
+# way out, and it is not a loophole because it is counted: K4 below asserts
+# how many lines carry it and which. An exclusion nobody can enumerate is
+# how a gate ends up not running the thing it says it runs.
+race_flag_problems() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /GOWORK=off go test/ && !/GOWORK=off go test -race/ {
+      if ($0 ~ /# no -race: [^ ]/) { next }
+      printf "  a Go suite runs without -race and without a reason, line %d: %s\n", NR, $0
+    }
+    /cmd\/gotestwatch/ && !/gotestwatch -race/ {
+      printf "  the gotestwatch suites run without -race, line %d: %s\n", NR, $0
+    }
+  ' "$1"
+}
+
+# race_flag_exceptions <path> -> one line per deliberate exclusion.
+race_flag_exceptions() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /GOWORK=off go test/ && !/GOWORK=off go test -race/ && /# no -race: [^ ]/ {
+      printf "%d: %s\n", NR, $0
+    }
+  ' "$1"
+}
+
+# race_flag_invocations <path> -> how many Go suites the script runs at all.
+# The count is the control for the scan: a script this scan finds nothing
+# wrong with because it found nothing at all would otherwise read as a pass.
+race_flag_invocations() {
+  grep -cE '^[^#]*(GOWORK=off go test|cmd/gotestwatch)' "$1" | tr -d '[:space:]'
+}
+
+real_gate="$SCRIPTS_DIR/ci-local.sh"
+
+# K1: the real script, as it stands. Every Go suite, detector on.
+k1_problems="$(race_flag_problems "$real_gate")"
+if [ -z "$k1_problems" ]; then
+  pass "K1 every Go suite in scripts/ci-local.sh runs under -race"
+else
+  fail "K1 every Go suite in scripts/ci-local.sh runs under -race" "$k1_problems"
+fi
+
+# K1's control: the scan has something to find. Nine Go suites today (the
+# FAST core step, the full core step, gotestwatch, apps/common,
+# distribution, distribution/packaging, apps/generic, apps/synology and
+# apps/ugos/backend), and the floor is deliberately low so adding or
+# removing a module does not fail this, while an empty scan does.
+k1_count="$(race_flag_invocations "$real_gate")"
+if [ "$k1_count" -ge 5 ]; then
+  pass "K1 the scan actually found the gate's Go suites ($k1_count of them)"
+else
+  fail "K1 the scan actually found the gate's Go suites" \
+    "found $k1_count invocations of \`go test\` or gotestwatch in $real_gate, want at least 5; the scan is looking for the wrong shape"
+fi
+
+# K2: the mutation. Strip the flag out of a copy and the scan has to say so,
+# by name, or K1 is a check that cannot fail.
+tree="$(make_full_tree)"
+script="$tree/scripts/ci-local.sh"
+sed -i.bak 's/go test -race/go test/g; s/gotestwatch -race/gotestwatch/g' "$script"
+rm -f "$script.bak"
+k2_problems="$(race_flag_problems "$script")"
+assert_contains "K2 a gate with the flag stripped out is caught" \
+  'a Go suite runs without -race' "$k2_problems"
+assert_contains "K2 the gotestwatch suites are caught too" \
+  'the gotestwatch suites run without -race' "$k2_problems"
+
+# K3: the other direction, end to end. A static scan of the file says the
+# flag is written down; this says a run actually announces it, which is what
+# stops the whole thing from passing against a step nobody reaches.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_eq "K3 a full run with -race everywhere still reaches ok" 0 "$status"
+assert_contains "K3 the core step announces the detector" \
+  'core/ go test -race ./...' "$out"
+assert_contains "K3 the gotestwatch step announces the detector" \
+  'under gotestwatch, -race' "$out"
+assert_contains "K3 the other Go modules announce it too" \
+  'apps/common go build, vet, test -race' "$out"
+
+# K4: the exclusions, enumerated. One suite is deliberately out
+# (distribution/packaging: no goroutine anywhere in it, so nothing to
+# detect, and it is the most CPU-bound package here). That is a decision
+# somebody made with a number in hand, and this is what keeps the next one
+# from being made by accident: the count is pinned, so a second exclusion
+# fails here until it is added on purpose.
+k4_exceptions="$(race_flag_exceptions "$real_gate")"
+k4_count="$(printf '%s' "$k4_exceptions" | grep -c . | tr -d '[:space:]')"
+assert_eq "K4 exactly one Go suite in the gate is excluded from -race" 1 "$k4_count"
+assert_contains "K4 the exclusion is distribution/packaging" './packaging/' "$k4_exceptions"
+assert_contains "K4 the exclusion says why on the line itself" \
+  'no goroutine of its own' "$k4_exceptions"
+
+# K4's control: the enumeration notices a new one. Without this, K4's count
+# assertion would also pass against a scan that can no longer see any
+# exclusion at all.
+tree="$(make_full_tree)"
+script="$tree/scripts/ci-local.sh"
+sed -i.bak 's|^(cd apps/common && \(.*\)go test -race \./\.\.\.)$|(cd apps/common \&\& \1go test ./...) # no -race: a second exclusion nobody decided on|' "$script"
+rm -f "$script.bak"
+k4_mutant="$(race_flag_exceptions "$script")"
+k4_mutant_count="$(printf '%s' "$k4_mutant" | grep -c . | tr -d '[:space:]')"
+if [ "$k4_mutant_count" -eq 2 ]; then
+  pass "K4 a second exclusion is counted, so the count assertion has teeth"
+else
+  fail "K4 a second exclusion is counted, so the count assertion has teeth" \
+    "the mutation should have produced 2 exclusions, the scan found $k4_mutant_count:
+$k4_mutant"
+fi
+
+# ------------- Group L: formatting is checked at all (#417)
+
+echo "==> L. the formatting gate, in both halves"
+
+# Formatting was not checked anywhere until #417, and the way that surfaced
+# is the reason this group exists. Two Go files in this repository were not
+# gofmt-clean, one of them since it was written, and every gate step stayed
+# green: `go build`, `go vet` and every linter .golangci.yml enabled are all
+# indifferent to layout. A check that was never there and a check that is
+# there and looking produce the same output, which is #160's defect arriving
+# through a third door.
+#
+# It is closed in two places, and neither makes the other redundant.
+# .golangci.yml enables the gofmt formatter, which covers the five Go
+# modules, and scripts/format/check-gofmt.sh sweeps every tracked .go file,
+# which is the only thing that reaches the two Go files living outside every
+# module and outside go.work. L1 and L2 are the sweep as a gate step; L3 is
+# the config, with the mutation that proves the assertion can fail.
+
+# L1: the sweep runs, and a run that has it stays green. The marker is the
+# control against L2 passing because the step was never reached at all.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "L1 the gate runs the formatting sweep" "$GOFMT_STUB" "$out"
+assert_contains "L1 the step says what it covers" \
+  'every tracked Go file is gofmt-clean' "$out"
+assert_eq "L1 a passing sweep leaves the run green" 0 "$status"
+
+# L2: a tree with unformatted Go in it fails the run, by name, and early.
+# Early matters for the same reason it did for the anchors check: this is a
+# half-second sweep, and nobody should wait out the Docker-backed suites to
+# be told about whitespace.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "not gofmt-clean" >&2\nexit 1\n' \
+  >"$tree/scripts/format/check-gofmt.sh"
+run_gate "$tree"
+assert_nonzero "L2 an unformatted tree fails the run" "$status"
+assert_not_contains "L2 an unformatted tree cannot report success" 'ci-local: ok' "$out"
+assert_contains "L2 the verdict names the formatting step" \
+  'ci-local: FAILED (every tracked Go file is gofmt-clean' "$out"
+assert_not_contains "L2 the formatting sweep fails before the Go suites" \
+  'core/ go test' "$out"
+
+# L4: the other half of the same blind spot. Being outside every module
+# does not only cost those two files their formatting: this gate vets and
+# lints per module too, so nothing had ever vetted or linted them either.
+# The check that does now lives in scripts/architecture/ but runs HERE,
+# near the top, and that placement is the thing this cell pins: the other
+# architecture checks run after the Go suites, and a Go file nobody checks
+# is worth hearing about before twenty minutes of Docker-backed tests.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "L4 the gate checks the Go files no module owns" "$UNOWNED_STUB" "$out"
+assert_contains "L4 the step says what it covers" \
+  'every Go file no module owns still passes go vet and golangci-lint' "$out"
+assert_eq "L4 a passing check leaves the run green" 0 "$status"
+
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "go vet found something" >&2\nexit 1\n' \
+  >"$tree/scripts/architecture/check-unowned-go.sh"
+run_gate "$tree"
+assert_nonzero "L4 an unvetted Go file fails the run" "$status"
+assert_contains "L4 the verdict names the step" \
+  'ci-local: FAILED (every Go file no module owns' "$out"
+assert_not_contains "L4 it fails before the Go suites" 'core/ go test' "$out"
+
+# L3: the other half. golangci-lint checks formatting only if the config
+# asks it to, and the config is a file anybody can trim.
+#
+# The reading is structural rather than a grep for the word, because
+# .golangci.yml mentions gofmt several times in the prose explaining why it
+# is enabled, and a scan that matched those would pass against a config that
+# had lost the setting and kept the paragraph.
+gofmt_formatter_enabled() { # <path to a .golangci.yml>
+  python3 "$SCRIPTS_DIR/tests/gofmt-formatter-enabled.py" "$1"
+}
+
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  fail "L3 .golangci.yml enables the gofmt formatter, and python3 has no yaml module to read it structurally"
+else
+  if gofmt_formatter_enabled "$REPO_ROOT/.golangci.yml"; then
+    pass "L3 .golangci.yml enables the gofmt formatter"
+  else
+    fail "L3 .golangci.yml enables the gofmt formatter" \
+      "formatters.enable does not list gofmt, so golangci-lint checks no formatting in any of the five Go modules"
+  fi
+
+  # L3's mutation: drop the setting, keep every word of the prose around it,
+  # and the scan has to notice. Without this, L3 would also pass against a
+  # scan that can no longer tell the difference.
+  cp "$REPO_ROOT/.golangci.yml" "$SANDBOX/golangci-no-formatters.yml"
+  perl -0pi -e 's/formatters:\n  enable:\n    - gofmt\n//' "$SANDBOX/golangci-no-formatters.yml"
+  if gofmt_formatter_enabled "$SANDBOX/golangci-no-formatters.yml"; then
+    fail "L3 the scan notices a config with the formatter removed" \
+      "the mutated config still reads as enabling gofmt, so L3 cannot fail"
+  else
+    pass "L3 the scan notices a config with the formatter removed, so L3 has teeth"
+  fi
+fi
 
 # ------------------------------------------------------------------ result
 

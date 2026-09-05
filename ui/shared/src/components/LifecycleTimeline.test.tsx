@@ -18,7 +18,15 @@ const BASE: BackupArtifact = {
   validation: "verified",
   retentionClasses: ["daily"],
   remoteSourceRemovedAt: "2026-08-29T02:01:01+02:00",
-  quarantine: null
+  quarantine: null,
+  placements: [
+    {
+      medium: "local", mediumType: "local", location: "/local/test.tar.zst",
+      sizeBytes: 1024, storageClass: "",
+      verificationClass: "content", verifiedAt: "2026-08-29T02:00:53+02:00",
+      access: "immediate", status: "ACTIVE"
+    }
+  ]
 };
 
 const ORDER = [

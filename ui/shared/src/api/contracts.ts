@@ -1,6 +1,6 @@
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
 import type { ApiErrorCode } from "./generated/contract";
-import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
+import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
   Operation,
@@ -110,6 +110,70 @@ export interface ValidatorCatalogEntry {
   summary: string;
 }
 
+/**
+ * Issue #350: a sparse edit of one already-persisted backup set. Every
+ * field is optional, and an omitted one is left alone rather than
+ * cleared, which is the property the detail page's per-box Save rests on.
+ *
+ * It carries no name and no source, deliberately: a backup set's identity
+ * keys every journal row, artifact id and recovery manifest it has ever
+ * produced, so renaming one is a migration rather than an edit
+ * (core/service/backupsetupdate.go's own package doc). It carries no key
+ * reference and no trusted host line either: those are the results of the
+ * wizard's import and probe steps, and re-trusting a host is a trust
+ * decision rather than a field.
+ */
+export interface BackupSetPatch {
+  host?: string;
+  /** 0 selects the default port, so it is a meaningful value rather than
+   *  an absent one; omit the key to leave the port alone. */
+  port?: number;
+  username?: string;
+  remoteFolder?: string;
+  destination?: string;
+  includePatterns?: string[];
+  completionMethod?: CompletionMethod;
+  /** Only meaningful when the completion method in effect after this edit
+   *  is "stable-size". */
+  stableForSeconds?: number;
+  staleAfterSeconds?: number;
+  /** Confirms an edit that moves this set to different data. Needed only
+   *  when `host`, `remoteFolder` or `destination` actually change on a
+   *  set that already has artifacts on record; without it the service
+   *  refuses with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and writes nothing.
+   *  It is not a property of the backup set: it answers one refusal, for
+   *  one request. */
+  acknowledgeRepoint?: boolean;
+}
+
+/** What a run cycle is doing for one backup set right now: the content of
+ *  the warning shown before edit mode opens. Discarding a partial
+ *  transfer of a named artifact is a materially different cost from
+ *  cancelling a tick that has not started work, which is why this names
+ *  both rather than saying "something is running". */
+export interface RunningWork {
+  /** The artifact being worked on, or "" during discovery. */
+  artifact: string;
+  /** One of the cycle's own stage names ("discovering", "transferring",
+   *  "verifying", "committing", "cleaning-remote"). */
+  stage: string;
+}
+
+/** What GET /backup-sets/{source}/{set}/edit-hold answers. */
+export interface EditHoldState {
+  held: boolean;
+  /** Null when no cycle is currently inside this set, which is what lets
+   *  edit mode open with no prompt for a risk that does not exist. */
+  running: RunningWork | null;
+}
+
+/** What taking the hold answers: `stopped` is null when nothing was
+ *  running, so a caller never claims to have interrupted something. */
+export interface EditHoldTaken {
+  expiresAt: string;
+  stopped: RunningWork | null;
+}
+
 export interface CreateBackupSetRequest {
   sourceName?: string;
   name: string;
@@ -140,6 +204,16 @@ export interface CreateBackupSetRequest {
    *  after this set is persisted. Ignored (never runs anything) when
    *  disabled is true. */
   runImmediately?: boolean;
+  /** Confirms creating this set somewhere other than where the history
+   *  already on its id came from (issue #411). Removing a set frees its
+   *  id up, and a set created over an id that already has artifacts on
+   *  record takes every one of them, so a different host, remote path or
+   *  destination is the same move an edit makes. Without it such a create
+   *  refuses with BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED and writes
+   *  nothing; re-creating a set exactly where it was removed from asks
+   *  nothing. Sent only when the caller actually set it, so an ordinary
+   *  create is never a pre-acknowledged one. */
+  acknowledgeRepoint?: boolean;
 }
 
 /** What a submitted run_cycle operation looks like from
@@ -152,6 +226,44 @@ export interface CreateBackupSetRequest {
 export interface RunCycleSubmission {
   operationId: string;
   status: string;
+}
+
+/** What an operator fills in to ask for one archived copy to be restored
+ *  (EPIC E, FR-34). */
+export interface RestoreCopyRequest {
+  /** The backup, as "source/set/name". */
+  artifactId: string;
+  /** The id of the storage medium holding the copy to restore. */
+  medium: string;
+  /** How many days the restored copy should stay readable, 1 to 30.
+   *  Zero is not a shorter restore, it is one that is billed and then
+   *  immediately unavailable. */
+  windowDays: number;
+  /** The operator saying they know this is billed and takes hours.
+   *  Required true; see BackupApi.restoreCopy. */
+  acknowledged: boolean;
+  /** The configuration revision the caller is displaying. */
+  configRevision: string;
+}
+
+/** What a restore looks like the instant it has been accepted.
+ *
+ *  There is no percent, no finishesAt and no cost, and there is nowhere
+ *  to add one without editing this comment: the provider reports a
+ *  restore as running or finished and nothing else, and this deployment
+ *  has no price list. */
+export interface RestoreSubmission {
+  operationId: string;
+  status: string;
+  /** The window that was actually asked for, in days. */
+  windowDays: number;
+  /** The storage class's OWN published restore time, in plain words. A
+   *  documented property of the class, and never an estimate for this
+   *  particular restore, so a UI must not render it as a countdown. */
+  wait: string;
+  /** The statement that a bill exists, with no amount. Empty for a class
+   *  the provider does not charge retrieval on. */
+  billing: string;
 }
 
 export interface CreatedBackupSet {
@@ -235,6 +347,129 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
+  /** The storage medium this tier's backups live on, by id; undefined
+   *  means the local backup root, which is what every tier of every
+   *  configuration written before storage mediums existed means.
+   *
+   *  It is on the shape that is both READ and WRITTEN because a settings
+   *  write replaces the whole chain: a field this UI could read but not
+   *  send back is a field that editing one tier's keep would silently
+   *  delete from another tier, moving somebody's backups back onto local
+   *  disk without saying so. */
+  medium?: string;
+}
+
+/**
+ * One configured storage medium, as GET /settings reports it: what it is
+ * called, what kind of place it is, which bucket and region, and which
+ * class backups are written with.
+ *
+ * There is no field for a credential and there is not going to be
+ * (FR-33): a medium's credentials reach the backend as a reference to a
+ * file, an environment variable or a command, and none of the three has a
+ * spelling on this boundary at all.
+ */
+export interface StorageMedium {
+  id: string;
+  type: string;
+  bucket: string;
+  region?: string;
+  storageClass: string;
+  /** True when this medium's class cannot be read on demand: a backup here
+   *  needs an explicit restore, taking hours, before anything can read it.
+   *  Computed by the backend, so this UI holds no list of its own of which
+   *  classes count as archive. */
+  readsRequireRestore: boolean;
+}
+
+/**
+ * One step of a storage-medium preflight (issue #443).
+ *
+ * There is no field here for a credential and there is not going to be
+ * (FR-33). `detail` is one of the engine's own sentences and never the
+ * text of what actually came back, because that names a path on the host
+ * or the name of an environment variable; the classified cause goes to the
+ * manager's log instead.
+ */
+export interface MediumPreflightCheck {
+  /** What this step proves. `credentials` is whether the credential the
+   *  medium declares can be obtained at all, which is a question for the
+   *  host; `reach` is whether the endpoint answers and holds the bucket
+   *  with that credential, which is a question for the provider. */
+  step:
+    | "credentials"
+    | "reach"
+    | "deliverable"
+    | "write"
+    | "read_back"
+    | "storage_class"
+    | "verification"
+    | "delete";
+  /** `skipped` is a real answer and not a quiet pass: an earlier step
+   *  failed in a way that makes this one meaningless. Rendering a skipped
+   *  write as anything but "this was never tried" tells an operator their
+   *  bucket is writable on the strength of a credential nobody obtained. */
+  outcome: "passed" | "failed" | "skipped";
+  /** The transport category a failure classified as, absent when the step
+   *  did not fail. Branch on this, never on `detail`. */
+  category?: string;
+  detail: string;
+}
+
+/**
+ * The result of proving one storage medium works.
+ *
+ * A medium that does not work RESOLVES with `ok` false rather than
+ * rejecting: a bucket that is not there is what an operator did, not what
+ * broke, exactly as a failed connection test reports itself.
+ */
+export interface MediumPreflight {
+  medium: string;
+  ok: boolean;
+  /** One entry per step, always the full list, so a surface renders a
+   *  fixed set of rows rather than discovering which steps happened to
+   *  run. */
+  checks: MediumPreflightCheck[];
+}
+
+/**
+ * One rung of the verification ladder (FR-31), with the backend's own
+ * words for what it proves and what achieving it takes.
+ *
+ * Served rather than written here for the reason RetentionSchema is
+ * served: a frontend that keeps its own copy of what "existence" proves
+ * eventually tells an operator something the engine does not, and the
+ * sentence somebody reads while deciding whether a backup is safe is the
+ * worst place in the product for a stale paraphrase.
+ */
+export interface VerificationClassInfo {
+  className: string;
+  proves: string;
+  /** What achieving this class requires, in words. Deliberately words,
+   *  and deliberately not a field called "cost": the backend has no price
+   *  list, so a number here would be invented, and a field named for one
+   *  is one release away from holding one. */
+  requires: string;
+  /** True when achieving this class downloads the object's bytes, which
+   *  the provider bills for. The same predicate the engine refuses
+   *  automatic medium revalidation on, read rather than restated. */
+  downloadsObject: boolean;
+}
+
+/** The vocabulary and the consent text a storage-medium mapping is written
+ *  against. */
+export interface StorageSchema {
+  /** The ladder, strongest first. */
+  verificationClasses: VerificationClassInfo[];
+  /** The words an operator has to be shown before the first save that
+   *  sends a tier's backups off local disk (FR-27). The backend refuses
+   *  such a write without an acknowledgment and its refusal carries this
+   *  same text, so what the form shows and what the server enforces cannot
+   *  come apart. */
+  mediumDisclosure: string;
+  /** The plain statement about reading a copy back off a medium. It
+   *  carries no figure, and never will. */
+  retrievalDisclosure: string;
 }
 
 /** The FR-18/FR-19 policy as it is actually deciding. `tiers` is always
@@ -250,6 +485,75 @@ export interface RetentionSettings {
    *  materially more dangerous configuration, and SettingsPage confirms
    *  it before the write. */
   protectLastKnownGood: boolean;
+}
+
+/**
+ * Issue #333: one backup set's OWN retention policy, unresolved, exactly
+ * as its configuration file carries it.
+ *
+ * Every field is optional and an omitted one INHERITS from the
+ * deployment's resolved policy rather than falling back to a product
+ * default. That is the whole difference between this type and
+ * RetentionSettings above, which is always fully resolved: this one
+ * answers "what does the file say", and a form that resolved it would
+ * turn every inherited field into an explicit one the moment somebody
+ * re-saved a policy they had not edited.
+ *
+ * A policy has to name the WHOLE chain. Half of one is refused by the
+ * server, in the same words a hand-edited config.yaml is refused with,
+ * because completing the missing half from the product defaults is how a
+ * set silently ends up retaining less than the operator who wrote the
+ * deployment's policy believes. Nothing in this UI ever builds a partial
+ * one: the editor starts from a whole resolved chain and every edit is on
+ * top of that.
+ */
+export interface RetentionOverride {
+  timezone?: string;
+  weekStartsOn?: string;
+  /** FR-18's original three-scalar chain. All three or none. This UI
+   *  never sends them (it edits the chain, exactly as the deployment's
+   *  own retention form does), and the type carries them because the
+   *  server round-trips a policy an operator wrote by hand. */
+  dailyDays?: number;
+  weeklyMonths?: number;
+  monthlyMonths?: number;
+  tiers?: RetentionTierSetting[];
+  protectLastKnownGood?: boolean;
+  /** The operator's acknowledgment of `schema.storage.mediumDisclosure`,
+   *  on this write for the reason UpdateSettingsRequest carries it: a
+   *  set's own chain can send a tier's backups off local disk exactly as
+   *  the deployment's policy can, and the backend refuses the first such
+   *  mapping with MEDIUM_DISCLOSURE_REQUIRED without it. A consent, not
+   *  part of the policy: the backend never serves it back, and this UI
+   *  sends it only on a save that introduces a mapping. */
+  acknowledgeMediumDisclosure?: boolean;
+}
+
+/**
+ * Which retention policy one backup set is retained under, and where that
+ * policy came from (issue #333).
+ *
+ * `isOverride` is served rather than derived by comparing `effective`
+ * against `deployment`: a set that deliberately pinned a chain identical
+ * to the deployment's is NOT inheriting, and the whole point of pinning
+ * it is that a later edit to the deployment's policy will not move it.
+ *
+ * `deployment` travels with every answer, including for a set that is
+ * inheriting. It is what "this is what clearing would return you to"
+ * means for a set that overrides, and it is the honest starting point for
+ * a form about to create one, which is what stops a first submission
+ * being half a policy.
+ */
+export interface BackupSetRetention {
+  backupSetId: string;
+  isOverride: boolean;
+  /** The policy actually deciding for this set, resolved. */
+  effective: RetentionSettings;
+  /** The deployment's own policy, resolved, whether or not this set is
+   *  currently retained under it. */
+  deployment: RetentionSettings;
+  /** The raw policy this set declared, or undefined when it inherits. */
+  override?: RetentionOverride;
 }
 
 /**
@@ -352,7 +656,12 @@ export interface UpdateCapacitySettings {
 export interface AppSettings {
   retention: RetentionSettings;
   capacity: CapacitySettings;
-  schema: { retention: RetentionSchema };
+  /** Every storage medium the configuration declares, in declaration
+   *  order. Empty for every deployment that has configured none, which is
+   *  the case the Medium column and the medium picker both disappear
+   *  for. */
+  mediums: StorageMedium[];
+  schema: { retention: RetentionSchema; storage: StorageSchema };
 }
 
 /** A PARTIAL update: only the fields named here change, everything else
@@ -370,6 +679,15 @@ export interface UpdateRetentionSettings {
 export interface UpdateSettingsRequest {
   retention?: UpdateRetentionSettings;
   capacity?: UpdateCapacitySettings;
+  /** The operator's acknowledgment of `schema.storage.mediumDisclosure`,
+   *  required by the backend on a write that first sends a tier's backups
+   *  to a non-local medium (FR-27).
+   *
+   *  Sending it is not what makes the write safe; the backend decides
+   *  whether it is needed and refuses the write with
+   *  MEDIUM_DISCLOSURE_REQUIRED when it is missing. Disabling a Save
+   *  button is a courtesy to the operator, never the gate. */
+  acknowledgeMediumDisclosure?: boolean;
 }
 
 /** Which question a storage gauge is a fraction OF (issue #286): the
@@ -519,6 +837,29 @@ export interface BackupManagerApi {
    * against a setup nobody looking at it has seen.
    */
   runCycle(configRevision: string): Promise<void>;
+  /**
+   * Asks for one archived copy of one backup to be made readable again
+   * (EPIC E, FR-34).
+   *
+   * `acknowledged` is a required true rather than a defaulted one, and
+   * that is the whole mechanism behind "make an accidental restore hard":
+   * a caller that forgot to ask a human gets a refusal, not a bill,
+   * because the value that costs nothing is the one you get by leaving
+   * the field alone. Compare a `force` flag, where the forgetful caller
+   * is the one who spends the money.
+   *
+   * `configRevision` is the revision the CALLER is displaying, for the
+   * reason runCycle's own doc gives, plus one that is sharper here: this
+   * request names a medium by id, and a configuration that moved while
+   * the screen was open may have repointed that id at a different bucket.
+   *
+   * What comes back says how long the storage class publishes a restore
+   * as taking and that a bill exists. It never says a percentage, a
+   * finishing time or an amount, and there is nowhere in the type to put
+   * one: S3 reports a restore as running or finished and nothing else,
+   * and this product holds no price list.
+   */
+  restoreCopy(req: RestoreCopyRequest): Promise<RestoreSubmission>;
   /** Re-checks an ALREADY persisted backup set's connection, by id. The
    *  connection details come from the configuration, so nothing about the
    *  key or the trusted host line travels from here. */
@@ -542,6 +883,70 @@ export interface BackupManagerApi {
    * setEnabled above takes.
    */
   setReadOnly(source: string, set: string, readOnly: boolean): Promise<void>;
+
+  /**
+   * Issue #350: changes one already-persisted backup set. Sparse, and
+   * that is the contract rather than a convenience: a key this patch
+   * omits is left exactly as it is, which is what lets the detail page's
+   * per-box Save persist only the box it belongs to. A Save that wrote
+   * every field would be lying about its scope, and an operator who
+   * changed two boxes and saved one would silently ship both.
+   *
+   * It resolves to the whole backup set as it now stands, so a caller can
+   * put the persisted truth back on the graph rather than the value it
+   * hoped it had written.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * setEnabled and setReadOnly take.
+   */
+  updateBackupSet(source: string, set: string, patch: BackupSetPatch): Promise<BackupSet>;
+
+  /**
+   * Issue #391: removes one backup set's configuration, so nothing is
+   * collected for it from here on.
+   *
+   * Configuration only. Every backup the set already took stays on
+   * storage and stays listed under Backups, which is what the
+   * confirmation the operator accepted promises, and this call is why
+   * that confirmation now means something: it used to close the dialog
+   * and call nothing at all.
+   *
+   * Not reversible as a call. The undo is creating a set with the same
+   * source and name again, which re-adopts every artifact the removed one
+   * produced, because an artifact is identified by source/set/name rather
+   * than by a surrogate key.
+   *
+   * It resolves to nothing, because there is nothing left to resolve to.
+   * A caller showing the removed set has to navigate away rather than
+   * re-read it: the next `getSet` for this id is a 404.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * setEnabled, setReadOnly and updateBackupSet take.
+   */
+  removeSet(source: string, set: string): Promise<void>;
+
+  /**
+   * Issue #350's edit hold. A backup set being edited while a cycle runs
+   * against it is two writers on one definition, so entering edit mode
+   * holds that one set: the pass currently running against it stops, and
+   * the scheduler starts no new one until the hold is released or its
+   * lease lapses.
+   *
+   * The read is separate from the take on purpose, and that split is what
+   * makes declining possible: a caller reads first, shows the operator
+   * what pressing Edit would interrupt, and only takes the hold once they
+   * accept. `running` is null when nothing is in flight for this set,
+   * which is what lets edit mode open with no prompt at all.
+   */
+  getEditHold(source: string, set: string): Promise<EditHoldState>;
+  /** Takes the hold, or renews one already held (the same call: see the
+   *  route's own doc for why a late heartbeat must not be refused).
+   *  Resolves with what it interrupted, or null when nothing was
+   *  running, so a caller never claims to have stopped something. */
+  takeEditHold(source: string, set: string): Promise<EditHoldTaken>;
+  /** Leaves edit mode. Every route out of edit mode calls it, and
+   *  releasing a hold that is not held is a success. */
+  releaseEditHold(source: string, set: string): Promise<void>;
 
   /** Issue #146 (B2.7): the wizard's three Save buttons. */
   createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;
@@ -581,6 +986,29 @@ export interface BackupManagerApi {
   retryIngestion(artifactId: string): Promise<void>;
 
   /**
+   * Put one FAILED backup back into the pipeline so it is attempted again
+   * (issue #419).
+   *
+   * FAILED is not quarantine and this is not `retryIngestion` with a wider
+   * mouth. Quarantine means somebody has to decide whether a backup is
+   * trustworthy; FAILED means an attempt did not finish, and until this
+   * existed a backup that reached it stopped being worked on permanently,
+   * because nothing in the product ever took either of the exits the
+   * lifecycle graph declares for it.
+   *
+   * Nothing does this automatically and that is deliberate: a blind
+   * re-transfer of gigabytes for a cause nothing has classified is a cost
+   * the backend refuses to take on its own, so an operator asking IS the
+   * eligibility rule.
+   *
+   * `note` is recorded alongside the transition so a later failure of the
+   * same backup carries what was tried last time. Rejects with
+   * ARTIFACT_NOT_FAILED when the backup is not stuck, which is what a
+   * stale screen produces.
+   */
+  retryFailedIngestion(artifactId: string, note?: string): Promise<void>;
+
+  /**
    * Re-check a quarantined backup's durable local copy and, when what is
    * found is enough, trust it again (issue #220).
    *
@@ -612,6 +1040,29 @@ export interface BackupManagerApi {
   previewRetention(source: string, set: string): Promise<RetentionPlan>;
   applyRetention(source: string, set: string, planId: string): Promise<RetentionPlan>;
 
+  /**
+   * Issue #333: one backup set's OWN retention policy, as three
+   * operations on one sub-resource rather than as fields on the backup
+   * set.
+   *
+   * `setBackupSetRetention` replaces the set's whole policy and never
+   * merges with anything, and `clearBackupSetRetention` is the only way
+   * to say "go back to inheriting the deployment's policy": that cannot
+   * be a value on an update where an absent field already means "leave
+   * this alone", since those are opposite requests.
+   *
+   * All three answer with the same shape, so a caller re-renders from
+   * what the server says is now deciding rather than from its own
+   * request.
+   */
+  getBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
+  setBackupSetRetention(
+    source: string,
+    set: string,
+    policy: RetentionOverride
+  ): Promise<BackupSetRetention>;
+  clearBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
+
   /** Issue #140 (B3.7): the settings surface. getSettings reads the
    *  policy in effect plus the schema it is validated against;
    *  updateSettings applies only the fields the request names and returns
@@ -619,6 +1070,34 @@ export interface BackupManagerApi {
    *  actually persisted rather than echoing its own request back. */
   getSettings(): Promise<AppSettings>;
   updateSettings(req: UpdateSettingsRequest): Promise<AppSettings>;
+
+  /**
+   * Prove one declared storage medium actually works, before a cycle
+   * carrying a real backup finds out for the operator (issue #443).
+   *
+   * This is the medium's equivalent of testCandidateConnection, and
+   * deliberately a stronger check: it writes a probe object, reads it back
+   * byte for byte, compares the storage class it landed in against the one
+   * the configuration claims, asks whether the verification class the
+   * medium declares can actually be achieved there, and deletes the probe.
+   * A wrong region, a policy that denies PutObject and an endpoint that
+   * silently ignores storage_class all answer a reachability ping
+   * perfectly well and then fail a move, in the middle of a cycle, after a
+   * backup has already been chosen to leave local disk.
+   *
+   * It takes an ID and never a candidate, unlike testCandidateConnection:
+   * a medium is declared in the configuration file and nowhere else, and
+   * the only fields that would make a candidate one meaningful are its
+   * three credential references, so a request body for one would make a
+   * path on the host into something this UI sends.
+   *
+   * It resolves rather than rejects when the medium does not work. Read
+   * `ok` for the verdict and `checks` for which step failed and how; a
+   * caller that only rendered "failed" has dropped the only part an
+   * operator can act on. Rejects with MEDIUM_NOT_FOUND for an id the
+   * configuration does not declare.
+   */
+  preflightStorageMedium(mediumId: string): Promise<MediumPreflight>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see

@@ -720,7 +720,7 @@ const testEncryptedFixtureKeyPassphrase = "correct horse battery staple"
 // mustEncryptedFixtureKeyPEM generates a fresh, throwaway, passphrase-
 // protected ed25519 private key for #269's ImportSSHKey tests: real
 // encrypted key bytes, generated the same Go-native way
-// internal/transport/rclone/ssh_test.go's generateEncryptedClientSSHKeyPair
+// core/tests/machinegate's encryptedClientKey
 // does (x/crypto/ssh's own MarshalPrivateKeyWithPassphrase), rather than
 // shelling out to ssh-keygen. Like testFixtureEd25519Key above, it
 // authorizes access to nothing: no server anywhere trusts its public half.

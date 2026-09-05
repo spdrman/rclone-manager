@@ -24,6 +24,15 @@ import (
 type ArtifactFilter struct {
 	Source string
 	Set    string
+
+	// IncludeUnconfigured widens an UNFILTERED list to the artifacts of
+	// backup sets the journal knows and the configuration no longer does
+	// (issue #391). It is opt-in, and it is honoured only when Source and
+	// Set are both empty; a filter that names something has been through
+	// resolve, which refuses an id the configuration does not have, and
+	// that refusal stays. See ListArtifacts for which caller asks for
+	// this and which deliberately does not.
+	IncludeUnconfigured bool
 }
 
 // resolve reports whether this filter names anything in sources, and
@@ -87,6 +96,34 @@ func (f ArtifactFilter) matches(sourceName, setName string) bool {
 // order, then backup-set order within each source), which is the same
 // deterministic order Sources() renders in.
 //
+// # Backup sets that are no longer configured
+//
+// An UNFILTERED list that asks for it (IncludeUnconfigured) also carries
+// the artifacts of backup sets the journal knows about and the
+// configuration no longer does (issue #391). Before removal existed those
+// two sets of ids were always the same, so walking the configuration was
+// a complete answer; it is not any more, and the difference is exactly
+// what removal is required to preserve. The confirmation an operator
+// accepts says the retained backups "stay on NAS storage and remain
+// listed under Backups", and the backups list is this call with no
+// filter, so a config-only walk would have made those backups vanish
+// from the one screen that was promised they would not.
+//
+// The widening is opt-in because this call feeds two screens, not one.
+// The backups list (core/service.ListArtifacts with no filter, the
+// `artifacts` command with none) asks for it. The quarantine list is
+// the same read with a filter on top, and it deliberately does NOT ask:
+// that screen carries three write actions, every one of which needs the
+// artifact's backup set to be configured (the checks run under the set's
+// validation policy, and a retry hands the row back to a pipeline that
+// only walks configured sets), so a quarantined row under a removed set
+// would be a row with three buttons none of which can do anything good.
+// It stays on the backups list, marked quarantined, and comes back to
+// the quarantine screen the moment the set is configured again. Health
+// (FR-24), capacity (FR-21) and retention walk the configuration alone
+// and always will: a removed set has no freshness to assess, no forecast
+// to make and no policy to apply.
+//
 // # An unconfigured filter is refused, not answered with nothing
 //
 // A filter naming a source or a backup set the loaded config does not
@@ -106,14 +143,49 @@ func (s *Service) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]s
 	}
 
 	var out []state.Record
+	configured := map[string]bool{}
 	for _, src := range s.Config.Sources {
 		for _, bs := range src.BackupSets {
+			configured[bs.ID.String()] = true
 			if !filter.matches(src.Name, bs.Name) {
 				continue
 			}
 			records, err := s.Journal.ListByBackupSet(ctx, bs.ID)
 			if err != nil {
 				return out, fmt.Errorf("app: artifacts: listing %s: %w", bs.ID, err)
+			}
+			out = append(out, records...)
+		}
+	}
+
+	// Then the sets that are gone. See this function's own doc for why
+	// they belong here at all; the shape is what needs explaining.
+	//
+	// Appended after the configured ones rather than merged into them, so
+	// the "config order, then backup-set order within each source" this
+	// function has always promised still describes the part of the list
+	// the configuration can account for, and a deployment that has never
+	// removed anything gets a byte-identical answer to the one it got
+	// before.
+	//
+	// Only for a filter that names nothing AND asked for it. A filter
+	// naming a specific source or set has already been through resolve
+	// above, which refuses an id the configuration does not have (issue
+	// #187), and that refusal stays: "no such backup set" and "this
+	// backup set has no artifacts" must not collapse into one answer
+	// just because removal now exists.
+	if filter.Source == "" && filter.Set == "" && filter.IncludeUnconfigured {
+		known, err := s.Journal.ListBackupSetIDs(ctx)
+		if err != nil {
+			return out, fmt.Errorf("app: artifacts: listing the backup sets on record: %w", err)
+		}
+		for _, id := range known {
+			if configured[id.String()] {
+				continue
+			}
+			records, err := s.Journal.ListByBackupSet(ctx, id)
+			if err != nil {
+				return out, fmt.Errorf("app: artifacts: listing %s: %w", id, err)
 			}
 			out = append(out, records...)
 		}
@@ -146,6 +218,13 @@ type ArtifactDetail struct {
 	// FailureReasonAt is when the transition that produced FailureReason
 	// happened. Only meaningful when FailureReason is non-empty.
 	FailureReasonAt time.Time
+
+	// Copies is one entry per durable copy of this artifact, each with
+	// the access state FR-34 defines: whether its bytes can be read right
+	// now, and what it would take if they cannot. It is nil for a record
+	// with no placements, which is what a record built by hand has and
+	// what an artifact that has not yet been transferred has.
+	Copies []ArtifactCopy
 }
 
 // GetArtifactDetail is `backup-manager artifacts <source/backup-set/name>`'s
@@ -180,7 +259,7 @@ func (s *Service) GetArtifactDetail(ctx context.Context, id model.ArtifactID) (A
 	if err != nil {
 		return ArtifactDetail{}, fmt.Errorf("app: artifact detail: %s: %w", id, err)
 	}
-	out := ArtifactDetail{Record: rec}
+	out := ArtifactDetail{Record: rec, Copies: s.artifactCopies(rec, s.now())}
 
 	switch lifecycle.State(rec.State) {
 	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:

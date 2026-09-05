@@ -81,6 +81,12 @@ type fakeTransport struct {
 	failForSourceID string
 	failErr         error
 
+	// beforeCopy, when set, runs at the very start of every CopyToLocal,
+	// before any byte is written. It is what lets a test act at the exact
+	// moment a transfer is in flight (issue #350's "Edit pressed while a
+	// transfer is running") without racing a sleep against real work.
+	beforeCopy func()
+
 	// poison, when set, makes DeleteRemote fail the test the instant it is
 	// called, rather than merely counting the call for a later assertion.
 	// Issue #282's own acceptance criterion asks for proof "not by
@@ -88,6 +94,18 @@ type fakeTransport struct {
 	// is the strongest form of that this package can build, stronger than
 	// a post-hoc deleteCallCount() check.
 	poison *testing.T
+
+	// copyToLocalErr, when non-nil, is what CopyToLocal returns instead of
+	// writing the bytes, for every remote path.
+	//
+	// It is its own field rather than a use of failForSourceID above,
+	// which reads as though it covers this and does not: that field is
+	// consulted by List and Stat only, so a test setting it and expecting
+	// a failed COPY gets a perfectly successful cycle. This is the same
+	// narrow, one-method shape remoteHashErr already has, for the same
+	// reason: a test that wants a transfer to fail wants discovery to have
+	// worked.
+	copyToLocalErr error
 
 	// remoteHashErr, when non-nil, is what RemoteHash returns instead of
 	// a computed hash, for every remote path. Unlike failForSourceID
@@ -97,6 +115,16 @@ type fakeTransport struct {
 	// (issue #284's own reproduction: a hardened SFTP account that
 	// cannot compute a hash) through an otherwise-successful transfer.
 	remoteHashErr error
+
+	// afterCopyToLocal, when non-nil, runs at the end of a successful
+	// CopyToLocal with the .partial path it just wrote. It exists so a
+	// test can change the local directory between lifecycle.Transfer's
+	// final-name collision guard (which runs before anything else, every
+	// time, per transfer.go) and lifecycle.Commit's own rename. That is
+	// the only window in which a cycle can be made to fail its commit
+	// rather than its transfer. See
+	// TestRunCycle_ResumesAnArtifactLeftAtCommitting.
+	afterCopyToLocal func(localPartialPath string)
 }
 
 func newFakeTransport() *fakeTransport {
@@ -146,6 +174,12 @@ func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remot
 
 func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	atomic.AddInt32(&f.copyToLocalCallsCount, 1)
+	if f.beforeCopy != nil {
+		f.beforeCopy()
+	}
+	if f.copyToLocalErr != nil {
+		return transport.TransferResult{}, f.copyToLocalErr
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return transport.TransferResult{}, transport.NewError(transport.NotFound, "copy_to_local", errors.New("not found"))
@@ -155,6 +189,9 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 	}
 	if err := os.WriteFile(localPartialPath, obj.data, 0o644); err != nil {
 		return transport.TransferResult{}, err
+	}
+	if f.afterCopyToLocal != nil {
+		f.afterCopyToLocal(localPartialPath)
 	}
 	return transport.TransferResult{BytesTransferred: int64(len(obj.data))}, nil
 }
