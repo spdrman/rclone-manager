@@ -493,6 +493,13 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 		}
 		wide := acceptedLogins(t, f) - before
 		shutdownFs(ctx, controlFs)
+		// Same partition as the walk control above, for the same reason:
+		// this copy ran at rclone's own stream count and opened three
+		// connections, and the assertion at the end of the subtest counts
+		// the server's whole table, so a survivor from here would be
+		// reported as "a copy above the multi-thread cutoff left a
+		// connection open" and send the reader after CopyToLocal.
+		requireNoConnections(t, f, "the control copy at --multi-thread-streams 4")
 		if wide <= 1 {
 			t.Fatalf("a copy at --multi-thread-streams 4 opened %d connection(s); the split this test is about did not happen, so the assertion below would prove nothing", wide)
 		}
