@@ -15,6 +15,31 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// A preflight exists in order to fail, so most of this suite is about
+// making it fail one way at a time. fakeStore is shaped for exactly that:
+// every misbehaviour a real bucket can show up with, a refused credential,
+// an absent bucket, a denied write, an endpoint that stores a class it was
+// not asked for, a delete that reports success and removes nothing, is a
+// single field. No test has to build a broken world to reach the one
+// failure it is actually about.
+//
+// The pairs are where most of the value sits. A credential that could not
+// be obtained and one the endpoint rejected are two different people's
+// jobs, so they are asserted apart rather than both settling for "not OK".
+// An endpoint that reports no storage class at all is an absence rather
+// than a failure, and it is asserted next to the case where it reports the
+// wrong one. The attested class is driven both ways, against an endpoint
+// that cannot attest and one that can, because a refusal that fired
+// unconditionally would satisfy the first of those and prove nothing.
+//
+// Two tests cover what a Report must never contain, and they work from
+// opposite ends. One plants a canary everywhere a medium can reference a
+// secret, runs a real check, and searches the serialised report for it,
+// with a positive control proving the canary was in play and did reach the
+// log. The other counts the fields on a serialised Report, so a field added
+// later that could carry a credential fails here rather than in an exported
+// API response.
+
 // --- a MediumStore that behaves like a bucket, and can be made to
 // misbehave one way at a time ---
 
