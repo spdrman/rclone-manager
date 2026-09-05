@@ -1122,9 +1122,26 @@ for each one that is not. It used to skip those checks and still print
 `==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
 
 The Docker daemon is the same rule with a bigger blast radius. With it stopped, the crash
-matrix, the SFTP integration suite and the whole `apps/generic/tests/dockercli` package
-call `t.Skip`, `go test` still exits 0, and nothing would reach the ledger. A full run
-refuses to start without a reachable daemon.
+matrix, the SFTP integration suite, `distribution/tests/adapterstacks` and the whole
+`apps/generic/tests/dockercli` package call `t.Skip`, `go test` still exits 0, and nothing
+would reach the ledger. A full run refuses to start without a reachable daemon.
+
+That refusal is about the start of the run, and the start of the run is not the run (#457).
+Docker Desktop's Resource Saver stops the hypervisor after five idle minutes, and this gate
+has several Docker-free stretches longer than that, so every run was cold-starting the VM
+somewhere in the middle and two runs died of it, both looking like skips rather than
+failures. Two things stop that now. A sentinel container (`alpine sleep infinity`) is
+started after the preflight and removed on the way out, including when the run fails or is
+interrupted, so the daemon is never idle and Resource Saver never fires, on any machine and
+without depending on a GUI setting. And every Docker-dependent step re-probes the daemon
+immediately before it runs, which costs about 100ms and turns "the VM died at minute 18"
+into `==> ci-local: FAILED` naming the step that needed it. The preflight also warns, and
+only warns, when it can see that Resource Saver is on.
+
+Everything the gate starts gets `CI_LOCAL=1` in its environment, which is how the Docker
+fixtures in `core/tests` tell "this laptop has no Docker", an honest skip when you are
+running one suite by hand, from "the daemon this gate already used has gone away", which is
+a failure.
 
 Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
 says which tier a test belongs to (unit, integration, or a machine reached through
@@ -1138,6 +1155,8 @@ Three environment variables change what runs:
 | `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
 | `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
 | `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
+| `CI_LOCAL_SENTINEL=0` | Does not start the sentinel container that keeps the Docker daemon out of Resource Saver's idle timer (#457). The per-step daemon probes still run, so a daemon that dies is still a named failure rather than a skip. |
+| `CI_LOCAL_SENTINEL_IMAGE` | The image the sentinel runs, `alpine:3.20` by default, chosen because the SFTP fixture already builds from it so every machine that can run this gate has it cached. |
 
 A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
 and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
