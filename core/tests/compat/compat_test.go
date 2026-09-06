@@ -17,11 +17,13 @@ import (
 // finding for every surface arrives in one message, so a change that moved
 // four cells is read once rather than fixed one red cell at a time.
 //
-// COMPAT_UPDATE=1 rewrites the corpus instead of comparing against it.
-// That is the only way to change a pinned line, and it is deliberately an
+// COMPAT_UPDATE rewrites the corpus instead of comparing against it. That
+// is the only way to change a pinned line, and it is deliberately an
 // environment variable and not a flag: it has to be something a person
 // types on purpose, with the reason going into the commit message, rather
-// than something a gate could ever set for itself.
+// than something a gate could ever set for itself. Naming a cell rewrites
+// that cell alone; COMPAT_UPDATE=1 sweeps all of them, and writeCorpus
+// below argues why the scoped form is the one to reach for.
 //
 // The failure text below is part of the mechanism. A reader who meets this
 // gate for the first time is meeting it while something is red, so the
@@ -52,12 +54,11 @@ func TestMediumFreeSurfacesAreUnchanged(t *testing.T) {
 		t.Fatalf("capturing the medium-free surfaces: %v", err)
 	}
 
-	if os.Getenv("COMPAT_UPDATE") == "1" {
-		if err := current.Save(CorpusPath); err != nil {
-			t.Fatalf("writing %s: %v", CorpusPath, err)
-		}
-		t.Logf("COMPAT_UPDATE=1: rewrote %s with %d cells. Every line that changed is a behavior change somebody has to justify in the commit message.",
-			CorpusPath, len(current.Cells))
+	// "0" and the empty string are both "not an update", so an environment
+	// that carries COMPAT_UPDATE=0 to mean off gets what it meant rather
+	// than a refusal about a cell named 0.
+	if spec := os.Getenv("COMPAT_UPDATE"); spec != "" && spec != "0" {
+		writeCorpus(t, spec, current)
 		return
 	}
 
@@ -82,10 +83,151 @@ never change or drop one that already exists. Everything else is compared line
 for line, because a medium-free deployment has no non-local placement, so FR-35
 allows it no additive column either.
 
-If the change is genuinely intended, re-capture with:
-  COMPAT_UPDATE=1 go test ./tests/compat/
-and say in the commit message which surface moved and why an operator upgrading
-into it is not surprised.`
+If the change is genuinely intended, re-capture the cell that moved, by name:
+  COMPAT_UPDATE=<cell-name> go test ./tests/compat/
+Several at once are a comma-separated list. Say in the commit message which
+surface moved and why an operator upgrading into it is not surprised.
+
+COMPAT_UPDATE=1 sweeps every cell instead. It is there for a first capture and
+for a change that genuinely moves several surfaces at once, and what it costs is
+that it also brings back whatever has drifted in the surfaces you did not touch,
+inside a commit that says it is about yours. If you reach for it, read the whole
+diff and write down what each hunk is.`
+
+// writeCorpus is everything COMPAT_UPDATE does.
+//
+// The scoped path is the interesting one. It loads the corpus that is
+// already checked in, replaces only the cells the operator named, and
+// writes that back, so the cells nobody named keep the exact lines they had
+// even though this run captured fresh ones for all of them. A change about
+// CLI wording then cannot move an API contract line, whatever the API
+// contract happens to be doing on that branch, and a reviewer reading the
+// diff is reading the cells the commit message claims (#549).
+//
+// Every refusal in here is a t.Fatal. A re-capture that silently wrote
+// nothing, or wrote more than was asked for, is the one outcome that is
+// worse than a red gate: the red gate is at least honest about what it
+// knows, while a person who believes they re-captured stops looking.
+func writeCorpus(t *testing.T, spec string, current Corpus) {
+	t.Helper()
+
+	all, cells, err := ParseUpdateRequest(spec)
+	if err != nil {
+		t.Fatalf("%v.\n\nThe cells this run captured are:\n  %s", err, strings.Join(cellNames(current), "\n  "))
+	}
+
+	if all {
+		if err := current.Save(CorpusPath); err != nil {
+			t.Fatalf("writing %s: %v", CorpusPath, err)
+		}
+		t.Logf("COMPAT_UPDATE=1: swept all %d cells of %s. Every line that changed is a behavior change somebody has to justify in the commit message, and that includes the ones your change was not about: a sweep re-captures every surface at once. Read the whole diff.\n\nTo move one surface and leave the rest at the lines they were checked in with, name it instead:\n  COMPAT_UPDATE=<cell-name> go test ./tests/compat/\nThe cells are:\n  %s",
+			len(current.Cells), CorpusPath, strings.Join(cellNames(current), "\n  "))
+		return
+	}
+
+	baseline, err := LoadCorpus(CorpusPath)
+	if err != nil {
+		t.Fatalf("a scoped re-capture writes the named cell(s) back into the corpus that is already there, and %s could not be read: %v\n\nOn a fresh checkout with no corpus yet there is nothing to scope against, so capture the first one with COMPAT_UPDATE=1.", CorpusPath, err)
+	}
+
+	merged, err := MergeCells(baseline, current, cells)
+	if err != nil {
+		t.Fatalf("COMPAT_UPDATE=%s: %v", spec, err)
+	}
+	if err := merged.Save(CorpusPath); err != nil {
+		t.Fatalf("writing %s: %v", CorpusPath, err)
+	}
+	t.Logf("COMPAT_UPDATE=%s: re-captured %d of the %d cells in %s and left the other %d at the lines they were checked in with. Say in the commit message which surface moved and why an operator upgrading into it is not surprised.",
+		spec, len(cells), len(merged.Cells), CorpusPath, len(merged.Cells)-len(cells))
+}
+
+// cellNames is sortedKeys with a name that reads at a call site, and it is
+// here rather than beside sortedKeys because the only thing that wants it
+// is a failure message.
+func cellNames(c Corpus) []string {
+	return sortedKeys(c.Cells)
+}
+
+// TestScopedRecaptureWritesOnlyWhatItWasAskedFor pins the half of #549 that
+// is not the guard: a re-capture aimed at one cell must not be able to move
+// another.
+//
+// These are unit assertions over the pure half of the package, deliberately.
+// The end-to-end version would have to run a real COMPAT_UPDATE against the
+// checked-in file, which means either mutating the tree under the gate or
+// building a second corpus to point it at, and neither of those tells you
+// anything the two functions below do not.
+func TestScopedRecaptureWritesOnlyWhatItWasAskedFor(t *testing.T) {
+	baseline := Corpus{Cells: map[string]Cell{
+		"cli":      {Certifies: "the terminal", Rule: RuleIdentical, Lines: []string{"old cli"}},
+		"contract": {Certifies: "the API", Rule: RuleAdditiveOnly, Lines: []string{"old contract"}},
+	}}
+	current := Corpus{Cells: map[string]Cell{
+		"cli":      {Certifies: "the terminal", Rule: RuleIdentical, Lines: []string{"new cli"}},
+		"contract": {Certifies: "the API", Rule: RuleAdditiveOnly, Lines: []string{"new contract"}},
+	}}
+
+	t.Run("the named cell moves and the others do not", func(t *testing.T) {
+		merged, err := MergeCells(baseline, current, []string{"cli"})
+		if err != nil {
+			t.Fatalf("MergeCells: %v", err)
+		}
+		if got := merged.Cells["cli"].Lines[0]; got != "new cli" {
+			t.Errorf("the cell that was named still reads %q, so the re-capture did nothing", got)
+		}
+		if got := merged.Cells["contract"].Lines[0]; got != "old contract" {
+			t.Errorf("a cell nobody named now reads %q. That is the sweep this whole mechanism exists to avoid: a change about one surface quietly re-capturing another.", got)
+		}
+	})
+
+	t.Run("a cell this run did not capture is refused", func(t *testing.T) {
+		if _, err := MergeCells(baseline, current, []string{"cli", "no-such-cell"}); err == nil {
+			t.Fatal("a re-capture naming a cell that does not exist was accepted, so a typo writes nothing and reads as done")
+		}
+	})
+
+	t.Run("a cell only the baseline has is carried through", func(t *testing.T) {
+		thin := Corpus{Cells: map[string]Cell{"cli": current.Cells["cli"]}}
+		merged, err := MergeCells(baseline, thin, []string{"cli"})
+		if err != nil {
+			t.Fatalf("MergeCells: %v", err)
+		}
+		if _, ok := merged.Cells["contract"]; !ok {
+			t.Error("a scoped re-capture dropped a cell it was not asked about, so the gate got smaller without anybody saying so")
+		}
+	})
+
+	t.Run("naming nothing is refused", func(t *testing.T) {
+		if _, err := MergeCells(baseline, current, nil); err == nil {
+			t.Fatal("a scoped re-capture with no cells named was accepted")
+		}
+	})
+}
+
+// TestParseUpdateRequestKeepsTheSweepAndTheScopeApart is the other half:
+// whatever COMPAT_UPDATE is set to, it means one thing or it is refused.
+func TestParseUpdateRequestKeepsTheSweepAndTheScopeApart(t *testing.T) {
+	all, cells, err := ParseUpdateRequest("1")
+	if err != nil || !all || len(cells) != 0 {
+		t.Errorf(`ParseUpdateRequest("1") = (%v, %v, %v), want the whole-corpus sweep. scripts/compat/selftest.sh drives that form, and so does a first capture.`, all, cells, err)
+	}
+
+	all, cells, err = ParseUpdateRequest("06b-cli-usage-block")
+	if err != nil || all || len(cells) != 1 || cells[0] != "06b-cli-usage-block" {
+		t.Errorf(`ParseUpdateRequest("06b-cli-usage-block") = (%v, %v, %v), want that one cell`, all, cells, err)
+	}
+
+	all, cells, err = ParseUpdateRequest("06b-cli-usage-block, 08-api-contract-promises ,06b-cli-usage-block")
+	if err != nil || all || len(cells) != 2 {
+		t.Errorf("a comma-separated list with spacing and a repeat = (%v, %v, %v), want the two distinct cells", all, cells, err)
+	}
+
+	for _, spec := range []string{"", "06b-cli-usage-block,", ",", "a,,b"} {
+		if _, _, err := ParseUpdateRequest(spec); err == nil {
+			t.Errorf("ParseUpdateRequest(%q) was accepted. A spec with a hole in it has to be refused rather than guessed at, or somebody re-captures fewer cells than they typed and never finds out.", spec)
+		}
+	}
+}
 
 // TestTheCorpusIsNotEmpty is the positive control for the control.
 //
