@@ -207,16 +207,18 @@ func (r *engineRoute) RemoveBackupSet(ctx context.Context, id string) error {
 //
 // `backup-set remove` counts what stays on storage as a courtesy, off the
 // journal, and over this route that count is GET /backups with the set in
-// a query parameter. The client has no query support and no listArtifacts
-// call: both belong to #544, which routes the artifact reads, and adding a
-// second listing here would be the same endpoint reached two ways before
-// either had been driven against a real engine.
+// a query parameter. The client can make that call, since #544 added
+// listArtifacts and the query support it needs. What nothing has written
+// is the other half, an apicontract.Artifact turned back into a
+// service.Artifact, and #544 did not need one: it asks the engine whether
+// it holds the same backups and compares ids (readagreement.go), rather
+// than asking it to render the rows this command prints.
 //
 // So the count is refused, not faked, and backupSetRemoveWith already
 // knows what to do with a count it could not take: it says so, in place of
 // printing a reassuring 0 about something nothing looked at. The removal
 // itself is unaffected, which is the half the operator asked for.
-var ErrArtifactsNotRouted = errors.New("this build cannot list artifacts through a running engine yet (#544)")
+var ErrArtifactsNotRouted = errors.New("this build does not count what stays on storage when a removal goes through a running engine")
 
 // ListArtifacts is the read `backup-set remove` uses for its count.
 func (r *engineRoute) ListArtifacts(_ context.Context, _ service.ArtifactFilter) ([]service.Artifact, error) {

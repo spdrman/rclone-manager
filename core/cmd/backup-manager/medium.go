@@ -18,12 +18,14 @@ import (
 // which mediums are DECLARED, because this command reads config.yaml for
 // itself while an engine that is already running is serving whatever it
 // loaded at startup. What can no longer put them into that state is this
-// binary: a configuration write from here is refused while something
-// serves the deployment (#538), so the remaining way in is a hand-edited
-// config.yaml. This command is a read either way and is never refused
-// beside a live engine. See the process-boundary note in backupset.go,
-// and #539 for why the distinction is spelled out rather than left to be
-// inferred. One command with a verb,
+// binary: a configuration write from here either goes to the process
+// serving the deployment, which writes it and holds it (#543), or is
+// refused with nothing written (#538), which leaves a hand-edited
+// config.yaml as the remaining way in. This command is a read either way, is never
+// refused beside a live engine, and announces no mode, since it is not
+// one of the four surfaces #544 checks against a serving process. See the
+// process-boundary note in backupset.go, and #539 for why the distinction
+// is spelled out rather than left to be inferred. One command with a verb,
 // like `catalog rebuild` and `quarantine <verb>`, because "preflight" will
 // not be the only thing this product ever wants to do to a named medium.
 //

@@ -89,7 +89,7 @@ func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error)
 }
 
 // openService loads and validates configPath, opens its state journal
-// (both via core/service.OpenConfigAndJournal — see that function's own
+// (both via core/service.OpenConfigAndJournal, see that function's own
 // doc for why this no longer reimplements that sequence itself), and
 // builds an internal/app.Service ready for whichever use case the calling
 // subcommand needs. withTransport controls whether the service is given a
@@ -135,48 +135,62 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // *config.Config, has no notion of at all. That is `settings`, every
 // `backup-set` verb, and `restore`.
 //
-// A `settings patch`, a `backup-set create`, `patch` or `remove`, or a
-// `backup-set retention` that sets or clears a policy, typed at a
-// terminal never reaches an engine that is already running, and is
-// refused rather than written while one is serving this deployment. The
-// reading forms of those same commands are not touched, which is what the
-// intent argument below is for. Nothing lands in the file and waits for a
-// restart: the command stops, config.yaml is byte for byte what it was,
-// and the operator is told what was found. With nothing serving, the
-// write happens here, and an engine started afterwards reads the new file
-// when it starts, because there is no config watcher and no SIGHUP reload
-// in this build. Issue #539 took the API-equivalence claim out, #538 and
-// #542 made this refuse rather than write, and the sentence above is what
-// those two together mean: a help text that told an operator to restart
-// into a command-line change was describing a binary that no longer makes
-// one.
+// It is not the only door any more, and which one a command comes through
+// is the whole of what it can do beside a running engine. #543 gave four
+// configuration writes a route to a serving process, and they come through
+// openConfigWriteRoute below: `backup-set create`, `patch` and `remove`,
+// and `settings patch`. What is left here as a WRITE is `backup-set
+// retention` setting or clearing a policy, which has no route. Not for
+// want of endpoints: the client carries setBackupSetRetention,
+// clearBackupSetRetention and getBackupSetRetention. #543 would not route
+// the write while the report beside it went on reading this host's own
+// file, and #544 did not take that read half, so both halves of the verb
+// stand where #538 left them. Everything else here reads:
+// `settings` on its own, `backup-set retention` reporting the policy in
+// force, and `restore`.
+//
+// So a write through THIS door still has exactly two outcomes. With
+// nothing serving, it happens here, and an engine started afterwards
+// reads the new file when it starts, because there is no config watcher
+// and no SIGHUP reload in this build. With something serving, it is
+// refused: nothing lands in the file for a restart to pick up, config.yaml
+// is byte for byte what it was, and the operator is told what was found
+// and where the change can be made instead. The reading forms are not
+// touched either way, which is what the intent argument below is for.
+// Issue #539 took the API-equivalence claim out, and #538 and #542 made
+// this refuse rather than write: a help text that told an operator to
+// restart into a command-line change was describing a binary that no
+// longer makes one.
 //
 // service.Open is the identical production constructor
 // apps/common/webhost's Open uses, so a CLI-driven write goes through the
 // same service layer, and the same persist-then-hot-reload sequence
-// (BackupService.UpdateSettings's own doc), that an HTTP PATCH does. It
-// does not go through it BY CALLING that route, and the difference is the
-// whole of issue #535: the hot reload is this process's own view of the
-// file, and this process then exits.
+// (BackupService.UpdateSettings's own doc), that an HTTP PATCH does. A
+// write through this door does not go through it BY CALLING that route,
+// and the difference is the whole of issue #535: the hot reload is this
+// process's own view of the file, and this process then exits.
 //
 // intent is issue #538, and it is why this function has an argument
 // openService does not need. Every route that rewrites an EXISTING
-// config.yaml is a *BackupService method, so for those this is the one
-// door, and a write aimed at a configuration a running engine holds is
-// refused here rather than performed and reported as a success (#535).
-// See liveengine.go for why the check cannot live further in, beside the
-// write itself, and why a read beside a live engine must keep working.
+// config.yaml is a *BackupService method, so a write reaches the file
+// through this function or through openConfigWriteRoute and through
+// nothing else, and a write aimed at a configuration a running engine
+// holds is refused here rather than performed and reported as a success
+// (#535). See liveengine.go for why the check cannot live further in,
+// beside the write itself, and why a read beside a live engine must keep
+// working.
 //
 // "Existing" is load bearing and it used not to be said. There is exactly
-// one configuration write in this binary that does not come through here:
-// `backup-set create` against a path where no config.yaml exists writes a
-// FIRST configuration through core/service.FirstRun, whose
-// writeConfigExclusively says in as many words that it is deliberately
-// not writeConfigBytesAtomically. That route asks the same question about
-// the journal --state-database names, in backupset.go's createFirstConfig,
-// because the claim this doc used to make ("every route that rewrites
-// config.yaml is a *BackupService method, so this is the one door") was
-// phrased over exactly the predicate that excluded the escape.
+// one configuration write in this binary that comes through neither this
+// function nor openConfigWriteRoute: `backup-set create` against a path
+// where no config.yaml exists writes a FIRST configuration through
+// core/service.FirstRun, whose writeConfigExclusively says in as many
+// words that it is deliberately not writeConfigBytesAtomically. That route
+// asks the same question about the journal --state-database names, in
+// backupset.go's createFirstConfig, because the claim this doc used to
+// make ("every route that rewrites config.yaml is a *BackupService method,
+// so this is the one door") was phrased over exactly the predicate that
+// excluded the escape.
 //
 // openService has no such argument because it structurally cannot write a
 // configuration: it hands back an internal/app.Service built from an
@@ -206,12 +220,13 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // # And the answer to the question is this invocation's mode
 //
 // Claiming and asking are one call rather than two (#542), because the
-// answer is not only a refusal: it is which of the two worlds this
-// command ran in, and an operator has to be able to see that in the
-// output. mode.go decides it here, once, prints it, and refuses an
-// engine-attached write this build has no route to carry out rather than
-// downgrading it to a direct one. Nothing downstream asks again, so
-// nothing downstream can get a different answer.
+// answer is not only a refusal: it is which world this command ran in,
+// and an operator has to be able to see that in the output. mode.go
+// decides it here, once, prints it, and refuses an engine-attached write
+// with no route to carry it out rather than downgrading it to a direct
+// one, which is every engine-attached write through this door. Nothing
+// downstream asks again, so nothing downstream can get a different
+// answer.
 //
 // The one configuration write that does not come through here,
 // createFirstConfig, announces its own mode for the same reason: a
@@ -251,13 +266,13 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	// claim is for. mode.go holds the reasoning; enterConfigWriteMode
 	// claims, asks, announces and refuses, and gives the claim back
 	// itself when it refuses.
-	// nil rather than attachToEngine, deliberately. This door is what
-	// `settings patch` and `backup-set retention` come through, and
-	// `backup-set retention` is not routed: setBackupSetRetention and
-	// clearBackupSetRetention are on the client, but the policy the CLI
-	// builds is a whole chain read from flags or from stdin and the
-	// preview beside it is #544's, so routing half of that command would
-	// be worse than routing none of it. openConfigWriteRoute below is the
+	// nil rather than attachToEngine, deliberately. `backup-set
+	// retention` is the write that comes through here, and it is not
+	// routed. setBackupSetRetention and clearBackupSetRetention are on the
+	// client, so this is a decision rather than a missing call: routing
+	// the write while the report beside it still read this host's own file
+	// would leave one verb answering out of two worlds, and #544 did not
+	// take that read half. openConfigWriteRoute below is the
 	// door that can hand a change over, and the two are separate
 	// functions precisely so that "this write can be routed" is a
 	// property of the call site rather than of a flag somebody might get

@@ -19,10 +19,14 @@ import (
 // same file, showed it. Two surfaces, two answers, no complaint from
 // either.
 //
-// Refusing is not the end state. #536 Phase 2 gives this binary a real
-// route to the engine, and then a mutation will REACH it rather than be
-// turned away. Until that exists, a write that cannot take effect must
-// not report that it did, and that is the whole of what this file does.
+// Refusing is not the whole story any more. #536 Phase 2 gave this binary
+// a real route to the engine, so `backup-set create`, `patch` and
+// `remove` and `settings patch` REACH a serving process when this host
+// has been told where it is (#543, route.go). What is left to this file
+// is every other case: a write no verb routes, a serving process nobody
+// named an address for, and a `daemon`, which serves no HTTP to route to.
+// In all of those a write that cannot take effect must not report that it
+// did, and saying so is the whole of what this file does.
 //
 // # Why it is not simply "always check before opening"
 //
@@ -68,9 +72,20 @@ import (
 // refused now. What remains is a host where nothing has ever been
 // configured and something is waiting to be, which is the same family as
 // #535 and is not detectable here: there is no journal, no port this
-// binary knows about, and no credential it holds. #536 Phase 2 is where
-// it closes, by giving this binary a real route to the running process
-// instead of a way to notice one.
+// binary knows about, and no credential it holds.
+//
+// Phase 2 did not close it, and this is the place to say so rather than
+// leave the old sentence promising that it would. A route only helps a
+// command that takes one, and the first-configuration write deliberately
+// takes none (mode.go's enterFirstConfigWriteMode): finding a process
+// serving the journal `--state-database` names says the deployment is
+// already configured, and POST /system/first-run is not an operation to
+// send an already configured engine. On a wizard host there is nothing to
+// find in the first place, because `AnnounceServing` on an instance with
+// no configuration is a no-op and the announcement only happens in
+// `Activate`, once setup has written one. So the shape survives EPIC #536
+// intact, and closing it needs something this file cannot offer: an
+// address for a process that has not yet decided what it serves.
 //
 // # And why reads are left alone
 //

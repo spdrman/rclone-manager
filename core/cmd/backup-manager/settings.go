@@ -12,32 +12,41 @@ import (
 
 // cmdSettings is `backup-manager settings` (report the live retention and
 // capacity settings FR-18/FR-19/FR-21 are currently deciding with) and
-// `backup-manager settings patch [flags]` (change one of them in place,
-// through the same core/service.BackupService.UpdateSettings that `PATCH
-// /api/v1/settings` is built on, called in this process rather than over
-// that route; see that method's own doc). Issue #277's own investigation
-// confirmed this is not fully covered by "edit config.yaml and validate",
-// the answer that already covers creating a backup set: GET is a
-// discovery surface a config file has no equivalent of, since it reports
-// the RESOLVED policy (defaults included) rather than the file's own
-// possibly-omitted keys, and the API's PATCH hot-reloads the process that
-// served it without a restart.
+// `backup-manager settings patch [flags]` (change one of them in place).
+// Issue #277's own investigation confirmed this is not fully covered by
+// "edit config.yaml and validate", the answer that already covers
+// creating a backup set: GET is a discovery surface a config file has no
+// equivalent of, since it reports the RESOLVED policy (defaults included)
+// rather than the file's own possibly-omitted keys, and the API's PATCH
+// hot-reloads the process that served it without a restart.
 //
-// This command does not, and it no longer pretends the difference is
-// only a matter of timing. There is no watcher over config.yaml, so a
-// patch typed here could never reach a daemon that is already running,
-// and rather than write one and leave it to a restart, `settings patch`
-// is REFUSED while another process serves this deployment: nothing is
-// written, and the operator is told so and told where the change can be
-// made instead (mode.go, liveengine.go). With nothing serving, the patch
-// is written straight into the file, this process reloads its own view of
-// it and exits, and an engine started afterwards reads the new file when
-// it starts. Which of those two happened is printed as a `mode:` line.
+// The patch goes one of three ways and prints which on a `mode:` line
+// (mode.go, liveengine.go). With something serving this deployment and a
+// route to it, the patch IS `PATCH /api/v1/settings` against that engine
+// (#543), so the hot reload is the serving process's own and there is
+// nothing to restart. With nothing serving, it is
+// core/service.BackupService.UpdateSettings called in this process, the
+// same method that route is built on: the file is written, this process
+// reloads its own view of it and exits, and an engine started afterwards
+// reads the new file when it starts. With something serving and no route,
+// the patch is REFUSED, nothing is written, and the operator is told what
+// was found and where the change can be made instead. That last one is a
+// refusal rather than a write because there is no watcher over
+// config.yaml, so a patch left in the file is one the serving process
+// would never read.
 //
-// The sentence this replaces said a patch here was hot-reloaded "into a
-// running process exactly as PATCH /api/v1/settings already does", which
-// is the claim issue #535 cost a real install; #539 corrected it, and
-// #538 and #542 are what turned the corrected sentence into behaviour.
+// The sentence all of that replaces said a patch here was hot-reloaded
+// "into a running process exactly as PATCH /api/v1/settings already
+// does", which is the claim issue #535 cost a real install. #539
+// corrected it, #538 and #542 turned the corrected sentence into
+// behaviour, and #543 made the original claim true for the one case it
+// was ever meant to describe, an engine that is really there and that
+// this command has been told how to reach.
+//
+// The READ is not routed and announces no mode at all. `settings` on its
+// own answers from this host's configuration file, which is a fact about
+// the file rather than about what the engine loaded, and it is not one of
+// the four surfaces #544 checks against a serving process.
 //
 // One more thing an operator meets before any of that: `settings patch`
 // with no patch flag at all is a usage error (exit 2) rather than a
@@ -109,12 +118,17 @@ func cmdSettings(args []string) int {
 	// `settings` on its own reads, and a read beside a live engine is
 	// ordinary use of this binary that #538 was careful not to narrow. It
 	// answers from this host's configuration file, which is a fact about
-	// the file rather than about what the engine loaded; routing the READS
-	// so the two can never disagree is #544's, and this is one of the
-	// commands waiting for it.
+	// the file rather than about what the engine loaded, and it still
+	// does: #544 routed `sources`, `status`, `artifacts` and the
+	// retention preview and stopped there, so this read announces no
+	// mode and is checked against no engine. Two surfaces can still
+	// disagree about the settings in force, and the way that happens is a
+	// hand-edited config.yaml rather than anything this binary writes.
 	//
-	// `settings patch` writes, which beside a running engine is a change
-	// that process would never see, so it goes through the route (#543).
+	// `settings patch` writes, and a write left in the file beside a
+	// running engine is a change that process would never see, so it goes
+	// through openConfigWriteRoute, which hands it to that process where
+	// it can and refuses where it cannot (#543).
 	if !patching {
 		svc, cleanup, err := openBackupService(ctx, *cfgPath, readsConfig)
 		if err != nil {

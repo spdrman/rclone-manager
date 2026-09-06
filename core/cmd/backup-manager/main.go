@@ -1,10 +1,14 @@
 // Command backup-manager is the entry point for every execution mode this
 // project supports (FR-1, FR-26). It is deliberately thin: every command
-// below does nothing but parse its own flags, build (or reuse) an
-// internal/app.Service, call exactly one of that package's exported use
-// cases, and format the result for a terminal. No business rule lives
-// here; see internal/app's package doc for why, and for what "business
-// rule" means in this project.
+// below does nothing but parse its own flags, reach exactly one use case,
+// and format the result for a terminal. Most reach it by building (or
+// reusing) an internal/app.Service; the configuration writes go through
+// core/service.BackupService instead; and four of those writes and the
+// four read surfaces put their question to a running engine over its HTTP
+// API when one is serving this deployment and this host has been told
+// where it is (#543, #544). No business rule lives on any of those paths;
+// see internal/app's package doc for why, and for what "business rule"
+// means in this project.
 package main
 
 import (
@@ -88,8 +92,12 @@ var commands = map[string]func([]string) int{
 // So a new verb is two edits, here and in commands above, and the usage half
 // is the one that is easy to skip and impossible to notice missing from the
 // inside. The flags are spelled out per verb rather than summarised because
-// this is the only reference an operator on a terminal has; the trailing
-// paragraph carries the one flag they all share.
+// this is the only reference an operator on a terminal has. The trailing
+// paragraphs carry the flag they all share, where a configuration change
+// actually goes now that it can go two places, and how to tell this
+// binary where the engine is, which is the only place those three
+// environment variables are written down for somebody who is not reading
+// route.go.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
 
@@ -105,23 +113,26 @@ commands:
                     --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
                     --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
                     [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
-                                                  create a backup set, through the same service layer POST
-                                                  /api/v1/backup-sets uses, not by calling it. On an instance with
-                                                  no config.yaml yet this writes the first one (#176), and
-                                                  --state-database names the journal it points at, which is also
-                                                  the journal that case is guarded against: a create is refused
-                                                  either way while something serves that deployment (#536)
+                                                  create a backup set. Beside a serving engine this command has a
+                                                  route to, that is POST /api/v1/backup-sets against the engine
+                                                  (#543); with nothing serving, it is the same service layer that
+                                                  route is built on, called here. On an instance with no config.yaml
+                                                  yet this writes the first one instead (#176), and --state-database
+                                                  names the journal it points at; that create has no route, so it is
+                                                  refused while something serves that deployment (#536)
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                                                   change one configured backup set in place; only the flags you pass are
-                                                  changed. Nothing here edits a running engine's configuration, so a
-                                                  patch is refused, with the file untouched, while one is serving
-                                                  this deployment (#350, #536)
-  backup-set remove <source/backup-set>          take one backup set out of the configuration, through the same
-                                                  service layer DELETE /api/v1/backup-sets/{source}/{set} uses, not
-                                                  by calling it. Configuration only: the backups it collected stay on
-                                                  storage and stay listed by artifacts, and creating the set again
-                                                  with the same source and name takes them back (#391)
+                                                  changed. Beside a serving engine this command has a route to, that is
+                                                  PATCH /api/v1/backup-sets/{source}/{set} against the engine and takes
+                                                  effect with no restart; with no route it is refused and the file is
+                                                  left untouched (#350, #536, #543)
+  backup-set remove <source/backup-set>          take one backup set out of the configuration: DELETE
+                                                  /api/v1/backup-sets/{source}/{set} against a serving engine this
+                                                  command has a route to, and the same service layer that route is
+                                                  built on when nothing is serving. Configuration only: the backups it
+                                                  collected stay on storage and stay listed by artifacts, and creating
+                                                  the set again with the same source and name takes them back (#391)
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
@@ -189,15 +200,36 @@ commands:
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
 a directory resolves to config.yaml inside it, which is what packaging mounts)
 
-no command here calls the API. backup-manager opens its own service over the same config.yaml
-and state database an engine uses, and there is still no config watcher and no SIGHUP reload
-in this build, so a change made here could never reach a running engine. It is refused rather
-than made: while another process is serving this deployment, backup-set create, patch and
-remove, a backup-set retention that sets or clears a policy, and settings patch all stop with
-nothing written, so there is no half-made change for a restart to pick up. With nothing
-serving, the change is written here and an engine started afterwards reads it when it starts.
-Each of those commands says which of the two it did, on a "mode: direct" or "mode:
-engine-attached" line. Nothing else is refused: status, sources, artifacts, run, fetch and
-the rest are ordinary beside a running engine (#535)
+a configuration write goes one of three ways, and says which on a "mode:" line. With nothing
+serving this deployment it is written here, and an engine started afterwards reads it when it
+starts. With something serving and a route to it, backup-set create, patch and remove and
+settings patch hand the change to that process over its API, so it takes effect at once and
+there is nothing to restart. With something serving and no route, the write is refused and
+nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
+change left in the file is one the serving process would never read. Two writes have no route
+at all and are refused beside a serving engine either way: a backup-set retention that sets
+or clears a policy, and the first config.yaml a create writes on an instance that has none
+yet (#535, #543)
+
+the route is three environment variables. BACKUP_MANAGER_API_URL is the engine's address,
+either its own listener from inside its container (http://127.0.0.1:8080) or the published
+Web UI port from a shell on the host; BACKUP_MANAGER_API_USERNAME and
+BACKUP_MANAGER_API_PASSWORD are the administrator credentials the Web UI takes, held in
+memory for the one invocation and written nowhere. Not flags, because a password on a command
+line is in every process listing on the host. One field does not survive the trip: the API
+carries no stale_after, so a routed create or patch prints it as not reported rather than as
+a value
+
+status, sources, artifacts and retention read rather than write, so a missing route never
+refuses them; they announce which world the answer is about instead. "mode: engine-attached"
+is a serving process that holds the same configuration and was asked the same question,
+"mode: direct" is nothing serving, and "mode: unconfirmed" is an answer taken from
+config.yaml that could not be checked against the process serving this deployment and can
+disagree with it. A read refuses only when that process holds a DIFFERENT configuration or
+answers its question differently, and then nothing at all is printed (#544)
+
+everything else is ordinary beside a running engine and announces no mode at all: run, fetch,
+check, validate and the rest, settings and a backup-set retention that only reports included.
+The one command a running engine refuses is daemon, for the reason its entry above gives
 `)
 }

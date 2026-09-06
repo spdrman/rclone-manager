@@ -146,8 +146,8 @@ func (d readDecision) agreeOnHealth(ctx context.Context, mine []string) error {
 // plan_id and the engine keeps that plan in a bounded, expiring cache so
 // that a later apply can be checked against a plan somebody reviewed.
 // Nothing is deleted, nothing is written to the journal, and this command
-// never applies anything -- `retention` previews in both its modes by
-// design -- but the engine does hold one more plan for a while.
+// never applies anything (`retention` previews in both its modes by
+// design), but the engine does hold one more plan for a while.
 func (d readDecision) agreeOnRetention(ctx context.Context, set model.BackupSetID, mine []string) error {
 	if !d.attached() {
 		return nil

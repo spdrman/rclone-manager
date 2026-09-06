@@ -60,9 +60,9 @@ import (
 // # The attach that fails is still the whole point
 //
 // Engine-attached mode can now be carried out for the three mutating
-// backup-set verbs (#543, route.go), and only when this command has been
-// told where the engine is. Everything else still refuses, and so does a
-// route that was named and cannot be built.
+// backup-set verbs and for `settings patch` (#543, route.go), and only
+// when this command has been told where the engine is. Everything else
+// still refuses, and so does a route that was named and cannot be built.
 //
 // What this file guarantees is what happens on that refusal. It refuses.
 // It does not write the file directly and report success, which is
@@ -112,9 +112,11 @@ const (
 	// engineAttachedMode: another process is serving this deployment, so
 	// the change belongs to it. Whether this build can hand it over
 	// depends on the verb and on whether an address was given: the three
-	// mutating backup-set verbs route (#543) when $BACKUP_MANAGER_API_URL
-	// names an engine, and everything else, including a `daemon` that
-	// serves no HTTP at all, is still a refusal.
+	// mutating backup-set verbs and `settings patch` route (#543) when
+	// $BACKUP_MANAGER_API_URL names an engine, and everything else is
+	// still a refusal, including a `backup-set retention` that sets or
+	// clears a policy, a first configuration, and any write at all beside
+	// a `daemon`, which serves no HTTP for a route to reach.
 	engineAttachedMode executionMode = "engine-attached"
 )
 
@@ -425,10 +427,11 @@ func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, atta
 // can be routed, and builds the route when it can.
 //
 // A nil attachFunc is "this write has no route", which is the honest
-// answer for every configuration write except the three backup-set verbs
-// #543 covers. Saying it by passing nil rather than by omitting a step is
-// what makes the unrouted writes visible: they are call sites that
-// deliberately hand over nothing, not call sites that forgot.
+// answer for every configuration write except the four #543 covers, the
+// three mutating backup-set verbs and `settings patch`. Saying it by
+// passing nil rather than by omitting a step is what makes the unrouted
+// writes visible: they are call sites that deliberately hand over
+// nothing, not call sites that forgot.
 type attachFunc func() (configWriteRoute, string, error)
 
 // configWrite is one settled configuration write: the claim that keeps the

@@ -54,7 +54,7 @@ func cmdArtifacts(args []string) int {
 	// read live by both processes, so the rows themselves cannot diverge.
 	// What can is which backup sets are configured, which is what decides
 	// whether a row is marked as belonging to one whose configuration was
-	// removed -- and that marker is the difference between "kept under
+	// removed, and that marker is the difference between "kept under
 	// this deployment's retention chain" and "kept because nothing is
 	// looking any more".
 	mode, err := enterReadMode(ctx, *cfgPath, cfg, os.Stderr)

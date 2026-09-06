@@ -89,8 +89,8 @@ import (
 // is #535, caught before anything is printed, and it is a refusal.
 //
 // On top of that, each command puts its own question to the engine
-// through the operations #544 names -- listBackupSets, listArtifacts,
-// getArtifact, previewRetention, getSystemHealth -- and compares. That is
+// through the operations #544 names (listBackupSets, listArtifacts,
+// getArtifact, previewRetention, getSystemHealth) and compares. That is
 // belt and braces on purpose: the revision proves the two configurations
 // agree, and these prove the two IMPLEMENTATIONS agree about them. A
 // difference either way is a refusal rather than two surfaces quietly
@@ -226,9 +226,9 @@ func enterReadMode(ctx context.Context, configPath string, cfg *config.Config, a
 	if err != nil {
 		// "I could not tell" is not "nothing is running", and this is the
 		// one place a read is allowed to carry on anyway. The probe fails
-		// for real reasons -- EACCES on a lock file owned by another uid,
+		// for real reasons (EACCES on a lock file owned by another uid,
 		// EIO on a sick volume, ENOTSUP where flock is unavailable, and
-		// the whole non-unix build -- and every one of those is a moment
+		// the whole non-unix build), and every one of those is a moment
 		// when an operator most needs `status` to still print something.
 		return d.unconfirmed(fmt.Sprintf("this host could not be asked whether any process is serving this deployment (%v)", err), announceTo), nil
 	}
