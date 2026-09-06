@@ -8,7 +8,7 @@
 # shellcheck disable=SC2034
 API_CONTRACT="api/v1/openapi.json"
 # shellcheck disable=SC2034
-API_GO_BINDING="apps/common/webhost/apicontract/contract.gen.go"
+API_GO_BINDING="core/apicontract/contract.gen.go"
 # shellcheck disable=SC2034
 API_TS_BINDING="ui/shared/src/api/generated/contract.ts"
 

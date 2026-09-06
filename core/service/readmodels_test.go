@@ -411,7 +411,7 @@ func TestScanCatalog_WritesNothingAndRebuildIsANoOpOnAHealthyJournal(t *testing.
 }
 
 // TestSetBackupSetEnabled_PersistsAndHotReloads is POST
-// /api/v1/backup-sets/{id}/enabled.
+// /api/v1/backup-sets/{source}/{set}/enabled.
 func TestSetBackupSetEnabled_PersistsAndHotReloads(t *testing.T) {
 	svc, configPath := openTestService(t)
 	ctx := context.Background()

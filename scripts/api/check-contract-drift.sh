@@ -24,6 +24,19 @@
 #      M1). A check nothing invokes is indistinguishable from a check that
 #      does not exist, so the invocation is now checked here too.
 #
+#   4. THE CONTRACT DISAGREEING WITH ITSELF. Every operation declares
+#      whether it needs a session and the double-submit token TWICE: once
+#      in the standard OpenAPI `security` block an external consumer or an
+#      off-the-shelf generator reads, and once in the x-authenticated and
+#      x-csrf-required extensions this repository's own generator obeys.
+#      Nothing compared them, and they had already parted on fifteen of
+#      forty-six operations: all fifteen mutating, all fifteen behind
+#      requireCSRF at runtime, and the published document silent about it,
+#      so the requirement could not be implemented from the document that
+#      defines it (PR #546 review). A constant declared twice with nothing
+#      comparing the two is a constant that drifts, which is this
+#      repository's own rule about the wire, turned on the document.
+#
 # What it deliberately does NOT check is whether the Go HANDLERS still
 # match the bindings; that needs reflection over unexported types, so it
 # lives in apps/common/webhost/contract_test.go and
@@ -169,6 +182,89 @@ else
       note "FAIL: $gate does not run $invoked. GitHub Actions is workflow_dispatch-only on this repository, so a check that lives only in .github/workflows/ci.yml runs on no commit at all. Add \`bash $invoked\` to $gate."
     fi
   done
+fi
+
+# ---- 4. the contract does not disagree with itself -----------------------
+
+# security vs x-authenticated / x-csrf-required, per operation.
+#
+# The two say the same thing to different readers, and only one of them is
+# obeyed here: gen-bindings.go decodes `security` and reads nothing out of
+# it, so that block can say anything at all and both generated bindings
+# stay byte for byte identical. That makes the OpenAPI half invisible to
+# every other check in this file, which is how it came to be wrong about a
+# third of the document while every gate stayed green.
+echo "==> the contract's security blocks agree with its own extensions"
+if python3 - "$API_CONTRACT" >"$tmp/security" 2>&1 <<'PYSEC'
+import json, sys
+
+VERBS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+
+schemes = set((doc.get("components") or {}).get("securitySchemes") or {})
+
+# The pairs this rule compares. csrf and csrfCookie are the two halves of
+# one double-submit requirement and are always required together, so both
+# are read against the same extension: a document that asked for the header
+# without naming the cookie a client has to echo would be describing a
+# requirement nobody can satisfy, which is the state this whole rule exists
+# to have caught.
+PAIRS = (("session", "x-authenticated"), ("csrf", "x-csrf-required"), ("csrfCookie", "x-csrf-required"))
+
+problems = []
+checked = 0
+
+for path, item in (doc.get("paths") or {}).items():
+    for verb, op in item.items():
+        if verb.lower() not in VERBS:
+            continue
+        where = "%s %s (%s)" % (verb.upper(), path, op.get("operationId", "?"))
+        security = op.get("security")
+        # Fail closed on a shape this rule cannot decide rather than
+        # skipping it. A list of alternatives is legal OpenAPI and this
+        # contract has never declared one, so meeting one means this rule
+        # needs rewriting, not relaxing, and a silent skip here would be
+        # indistinguishable from a comparison that passed.
+        if not isinstance(security, list) or len(security) != 1 or not isinstance(security[0], dict):
+            problems.append("%s: security is %r. This rule reads exactly one requirement set per operation, which "
+                            "is all this contract has ever declared; anything else needs the rule rewritten rather "
+                            "than skipped." % (where, security))
+            continue
+        required = security[0]
+        unknown = sorted(set(required) - schemes)
+        if unknown:
+            problems.append("%s: names security scheme(s) %s, which components.securitySchemes does not declare."
+                            % (where, ", ".join(unknown)))
+        checked += 1
+
+        for scheme, extension in PAIRS:
+            declared = scheme in required
+            extended = op.get(extension) is True
+            if declared != extended:
+                problems.append(
+                    "%s: security %s %r, and %s is %r. These are two declarations of one fact, and both are read: an "
+                    "external consumer implements `security`, and scripts/api/gen-bindings.go obeys the extension. "
+                    "Say the same thing in both."
+                    % (where, "declares" if declared else "does not declare", scheme, extension, op.get(extension)))
+
+if checked == 0:
+    print("no operation declared a security requirement at all, so this rule compared nothing and would pass vacuously")
+    sys.exit(1)
+
+if problems:
+    for p in problems:
+        print(p)
+    sys.exit(1)
+
+print("ok: %d operation(s) say the same thing about a session and about CSRF in `security` and in their extensions" % checked)
+PYSEC
+then
+  sed 's/^/  /' "$tmp/security"
+else
+  note "FAIL: the contract's security blocks disagree with its own x-authenticated/x-csrf-required extensions."
+  sed 's/^/    /' "$tmp/security" >&2
 fi
 
 if [ "$fail" -ne 0 ]; then
