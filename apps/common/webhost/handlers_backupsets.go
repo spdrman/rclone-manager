@@ -137,6 +137,22 @@ type backupSetResponse struct {
 	// "stable" and had nothing to send alongside it, which core refuses,
 	// so the only possible outcome was a save that failed.
 	StableForSeconds int `json:"stable_for_seconds"`
+	// StaleAfterSeconds is FR-24's freshness budget: how long this set may
+	// go without a fresh backup before it is reported as stale.
+	//
+	// It is here because it was the one field this API could WRITE and
+	// could not read back. BackupSetSpec has always accepted it and
+	// UpdateBackupSetRequest has always been able to change it, so a
+	// client that set it had no way to show what it had set, and a CLI
+	// routing a create through this engine printed "not reported" for a
+	// value it had just sent (issue #555, folded in with the routed-write
+	// guard because it is the same command's own report).
+	//
+	// Never omitted, the same discipline the two booleans below follow: a
+	// caller has to be able to tell a value from "this build does not
+	// report it". It is always positive on a configured set, because a
+	// configuration that leaves it unset is one core refuses to load.
+	StaleAfterSeconds int `json:"stale_after_seconds"`
 	// ValidatorID is the registered validator this backup set selected,
 	// or "" for none. The id only: what it resolves to is a server-side
 	// path, and this package never puts one on the wire (see
@@ -175,6 +191,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		Include:             bs.Include,
 		CompletionStrategy:  bs.CompletionStrategy,
 		StableForSeconds:    int(bs.StableFor / time.Second),
+		StaleAfterSeconds:   int(bs.StaleAfter / time.Second),
 		ValidatorID:         string(bs.ValidatorID),
 		Disabled:            bs.Disabled,
 		ReadOnly:            bs.ReadOnly,

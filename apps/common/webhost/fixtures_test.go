@@ -128,9 +128,16 @@ func (alwaysPassGate) Passed() bool { return true }
 type syncFakeBackend struct {
 	mu             sync.Mutex
 	configRevision string
-	ops            map[string]service.Operation
-	errOnSubmit    error
-	nextID         int
+
+	// deploymentID is which deployment this fake claims to be (issue
+	// #555). It is a fixed, obviously-fake value rather than the empty
+	// string, because empty is the answer that means "this process cannot
+	// name its deployment" and a fixture that answered it would exercise
+	// the unconfirmable path on every handler test.
+	deploymentID string
+	ops          map[string]service.Operation
+	errOnSubmit  error
+	nextID       int
 
 	// errOnRestore is SubmitRestorePlacement's equivalent of
 	// errOnSubmit, and lastRestore is the request it was last handed, so
@@ -224,6 +231,7 @@ type syncFakeBackend struct {
 func newSyncFakeBackend() *syncFakeBackend {
 	return &syncFakeBackend{
 		configRevision:            "rev-1",
+		deploymentID:              "deployment-1",
 		ops:                       map[string]service.Operation{},
 		plans:                     map[string]service.RetentionPlan{},
 		persistedConnectionResult: service.ConnectionTestResult{OK: true},
@@ -231,6 +239,8 @@ func newSyncFakeBackend() *syncFakeBackend {
 }
 
 func (f *syncFakeBackend) ConfigRevision() string { return f.configRevision }
+
+func (f *syncFakeBackend) DeploymentID() string { return f.deploymentID }
 
 // PreviewRetention returns a fixed, single-artifact DELETE plan for any
 // source/set, storing it exactly once so a matching ApplyRetentionPlan
@@ -774,6 +784,8 @@ func newAsyncFakeBackend() *asyncFakeBackend {
 }
 
 func (f *asyncFakeBackend) ConfigRevision() string { return "rev-1" }
+
+func (f *asyncFakeBackend) DeploymentID() string { return "deployment-1" }
 
 func (f *asyncFakeBackend) Ready() bool { return true }
 

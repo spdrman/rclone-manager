@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "8ac2ee57255c565c29df73142b1a59fc2fd221b78651a7272161cd12fc20dfa0"
+const ContractSHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -841,6 +841,7 @@ type BackupSet struct {
 	RetentionIsOverride bool     `json:"retention_is_override"`
 	SourceName          string   `json:"source_name"`
 	StableForSeconds    int      `json:"stable_for_seconds"`
+	StaleAfterSeconds   int      `json:"stale_after_seconds"`
 	User                string   `json:"user"`
 	ValidatorID         string   `json:"validator_id"`
 }
@@ -1685,6 +1686,7 @@ type VersionResponse struct {
 	ConfigRevision string `json:"config_revision"`
 	Configured     bool   `json:"configured"`
 	CoreVersion    string `json:"core_version"`
+	DeploymentID   string `json:"deployment_id"`
 	EngineVersion  string `json:"engine_version"`
 	GoVersion      string `json:"go_version"`
 	Ready          bool   `json:"ready"`

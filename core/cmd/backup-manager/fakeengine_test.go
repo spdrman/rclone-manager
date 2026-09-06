@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +53,14 @@ type fakeEngine struct {
 	username string
 	password string
 
+	// anonymous makes GET /system/version answer with no deployment_id,
+	// which is what every engine older than #555 does, what an engine
+	// that could not read its own identity file does, and what an engine
+	// holding no deployment at all does. The client cannot tell those
+	// apart and must not read any of them as agreement: two processes
+	// that both name nothing are not thereby one deployment.
+	anonymous bool
+
 	server *httptest.Server
 
 	mu       sync.Mutex
@@ -60,9 +69,32 @@ type fakeEngine struct {
 	seen     []string
 }
 
-// startFakeEngine opens a BackupService over configPath and serves it.
+// startFakeEngine announces that this process serves the deployment
+// configPath names, opens a BackupService over it, and serves it.
+//
+// Announce first, then open, which is the order backup-manager-web and
+// `backup-manager daemon` use and which is now load-bearing rather than
+// tidy: core/service mints a deployment identity in AnnounceServing and
+// nowhere else (#555 as #559 left it), so an engine that opened first
+// would cache an empty identity and every routed write against it would
+// be refused for naming no deployment.
+//
+// It is also what makes this fixture an engine rather than a web server
+// with a BackupService behind it. A CLI decides engine-attached mode from
+// the serving lock, so a test that wanted one used to announce separately
+// beside this; the announcement belongs to the thing that serves.
 func startFakeEngine(t *testing.T, configPath string) *fakeEngine {
 	t.Helper()
+	release, err := service.AnnounceServing(configPath)
+	if err != nil {
+		t.Fatalf("announcing this process as serving %s: %v", configPath, err)
+	}
+	t.Cleanup(func() {
+		if err := release(); err != nil {
+			t.Errorf("releasing the serving announcement: %v", err)
+		}
+	})
+
 	svc, closeFn, err := service.Open(t.Context(), configPath)
 	if err != nil {
 		t.Fatalf("opening the engine's own service over %s: %v", configPath, err)
@@ -88,6 +120,23 @@ func startFakeEngine(t *testing.T, configPath string) *fakeEngine {
 	e.server = httptest.NewServer(e)
 	t.Cleanup(e.server.Close)
 	return e
+}
+
+// startFakeEngineFor stands an engine up over a configuration file of its
+// own that names the SAME deployment as cliConfig.
+//
+// Two files, one deployment, and both halves matter. Two files is what
+// lets a test assert that a routed write changed the engine's
+// configuration and left the CLI's alone, which is the whole of what
+// routing means. One deployment is what #555 made necessary: a routed
+// write now asks the engine which deployment it serves and refuses when
+// it is not the one the command was typed at, so a fixture with two
+// journals would drive that refusal on every row instead of the route the
+// row is about. It is also the truthful arrangement, since a real CLI and
+// a real engine share one config.yaml and one journal.
+func startFakeEngineFor(t *testing.T, cliConfig string) *fakeEngine {
+	t.Helper()
+	return startFakeEngine(t, writeTestConfigFor(t, cliConfig))
 }
 
 // baseURL is the address the CLI is told to reach this engine at.
@@ -217,6 +266,8 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 	}
 
 	switch {
+	case r.Method == http.MethodGet && path == "/system/version":
+		e.systemVersion(w, r)
 	case r.Method == http.MethodPost && path == "/ssh-keys":
 		e.importKey(w, r)
 	case r.Method == http.MethodPost && path == "/ssh/host-key-probe":
@@ -234,6 +285,33 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 	default:
 		refuse(w, http.StatusNotFound, apicontract.ErrorCodeInternal, "this fake engine serves no "+r.Method+" "+path)
 	}
+}
+
+// systemVersion is GET /system/version, and it is the call a routed write
+// makes before it sends anything (#555).
+//
+// Every value comes from the real BackupService behind this engine, the
+// deployment identity included. That is what makes the check under test
+// able to fail: an identity typed into a fixture would agree with whatever
+// the test wanted it to agree with, and the whole question is whether the
+// engine at the other end is the deployment the command was typed at.
+func (e *fakeEngine) systemVersion(w http.ResponseWriter, _ *http.Request) {
+	v := service.BuildVersion("dev", "none")
+	deploymentID := e.svc.DeploymentID()
+	if e.anonymous {
+		deploymentID = ""
+	}
+	writeJSON(w, http.StatusOK, apicontract.VersionResponse{
+		APIVersion:     apicontract.Version,
+		CoreVersion:    v.CoreVersion,
+		Commit:         v.Commit,
+		GoVersion:      v.GoVersion,
+		EngineVersion:  v.EngineVersion,
+		ConfigRevision: e.svc.ConfigRevision(),
+		DeploymentID:   deploymentID,
+		Ready:          e.svc.Ready(),
+		Configured:     true,
+	})
 }
 
 func (e *fakeEngine) importKey(w http.ResponseWriter, r *http.Request) {
@@ -433,8 +511,20 @@ func toContractSettings(s service.Settings) apicontract.SettingsResponse {
 }
 
 // toContractBackupSet mirrors apps/common/webhost's toBackupSetResponse,
-// including the field it does NOT carry: the API reports no stale_after at
-// all, which is a real gap and not something a fixture may paper over.
+// field for field.
+//
+// Field for field is the whole contract of this function, and it was
+// broken in the commit that made stale_after reportable: the API grew
+// stale_after_seconds and this stayed as it was, so every routed test in
+// this package went on exercising the legacy branch, a routed create went
+// on printing "stale_after: not reported", and the sentence #555 says it
+// removed was still being produced under a green suite. A fixture that
+// carries less than production is not a smaller fixture, it is a
+// different product.
+//
+// TestTheFixtureCarriesEveryFieldTheContractHas is the control that keeps
+// this honest, because a missing field is invisible here: the zero value
+// is a legal value for every one of them.
 func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 	return apicontract.BackupSet{
 		ID:                  s.ID,
@@ -448,10 +538,72 @@ func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 		Include:             s.Include,
 		CompletionStrategy:  s.CompletionStrategy,
 		StableForSeconds:    int(s.StableFor / time.Second),
+		StaleAfterSeconds:   int(s.StaleAfter / time.Second),
 		ValidatorID:         string(s.ValidatorID),
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
+	}
+}
+
+// TestTheFixtureCarriesEveryFieldTheContractHas is the control that makes
+// a sparse fixture visible.
+//
+// toContractBackupSet's whole job is to mirror apps/common/webhost's
+// toBackupSetResponse, and a field it drops is invisible in every
+// assertion written over it: the zero value is a legal value for all
+// sixteen, so a routed test asserting on a set the engine returned passes
+// whether or not the field made the trip. That is how stale_after_seconds
+// went missing for a whole commit while a routed create went on printing
+// "stale_after: not reported" under a green suite.
+//
+// So the mirroring is driven from the other end. Every field of
+// service.BackupSet is given a value nothing here would produce by
+// accident, and every field of the apicontract.BackupSet that comes out
+// has to be non-zero. A field that legitimately cannot carry one belongs
+// in exemptFromTheFixture, named, with the reason beside it, which makes
+// leaving one out a decision somebody wrote down.
+func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
+	// Deliberately unlike anything the rest of this package builds: this
+	// is about whether a value survives the mapping, not about whether it
+	// is a plausible backup set.
+	full := service.BackupSet{
+		ID:                  "control/every-field",
+		SourceName:          "control",
+		Name:                "every-field",
+		Host:                "control.example.internal",
+		Port:                2201,
+		User:                "controluser",
+		RemotePath:          "/srv/control",
+		LocalPath:           "/data/control",
+		Include:             []string{"*.control"},
+		CompletionStrategy:  "stable",
+		StableFor:           90 * time.Second,
+		StaleAfter:          36 * time.Hour,
+		ValidatorID:         service.ValidatorID("control-validator"),
+		Disabled:            true,
+		ReadOnly:            true,
+		RetentionIsOverride: true,
+	}
+
+	// Nothing is exempt today, and that is the point of writing the list
+	// out: a field added to the contract that this fixture cannot carry
+	// has to be argued for here rather than quietly left at zero.
+	exemptFromTheFixture := map[string]string{}
+
+	got := toContractBackupSet(full)
+	v := reflect.ValueOf(got)
+	for i := 0; i < v.NumField(); i++ {
+		name := v.Type().Field(i).Name
+		if reason, exempt := exemptFromTheFixture[name]; exempt {
+			if !v.Field(i).IsZero() {
+				t.Errorf("%s is listed as a field this fixture cannot carry (%s) and it carried one anyway; the list is out of date", name, reason)
+			}
+			continue
+		}
+		if v.Field(i).IsZero() {
+			t.Errorf("toContractBackupSet drops %s, so every routed test in this package exercises an engine that does not report it and none exercises one that does. apps/common/webhost's toBackupSetResponse carries it, and a fixture that carries less than production is a different product", name)
+		}
 	}
 }
 

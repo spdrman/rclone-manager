@@ -277,7 +277,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	// functions precisely so that "this write can be routed" is a
 	// property of the call site rather than of a flag somebody might get
 	// wrong.
-	write, err := enterConfigWriteMode(configPath, nil, os.Stdout, os.Stderr)
+	write, err := enterConfigWriteMode(ctx, configPath, nil, os.Stdout, os.Stderr)
 	if err != nil {
 		cleanup()
 		return nil, func() {}, err
@@ -345,7 +345,7 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 		}
 	}
 
-	write, err := enterConfigWriteMode(configPath, attachToEngine, os.Stdout, os.Stderr)
+	write, err := enterConfigWriteMode(ctx, configPath, attachToEngine, os.Stdout, os.Stderr)
 	if err != nil {
 		closeLocal()
 		return nil, func() {}, err

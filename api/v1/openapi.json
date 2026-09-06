@@ -221,6 +221,10 @@
             "type": "string",
             "description": "The optimistic-concurrency token a client echoes back on POST /operations. Read here rather than scraped out of a 409's prose."
           },
+          "deployment_id": {
+            "type": "string",
+            "description": "Which deployment this is, as opposed to what it currently holds. Minted once per instance and stable across every configuration edit, so two instances built from the same template are told apart by it where a config_revision, being a hash of configuration content, reports them as the same. A client about to send a mutation compares it against the deployment the command was aimed at, so a write typed at one instance with another instance's address configured is refused rather than carried out somewhere nobody was looking. Empty on an instance that cannot name itself, which a client reads as unconfirmable rather than as agreement."
+          },
           "ready": {
             "type": "boolean",
             "description": "True once the runtime has completed its startup sequence."
@@ -237,6 +241,7 @@
           "go_version",
           "engine_version",
           "config_revision",
+          "deployment_id",
           "ready",
           "configured"
         ]
@@ -959,6 +964,10 @@
             "type": "integer",
             "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses. Whole seconds, truncated rather than refused: a configuration is only required to make stable_for positive, so a stable_for of 1500ms loads and is served here as 1, and any window under a second is served as 0, which this field already spends on \"not the stable strategy\". A client cannot tell those two apart. The write path refuses a sub-second window instead of rounding it, on the grounds that a value meaning one thing over this wire and another in the file is a divergence both routes report as success; the read path does not, so a set configured with a sub-second window reads back here as a different set from the one that was written. Read it as the budget rounded down, never as the budget."
           },
+          "stale_after_seconds": {
+            "type": "integer",
+            "description": "How long this backup set may go without a fresh backup before it is reported as stale (FR-24's freshness budget). BackupSetSpec has always accepted it on the way in and UpdateBackupSetRequest has always been able to change it, so until now this was a field the API could write and could not read back, and a client that changed it had no way to show what it had changed it to. Zero is how an engine built before this field answers, and a client reads it as not reported rather than as a set with no freshness budget. It cannot mean a configured budget of none: a configuration that leaves stale_after unset or non-positive is one this service refuses to load. It can mean a budget under a second, because the value is truncated to whole seconds on the way out while nothing refuses sub-second precision on the way in, so `stale_after: 1500ms` is served as 1 and `stale_after: 500ms` as 0."
+          },
           "validator_id": {
             "type": "string"
           },
@@ -988,6 +997,7 @@
           "disabled",
           "read_only",
           "stable_for_seconds",
+          "stale_after_seconds",
           "retention_is_override"
         ]
       },

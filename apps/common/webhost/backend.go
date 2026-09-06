@@ -43,6 +43,20 @@ type BackupServiceClient interface {
 	// detected (docs/EPIC-B-multi-nas.md §14).
 	ConfigRevision() string
 
+	// DeploymentID reports WHICH deployment this backend serves, as
+	// opposed to what configuration it currently holds (issue #555). A
+	// client that is about to send a mutation compares it against the
+	// deployment its command was aimed at, so a command typed at one
+	// instance with another instance's address configured is refused
+	// instead of carried out somewhere nobody was looking. It is a
+	// different fact from ConfigRevision above and cannot be derived from
+	// it: a revision is a hash of configuration content, so a staging and
+	// a production instance built from one template share one. Empty
+	// means this process cannot name its deployment, which a client reads
+	// as unconfirmable rather than as agreement. See
+	// core/service.BackupService.DeploymentID.
+	DeploymentID() string
+
 	// Ready reports whether this backend completed
 	// docs/EPIC-B-multi-nas.md §46.1's startup sequence. It is the fact
 	// behind /health/ready and GET /system/version's "ready" field, and

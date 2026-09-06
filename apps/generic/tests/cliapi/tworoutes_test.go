@@ -71,13 +71,23 @@ import (
 // and the fields they still cannot be compared on are enumerated in
 // unreportedOnTheWire below, as an executed list rather than a paragraph.
 //
-// Two of the tests here record a gap rather than a property, and both say
-// so in their own name. A read on a deployment that has not been told where
-// its engine is announces `unconfirmed` rather than being prevented, which
-// is the shipped container's own default. And a routed WRITE compares no
-// revision at all, so one wrong character in $BACKUP_MANAGER_API_URL writes
-// into a different deployment's engine, which is driven rather than
-// speculated about.
+// One test here records a gap rather than a property and says so in its
+// own name: a read on a deployment that has not been told where its engine
+// is announces `unconfirmed` rather than being prevented, which is the
+// shipped container's own default.
+//
+// There used to be a second, and #555 closed what it recorded. A routed
+// write compared nothing at all, so one wrong character in
+// $BACKUP_MANAGER_API_URL sent the change into a different deployment's
+// engine and both surfaces reported success. It now asks the engine which
+// deployment it serves before it sends anything and refuses when that is
+// not the deployment the command was typed at, which is what
+// TestARoutedWriteRefusesWhenTheEngineServesADifferentDeployment drives.
+// What it compares is a deployment identity rather than a revision, for
+// the reason that test spells out: a revision is a hash of configuration
+// content, so a staging and a production instance built from one template
+// share one, and those two are exactly the pair an address gets confused
+// between.
 //
 // # The Web UI itself
 //
@@ -283,6 +293,21 @@ func (b *browser) configRevision() string {
 		b.t.Fatal("the engine reported an empty config_revision, so nothing below is comparing anything")
 	}
 	return answer.ConfigRevision
+}
+
+// deploymentID is the engine's own answer to "which deployment am I",
+// which is a different fact from the revision above and the one a routed
+// write is checked against. It is minted once beside the journal and does
+// not move when the configuration does, so two instances built from one
+// template are told apart by it and are not told apart by a revision.
+func (b *browser) deploymentID() string {
+	b.t.Helper()
+	var answer apicontract.VersionResponse
+	b.get("/api/v1/system/version", &answer)
+	if answer.DeploymentID == "" {
+		b.t.Fatal("the engine reported an empty deployment_id, so a routed write has nothing to check itself against")
+	}
+	return answer.DeploymentID
 }
 
 // invocation is one run of the real binary.
@@ -1040,29 +1065,34 @@ func equal(a, b []string) bool {
 // unreportedOnTheWire is every field the same command prints on the direct
 // route and cannot print through the engine, as a list that runs.
 //
-// It is short on purpose: this is the residue of #543 and #544, not a
-// summary of them. Each entry is a property api/v1/openapi.json's own
-// schema has no room for, so closing one is a contract addition rather than
-// anything the CLI can do.
+// It is empty, and that is a fact worth keeping executable rather than
+// deleting. It had one entry, stale_after: api/v1/openapi.json's BackupSet
+// carried no such property, even though BackupSetSpec accepted one on the
+// way in and UpdateBackupSetRequest could change it, so the API could write
+// a field it could not read back and a routed create printed "not reported"
+// for a value the operator had just typed. #555 put stale_after_seconds on
+// the wire and the list emptied.
 //
-//	stale_after  BackupSet carries no stale_after property at all, even
-//	             though BackupSetSpec accepts one on the way in and
-//	             UpdateBackupSetRequest can change it. So the API can
-//	             write a field it cannot read back, and a routed create
-//	             reports it as unreported rather than printing 0s about
-//	             FR-24's freshness budget.
-var unreportedOnTheWire = []string{"stale_after"}
+// Empty means the test below asserts something stronger than it used to:
+// the two routes print the same report, line for line. An entry added here
+// again is somebody recording a new divergence and having to say what it
+// is, which is the shape this list existed for.
+var unreportedOnTheWire = []string{}
 
 // TestWhatARoutedCommandStillCannotReport drives the list above rather than
 // leaving it as a paragraph, in both directions.
 //
 // The same create is typed at two deployments, one with nothing serving and
 // one with an engine serving it, and the two reports are compared line for
-// line. Every line that differs has to be about something on the list, and
-// every entry on the list has to account for a line that differs. The
-// second half is the one that matters over time: close the gap in the
-// contract and this fails until somebody shortens the list, which is the
-// opposite of how a documented limitation usually ages.
+// line. With the list empty the two have to match exactly, and with an
+// entry on it every line that differs has to be about something on the
+// list and every entry has to account for a line that differs.
+//
+// Both halves matter over time and they matter in opposite directions.
+// Adding a divergence without recording it fails. Closing one in the
+// contract and leaving the list alone also fails, until somebody shortens
+// it, which is the opposite of how a documented limitation usually ages:
+// this one has already been shortened to nothing that way.
 func TestWhatARoutedCommandStillCannotReport(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the real CLI against a real engine")
@@ -1096,6 +1126,12 @@ func TestWhatARoutedCommandStillCannotReport(t *testing.T) {
 	}
 
 	onlyDirect, onlyRouted := reportDiff(t, direct.stdout, routed.stdout)
+	if len(unreportedOnTheWire) == 0 {
+		for _, line := range append(append([]string{}, onlyDirect...), onlyRouted...) {
+			t.Errorf("the two routes disagree about a line, and unreportedOnTheWire records no divergence at all; either fix it or record it there with a reason:\n  %s", line)
+		}
+		return
+	}
 	if len(onlyDirect) == 0 && len(onlyRouted) == 0 {
 		t.Fatal("the two routes printed exactly the same report, which cannot be right while unreportedOnTheWire has entries in it; either the list is stale or this comparison has stopped comparing")
 	}
@@ -1225,26 +1261,31 @@ func TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWer
 	}
 }
 
-// TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo records a gap
-// rather than a property, and it is the sharpest one left.
+// TestARoutedWriteRefusesWhenTheEngineServesADifferentDeployment is
+// issue #555, and it is the test that used to record the gap rather than
+// close it.
 //
-// A read compares the engine's own config_revision against the one this
-// command computed, so a read aimed at the wrong engine refuses (that is
+// The gap was the sharpest one #536 left. A read compares the engine's own
+// config_revision against the one this command computed, so a read aimed
+// at the wrong engine refuses (that is
 // TestTheTwoRoutesCannotDisagreeAboutTheConfiguration's second case). A
-// WRITE compares nothing. $BACKUP_MANAGER_API_URL is taken as naming this
-// deployment's engine, and one character wrong in a port names somebody
-// else's, on a host running two of these. The write then lands there, with
-// this deployment's own configuration file untouched and both surfaces
-// reporting success.
+// WRITE compared nothing, so $BACKUP_MANAGER_API_URL was taken as naming
+// this deployment's engine and one character wrong in a port named
+// somebody else's. The write landed there, this deployment's own
+// configuration file was untouched, and both surfaces reported success.
 //
-// This drives exactly that: two deployments, a create typed at the first
-// with the second's address in the environment, and the set arrives in the
-// second. It is asserted as it behaves today, deliberately, because a gap
-// nobody has run is a gap nobody can size. config_revision is the hook that
-// would close it and it is already on the wire; doing that is a separate
-// issue, and when somebody does, this test goes red, which is the reminder
-// that it was closed rather than a cost.
-func TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo(t *testing.T) {
+// What closes it is not the revision. A revision is a hash of
+// configuration content, so a staging and a production instance built from
+// one template share one, and those two are exactly the pair an operator
+// points the wrong address at. What is compared instead is a deployment
+// IDENTITY, minted once beside each deployment's journal and served on
+// GET /system/version, which is a fact about the instance rather than
+// about what it currently holds.
+//
+// Two deployments, a create typed at the first with the second's address
+// in the environment, and the assertion is now that nothing happens
+// anywhere and the operator is told which two deployments were involved.
+func TestARoutedWriteRefusesWhenTheEngineServesADifferentDeployment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the real CLI against two real engines")
 	}
@@ -1265,6 +1306,11 @@ func TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo(t *testing.T) {
 	near := signIn(t, home.uiURL)
 	view := signIn(t, elsewhere.uiURL)
 
+	mineID, theirsID := near.deploymentID(), view.deploymentID()
+	if mineID == theirsID {
+		t.Fatalf("both deployments report the identity %s, so nothing here could tell them apart", mineID)
+	}
+
 	mineBefore := readFile(t, mine)
 	nearBefore := near.backupSets()
 	theirsBefore := view.backupSets()
@@ -1272,19 +1318,69 @@ func TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo(t *testing.T) {
 	// The address of the OTHER deployment's engine, which is what a
 	// mistyped port looks like from here.
 	got := runCLI(t, bin, routeTo(elsewhere.engineURL), createArgs(mine, writePrivateKey(t), newSetID)...)
-	if got.code != 0 {
-		t.Fatalf("this test records what happens when the write is accepted; it was refused, which would mean the gap has closed and this test should be rewritten as the guard it is waiting for:\n%s", got)
+	if got.code == 0 {
+		t.Fatalf("a create typed at %s was accepted with the engine serving %s in $BACKUP_MANAGER_API_URL, so it went into a deployment nobody was looking at:\n%s", mine, theirs, got)
+	}
+
+	// Both identities, because an operator who has just mistyped a URL
+	// needs to see the one they meant beside the one they reached. A
+	// message carrying only the engine's tells them where they ended up
+	// and not what they were aiming at.
+	if !strings.Contains(got.output(), theirsID) {
+		t.Errorf("the refusal does not name the identity %s of the deployment the engine actually serves:\n%s", theirsID, got)
+	}
+	if !strings.Contains(got.output(), mineID) {
+		t.Errorf("the refusal does not name the identity %s of the deployment this command was typed at:\n%s", mineID, got)
+	}
+	// The revision check is the read path's and it is a different fact.
+	// If this refusal came from there, the guard would still be missing on
+	// the case the two configurations are identical, which is the one a
+	// staging and a production instance from one template land in.
+	if strings.Contains(got.output(), "holding a different configuration") {
+		t.Errorf("the write refused on a configuration comparison rather than on which deployment it had reached:\n%s", got)
 	}
 
 	if after := readFile(t, mine); after != mineBefore {
-		t.Error("the deployment the operator typed this at changed on disk, which no routed write should do")
+		t.Error("the deployment the operator typed this at changed on disk, which no refused write should do")
 	}
 	if after := near.backupSets(); !equal(after, nearBefore) {
 		t.Errorf("the near deployment's own engine took the change after all\nbefore: %v\nafter:  %v", nearBefore, after)
 	}
-	theirsAfter := view.backupSets()
-	if !contains(theirsAfter, newSetID) {
-		t.Fatalf("the create was accepted and landed in neither deployment\ntheirs before: %v\ntheirs after:  %v\n%s", theirsBefore, theirsAfter, got)
+	if after := view.backupSets(); contains(after, newSetID) {
+		t.Fatalf("the create was refused and landed in the other deployment anyway\ntheirs before: %v\ntheirs after:  %v\n%s", theirsBefore, after, got)
 	}
-	t.Logf("recorded: a routed create typed at %s was written into the deployment %s serves, and nothing anywhere compared the two. config_revision is on the wire and is what would catch it", mine, theirs)
+}
+
+// TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt is the control the
+// test above needs, and it is the reason that one can fail.
+//
+// A guard that refused every routed write would satisfy every assertion up
+// there and would have taken engine-attached mode away entirely. This is
+// the same two-deployment arrangement with the address an operator meant,
+// so the same command has to go through.
+func TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against two real engines")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	_, mine := writeFixture(t)
+	_, theirs := writeFixture(t)
+	home := startStack(t, mine)
+	elsewhere := startStack(t, theirs)
+	near := signIn(t, home.uiURL)
+	view := signIn(t, elsewhere.uiURL)
+
+	theirsBefore := view.backupSets()
+
+	got := runCLI(t, bin, routeTo(home.engineURL), createArgs(mine, writePrivateKey(t), newSetID)...)
+	if got.code != 0 {
+		t.Fatalf("a create typed at %s with that deployment's own engine in $BACKUP_MANAGER_API_URL was refused:\n%s", mine, got)
+	}
+	if !contains(near.backupSets(), newSetID) {
+		t.Fatalf("the create was accepted and the deployment it was typed at does not have %s:\n%s", newSetID, got)
+	}
+	if after := view.backupSets(); !equal(after, theirsBefore) {
+		t.Errorf("the other deployment on this host moved on a write aimed somewhere else\nbefore: %v\nafter:  %v", theirsBefore, after)
+	}
 }
