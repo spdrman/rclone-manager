@@ -258,7 +258,10 @@ to print:
       and the reason is on stderr either way
   3   another process is serving this deployment, so nothing was done: a configuration write
       refused because it would never reach that process, or a daemon refused rather than
-      started beside one. Read the sentence beside it before retrying in a loop. A
+      started beside one. backup-manager-web serve answers the same way for the same
+      reason, which matters because that is the binary this deployment's compose file
+      runs, so a supervisor reads one code from either (#557). Read the sentence beside
+      it before retrying in a loop. A
       supervisor still rolling the outgoing process gets this until it has let go, and
       waiting is the right answer; an engine this host was never given a route to goes on
       refusing for as long as it serves, and the answer there is to set the route or stop

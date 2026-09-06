@@ -442,7 +442,9 @@ expect_unit_check_fails "a command registered and listed, with nothing pinning a
 
 d=$(mutant command-registered-and-never-listed)
 # The shape `backup-set remove` shipped in (#391), which usage_test.go
-# already catches for the backup-set verbs and for nothing else.
+# already catches for the backup-set verbs and, since this batch, for the medium ones.
+# catalog and quarantine still dispatch against string literals, so nothing holds their
+# subcommands against usage.
 swap "$d/core/cmd/backup-manager/main.go" \
   '	"version":      cmdVersion,
 }' \
