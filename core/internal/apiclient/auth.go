@@ -150,11 +150,23 @@ func (c *Client) Session(ctx context.Context) (apicontract.SessionResponse, erro
 	return out, err
 }
 
-// Logout ends the session on the engine.
+// Logout ends the session on the engine, and is worth calling from a CLI
+// even though the process is about to exit: the engine holds sessions for
+// twenty-four hours from creation, so a command that signs in and walks
+// away leaves one live for the rest of the day.
+//
+// A client that never signed in has nothing to end and does not sign in to
+// do it. That branch is not a micro-optimisation: the contract marks
+// logout as authenticated, so going through the ordinary path would have
+// this present a password purely in order to throw the resulting session
+// away, which is a real credential use for no effect.
 func (c *Client) Logout(ctx context.Context) error {
-	err := c.call(ctx, "logout", nil, nil, nil)
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.signedIn {
+		return nil
+	}
+	err := c.do(ctx, endpointByID["logout"], nil, nil, nil)
 	c.signedIn = false
-	c.mu.Unlock()
 	return err
 }

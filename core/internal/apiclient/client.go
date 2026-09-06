@@ -121,8 +121,21 @@ func New(cfg Config) (*Client, error) {
 	if base.Host == "" {
 		return nil, fmt.Errorf("apiclient: base URL %q names no host", cfg.BaseURL)
 	}
+	if base.RawQuery != "" || base.Fragment != "" {
+		// Dropping them quietly would be worse than refusing: an operator
+		// who put something there meant it, and a client that discards
+		// half of what it was given and then works is a client nobody can
+		// reason about the next time it does not.
+		return nil, fmt.Errorf("apiclient: base URL %q carries a query or fragment; this is the engine's address, not a request", cfg.BaseURL)
+	}
 	base.Path = strings.TrimSuffix(base.Path, "/")
-	base.RawQuery, base.Fragment = "", ""
+	if strings.HasSuffix(base.Path, apicontract.BasePath) {
+		// The single likeliest mistake: pasting the API's own URL rather
+		// than the host's. Left alone it builds /api/v1/api/v1/... and
+		// every call 404s, which reads as an engine that does not speak
+		// this API rather than as an address with one segment too many.
+		return nil, fmt.Errorf("apiclient: base URL %q already ends in %s; this takes the engine's address, and appends %s itself", cfg.BaseURL, apicontract.BasePath, apicontract.BasePath)
+	}
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {

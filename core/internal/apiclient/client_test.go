@@ -396,6 +396,8 @@ func TestNew_RefusesABaseURLItCannotUse(t *testing.T) {
 		{"no scheme", "127.0.0.1:8080"},
 		{"a scheme that is not HTTP", "unix:///var/run/backup-manager.sock"},
 		{"no host", "http://"},
+		{"a query nobody would mean", "http://127.0.0.1:8080/?token=abc"},
+		{"the API's own URL rather than the host's", "http://127.0.0.1:8080/api/v1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,5 +405,33 @@ func TestNew_RefusesABaseURLItCannotUse(t *testing.T) {
 				t.Fatalf("New accepted %q", tc.base)
 			}
 		})
+	}
+}
+
+func TestClient_LogoutDoesNotSignInJustToSignOut(t *testing.T) {
+	// The contract marks logout as authenticated, so the ordinary path
+	// would establish a session in order to throw it away: a real password
+	// presented for no effect. A client that never signed in has nothing
+	// to end.
+	engine := newFakeEngine(t)
+	client := engine.client(t, engine.start())
+
+	if err := client.Logout(context.Background()); err != nil {
+		t.Fatalf("Logout on a client that never signed in: %v", err)
+	}
+	if got := engine.operations(); len(got) != 0 {
+		t.Errorf("Logout made %v; a client with no session has nothing to end", got)
+	}
+
+	// And it does end a real one.
+	if _, err := client.ListBackupSets(context.Background()); err != nil {
+		t.Fatalf("ListBackupSets: %v", err)
+	}
+	engine.reset()
+	if err := client.Logout(context.Background()); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if got := engine.operations(); !reflect.DeepEqual(got, []string{"logout"}) {
+		t.Errorf("Logout made %v, want [logout]", got)
 	}
 }
