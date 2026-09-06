@@ -373,7 +373,13 @@ func calleeName(fun ast.Expr) (name, qualifier string) {
 func MissingFromGate(script string, machinePackages []string) []string {
 	var excludeLine, watchLine string
 	for _, line := range strings.Split(script, "\n") {
-		if strings.Contains(line, "grep -vE '/tests/(") {
+		// Matched in two pieces rather than as one literal, because what
+		// wraps the tests group is not this check's business. #533 put
+		// cmd/gotestwatch in the same exclusion, which turns the prefix
+		// into `/(tests/(` and used to make this report that the gate had
+		// no exclusion line at all. The group itself is read below and
+		// that read already tolerates either shape.
+		if strings.Contains(line, "grep -vE '") && strings.Contains(line, "tests/(") {
 			excludeLine = line
 		}
 		if strings.Contains(line, "cmd/gotestwatch") && strings.Contains(line, "./tests/") {
@@ -392,8 +398,8 @@ func MissingFromGate(script string, machinePackages []string) []string {
 	}
 
 	group := ""
-	if i := strings.Index(excludeLine, "/tests/("); i >= 0 {
-		rest := excludeLine[i+len("/tests/("):]
+	if i := strings.Index(excludeLine, "tests/("); i >= 0 {
+		rest := excludeLine[i+len("tests/("):]
 		if j := strings.Index(rest, ")"); j >= 0 {
 			group = rest[:j]
 		}
