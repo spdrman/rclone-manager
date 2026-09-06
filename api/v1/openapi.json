@@ -964,6 +964,10 @@
             "type": "integer",
             "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses."
           },
+          "stale_after_seconds": {
+            "type": "integer",
+            "description": "How long this backup set may go without a fresh backup before it is reported as stale (FR-24's freshness budget). BackupSetSpec has always accepted it on the way in and UpdateBackupSetRequest has always been able to change it, so until now this was a field the API could write and could not read back, and a client that changed it had no way to show what it had changed it to. Always positive on a configured set: a configuration that leaves it unset or non-positive is one this service refuses to load."
+          },
           "validator_id": {
             "type": "string"
           },
@@ -993,6 +997,7 @@
           "disabled",
           "read_only",
           "stable_for_seconds",
+          "stale_after_seconds",
           "retention_is_override"
         ]
       },

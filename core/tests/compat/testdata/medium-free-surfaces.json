@@ -969,6 +969,7 @@
         "schema BackupSet.retention_is_override type=boolean required=true",
         "schema BackupSet.source_name type=string required=true",
         "schema BackupSet.stable_for_seconds type=integer required=true",
+        "schema BackupSet.stale_after_seconds type=integer required=true",
         "schema BackupSet.user type=string required=true",
         "schema BackupSet.validator_id type=string required=true",
         "schema BackupSetEditHold type=object",

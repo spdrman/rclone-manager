@@ -364,6 +364,13 @@ const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
  * absent is a claim this type is allowed to make where a boolean was not
  * (issue #231).
  *
+ * `stale_after_seconds` is on the wire response now (issue #555 put it
+ * there, so the API stopped being able to write a field it could not read
+ * back) and is deliberately still not taken here. It would map onto
+ * `expectedIntervalHours`, which is the same join issue #245 refused from
+ * the health report, and taking it is its own change with its own naming
+ * question rather than a side effect of the field appearing.
+ *
  * The join stops at the verdict on purpose. Validations, counters and
  * the host fingerprint below stay placeholders because nothing anywhere
  * in core/service computes them yet. Retention used to be on that list

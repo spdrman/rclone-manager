@@ -1055,29 +1055,34 @@ func equal(a, b []string) bool {
 // unreportedOnTheWire is every field the same command prints on the direct
 // route and cannot print through the engine, as a list that runs.
 //
-// It is short on purpose: this is the residue of #543 and #544, not a
-// summary of them. Each entry is a property api/v1/openapi.json's own
-// schema has no room for, so closing one is a contract addition rather than
-// anything the CLI can do.
+// It is empty, and that is a fact worth keeping executable rather than
+// deleting. It had one entry, stale_after: api/v1/openapi.json's BackupSet
+// carried no such property, even though BackupSetSpec accepted one on the
+// way in and UpdateBackupSetRequest could change it, so the API could write
+// a field it could not read back and a routed create printed "not reported"
+// for a value the operator had just typed. #555 put stale_after_seconds on
+// the wire and the list emptied.
 //
-//	stale_after  BackupSet carries no stale_after property at all, even
-//	             though BackupSetSpec accepts one on the way in and
-//	             UpdateBackupSetRequest can change it. So the API can
-//	             write a field it cannot read back, and a routed create
-//	             reports it as unreported rather than printing 0s about
-//	             FR-24's freshness budget.
-var unreportedOnTheWire = []string{"stale_after"}
+// Empty means the test below asserts something stronger than it used to:
+// the two routes print the same report, line for line. An entry added here
+// again is somebody recording a new divergence and having to say what it
+// is, which is the shape this list existed for.
+var unreportedOnTheWire = []string{}
 
 // TestWhatARoutedCommandStillCannotReport drives the list above rather than
 // leaving it as a paragraph, in both directions.
 //
 // The same create is typed at two deployments, one with nothing serving and
 // one with an engine serving it, and the two reports are compared line for
-// line. Every line that differs has to be about something on the list, and
-// every entry on the list has to account for a line that differs. The
-// second half is the one that matters over time: close the gap in the
-// contract and this fails until somebody shortens the list, which is the
-// opposite of how a documented limitation usually ages.
+// line. With the list empty the two have to match exactly, and with an
+// entry on it every line that differs has to be about something on the
+// list and every entry has to account for a line that differs.
+//
+// Both halves matter over time and they matter in opposite directions.
+// Adding a divergence without recording it fails. Closing one in the
+// contract and leaving the list alone also fails, until somebody shortens
+// it, which is the opposite of how a documented limitation usually ages:
+// this one has already been shortened to nothing that way.
 func TestWhatARoutedCommandStillCannotReport(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the real CLI against a real engine")
@@ -1111,6 +1116,12 @@ func TestWhatARoutedCommandStillCannotReport(t *testing.T) {
 	}
 
 	onlyDirect, onlyRouted := reportDiff(t, direct.stdout, routed.stdout)
+	if len(unreportedOnTheWire) == 0 {
+		for _, line := range append(append([]string{}, onlyDirect...), onlyRouted...) {
+			t.Errorf("the two routes disagree about a line, and unreportedOnTheWire records no divergence at all; either fix it or record it there with a reason:\n  %s", line)
+		}
+		return
+	}
 	if len(onlyDirect) == 0 && len(onlyRouted) == 0 {
 		t.Fatal("the two routes printed exactly the same report, which cannot be right while unreportedOnTheWire has entries in it; either the list is stale or this comparison has stopped comparing")
 	}

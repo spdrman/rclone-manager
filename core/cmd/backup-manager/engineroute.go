@@ -40,9 +40,13 @@ import (
 // one (PR #546's review found what a single composite parameter cost: every
 // real backup set came back not-found).
 //
-// And one field simply is not on the wire. The API's BackupSet carries no
-// stale_after at all, so the engine cannot report what it persisted for it.
-// That is reported as unknown rather than as zero; see staleAfterFromWire.
+// There used to be a fourth difference and there is not any more. The
+// API's BackupSet carried no stale_after at all, so the engine could not
+// report what it had just persisted for a field it had accepted on the way
+// in, and a routed create printed "not reported" for a value the operator
+// had typed on that very command line. #555 put stale_after_seconds on the
+// wire, so both windows now cross in both directions and this adapter
+// carries no gap at all.
 
 // engineRoute is backupSetRoute over the running engine.
 type engineRoute struct {
@@ -245,32 +249,13 @@ func backupSetFromWire(s apicontract.BackupSet) service.BackupSet {
 		Include:             s.Include,
 		CompletionStrategy:  s.CompletionStrategy,
 		StableFor:           time.Duration(s.StableForSeconds) * time.Second,
-		StaleAfter:          staleAfterFromWire(),
+		StaleAfter:          time.Duration(s.StaleAfterSeconds) * time.Second,
 		ValidatorID:         service.ValidatorID(s.ValidatorID),
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
 	}
 }
-
-// staleAfterFromWire is the one field the engine cannot report.
-//
-// api/v1/openapi.json's BackupSet carries stale_after_seconds nowhere, and
-// apps/common/webhost's toBackupSetResponse therefore serves none, even
-// though BackupSetSpec accepts one on the way in and UpdateBackupSetRequest
-// can change it. So the API can write a field it cannot read back, which is
-// the exact shape service.BackupSet.StaleAfter's own doc calls out as
-// leaving a surface unable to show an operator what they changed.
-//
-// A function with no argument, rather than a zero left in the literal
-// above, so that the gap is a named thing with a reason attached instead of
-// a field somebody forgot. printBackupSet reads the zero as "the engine did
-// not report this" and says so; it never prints it as 0s, which would be a
-// specific claim about a value nothing looked at.
-//
-// Closing it is a contract addition (a new property on BackupSet, served by
-// webhost) rather than anything this file can do.
-func staleAfterFromWire() time.Duration { return 0 }
 
 // wireSeconds converts a duration to the whole seconds the contract
 // carries, refusing anything that would not survive the trip.

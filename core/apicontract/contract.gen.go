@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "28e0081930496dac13a7fe9d40659aa6373d6e5e9d3b5bef16aaaef574d19177"
+const ContractSHA256 = "6ddc5de94d41a714fe2449ef308df6f2b84878530fa6d881138ff649faf01dd2"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -841,6 +841,7 @@ type BackupSet struct {
 	RetentionIsOverride bool     `json:"retention_is_override"`
 	SourceName          string   `json:"source_name"`
 	StableForSeconds    int      `json:"stable_for_seconds"`
+	StaleAfterSeconds   int      `json:"stale_after_seconds"`
 	User                string   `json:"user"`
 	ValidatorID         string   `json:"validator_id"`
 }
