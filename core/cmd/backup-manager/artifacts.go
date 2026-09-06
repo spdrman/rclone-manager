@@ -74,7 +74,7 @@ func cmdArtifacts(args []string) int {
 		if err != nil {
 			return fail(err)
 		}
-		if err := mode.agreeOnArtifact(ctx, id, detail.Record.Artifact.String()+" "+detail.Record.State); err != nil {
+		if err := mode.agreeOnArtifact(ctx, id, detail.Artifact.String()+" "+detail.State); err != nil {
 			return fail(err)
 		}
 		printArtifactDetail(detail)
