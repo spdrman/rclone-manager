@@ -527,18 +527,39 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `backup-manager run`")
 	}
 
-	// The mode, before anything is written, exactly as openBackupService
-	// settles it for every other configuration write (#542). This path
-	// has no journal to open and no BackupService to open it with, so it
-	// would otherwise be the one write in this binary that reported no
-	// mode at all. What the detection can see here is limited, and
-	// liveengine.go says so out loud: a host serving the first-run wizard
-	// holds no journal yet, so this will decide "direct" underneath one.
-	// Announcing the mode it decided is still the honest answer, and it
-	// is strictly more than the nothing this path said before.
-	if err := enterConfigWriteMode(configFile, os.Stdout, os.Stderr); err != nil {
+	// This path writes a configuration without ever going through
+	// openBackupService, so it has to ask openBackupService's question
+	// itself, and it has to ask it about the journal rather than about
+	// the configuration: there is no configuration here to read a journal
+	// path out of, which is the entire reason this branch was taken.
+	//
+	// Two ordinary mistakes land here against a LIVE deployment, and both
+	// used to exit 0 after writing a configuration nothing would ever
+	// read: a mistyped --config, and a config.yaml renamed out from under
+	// a running engine. --state-database is what still identifies the
+	// deployment in both, because it carries the same packaged default
+	// the first-run wizard writes, so a create that does not name one is
+	// still asking about the right journal.
+	//
+	// A genuine first run is untouched by this, and that is the half that
+	// had to stay true: a bare host has no journal, a host serving the
+	// setup wizard has not opened one yet, and neither announces itself
+	// as serving anything. Both still write their first configuration
+	// from here.
+	//
+	// It announces its mode too (#542), for the same reason it has to
+	// ask at all: this was the one configuration write in the binary with
+	// no route through openBackupService, so leaving it out would leave
+	// exactly one write that never says which world it believed it was
+	// in. What the decision can see here is narrower than elsewhere and
+	// liveengine.go says so out loud, but announcing the mode it did
+	// decide is the honest answer and is strictly more than the nothing
+	// this path said before.
+	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
+	if err != nil {
 		return fail(err)
 	}
+	defer func() { _ = guard.Release() }()
 
 	firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
 		ConfigPath:    configFile,

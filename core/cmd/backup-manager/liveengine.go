@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
 
 // Issue #538, Phase 1 of #536: the CLI refusing to write a configuration
 // a running engine holds, instead of writing it and reporting success.
@@ -22,30 +26,50 @@ import "fmt"
 // # Why it is not simply "always check before opening"
 //
 // The check only means anything from a process that is not the engine.
-// The lock this detection reads is held by every process with the journal
-// open, the engine's own included, so an engine asking this question
-// about itself would find itself and refuse its own API writes. That is
-// why the probe happens here, in the CLI, before anything opens anything,
-// rather than down beside the write in core/service where both routes
-// meet.
+// core/service answers it from a lock only a SERVING process takes, so an
+// engine asking about itself would find itself and refuse its own API
+// writes. That is why the check happens here, in the CLI, rather than
+// down beside the write in core/service where both routes meet.
+//
+// It is not a check taken once and then trusted, either. It is taken
+// while holding core/service's ConfigWriteGuard, and the guard is kept
+// until the command is done, so an engine that was not there when the
+// question was asked cannot have finished starting by the time the answer
+// is acted on. The version of this that only asked was demonstrably not
+// enough: a `backup-set retention --policy-file -` parked on a fifo asked
+// before it read stdin, and an operator could take as long as they liked
+// to make the answer stale.
+//
+// The asking itself lives next door, in mode.go, because the answer is
+// also #542's decision: taking the claim, asking, naming the mode and
+// saying it out loud are one act there, and this file is left with the
+// two sentences that act prints. Splitting them that way is what stops a
+// caller acquiring the claim without deciding a mode, or deciding one
+// without holding the claim.
 //
 // # The one shape this cannot see, said out loud
 //
 // A host serving the FIRST-RUN flow (issue #176: an install with no
 // config.yaml serves a setup wizard rather than refusing to start) holds
-// no journal. apps/generic opens one only in its Activate callback, after
-// its own POST has written the configuration, so until then there is no
-// lock to find and no lock-based detector can find one. A CLI
-// `backup-set create` on such a host takes createFirstConfig's path,
-// writes the first configuration underneath the wizard, and the wizard
-// goes on serving setup until it is restarted.
+// no journal and serves no deployment yet. apps/generic announces itself
+// only in its Activate callback, after its own POST has written the
+// configuration, so until then there is nothing to find and no lock-based
+// detector can find it. A CLI `backup-set create` on such a host takes
+// createFirstConfig's path, writes the first configuration underneath the
+// wizard, and the wizard goes on serving setup until it is restarted.
 //
-// That is the same family as #535 and it is not fixed here, because it is
-// not detectable here: there is no journal, no port this binary knows
-// about, and no credential it holds. #536 Phase 2 is where it closes, by
-// giving this binary a real route to the running process instead of a way
-// to notice one. Naming it is the alternative to leaving a gap
-// indistinguishable from one nobody thought of.
+// That is genuinely the wizard's shape, and it is narrow: it is not "any
+// host with no config.yaml", because a create against an absent
+// configuration path now asks about the journal --state-database names
+// before it writes anything (backupset.go's createFirstConfig). A
+// mistyped --config against a live deployment, and a config.yaml renamed
+// out from under a running engine, both used to land here and are both
+// refused now. What remains is a host where nothing has ever been
+// configured and something is waiting to be, which is the same family as
+// #535 and is not detectable here: there is no journal, no port this
+// binary knows about, and no credential it holds. #536 Phase 2 is where
+// it closes, by giving this binary a real route to the running process
+// instead of a way to notice one.
 //
 // # And why reads are left alone
 //
@@ -81,47 +105,47 @@ const (
 	writesConfig configIntent = "writes the configuration"
 )
 
-// refuseIfAnEngineHoldsTheConfiguration returns the refusal a
-// configuration write gets when the mode decided for this invocation is
-// engine-attached, or nil when it is direct and this process is the only
-// authority there is.
+// engineRefusal is the sentence both configuration-write routes print
+// when they find a serving process, so the two cannot drift into telling
+// an operator different things about the same situation. Its two callers
+// are mode.go's enterConfigWriteMode and enterFirstConfigWriteMode, which
+// differ only in whether they can name the file the engine read.
 //
-// It takes the decision rather than a path, and therefore no longer asks
-// the kernel anything itself: #542 made the mode one answer per
-// invocation, so the probe happens once, in decideConfigWriteMode, and
-// everything downstream reads the value it produced. A refusal that
-// re-probed would be a second question about a world that can have
-// changed since the first, and an engine exiting in that gap would turn
-// this refusal into a direct write.
+// Three things have to be in it, and each is there because leaving it out
+// was worse.
 //
-// A detection that could not be PERFORMED is still a refusal rather than
-// a "no", for the same reason it always was ("I could not tell" and
-// "nothing is running" are the same behaviour only if you are willing to
-// write the file anyway, which is the defect); that case never reaches
-// here, because decideConfigWriteMode returns it as an error and there is
-// no decision to act on.
-func refuseIfAnEngineHoldsTheConfiguration(d modeDecision) error {
-	held := d.heldBy()
-	if held == "" {
-		// Direct mode: nothing was found running this deployment, so this
-		// process is the only authority there is and the write goes
-		// ahead. heldBy rather than the mode field because the two are
-		// set from the same answer and reading them together is what
-		// stops them being read apart (modeDecision.heldBy says so).
-		return nil
-	}
-	// modeDecision.configFile is already resolved, because --config may
-	// name the packaged configuration DIRECTORY (#196) and an operator
-	// matching this sentence against their own deployment needs the file,
-	// not the directory they typed.
-	//
-	// The engine is named by the state database it was found holding
-	// rather than by a pid: flock(2) offers no portable way to ask which
-	// process holds a lock, and a message that carries a pid on Linux and
-	// not on macOS would be worse than one that carries none. The
-	// database is also the thing an operator can match against a
-	// container's own mounts.
+// What was found, named by the state database rather than by a pid:
+// flock(2) offers no portable way to ask which process holds a lock, and
+// a message that carries a pid on Linux and not on macOS would be worse
+// than one that carries none. The database is also the thing an operator
+// can match against a container's own mounts.
+//
+// That nothing was written. "This was refused" and "this was refused and
+// your file is untouched" are different pieces of news, and only the
+// second one tells somebody reading a failed script whether they now have
+// to go and check the file.
+//
+// And a remedy that exists. The remedy this used to lead with was "make
+// this change through the Web UI, or through the HTTP API that process
+// serves", which on a host running `backup-manager daemon` names two
+// things that are not there: the daemon serves no HTTP at all. Stopping
+// the process is the one answer that is true on every deployment, so it
+// is the one stated plainly, and the other is offered as the conditional
+// it actually is.
+func engineRefusal(engine *service.RunningEngine, because string) error {
 	return fmt.Errorf(
-		"another process is already running this deployment and holds its state database open (%s), so a configuration change made here would never reach it: that process read %s when it started and nothing re-reads that file. Make this change through the Web UI, or through the HTTP API that process serves, or stop that process and run this command again",
-		held, d.configFile)
+		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead",
+		engine.StateDatabase, because)
+}
+
+// cannotTellError is the refusal for a check that could not be performed,
+// and it is deliberately a refusal rather than a shrug.
+//
+// "I could not tell" and "nothing is running" are the same behaviour only
+// if you are willing to write the file anyway, which is the defect. The
+// check does fail in production: EACCES on a lock file owned by another
+// uid, ENOTSUP where flock is unavailable, EIO on a sick volume, and the
+// whole non-unix build, where core/service refuses to guess by design.
+func cannotTellError(err error) error {
+	return fmt.Errorf("cannot tell whether another process is already serving this deployment, and a configuration change written while one is would never reach it, so nothing was written: %w", err)
 }

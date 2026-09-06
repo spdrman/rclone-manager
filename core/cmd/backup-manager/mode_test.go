@@ -20,20 +20,31 @@ import (
 // detector that works from one that answers "engine" whatever the world
 // looks like, and a CLI that decided it was engine-attached on a bare
 // host would have no way to do anything at all. So every announcement is
-// asserted in both directions: with a real engine process holding the
-// journal, and with nothing running, against the identical argv.
+// asserted in both directions: with a real engine process serving the
+// deployment, and with nothing serving it, against the identical argv.
 //
 // Both arms also assert the announcement the other mode would have
 // printed is ABSENT. That is the half that catches the failure #542 names
-// -- a command that quietly falls back to direct and reports a success
-// the engine will never see -- because a fallback that also announced
-// itself as engine-attached would satisfy a one-sided assertion.
+// (a command that quietly falls back to direct and reports a success the
+// engine will never see) because a fallback that also announced itself as
+// engine-attached would satisfy a one-sided assertion.
 //
 // # And the fixture is two processes, not two function calls
 //
 // startEngineHolding (liveengine_test.go) re-executes this test binary as
-// `daemon`, so the journal is held by a real process running the same
-// dispatch the shipped binary runs. Nothing below simulates an engine.
+// `daemon`, which announces itself as serving before it opens anything,
+// so the thing these announcements are about is a real process running
+// the same dispatch the shipped binary runs. Nothing below simulates an
+// engine.
+//
+// # What the announcement may claim
+//
+// "Serving", not "holding the journal open", and that distinction is the
+// whole of what changed underneath this file. The detector this was first
+// written against read the shared journal lock, which every `status`,
+// every `sources` and every cron `run` takes, so `mode: engine-attached`
+// fired for a plain reader. It now reads a lock only a serving process
+// takes, so the announcement can say serving without over-claiming.
 
 // directLine and engineAttachedLine are the two announcements an operator
 // greps for, built from the product's own constants so a reworded mode
@@ -50,9 +61,9 @@ var (
 // Folded deliberately: the claim being checked is what an operator sees
 // in a terminal, and a terminal does not separate the two. It also keeps
 // the assertions honest about the one asymmetry this change introduces on
-// purpose -- a direct run announces itself on stdout beside the command's
+// purpose (a direct write announces itself on stdout beside the command's
 // own report, an engine-attached refusal announces itself on stderr
-// beside the refusal -- without either arm having to know which.
+// beside the refusal) without either arm having to know which.
 func runCapturingBothStreams(t *testing.T, args []string) (int, string) {
 	t.Helper()
 	var (
@@ -69,11 +80,14 @@ func runCapturingBothStreams(t *testing.T, args []string) (int, string) {
 // both modes announce themselves, on every command that rewrites
 // config.yaml, and neither is ever announced in the other's place.
 func TestEveryConfigurationWriteSaysWhichModeItRan(t *testing.T) {
-	t.Run("with an engine holding the deployment", func(t *testing.T) {
+	t.Run("with an engine serving the deployment", func(t *testing.T) {
 		for _, m := range configMutations {
 			t.Run(m.name, func(t *testing.T) {
 				configPath := writeTestConfigWithDeploymentPolicy(t)
 				keyPath := writeTestPrivateKey(t)
+				if m.prepare != nil {
+					m.prepare(t, configPath)
+				}
 				before := readFile(t, configPath)
 
 				stop := startEngineHolding(t, configPath)
@@ -85,7 +99,7 @@ func TestEveryConfigurationWriteSaysWhichModeItRan(t *testing.T) {
 					t.Errorf("%s never said which mode it ran in; an operator cannot tell whether this reached the engine\nwant a line containing %q, got:\n%s", m.name, engineAttachedLine, out)
 				}
 				if strings.Contains(out, directLine) {
-					t.Errorf("%s reported %q while another process was holding this deployment; that is the #535 defect with a label on it\n%s", m.name, directLine, out)
+					t.Errorf("%s reported %q while another process was serving this deployment; that is the #535 defect with a label on it\n%s", m.name, directLine, out)
 				}
 				if code == 0 {
 					t.Errorf("%s exited 0 against a running engine, so a change the engine never sees was reported as a success\n%s", m.name, out)
@@ -97,17 +111,20 @@ func TestEveryConfigurationWriteSaysWhichModeItRan(t *testing.T) {
 		}
 	})
 
-	t.Run("with nothing running", func(t *testing.T) {
+	t.Run("with nothing serving it", func(t *testing.T) {
 		for _, m := range configMutations {
 			t.Run(m.name, func(t *testing.T) {
 				configPath := writeTestConfigWithDeploymentPolicy(t)
 				keyPath := writeTestPrivateKey(t)
+				if m.prepare != nil {
+					m.prepare(t, configPath)
+				}
 				before := readFile(t, configPath)
 
 				code, out := runCapturingBothStreams(t, m.args(configPath, keyPath))
 
 				if code != 0 {
-					t.Fatalf("%s exited %d with nothing running, want 0\n%s", m.name, code, out)
+					t.Fatalf("%s exited %d with nothing serving this deployment, want 0\n%s", m.name, code, out)
 				}
 				if !strings.Contains(out, directLine) {
 					t.Errorf("%s wrote the configuration itself and did not say so; want a line containing %q, got:\n%s", m.name, directLine, out)
@@ -116,14 +133,14 @@ func TestEveryConfigurationWriteSaysWhichModeItRan(t *testing.T) {
 					t.Errorf("%s claimed %q on a host with no engine on it\n%s", m.name, engineAttachedLine, out)
 				}
 				if after := readFile(t, configPath); after == before {
-					t.Errorf("%s exited 0 with nothing running but left config.yaml unchanged, so this arm proves nothing about the write it announced", m.name)
+					t.Errorf("%s exited 0 with nothing serving this deployment but left config.yaml unchanged, so this arm proves nothing about the write it announced", m.name)
 				}
 			})
 		}
 	})
 }
 
-// TestTheFirstConfigurationWriteSaysItWroteDirectly covers the one
+// TestTheFirstConfigurationWriteSaysWhichModeItRan covers the one
 // configuration write that does not go through openBackupService.
 //
 // `backup-set create` against an install with no config.yaml takes
@@ -132,69 +149,103 @@ func TestEveryConfigurationWriteSaysWhichModeItRan(t *testing.T) {
 // BackupService. It is still this binary writing a deployment's
 // configuration, so it still has a mode, and leaving it out would put a
 // configuration write into the tree that announces nothing.
-func TestTheFirstConfigurationWriteSaysItWroteDirectly(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	keyPath := writeTestPrivateKey(t)
+//
+// Both arms again, and here the second one is not a formality: what this
+// path decides from is the journal --state-database names rather than a
+// configuration file that is not there, so the engine-attached arm is a
+// mistyped --config against a live deployment and the direct arm is a
+// genuine bare host.
+func TestTheFirstConfigurationWriteSaysWhichModeItRan(t *testing.T) {
+	t.Run("with an engine serving that journal", func(t *testing.T) {
+		configPath := writeTestConfigWithDeploymentPolicy(t)
+		keyPath := writeTestPrivateKey(t)
+		dbPath := filepath.Join(filepath.Dir(configPath), "state.db")
 
-	args := createArgs(configPath, keyPath, "api/postgres", "--state-database", filepath.Join(dir, "state.db"))
-	code, out := runCapturingBothStreams(t, args)
+		stop := startEngineHolding(t, configPath)
+		defer stop()
 
-	if code != 0 {
-		t.Fatalf("run(%v) = %d, want 0\n%s", args, code, out)
-	}
-	if !strings.Contains(out, directLine) {
-		t.Errorf("the first configuration was written without saying which mode wrote it; want a line containing %q, got:\n%s", directLine, out)
-	}
+		// The path the operator meant to type, one letter out.
+		mistyped := filepath.Join(filepath.Dir(configPath), "confg.yaml")
+		args := createArgs(mistyped, keyPath, "api/postgres", "--state-database", dbPath)
+		code, out := runCapturingBothStreams(t, args)
+
+		if !strings.Contains(out, engineAttachedLine) {
+			t.Errorf("writing a first configuration beside a live engine never said which mode it ran in; want a line containing %q, got:\n%s", engineAttachedLine, out)
+		}
+		if strings.Contains(out, directLine) {
+			t.Errorf("writing a first configuration reported %q while an engine serves %s\n%s", directLine, dbPath, out)
+		}
+		if code == 0 {
+			t.Errorf("backup-set create exited 0 writing a first configuration at %s while an engine serves %s\n%s", mistyped, dbPath, out)
+		}
+		if _, err := os.Stat(mistyped); !os.IsNotExist(err) {
+			t.Errorf("a first configuration was written at %s while an engine serves %s (stat err = %v)", mistyped, dbPath, err)
+		}
+	})
+
+	t.Run("with nothing serving that journal", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "config.yaml")
+		keyPath := writeTestPrivateKey(t)
+
+		args := createArgs(configPath, keyPath, "api/postgres", "--state-database", filepath.Join(dir, "state.db"))
+		code, out := runCapturingBothStreams(t, args)
+
+		if code != 0 {
+			t.Fatalf("run(%v) = %d, want 0\n%s", args, code, out)
+		}
+		if !strings.Contains(out, directLine) {
+			t.Errorf("the first configuration was written without saying which mode wrote it; want a line containing %q, got:\n%s", directLine, out)
+		}
+		if strings.Contains(out, engineAttachedLine) {
+			t.Errorf("writing a first configuration on a bare host claimed %q\n%s", engineAttachedLine, out)
+		}
+	})
 }
 
 // TestAModeThatCannotBeDecidedIsRefusedRatherThanAssumedDirect is the
 // "briefly unreachable" half of #542, in the only form this build can
 // actually produce: a probe that fails.
 //
-// The detection reads the journal's own advisory lock file, so a lock
-// file this process cannot open is a real, unsimulated probe failure,
-// which is why the fixture makes one rather than swapping the detector
-// out. What must not happen is the thing #537's own doc warns about:
+// What must not happen is the thing core/service's own doc warns about:
 // "I could not tell" quietly becoming "nothing is running", which is the
-// same write, reported the same way, as the one #535 recorded.
+// same write, reported the same way, as the one #535 recorded. #538's
+// table already asserts that such a command does not exit 0 and does not
+// change the file. What is asserted here is the half that is #542's: it
+// must not tell the operator it wrote directly, because a command that
+// says "direct" when it could not tell has lied whether or not it also
+// wrote.
 //
-// Root can open a mode-000 file, so the case is skipped there rather than
-// left to pass without having tested anything.
+// The failure is a real one rather than an injected seam: a serving-lock
+// path that is a symlink to itself, so opening it is ELOOP for any uid,
+// on any filesystem, with no privileges needed to arrange it.
 func TestAModeThatCannotBeDecidedIsRefusedRatherThanAssumedDirect(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root, which can open a mode-000 lock file, so this fixture cannot produce a failed probe")
-	}
 	for _, m := range configMutations {
 		t.Run(m.name, func(t *testing.T) {
 			configPath := writeTestConfigWithDeploymentPolicy(t)
 			keyPath := writeTestPrivateKey(t)
+			if m.prepare != nil {
+				m.prepare(t, configPath)
+			}
 			before := readFile(t, configPath)
 
-			// The journal's lock file, spelled the way core/service
-			// spells it (startup.go's journalLockSuffix, beside the
+			// The lock the decision reads, spelled the way core/service
+			// spells it (startup.go's servingLockSuffix, beside the
 			// state.db writeTestConfig names). Unexported over there, so
 			// this is the same literal coupling liveengine_test.go
-			// already has to "state.db": a rename on that side lands here
-			// as a fixture that stops producing a failed probe, which is
-			// a red test rather than a quiet one, because the assertions
-			// below need the refusal.
-			lockPath := filepath.Join(filepath.Dir(configPath), "state.db.journal-lock")
-			if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
-				t.Fatalf("WriteFile %s: %v", lockPath, err)
+			// already has: a rename on that side lands here as a fixture
+			// that stops producing a failed probe, which is a red test
+			// rather than a quiet one, because the assertions below need
+			// the refusal.
+			loop := filepath.Join(filepath.Dir(configPath), "state.db.serving-lock")
+			if err := os.Symlink(loop, loop); err != nil {
+				t.Fatalf("Symlink: %v", err)
 			}
-			if err := os.Chmod(lockPath, 0o000); err != nil {
-				t.Fatalf("Chmod %s: %v", lockPath, err)
-			}
-			// Put back before the framework removes the directory, so a
-			// deliberately unreadable fixture cannot become a cleanup
-			// failure on some other platform's rules.
-			t.Cleanup(func() { _ = os.Chmod(lockPath, 0o600) })
 
 			code, out := runCapturingBothStreams(t, m.args(configPath, keyPath))
 
 			if code == 0 {
-				t.Errorf("%s exited 0 while the detection could not be performed at all\n%s", m.name, out)
+				t.Errorf("%s exited 0 while the mode could not be decided at all\n%s", m.name, out)
 			}
 			if strings.Contains(out, directLine) {
 				t.Errorf("%s reported %q after a probe that could not answer; a mode that cannot be decided is a refusal, not a default\n%s", m.name, directLine, out)
@@ -213,20 +264,34 @@ func TestAModeThatCannotBeDecidedIsRefusedRatherThanAssumedDirect(t *testing.T) 
 //
 // It matters beyond tidiness. A second probe is a second question asked
 // of a world that can have changed between the two, so an engine that
-// exits in the gap turns a refusal into a direct write, which is the
+// starts in the gap turns a refusal into a direct write, which is the
 // downgrade this issue exists to make impossible. Counting the probes is
 // the only way to tell a decision that is carried from one that happens
 // to agree with itself today.
+//
+// Both entry points are counted into one number on purpose. They are the
+// same question, asked by callers that differ only in whether there is a
+// configuration file to read the journal out of, and a counter that
+// watched one of them would report "asked once" for an invocation that
+// asked the other one twice.
 func TestTheModeIsDecidedOncePerInvocation(t *testing.T) {
 	countProbes := func(t *testing.T) *int {
 		t.Helper()
 		calls := 0
-		real := detectRunningEngine
+		realByConfig := detectRunningEngine
+		realByJournal := detectRunningEngineForJournal
 		detectRunningEngine = func(configPath string) (*service.RunningEngine, error) {
 			calls++
-			return real(configPath)
+			return realByConfig(configPath)
 		}
-		t.Cleanup(func() { detectRunningEngine = real })
+		detectRunningEngineForJournal = func(dbPath string) (*service.RunningEngine, error) {
+			calls++
+			return realByJournal(dbPath)
+		}
+		t.Cleanup(func() {
+			detectRunningEngine = realByConfig
+			detectRunningEngineForJournal = realByJournal
+		})
 		return &calls
 	}
 
@@ -234,15 +299,18 @@ func TestTheModeIsDecidedOncePerInvocation(t *testing.T) {
 		t.Run(m.name, func(t *testing.T) {
 			configPath := writeTestConfigWithDeploymentPolicy(t)
 			keyPath := writeTestPrivateKey(t)
+			if m.prepare != nil {
+				m.prepare(t, configPath)
+			}
 
 			calls := countProbes(t)
 			code, out := runCapturingBothStreams(t, m.args(configPath, keyPath))
 
 			if code != 0 {
-				t.Fatalf("%s exited %d with nothing running, want 0\n%s", m.name, code, out)
+				t.Fatalf("%s exited %d with nothing serving this deployment, want 0\n%s", m.name, code, out)
 			}
 			if *calls != 1 {
-				t.Errorf("%s asked whether an engine is running %d times; the mode is one decision per invocation, and a second ask is a second answer that can disagree with the first", m.name, *calls)
+				t.Errorf("%s asked whether an engine is serving this deployment %d times; the mode is one decision per invocation, and a second ask is a second answer that can disagree with the first", m.name, *calls)
 			}
 		})
 	}
@@ -260,7 +328,7 @@ func TestTheModeIsDecidedOncePerInvocation(t *testing.T) {
 			t.Fatalf("run(%v) = %d, want 0\n%s", args, code, out)
 		}
 		if *calls != 1 {
-			t.Errorf("writing the first configuration asked whether an engine is running %d times, want 1", *calls)
+			t.Errorf("writing the first configuration asked whether an engine is serving this deployment %d times, want 1", *calls)
 		}
 	})
 }

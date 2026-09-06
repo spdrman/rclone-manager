@@ -14,23 +14,48 @@ import (
 //
 // # Why this is a decision and not a condition
 //
-// #538 already asks the kernel whether another process holds this
-// deployment's journal, and refuses a configuration write when one does.
-// What it does not do is say which world the command believed it was in.
-// An operator reading `backup-set create` scroll back sees a set printed
-// and has no way to tell whether that reached the running engine, was
-// written directly because nothing was running, or was written directly
-// because the check was skipped, and those are three very different
-// facts about their deployment.
+// #538 already asks whether another process is serving this deployment,
+// and refuses a configuration write when one is. What it does not do is
+// say which world the command believed it was in. An operator reading
+// `backup-set create` scroll back sees a set printed and has no way to
+// tell whether that reached the running engine, was written directly
+// because nothing was serving, or was written directly because the check
+// was skipped, and those are three very different facts about their
+// deployment.
 //
 // So the answer is given a name, printed, and made once. Once matters on
 // its own: a second probe is a second question asked of a world that can
-// have changed between the two, and an engine that exits in that gap
+// have changed between the two, and an engine that starts in that gap
 // turns a refusal into a direct write. That is #535 again, arriving
 // through a race rather than through a missing check, and the only thing
 // that structurally prevents it is that nothing downstream re-derives the
 // answer. mode_test.go counts the probes rather than reading the code for
 // it.
+//
+// # The decision and the claim are one act
+//
+// This is the part that changed when core/service stopped answering
+// "who holds the journal" and started answering "who announced that they
+// serve this deployment". The new mechanism does not only give a better
+// answer; it gives an answer that STAYS true, and it does that through
+// service.BeginConfigWrite, which takes the same `.startup-lock` every
+// engine start has to take and holds it until the write is done.
+//
+// Deciding a mode outside that claim would put this file back where the
+// review found #538: a sample about a world that has had seconds to
+// change, with a startup sequence, an SSH host-key probe and, on one
+// route, a blocking read of standard input in between. A `backup-set
+// retention --policy-file -` parked on a fifo made that gap as wide as an
+// operator liked, and the write landed behind an engine that had started
+// in the meantime.
+//
+// So there is no way here to decide a mode without claiming the
+// deployment, and no way to claim it without deciding a mode.
+// enterConfigWriteMode does both or neither, and hands back the claim its
+// caller has to hold for as long as the write lasts. "Decided once" is
+// then not a property of how many times this file calls the kernel, it is
+// a property of the world: nothing else can finish starting between the
+// question and the write.
 //
 // # The failed attach is the whole point
 //
@@ -47,9 +72,9 @@ import (
 // # And there is no third mode
 //
 // A probe that cannot be performed does not produce a mode. It produces a
-// refusal, for the reason core/service/liveengine.go's own doc gives: "I
-// could not tell" and "nothing is running" are the same behaviour only if
-// you are willing to write the file anyway, which is the defect.
+// refusal, for the reason cannotTellError gives: "I could not tell" and
+// "nothing is running" are the same behaviour only if you are willing to
+// write the file anyway, which is the defect.
 //
 // # What deliberately has no mode yet
 //
@@ -59,20 +84,22 @@ import (
 // this binary and which #538 was careful not to narrow. They will get a
 // mode when they get a route, which is #544. Saying so is the
 // alternative to leaving a gap indistinguishable from one nobody thought
-// of.
+// of. Whoever picks that up should not read "read" as "no side effects":
+// `restore` is declared readsConfig and writes an operation row into the
+// journal, which is true of the configuration and not of the deployment.
 
 // executionMode is where one invocation's configuration write actually
-// happened: through the process already running this deployment, or
-// straight into the file because there is no such process.
+// happened: through the process already serving this deployment, or
+// straight into the file because no process is.
 type executionMode string
 
 const (
-	// directMode: no other process holds this deployment's journal, so
-	// this command is the only authority there is and changes the
-	// configuration file itself.
+	// directMode: no process has announced itself as serving this
+	// deployment, so this command is the only authority there is and
+	// changes the configuration file itself.
 	directMode executionMode = "direct"
 
-	// engineAttachedMode: another process is running this deployment, so
+	// engineAttachedMode: another process is serving this deployment, so
 	// the change belongs to it. Nothing in this build can hand it over
 	// yet (#541, #543), which makes every engine-attached configuration
 	// write a refusal today.
@@ -85,17 +112,26 @@ const (
 // scroll back rather than from a paragraph.
 const modeLinePrefix = "mode: "
 
-// detectRunningEngine is core/service.DetectRunningEngine behind a
-// package variable so mode_test.go can count how many times one
-// invocation asks.
+// detectRunningEngine and detectRunningEngineForJournal are core/service's
+// two detection entry points behind package variables, so mode_test.go can
+// count how many times one invocation asks.
 //
-// A variable rather than an interface, unlike this package's other two
+// Both, not one, and that is not symmetry for its own sake. They are the
+// same question asked by callers that differ only in whether there is a
+// configuration file to read the journal path out of, and a counter that
+// watched one of them would report "asked once" for an invocation that
+// went down the other path and asked twice.
+//
+// Variables rather than an interface, unlike this package's other two
 // seams (backupSetRemover, backupSetCreatePrereqs), because the thing
 // being observed is not a collaborator a caller could be handed: it is
 // how often the whole binary reaches the kernel across a dispatch that
-// takes only an argv. Nothing overrides it outside a test, and the one
-// test that does restores it through t.Cleanup.
-var detectRunningEngine = service.DetectRunningEngine
+// takes only an argv. Nothing overrides them outside a test, and the one
+// test that does restores them through t.Cleanup.
+var (
+	detectRunningEngine           = service.DetectRunningEngine
+	detectRunningEngineForJournal = service.DetectRunningEngineForJournal
+)
 
 // modeDecision is the one answer an invocation gets, and the value every
 // later step reads instead of asking again.
@@ -103,11 +139,11 @@ type modeDecision struct {
 	// mode is the decision itself.
 	mode executionMode
 
-	// engine is the process that was found holding this deployment, and
-	// is nil in direct mode. Kept beside the mode rather than discarded
-	// because the refusal has to name what it found: an operator needs
-	// the state database to go and identify the container, which is the
-	// same reason core/service.RunningEngine carries it.
+	// engine is the process that announced itself as serving this
+	// deployment, and is nil in direct mode. Kept beside the mode rather
+	// than discarded because the refusal has to name what it found: an
+	// operator needs the state database to go and identify the container,
+	// which is the same reason core/service.RunningEngine carries it.
 	engine *service.RunningEngine
 
 	// configFile is the configuration this decision is about, resolved,
@@ -115,19 +151,25 @@ type modeDecision struct {
 	// (#196) and an operator matching an announcement against their own
 	// deployment needs the file they would edit.
 	configFile string
+
+	// because is the clause engineRefusal appends to say why a change
+	// made here would never reach that process. It differs between the
+	// two callers only because one of them can name the file the engine
+	// read and the other, by construction, cannot.
+	because string
 }
 
-// heldBy names the state database the engine was found holding, or the
+// heldBy names the state database the serving process announced, or the
 // empty string in direct mode.
 //
-// It exists so that mode and engine are read together in one place.
-// decideConfigWriteMode is the only thing that builds a modeDecision and
-// it sets the two from the same answer, so they cannot disagree; this is
-// what keeps that from being a fact every later reader has to remember.
-// The engine is named by its journal rather than by a pid for the reason
-// liveengine.go gives: flock(2) offers no portable way to ask which
-// process holds a lock, and a message carrying a pid on Linux and not on
-// macOS is worse than one carrying none.
+// It exists so that mode and engine are read together in one place. The
+// two enter functions below are the only things that build a
+// modeDecision and they set the two from the same answer, so they cannot
+// disagree; this is what keeps that from being a fact every later reader
+// has to remember. The engine is named by its journal rather than by a
+// pid for the reason engineRefusal gives: flock(2) offers no portable way
+// to ask which process holds a lock, and a message carrying a pid on
+// Linux and not on macOS is worse than one carrying none.
 func (d modeDecision) heldBy() string {
 	if d.engine == nil {
 		return ""
@@ -135,30 +177,29 @@ func (d modeDecision) heldBy() string {
 	return d.engine.StateDatabase
 }
 
-// decideConfigWriteMode asks, once, whether another process is running
-// this deployment, and turns the answer into the mode this invocation is
-// in.
-//
-// The error it returns is a probe that could not be performed, never a
-// probe that answered "nobody". Callers must treat it as a refusal; there
-// is no mode to fall back to, because falling back is the defect.
-func decideConfigWriteMode(configPath string) (modeDecision, error) {
-	engine, err := detectRunningEngine(configPath)
-	if err != nil {
-		// #538's sentence, unchanged: it is already the one an operator
-		// needs, and it belongs here now rather than beside the refusal
-		// because this is where the question is asked.
-		return modeDecision{}, fmt.Errorf("cannot tell whether another process is already running this deployment, and a configuration change written while one is would never reach it: %w", err)
-	}
-	d := modeDecision{mode: directMode, engine: engine, configFile: config.ResolvePath(configPath)}
-	if engine != nil {
-		d.mode = engineAttachedMode
-	}
-	return d, nil
-}
-
 // announce writes the one line that says which mode this invocation is
 // in.
+//
+// # What it may claim, and what it may not
+//
+// It says what is SERVING, which is a claim this binary can now actually
+// make. It used to say what was found holding the journal open, and that
+// was the wrong sentence about the wrong fact: every `status`, every
+// `sources` and every cron `run` holds the journal, so an operator with a
+// backup cycle in flight was told an engine was attached. The mechanism
+// underneath is now an announcement a serving process makes about itself,
+// so the line can name serving without over-claiming.
+//
+// The direct line says "no process has announced itself" rather than
+// "nothing is serving this deployment", and the difference is the one gap
+// liveengine.go names out loud: a host still on the first-run wizard
+// serves something and has not announced anything, because it has no
+// journal to announce about yet. The weaker sentence is the true one.
+//
+// No address appears here. A mode that named one would print
+// apiclient.BaseURL(), which renders userinfo credentials in cleartext
+// (#546). The state database is what an operator needs to find the
+// process anyway, and it is not a secret.
 //
 // # Which stream, and why they differ
 //
@@ -166,7 +207,7 @@ func decideConfigWriteMode(configPath string) (modeDecision, error) {
 // report of what it did (printBackupSet, printSettings and the removal
 // summary are all there), because it qualifies that report: it is the
 // difference between "this set exists" and "this set exists in a file a
-// running engine has not read". `run` and `fetch` are the commands whose
+// serving engine has not read". `run` and `fetch` are the commands whose
 // stdout is FR-23's JSON event stream and nothing new may go there
 // (cycleExit says so in its own doc); neither of them writes a
 // configuration, so neither of them reaches this.
@@ -184,42 +225,129 @@ func (d modeDecision) announce(announceTo, refuseTo io.Writer) {
 	// announcement could not be delivered would be the worse answer.
 	switch d.mode {
 	case engineAttachedMode:
-		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is running this deployment (it holds %s open), and this build has no route to it, so nothing was written: a mode that cannot be carried out is refused here, never downgraded to a direct write.\n",
+		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is serving this deployment (state database %s) and this build has no route to it, so the change is refused here rather than downgraded to a direct write it would never see.\n",
 			modeLinePrefix, d.mode, d.heldBy())
 	case directMode:
-		_, _ = fmt.Fprintf(announceTo, "%s%s. Nothing was found running this deployment, so this command changes %s itself.\n",
+		_, _ = fmt.Fprintf(announceTo, "%s%s. No process has announced itself as serving this deployment, so this command changes %s itself.\n",
 			modeLinePrefix, d.mode, d.configFile)
 	default:
-		// Not reachable from decideConfigWriteMode, which is the only
-		// thing that builds one of these, and it stays that way by being
-		// loud rather than by falling through to the direct wording. A
-		// mode nobody named is not a mode, and a configuration write that
-		// announced the wrong one would be worse than one that announced
-		// nothing.
+		// Not reachable from the two enter functions below, which are the
+		// only things that build one of these, and it stays that way by
+		// being loud rather than by falling through to the direct
+		// wording. A mode nobody named is not a mode, and a configuration
+		// write that announced the wrong one would be worse than one that
+		// announced nothing.
 		_, _ = fmt.Fprintf(refuseTo, "%s%q, which this binary does not recognise; this is a bug in %s\n",
 			modeLinePrefix, d.mode, d.configFile)
 	}
 }
 
-// enterConfigWriteMode is the whole of #542 at a call site: decide which
-// mode this invocation is in, say so, and return the refusal when it is a
-// mode this build cannot carry out.
-//
-// The three steps are one function on purpose. Split up, a new
-// configuration-writing command could decide a mode and forget to print
-// it, or print one and forget that engine-attached means it may not
-// write, and both of those are silent. There is no way to get half of
-// this.
-//
-// Every route that rewrites config.yaml calls it exactly once:
-// openBackupService for the commands that persist through a
-// BackupService, and createFirstConfig for the one write that predates
-// having a service at all.
-func enterConfigWriteMode(configPath string, announceTo, refuseTo io.Writer) error {
-	decision, err := decideConfigWriteMode(configPath)
-	if err != nil {
-		return err
+// refusal is what engine-attached mode means in this build: nothing can
+// hand the change over, so the command stops. Direct mode returns nil,
+// which is the only mode this binary can carry out today.
+func (d modeDecision) refusal() error {
+	if d.mode != engineAttachedMode {
+		return nil
 	}
-	decision.announce(announceTo, refuseTo)
-	return refuseIfAnEngineHoldsTheConfiguration(decision)
+	return engineRefusal(d.engine, d.because)
+}
+
+// enterConfigWriteMode claims the deployment configPath names for a
+// configuration write, decides this invocation's mode from inside that
+// claim, says which one it is, and refuses when it is a mode this build
+// cannot carry out.
+//
+// The four steps are one function on purpose, and the claim is one of
+// them for the reason this file's doc gives: a mode decided outside the
+// claim is a sample, and #538's review demonstrated a write landing
+// behind an engine that started after the sample was taken. Split up, a
+// new configuration-writing command could also decide a mode and forget
+// to print it, or print one and forget that engine-attached means it may
+// not write. There is no way to get part of this.
+//
+// The caller owns the returned claim and must Release it once the write
+// is done. A refusal releases it here, so a caller that got an error has
+// nothing to give back.
+//
+// The order is BeginConfigWrite and then the probe, never the other way
+// round. A serving process announces itself before it takes the startup
+// lock (core/service's AnnounceServing), so by the time this claim is
+// granted, an engine that got there first is already visible to the
+// question below, and one that arrives later cannot finish starting until
+// the claim is released.
+func enterConfigWriteMode(configPath string, announceTo, refuseTo io.Writer) (*service.ConfigWriteGuard, error) {
+	guard, err := service.BeginConfigWrite(configPath)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := detectRunningEngine(configPath)
+	if err != nil {
+		_ = guard.Release()
+		return nil, cannotTellError(err)
+	}
+	// Resolved for the announcement and for the refusal, because --config
+	// may name the packaged configuration DIRECTORY (#196) and an
+	// operator matching either sentence against their own deployment
+	// needs the file, not the directory they typed.
+	resolved := config.ResolvePath(configPath)
+	return settleConfigWriteMode(guard, modeDecision{
+		engine:     engine,
+		configFile: resolved,
+		because:    fmt.Sprintf("that process read %s when it started and nothing re-reads that file", resolved),
+	}, announceTo, refuseTo)
+}
+
+// enterFirstConfigWriteMode is enterConfigWriteMode for the one
+// configuration write that has no configuration to read a journal path
+// out of: `backup-set create` against a path where no config.yaml exists,
+// which writes a whole first configuration through core/service.FirstRun.
+//
+// It exists because that path was the way around the check, and it is
+// also the one write in this binary that would otherwise announce no mode
+// at all. Two ordinary mistakes land here against a LIVE deployment and
+// both used to exit 0 after writing a configuration nothing would ever
+// read: a mistyped --config, and a config.yaml renamed out from under a
+// running engine. --state-database is what still identifies the
+// deployment in both, because it carries the same packaged default the
+// first-run wizard writes.
+//
+// configFile is only ever announced, never probed. That split is the
+// point: the decision is about the deployment, which is the journal, and
+// the announcement is about the file this command is going to write.
+func enterFirstConfigWriteMode(configFile, stateDatabase string, announceTo, refuseTo io.Writer) (*service.ConfigWriteGuard, error) {
+	guard, err := service.BeginConfigWriteForJournal(stateDatabase)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := detectRunningEngineForJournal(stateDatabase)
+	if err != nil {
+		_ = guard.Release()
+		return nil, cannotTellError(err)
+	}
+	return settleConfigWriteMode(guard, modeDecision{
+		engine:     engine,
+		configFile: config.ResolvePath(configFile),
+		because:    "that process read its configuration when it started and nothing re-reads it",
+	}, announceTo, refuseTo)
+}
+
+// settleConfigWriteMode is the tail both enter functions share: name the
+// mode from the one answer, say it out loud, and either hand the claim on
+// or give it back with the refusal.
+//
+// The mode is derived here and nowhere else, from the engine field alone,
+// so the two can never be set from different answers. A caller that built
+// a modeDecision and set the mode itself would be a second place that
+// could decide, which is what this issue exists to remove.
+func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, announceTo, refuseTo io.Writer) (*service.ConfigWriteGuard, error) {
+	d.mode = directMode
+	if d.engine != nil {
+		d.mode = engineAttachedMode
+	}
+	d.announce(announceTo, refuseTo)
+	if err := d.refusal(); err != nil {
+		_ = guard.Release()
+		return nil, err
+	}
+	return guard, nil
 }
