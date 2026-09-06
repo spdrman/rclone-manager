@@ -966,7 +966,7 @@
           },
           "stale_after_seconds": {
             "type": "integer",
-            "description": "How long this backup set may go without a fresh backup before it is reported as stale (FR-24's freshness budget). BackupSetSpec has always accepted it on the way in and UpdateBackupSetRequest has always been able to change it, so until now this was a field the API could write and could not read back, and a client that changed it had no way to show what it had changed it to. Always positive on a configured set: a configuration that leaves it unset or non-positive is one this service refuses to load."
+            "description": "How long this backup set may go without a fresh backup before it is reported as stale (FR-24's freshness budget). BackupSetSpec has always accepted it on the way in and UpdateBackupSetRequest has always been able to change it, so until now this was a field the API could write and could not read back, and a client that changed it had no way to show what it had changed it to. Zero is how an engine built before this field answers, and a client reads it as not reported rather than as a set with no freshness budget. It cannot mean a configured budget of none: a configuration that leaves stale_after unset or non-positive is one this service refuses to load. It can mean a budget under a second, because the value is truncated to whole seconds on the way out while nothing refuses sub-second precision on the way in, so `stale_after: 1500ms` is served as 1 and `stale_after: 500ms` as 0."
           },
           "validator_id": {
             "type": "string"
