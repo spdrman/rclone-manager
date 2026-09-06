@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"errors"
+	"go/ast"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -433,5 +434,145 @@ func TestClient_LogoutDoesNotSignInJustToSignOut(t *testing.T) {
 	}
 	if got := engine.operations(); !reflect.DeepEqual(got, []string{"logout"}) {
 		t.Errorf("Logout made %v, want [logout]", got)
+	}
+}
+
+// The credential that must never reach a terminal.
+//
+// BaseURL exists so a command can print the address (#542 requires the
+// mode to be reported), and Unreachable names it in the one failure most
+// likely to be pasted into a support ticket. url.URL.String() renders
+// userinfo verbatim, so a base URL carrying a password prints the
+// password. The password below is the review's own example and is not a
+// credential to anything.
+func TestNew_RefusesABaseURLCarryingCredentials(t *testing.T) {
+	for _, base := range []string{
+		"http://admin:hunter2@nas.local:8080",
+		"http://admin@nas.local:8080",
+	} {
+		t.Run(base, func(t *testing.T) {
+			c, err := New(Config{BaseURL: base})
+			if err == nil {
+				t.Fatalf("New accepted %q and returned a client whose BaseURL() is %q", base, c.BaseURL())
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Errorf("the refusal itself prints the password: %q", err)
+			}
+			// And not on the error's own fields either. A command printing
+			// a structured refusal reads those, not Error().
+			var refused *ConfigError
+			if !errors.As(err, &refused) {
+				t.Fatalf("error is %T (%v), want a *ConfigError", err, err)
+			}
+			if strings.Contains(refused.Value+refused.Reason, "hunter2") {
+				t.Errorf("the refusal carries the password on its own fields: %+v", refused)
+			}
+		})
+	}
+}
+
+func TestClient_NeverPrintsUserinfoEvenWhenItSomehowHasSome(t *testing.T) {
+	// Constructed past New on purpose. New refuses this now, so the two
+	// printing paths are a second line of defence rather than the first,
+	// and a second line nobody watched is not one.
+	base, err := url.Parse("http://admin:hunter2@nas.local:8080")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	client := &Client{base: base}
+	if got := client.BaseURL(); strings.Contains(got, "hunter2") {
+		t.Errorf("BaseURL() = %q, and printing that anywhere puts a password on a terminal", got)
+	}
+
+	unreachable := &Unreachable{Operation: "getSession", BaseURL: base.String(), Err: errors.New("dial tcp: connection refused")}
+	if got := unreachable.Error(); strings.Contains(got, "hunter2") {
+		t.Errorf("Unreachable.Error() = %q, and that is the string an operator pastes into a support ticket", got)
+	}
+}
+
+// The refusal that never happened.
+//
+// With no credentials the client used to answer with an *Error carrying
+// Status 401 and a hand-written path, after zero requests. *Error's own
+// doc says reaching it is good news about the deployment: an engine is
+// running and understood the request. None of that is true here, and a
+// command that prints "the engine refused your login" sends the operator
+// to check a password instead of a base URL.
+func TestClient_NoCredentialsIsNotAnEngineRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"Login", func(c *Client) error { return c.Login(context.Background()) }},
+		{"a call that needs a session", func(c *Client) error {
+			_, err := c.ListBackupSets(context.Background())
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := newFakeEngine(t)
+			client, err := New(Config{BaseURL: engine.start()})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			err = tc.call(client)
+			if err == nil {
+				t.Fatal("the call succeeded with no credentials and no session")
+			}
+			if !errors.Is(err, ErrUnauthenticated) {
+				t.Errorf("error is %v, want one that satisfies errors.Is(err, ErrUnauthenticated)", err)
+			}
+			var refusal *Error
+			if errors.As(err, &refusal) {
+				t.Errorf("error is an *Error claiming %d on %s %s, and no request was made to earn it: %v",
+					refusal.Status, refusal.Method, refusal.Path, err)
+			}
+			var missing *NoCredentials
+			if !errors.As(err, &missing) {
+				t.Fatalf("error is %T (%v), want a *NoCredentials", err, err)
+			}
+			if strings.Contains(err.Error(), "refused") {
+				t.Errorf("error reads %q, which describes an engine that answered", err)
+			}
+		})
+	}
+}
+
+// TestClient_OnlyTheReceivePathBuildsAnEngineRefusal is the invariant
+// behind the test above, rather than one instance of it. *Error means the
+// engine said no, so the only place that may build one is the code holding
+// the engine's answer.
+func TestClient_OnlyTheReceivePathBuildsAnEngineRefusal(t *testing.T) {
+	fset, files := parsePackageSource(t)
+
+	found := 0
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok {
+				return true
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				ident, ok := lit.Type.(*ast.Ident)
+				if !ok || ident.Name != "Error" {
+					return true
+				}
+				found++
+				if fn.Name.Name != "receive" {
+					t.Errorf("%s builds an *Error in %s at %s. Only the code holding a response may say the engine refused something.",
+						name, fn.Name.Name, fset.Position(lit.Pos()))
+				}
+				return true
+			})
+			return false
+		})
+	}
+	if found == 0 {
+		t.Fatal("no *Error literal was found anywhere in the package, so this check verified nothing")
 	}
 }

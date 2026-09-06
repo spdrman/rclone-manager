@@ -3,17 +3,19 @@ package apiclient
 import (
 	"errors"
 	"fmt"
+	"net/url"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
 )
 
-// Four things happen to a call, and they must never be reported as one.
+// Five things happen to a call, and they must never be reported as one.
 //
 // It worked. The caller is not signed in. Nothing is listening. Something
-// answered that is not the engine this build was written against. Those
-// have four different remedies - do nothing, sign in, start the engine,
-// look at what is on that port - and a client that returns one opaque
-// error for all four sends an operator to the wrong one. ui/shared's
+// answered that is not the engine this build was written against. Or this
+// client was never given a usable address to try. Those have five
+// different remedies - do nothing, sign in, start the engine, look at what
+// is on that port, fix the setting - and a client that returns one opaque
+// error for all of them sends an operator to the wrong one. ui/shared's
 // single "The backup service returned an unexpected response." is what
 // that reads like from the outside, and issue #211 is what it cost.
 //
@@ -22,6 +24,23 @@ import (
 // with errors.Is. The types stay open (exported fields, no accessors)
 // because the command layer in #543/#544 has to be able to print a
 // deployment-specific remedy, not just a category.
+//
+// # The list is exhaustive, and that is the property worth defending
+//
+// A taxonomy is only useful to a caller if EVERY failure is in it: a
+// command writing the obvious switch and falling through to a default
+// branch is back to ui/shared's one sentence. So the five below are
+// everything this package returns, and taxonomy_test.go holds it, by
+// walking the source for a return that escapes them and by driving one
+// instance of each against a real server. Adding a sixth is a change to
+// that list, to this comment and to doc.go, in that order.
+//
+//	*ConfigError       nothing was tried; the address is unusable.
+//	*Unreachable       nothing answered.
+//	*NoCredentials     nothing was tried; there is nothing to sign in with.
+//	*Error             the engine answered, and refused, for a named reason.
+//	*ContractViolation the answer is not one api/v1/openapi.json describes,
+//	                   or the request was not one it could have made.
 
 // ErrUnreachable matches any failure that happened before an HTTP response
 // existed: a refused connection, a name that does not resolve, a timeout,
@@ -44,7 +63,11 @@ var ErrUnauthenticated = errors.New("apiclient: not authenticated")
 type Unreachable struct {
 	// Operation is the contract operation id that was being attempted.
 	Operation string
-	// BaseURL is the address the request went to.
+	// BaseURL is the address the request went to, with any userinfo
+	// redacted. New refuses a base URL carrying credentials, so this is
+	// already clean when the client built it; Error() redacts again anyway,
+	// because this is the string that ends up in a support ticket and a
+	// field anybody can fill in.
 	BaseURL string
 	// Err is the underlying transport failure, kept so a caller can still
 	// reach context.DeadlineExceeded or a *net.OpError through
@@ -53,7 +76,7 @@ type Unreachable struct {
 }
 
 func (e *Unreachable) Error() string {
-	return fmt.Sprintf("apiclient: %s: no engine answered at %s: %v", e.Operation, e.BaseURL, e.Err)
+	return fmt.Sprintf("apiclient: %s: no engine answered at %s: %v", e.Operation, redactURL(e.BaseURL), e.Err)
 }
 
 func (e *Unreachable) Unwrap() error { return e.Err }
@@ -136,3 +159,79 @@ func (e *ContractViolation) Error() string {
 	return fmt.Sprintf("apiclient: %s: %s %s answered %d, which api/v1/openapi.json does not describe: %s",
 		e.Operation, e.Method, e.Path, e.Status, e.Reason)
 }
+
+// NoCredentials is this client refusing before the wire: it holds neither
+// a live session nor a username and password, so there is nothing to sign
+// in with.
+//
+// It is deliberately NOT an *Error. Reaching *Error means an engine
+// answered; this means nothing was asked, and the base URL may point at
+// nothing at all. A command that reported this as "the engine refused your
+// login" would send an operator to check a password when the thing to
+// check is whether an engine is there. So it claims no status and names no
+// path, because it has neither, while still matching ErrUnauthenticated:
+// "you are not signed in" is exactly what happened.
+type NoCredentials struct {
+	// Operation is the contract operation id that could not proceed.
+	Operation string
+	// Reason says which of the two was missing.
+	Reason string
+}
+
+func (e *NoCredentials) Error() string {
+	return fmt.Sprintf("apiclient: %s: %s", e.Operation, e.Reason)
+}
+
+func (e *NoCredentials) Is(target error) bool { return target == ErrUnauthenticated }
+
+// redactURL replaces a password in a URL with "xxxxx".
+//
+// url.URL.String() renders userinfo verbatim; only Redacted() hides it.
+// Every place this package prints an address goes through here, because
+// the whole point of printing one is that a human reads it, and a password
+// on a terminal has been copied into a scrollback buffer, a screenshot and
+// a support ticket before anybody notices.
+func redactURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User == nil {
+		return raw
+	}
+	return parsed.Redacted()
+}
+
+// ConfigError is New refusing a Config it cannot build a client from.
+//
+// It is a category rather than a bare fmt.Errorf because doc.go's claim is
+// that every failure this package produces is one a caller can switch on,
+// and "the address you were given is not usable" is a remedy of its own:
+// nobody has been contacted, no credential has been used, and the fix is
+// in whatever supplied the setting rather than in the deployment.
+type ConfigError struct {
+	// Field names the Config field at fault, empty when the failure is not
+	// about one field's value.
+	Field string
+	// Value is what that field held, already redacted when it held a
+	// password: refusing a credential by echoing it would be the very
+	// defect the refusal exists for, and a command printing a structured
+	// refusal reads this rather than Error(). Error() redacts again, for
+	// anybody who fills this in themselves.
+	Value string
+	// Reason says what was wrong with it.
+	Reason string
+	// Err is the underlying failure, when there was one, so a caller can
+	// still reach a *url.Error through errors.As.
+	Err error
+}
+
+func (e *ConfigError) Error() string {
+	switch {
+	case e.Field == "":
+		return "apiclient: " + e.Reason
+	case e.Value == "":
+		return fmt.Sprintf("apiclient: %s: %s", e.Field, e.Reason)
+	default:
+		return fmt.Sprintf("apiclient: %s %q: %s", e.Field, redactURL(e.Value), e.Reason)
+	}
+}
+
+func (e *ConfigError) Unwrap() error { return e.Err }

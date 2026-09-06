@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,20 @@ const (
 // and a minute of a CLI hanging on a wedged engine is a minute an operator
 // spends wondering whether it worked.
 const defaultTimeout = 30 * time.Second
+
+// defaultUserAgent names the product and the API version it speaks, so a
+// request from this client is one an operator can pick out of an access
+// log. "Go-http-client/1.1" names no product, no version and no surface,
+// and #543's claim is that a command taking this route leaves the same
+// audit trail as the Web UI.
+//
+// The BINARY's own version is deliberately not read here. internal/app
+// reads build info to answer `version`, and its doc is explicit that a
+// second reader of it would be a second answer to a question that has one.
+// A caller that already knows its build (cmd/backup-manager does, from
+// -ldflags) says so through Config.UserAgent, and this is what stands in
+// until one does.
+const defaultUserAgent = "backup-manager-cli (api " + apicontract.Version + ")"
 
 // maxResponseBytes caps what is read from one response. The largest thing
 // on this API is a backup-set or artifact listing, and the cap exists so
@@ -86,6 +101,34 @@ type Config struct {
 
 	// Timeout bounds one request. Zero means defaultTimeout.
 	Timeout time.Duration
+
+	// HTTPClient, when non-nil, supplies the transport. Nil keeps a
+	// default one, which is what every caller inside a container wants.
+	//
+	// It exists for the other route. The product terminates no TLS itself,
+	// so a host reaching the published port over https goes through the
+	// operator's own reverse proxy, very often presenting a NAS-issued or
+	// self-signed certificate that no public root signed. Without this
+	// that operator's only working option is plain http. Set
+	// Transport.TLSClientConfig.RootCAs here and the rest of this package
+	// is unchanged, because the two routes are one API.
+	//
+	// New takes what it needs from this rather than trusting what arrives:
+	// it copies the value and installs its own cookie jar, timeout and
+	// redirect policy on the copy, so a client shared with something else
+	// is not altered and its session cookies do not leak into a jar this
+	// package did not make.
+	HTTPClient *http.Client
+
+	// UserAgent is what every request identifies itself as. Empty means
+	// defaultUserAgent.
+	//
+	// #543's claim is that a command run through this route leaves the
+	// same audit trail as the Web UI, and a log line reading
+	// "Go-http-client/1.1" names no product, no version and no surface. A
+	// caller that knows its own build (cmd/backup-manager does, from
+	// -ldflags) should say so here.
+	UserAgent string
 }
 
 // Client talks to one engine. Safe for concurrent use: the sign-in is
@@ -98,8 +141,37 @@ type Client struct {
 	username string
 	password string
 
-	mu       sync.Mutex
-	signedIn bool
+	userAgent string
+
+	// sleep waits between attempts. It is a field so the suite can prove
+	// this client sits out a full rate-limit window without spending a
+	// real minute doing it.
+	sleep func(context.Context, time.Duration) error
+
+	// mu guards nothing but the three fields below, and is never held
+	// across the network. See ensureSession for why that matters.
+	mu sync.Mutex
+	// signedIn is what this client believes about the OTHER process, which
+	// is why generation exists next to it: the belief is versioned so that
+	// a 401 invalidates the session it was answered under and not a newer
+	// one somebody else established in the meantime.
+	signedIn   bool
+	generation uint64
+	// signingIn is non-nil while one caller is doing the handshake, and is
+	// closed when it finishes. Others wait on it, or on their own context.
+	signingIn chan struct{}
+}
+
+// ProbeResult is the three answers Probe distinguishes, which are the
+// three an operator has different things to do about.
+type ProbeResult struct {
+	// Reachable is whether anything answered at all.
+	Reachable bool
+	// Authenticated is whether the engine already knows this client, which
+	// is asked and answered without spending a password.
+	Authenticated bool
+	// Username is who the engine says this client is, when it is anybody.
+	Username string
 }
 
 // New validates cfg and returns a client for it.
@@ -109,24 +181,37 @@ type Client struct {
 // moment of a mutation is the worst time to find it out.
 func New(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
-		return nil, errors.New("apiclient: no base URL: this client has to be told where the engine is")
+		return nil, &ConfigError{Field: "BaseURL", Reason: "no base URL: this client has to be told where the engine is"}
 	}
 	base, err := url.Parse(strings.TrimSpace(cfg.BaseURL))
 	if err != nil {
-		return nil, fmt.Errorf("apiclient: base URL %q: %w", cfg.BaseURL, err)
+		return nil, &ConfigError{Field: "BaseURL", Value: cfg.BaseURL, Reason: "this is not a URL: " + err.Error(), Err: err}
 	}
 	if base.Scheme != "http" && base.Scheme != "https" {
-		return nil, fmt.Errorf("apiclient: base URL %q has scheme %q; /api/v1 is served over http or https", cfg.BaseURL, base.Scheme)
+		return nil, &ConfigError{Field: "BaseURL", Value: cfg.BaseURL, Reason: fmt.Sprintf("it has scheme %q, and /api/v1 is served over http or https", base.Scheme)}
 	}
 	if base.Host == "" {
-		return nil, fmt.Errorf("apiclient: base URL %q names no host", cfg.BaseURL)
+		return nil, &ConfigError{Field: "BaseURL", Value: cfg.BaseURL, Reason: "it names no host"}
 	}
 	if base.RawQuery != "" || base.Fragment != "" {
 		// Dropping them quietly would be worse than refusing: an operator
 		// who put something there meant it, and a client that discards
 		// half of what it was given and then works is a client nobody can
 		// reason about the next time it does not.
-		return nil, fmt.Errorf("apiclient: base URL %q carries a query or fragment; this is the engine's address, not a request", cfg.BaseURL)
+		return nil, &ConfigError{Field: "BaseURL", Value: cfg.BaseURL, Reason: "it carries a query or fragment, and this is the engine's address, not a request"}
+	}
+	if base.User != nil {
+		// Same reasoning, and one more of its own. BaseURL() exists so a
+		// command can print this address (#542 reports the mode rather than
+		// inferring it) and Unreachable names it in the failure most likely
+		// to be pasted into a support ticket, so accepting a password here
+		// puts one on a terminal. It buys nothing either: Go would attach it
+		// as Authorization: Basic, and /api/v1 authenticates with a session
+		// cookie, not Basic. The credentials go in Config.Username and
+		// Config.Password, which are never printed.
+		//
+		// The message deliberately does not echo what was given.
+		return nil, &ConfigError{Field: "BaseURL", Value: base.Redacted(), Reason: "it carries a username or password, and /api/v1 signs in with Config.Username and Config.Password instead; this address is printed"}
 	}
 	base.Path = strings.TrimSuffix(base.Path, "/")
 	if strings.HasSuffix(base.Path, apicontract.BasePath) {
@@ -134,12 +219,12 @@ func New(cfg Config) (*Client, error) {
 		// than the host's. Left alone it builds /api/v1/api/v1/... and
 		// every call 404s, which reads as an engine that does not speak
 		// this API rather than as an address with one segment too many.
-		return nil, fmt.Errorf("apiclient: base URL %q already ends in %s; this takes the engine's address, and appends %s itself", cfg.BaseURL, apicontract.BasePath, apicontract.BasePath)
+		return nil, &ConfigError{Field: "BaseURL", Value: cfg.BaseURL, Reason: fmt.Sprintf("it already ends in %s, and this takes the engine's address and appends %s itself", apicontract.BasePath, apicontract.BasePath)}
 	}
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, fmt.Errorf("apiclient: cookie jar: %w", err)
+		return nil, &ConfigError{Reason: "the session cookie jar could not be built: " + err.Error(), Err: err}
 	}
 
 	timeout := cfg.Timeout
@@ -147,27 +232,43 @@ func New(cfg Config) (*Client, error) {
 		timeout = defaultTimeout
 	}
 
+	// A copy, not the caller's own client. Whatever they built it for -
+	// a root CA the host trusts and Go does not, a proxy, a dialer - is
+	// carried over in the Transport, while the three things this package
+	// is entitled to decide are set here rather than assumed. Reaching
+	// into their value instead would put this package's session cookies in
+	// a jar shared with whatever else uses that client.
+	transport := http.Client{}
+	if cfg.HTTPClient != nil {
+		transport = *cfg.HTTPClient
+	}
+	transport.Jar = jar
+	transport.Timeout = timeout
+	// A redirect is not part of this API. Returning the 3xx unfollowed
+	// sends it through the ordinary status check below, which refuses it
+	// as a status the operation does not declare, rather than silently
+	// replaying a mutation somewhere else.
+	transport.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	userAgent := strings.TrimSpace(cfg.UserAgent)
+	if userAgent == "" {
+		userAgent = defaultUserAgent
+	}
+
 	return &Client{
-		base:     base,
-		username: cfg.Username,
-		password: cfg.Password,
-		http: &http.Client{
-			Jar:     jar,
-			Timeout: timeout,
-			// A redirect is not part of this API. Returning the 3xx
-			// unfollowed sends it through the ordinary status check
-			// below, which refuses it as a status the operation does not
-			// declare, rather than silently replaying a mutation
-			// somewhere else.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+		base:      base,
+		username:  cfg.Username,
+		password:  cfg.Password,
+		userAgent: userAgent,
+		sleep:     waitFor,
+		http:      &transport,
 	}, nil
 }
 
 // BaseURL is the address this client talks to, for a command that has to
 // name it in its output (#542 requires the mode to be reported, never
 // inferred).
-func (c *Client) BaseURL() string { return c.base.String() }
+func (c *Client) BaseURL() string { return c.base.Redacted() }
 
 // call performs one contract operation, signing in first if the operation
 // requires a session.
@@ -176,23 +277,64 @@ func (c *Client) BaseURL() string { return c.base.String() }
 // declares them. body, when non-nil, is marshalled as the request body.
 // out, when non-nil, receives the decoded response.
 func (c *Client) call(ctx context.Context, operation string, pathArgs []string, body any, out any) error {
-	ep, ok := endpointByID[operation]
-	if !ok {
-		// Unreachable from this package's own methods, and checked anyway:
-		// this is the one failure mode that would otherwise be a silently
-		// mistyped string, and a client that asks for a route the engine
-		// does not serve is exactly issue #211's defect.
-		return &ContractViolation{
+	ep, err := endpoint(operation)
+	if err != nil {
+		return err
+	}
+	if !ep.Authenticated {
+		return c.do(ctx, ep, pathArgs, body, out)
+	}
+
+	state, err := c.ensureSession(ctx)
+	if err != nil {
+		return err
+	}
+	err = c.do(ctx, ep, pathArgs, body, out)
+	if !isSessionRefusal(err) {
+		return err
+	}
+
+	// The engine says this caller has no session, and this caller thought
+	// it had one. Something ended it: a restart, which drops every session
+	// because they live in memory, or the twenty-four hours running out.
+	// Returning the 401 while holding credentials that would work is the
+	// EPIC's own defect in miniature - a cached belief about another
+	// process with nothing to invalidate it - and it is load-bearing the
+	// moment a command creates something and reads it back.
+	//
+	// Sending the request again is safe because a 401 is answered by the
+	// authentication middleware, in front of every handler: the request
+	// was refused before it did anything, so nothing happened that a
+	// second attempt would repeat. That is true of a mutation as much as
+	// of a read, and it is the only reason this may retry at all. The body
+	// is re-encoded from the same value rather than replayed from a
+	// consumed reader.
+	//
+	// Exactly once. An engine that mints a session and then refuses it is
+	// broken in a way no amount of retrying fixes, and a loop would turn a
+	// fast wrong answer into a hang.
+	c.forget(state.generation)
+	if _, err := c.ensureSession(ctx); err != nil {
+		return err
+	}
+	return c.do(ctx, ep, pathArgs, body, out)
+}
+
+// endpoint resolves a contract operation id.
+//
+// Every path in this package comes through here rather than out of a map
+// lookup nobody checked. This is the one failure mode that would otherwise
+// be a silently mistyped string, and a client that asks for a route the
+// engine does not serve is exactly issue #211's defect.
+func endpoint(operation string) (apicontract.Endpoint, error) {
+	ep, found := endpointByID[operation]
+	if !found {
+		return apicontract.Endpoint{}, &ContractViolation{
 			Operation: operation,
 			Reason:    "api/v1/openapi.json declares no such operation, so there is no path to build",
 		}
 	}
-	if ep.Authenticated {
-		if err := c.ensureSession(ctx); err != nil {
-			return err
-		}
-	}
-	return c.do(ctx, ep, pathArgs, body, out)
+	return ep, nil
 }
 
 // do is call without the sign-in, so that the sign-in itself can use it
@@ -211,21 +353,76 @@ func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []str
 		return &ContractViolation{Operation: ep.ID, Method: ep.Method, Reason: "the request URL could not be built: " + err.Error()}
 	}
 
-	var payload io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		encoded, err = json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("apiclient: %s: encoding the request body: %w", ep.ID, err)
+			// A body this client cannot encode is this client breaching
+			// the contract's request schema, found before anything was
+			// sent, which is what ContractViolation's Status 0 is for.
+			schema := ep.RequestSchema
+			if schema == "" {
+				schema = "request body"
+			}
+			return &ContractViolation{
+				Operation: ep.ID,
+				Method:    ep.Method,
+				Reason:    "what was handed over is not something the contract's " + schema + " can be encoded as: " + err.Error(),
+			}
 		}
-		payload = bytes.NewReader(encoded)
 	}
 
+	for attempt := 0; ; attempt++ {
+		req, err := c.newRequest(ctx, ep, target, body != nil, encoded)
+		if err != nil {
+			return err
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			// Every failure here happened before a response existed: a
+			// refused connection, an unresolvable name, a timeout, a
+			// cancelled context. The cause is kept on the error so a
+			// caller can still reach context.DeadlineExceeded through
+			// errors.Is.
+			return &Unreachable{Operation: ep.ID, BaseURL: c.base.Redacted(), Err: unwrapURLError(err)}
+		}
+
+		if wait, ok := rateLimitWait(ep, resp, attempt); ok {
+			drain(resp)
+			if err := c.wait(ctx, wait); err != nil {
+				return &Unreachable{Operation: ep.ID, BaseURL: c.base.Redacted(), Err: err}
+			}
+			continue
+		}
+
+		err = c.receive(ep, target.EscapedPath(), resp, out)
+		drain(resp)
+		return err
+	}
+}
+
+// newRequest builds one attempt. It is per-attempt rather than built once
+// because a request carries its body as a reader, which a retry would find
+// already consumed, and because the double-submit token can be issued by
+// the very response that refused the attempt before it.
+func (c *Client) newRequest(ctx context.Context, ep apicontract.Endpoint, target *url.URL, hasBody bool, encoded []byte) (*http.Request, error) {
+	var payload io.Reader
+	if hasBody {
+		payload = bytes.NewReader(encoded)
+	}
 	req, err := http.NewRequestWithContext(ctx, ep.Method, target.String(), payload)
 	if err != nil {
-		return fmt.Errorf("apiclient: %s: building the request: %w", ep.ID, err)
+		return nil, &ContractViolation{
+			Operation: ep.ID,
+			Method:    ep.Method,
+			Path:      target.EscapedPath(),
+			Reason:    "the request could not be built: " + err.Error(),
+		}
 	}
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
+	req.Header.Set("User-Agent", c.userAgent)
+	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if ep.CSRFRequired {
@@ -235,7 +432,7 @@ func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []str
 			// serves, so its absence is the deployment's, not the
 			// caller's. Sending the mutation anyway would earn a 403 about
 			// a header the operator never saw and cannot supply.
-			return &ContractViolation{
+			return nil, &ContractViolation{
 				Operation: ep.ID,
 				Method:    ep.Method,
 				Path:      target.EscapedPath(),
@@ -245,21 +442,105 @@ func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []str
 		}
 		req.Header.Set(csrfHeaderName, token)
 	}
+	return req, nil
+}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		// Every failure here happened before a response existed: a refused
-		// connection, an unresolvable name, a timeout, a cancelled
-		// context. The cause is kept on the error so a caller can still
-		// reach context.DeadlineExceeded through errors.Is.
-		return &Unreachable{Operation: ep.ID, BaseURL: c.base.String(), Err: unwrapURLError(err)}
+// The rate limit this client is on the wrong side of, and why waiting is
+// the only honest answer to it.
+//
+// apps/common/auth/local allows ten logins a minute per remote IP, in a
+// fixed window, and this package's whole design signs in once per CLI
+// invocation and lets the session expire. So a provisioning script making
+// its eleventh change from one host inside a minute is refused with 429
+// RATE_LIMITED, and there is nothing wrong with what it did. The
+// alternatives are worse than waiting: a CLI-only credential would be a
+// second thing deciding who may act on one deployment, which is the defect
+// #536 exists to remove, and failing the eleventh command is failing an
+// ordinary thing to do.
+//
+// The ceiling is chosen to cover that window. Doubling from two seconds,
+// five waits reach sixty-two, which is a whole fixed window plus a
+// margin, so a client that gives up has waited out the thing it was
+// waiting for rather than giving up before it could happen. Bounded,
+// because the failure has to be slow rather than absent.
+const (
+	rateLimitAttempts     = 5
+	firstRateLimitBackoff = 2 * time.Second
+	maxRateLimitBackoff   = 32 * time.Second
+)
+
+// rateLimitWait reports how long to wait before trying this request again,
+// and whether to wait at all.
+//
+// Only for an operation the contract declares a 429 for. Something
+// answering 429 where the contract names no such refusal is not this API's
+// rate limiter, and sitting out a minute for it would be waiting on a fact
+// nobody stated; that answer goes to receive, which reports it as the
+// contract violation it is.
+func rateLimitWait(ep apicontract.Endpoint, resp *http.Response, attempt int) (time.Duration, bool) {
+	if resp.StatusCode != http.StatusTooManyRequests || attempt >= rateLimitAttempts {
+		return 0, false
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
-		_ = resp.Body.Close()
-	}()
+	if !slices.Contains(ep.ErrorCodes[http.StatusTooManyRequests], apicontract.ErrorCodeRateLimited) {
+		return 0, false
+	}
 
-	return c.receive(ep, target.EscapedPath(), resp, out)
+	backoff := min(firstRateLimitBackoff<<attempt, maxRateLimitBackoff)
+	// The engine sends no Retry-After today, but a reverse proxy in front
+	// of it may, and a limiter that has said how long to wait knows better
+	// than a schedule guessing at it.
+	if asked, ok := retryAfter(resp); ok && asked > backoff {
+		backoff = min(asked, maxRateLimitBackoff)
+	}
+	return backoff, true
+}
+
+// retryAfter reads the header in either of the two forms RFC 9110 allows.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
+	raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second, true
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
+// wait sleeps, through the seam the suite replaces.
+func (c *Client) wait(ctx context.Context, d time.Duration) error {
+	if c.sleep != nil {
+		return c.sleep(ctx, d)
+	}
+	return waitFor(ctx, d)
+}
+
+// waitFor is the real wait, and it is interruptible: a caller that gave up
+// while this client was sitting out a rate limit gets its own context's
+// answer rather than the rest of the wait.
+func waitFor(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// drain reads and closes a response so its connection can be reused, and
+// caps what it reads so something on that port which is not the engine
+// cannot make the CLI read forever.
+func drain(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
+	_ = resp.Body.Close()
 }
 
 // receive holds the engine's answer to what the contract says this
