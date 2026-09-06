@@ -193,6 +193,21 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // supervisor brings it back. What that costs, and why it is worth it, is
 // spelled out on ConfigWriteGuard itself.
 //
+// # And the answer to the question is this invocation's mode
+//
+// Claiming and asking are one call rather than two (#542), because the
+// answer is not only a refusal: it is which of the two worlds this
+// command ran in, and an operator has to be able to see that in the
+// output. mode.go decides it here, once, prints it, and refuses an
+// engine-attached write this build has no route to carry out rather than
+// downgrading it to a direct one. Nothing downstream asks again, so
+// nothing downstream can get a different answer.
+//
+// The one configuration write that does not come through here,
+// createFirstConfig, announces its own mode for the same reason: a
+// configuration write in this binary that says nothing about which world
+// it believed it was in is the gap this issue exists to close.
+//
 // The returned cleanup func closes the journal (via BackupService.Close)
 // and gives the claim back; callers should always `defer cleanup()`
 // immediately.
@@ -220,13 +235,14 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 		return svc, cleanup, nil
 	}
 
-	guard, err := service.BeginConfigWrite(configPath)
+	// One call, and it is #538's claim and #542's mode decision together,
+	// because they are the same act: the claim is what makes the decision
+	// still true when the write happens, and the decision is what the
+	// claim is for. mode.go holds the reasoning; enterConfigWriteMode
+	// claims, asks, announces and refuses, and gives the claim back
+	// itself when it refuses.
+	guard, err := enterConfigWriteMode(configPath, os.Stdout, os.Stderr)
 	if err != nil {
-		cleanup()
-		return nil, func() {}, err
-	}
-	if err := refuseIfAnEngineHoldsTheConfiguration(configPath); err != nil {
-		_ = guard.Release()
 		cleanup()
 		return nil, func() {}, err
 	}

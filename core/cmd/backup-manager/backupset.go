@@ -575,14 +575,20 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	// setup wizard has not opened one yet, and neither announces itself
 	// as serving anything. Both still write their first configuration
 	// from here.
-	guard, err := service.BeginConfigWriteForJournal(stateDatabase)
+	//
+	// It announces its mode too (#542), for the same reason it has to
+	// ask at all: this was the one configuration write in the binary with
+	// no route through openBackupService, so leaving it out would leave
+	// exactly one write that never says which world it believed it was
+	// in. What the decision can see here is narrower than elsewhere and
+	// liveengine.go says so out loud, but announcing the mode it did
+	// decide is the honest answer and is strictly more than the nothing
+	// this path said before.
+	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
 	if err != nil {
 		return fail(err)
 	}
 	defer func() { _ = guard.Release() }()
-	if err := refuseIfAnEngineServesThisJournal(stateDatabase); err != nil {
-		return fail(err)
-	}
 
 	firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
 		ConfigPath:    configFile,

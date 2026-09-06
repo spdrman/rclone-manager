@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -40,6 +39,13 @@ import (
 // enough: a `backup-set retention --policy-file -` parked on a fifo asked
 // before it read stdin, and an operator could take as long as they liked
 // to make the answer stale.
+//
+// The asking itself lives next door, in mode.go, because the answer is
+// also #542's decision: taking the claim, asking, naming the mode and
+// saying it out loud are one act there, and this file is left with the
+// two sentences that act prints. Splitting them that way is what stops a
+// caller acquiring the claim without deciding a mode, or deciding one
+// without holding the claim.
 //
 // # The one shape this cannot see, said out loud
 //
@@ -99,59 +105,11 @@ const (
 	writesConfig configIntent = "writes the configuration"
 )
 
-// refuseIfAnEngineHoldsTheConfiguration returns the refusal a
-// configuration write gets when another process is already running this
-// deployment, or nil when this process is the only authority there is.
-//
-// A detection that could not be PERFORMED is returned as an error too,
-// and deliberately so: "I could not tell" and "nothing is running" are
-// the same behaviour only if you are willing to write the file anyway,
-// which is the defect. core/service.DetectRunningEngine's own doc splits
-// that from the case where the configuration cannot be read, which is not
-// an error here because the open that follows this call fails on the same
-// file with the message the operator actually needs.
-func refuseIfAnEngineHoldsTheConfiguration(configPath string) error {
-	engine, err := service.DetectRunningEngine(configPath)
-	if err != nil {
-		return cannotTellError(err)
-	}
-	if engine == nil {
-		return nil
-	}
-	// Resolved for the message, because --config may name the packaged
-	// configuration DIRECTORY (#196) and an operator matching this
-	// sentence against their own deployment needs the file, not the
-	// directory they typed.
-	return engineRefusal(engine, fmt.Sprintf("that process read %s when it started and nothing re-reads that file", config.ResolvePath(configPath)))
-}
-
-// refuseIfAnEngineServesThisJournal is the same refusal for a caller with
-// no configuration to read the journal out of: a `backup-set create`
-// against a path where no config.yaml exists, which writes a whole first
-// configuration through core/service.FirstRun rather than through
-// BackupService.
-//
-// It exists because that path was the way around the check. A mistyped
-// --config, or a config.yaml renamed out from under a running engine,
-// both leave `create` looking at an absent file, and both used to write a
-// brand-new configuration beside a live deployment and report success.
-// The journal is what still identifies the deployment in that state,
-// because --state-database names it and carries the packaged default the
-// first-run wizard writes.
-func refuseIfAnEngineServesThisJournal(stateDatabase string) error {
-	engine, err := service.DetectRunningEngineForJournal(stateDatabase)
-	if err != nil {
-		return cannotTellError(err)
-	}
-	if engine == nil {
-		return nil
-	}
-	return engineRefusal(engine, "that process read its configuration when it started and nothing re-reads it")
-}
-
-// engineRefusal is the sentence both refusals print, so the two cannot
-// drift into telling an operator different things about the same
-// situation.
+// engineRefusal is the sentence both configuration-write routes print
+// when they find a serving process, so the two cannot drift into telling
+// an operator different things about the same situation. Its two callers
+// are mode.go's enterConfigWriteMode and enterFirstConfigWriteMode, which
+// differ only in whether they can name the file the engine read.
 //
 // Three things have to be in it, and each is there because leaving it out
 // was worse.
