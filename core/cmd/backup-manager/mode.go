@@ -170,7 +170,7 @@ type modeDecision struct {
 	// about. Nil is what refusal() reads, so "engine-attached" and
 	// "engine-attached and carryable" can never be confused for each
 	// other by a later reader.
-	route backupSetRoute
+	route configWriteRoute
 
 	// routeAddress is where that route goes, already redacted, for the
 	// announcement. #542's rule is that the mode is reported rather than
@@ -423,12 +423,12 @@ func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, atta
 // #543 covers. Saying it by passing nil rather than by omitting a step is
 // what makes the unrouted writes visible: they are call sites that
 // deliberately hand over nothing, not call sites that forgot.
-type attachFunc func() (backupSetRoute, string, error)
+type attachFunc func() (configWriteRoute, string, error)
 
 // configWrite is one settled configuration write: the claim that keeps the
 // decision true, and the route it decided on, which is nil for a write
 // this process performs itself.
 type configWrite struct {
 	guard *service.ConfigWriteGuard
-	route backupSetRoute
+	route configWriteRoute
 }

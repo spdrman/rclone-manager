@@ -243,12 +243,15 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	// itself when it refuses.
 	// nil rather than attachToEngine, deliberately. This door is what
 	// `settings patch` and `backup-set retention` come through, and
-	// neither is routed yet (#543 covers create, patch and remove; the
-	// client has no settings verbs at all), so engine-attached here is
-	// still the refusal it was. openBackupSetRoute below is the door that
-	// can hand a change over, and the two are separate functions
-	// precisely so that "this write can be routed" is a property of the
-	// call site rather than of a flag somebody might get wrong.
+	// `backup-set retention` is not routed: setBackupSetRetention and
+	// clearBackupSetRetention are on the client, but the policy the CLI
+	// builds is a whole chain read from flags or from stdin and the
+	// preview beside it is #544's, so routing half of that command would
+	// be worse than routing none of it. openConfigWriteRoute below is the
+	// door that can hand a change over, and the two are separate
+	// functions precisely so that "this write can be routed" is a
+	// property of the call site rather than of a flag somebody might get
+	// wrong.
 	write, err := enterConfigWriteMode(configPath, nil, os.Stdout, os.Stderr)
 	if err != nil {
 		cleanup()
@@ -268,9 +271,9 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	}, nil
 }
 
-// openBackupSetRoute is openBackupService for the three verbs that can
-// now be handed to a running engine (#543): it answers "where does this
-// change go", not "which service do I open".
+// openConfigWriteRoute is openBackupService for the configuration writes
+// that can now be handed to a running engine (#543): it answers "where
+// does this change go", not "which service do I open".
 //
 // # Why it is a separate function rather than an argument
 //
@@ -306,7 +309,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 //
 // The returned cleanup func closes whatever was opened and gives the claim
 // back; callers should always `defer cleanup()` immediately.
-func openBackupSetRoute(ctx context.Context, configPath string) (backupSetRoute, func(), error) {
+func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRoute, func(), error) {
 	svc, closeFn, err := service.Open(ctx, configPath)
 	if err != nil {
 		return nil, func() {}, err

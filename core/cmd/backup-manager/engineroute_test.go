@@ -179,6 +179,57 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 	}
 }
 
+// TestSettingsPatchReachesTheAttachedEngine covers the other
+// configuration write a terminal can make.
+//
+// It is here rather than left for a later issue because of what leaving it
+// would have meant: `settings patch` is refused beside a running engine
+// (#538) and nothing in #536's plan replaced that refusal, so after the
+// EPIC it would have been the one write permanently refused with no route
+// to make it through. The seam is the same one; the mapping is a different
+// pair of shapes in the same file.
+func TestSettingsPatchReachesTheAttachedEngine(t *testing.T) {
+	cliConfig := writeTestConfig(t)
+	engine := startFakeEngine(t, writeTestConfig(t))
+	engine.attach(t)
+	attachEngineTo(t, cliConfig)
+
+	before := readFile(t, cliConfig)
+	args := []string{"settings", "--config", cliConfig, "patch",
+		"--timezone", "America/Toronto",
+		"--cap-bytes", "123456789",
+		"--protect-last-known-good=false",
+	}
+	var code int
+	stderr := captureStderr(t, func() {
+		code = captureStdoutCode(t, func() int { return run(args) })
+	})
+	if code != 0 {
+		t.Fatalf("settings patch against an attached engine exited %d, want 0\nstderr: %s", code, stderr)
+	}
+	if after := readFile(t, cliConfig); after != before {
+		t.Error("settings patch changed the CLI's own config.yaml as well as reaching the engine")
+	}
+
+	got, err := engine.svc.Settings(t.Context())
+	if err != nil {
+		t.Fatalf("reading the engine's settings back: %v", err)
+	}
+	if got.Retention.Timezone != "America/Toronto" {
+		t.Errorf("the engine's timezone is %q, and the CLI set America/Toronto", got.Retention.Timezone)
+	}
+	if got.Capacity.CapBytes != 123456789 {
+		t.Errorf("the engine's cap_bytes is %d, and the CLI set 123456789", got.Capacity.CapBytes)
+	}
+	// An explicitly passed =false has to survive the whole way. It is the
+	// one flag whose zero value is already true, so a mapping that read
+	// the value rather than the pointer would turn "turn FR-19 protection
+	// off" into "leave it on" and report success.
+	if got.Retention.ProtectLastKnownGood {
+		t.Error("the engine still protects the last known good backup, and the CLI turned it off")
+	}
+}
+
 // TestAnEngineAttachedWriteIsStillRefusedWithNoRouteToTheEngine keeps
 // #538's guard where it was. A `backup-manager daemon` serves no HTTP at
 // all, and an operator who has told this command nothing about the engine

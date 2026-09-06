@@ -227,6 +227,10 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 		e.updateBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/backup-sets/"):
 		e.removeBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
+	case r.Method == http.MethodGet && path == "/settings":
+		e.getSettings(w, r)
+	case r.Method == http.MethodPatch && path == "/settings":
+		e.updateSettings(w, r)
 	default:
 		refuse(w, http.StatusNotFound, apicontract.ErrorCodeInternal, "this fake engine serves no "+r.Method+" "+path)
 	}
@@ -346,6 +350,86 @@ func (e *fakeEngine) removeBackupSet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (e *fakeEngine) getSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := e.svc.Settings(r.Context())
+	if err != nil {
+		refuseServiceError(w, "getSettings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toContractSettings(settings))
+}
+
+func (e *fakeEngine) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var body apicontract.UpdateSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		refuse(w, http.StatusBadRequest, apicontract.ErrorCodeInvalidRequest, err.Error())
+		return
+	}
+	req := service.UpdateSettingsRequest{AcknowledgeMediumDisclosure: body.AcknowledgeMediumDisclosure}
+	if body.Retention != nil {
+		retention := service.RetentionUpdate{
+			Timezone:             body.Retention.Timezone,
+			WeekStartsOn:         body.Retention.WeekStartsOn,
+			ProtectLastKnownGood: body.Retention.ProtectLastKnownGood,
+		}
+		for _, t := range body.Retention.Tiers {
+			retention.Tiers = append(retention.Tiers, service.RetentionTier{
+				Name: t.Name, Granularity: t.Granularity, PeriodDays: t.PeriodDays,
+				Keep: t.Keep, WindowUnit: t.WindowUnit, Medium: t.Medium,
+			})
+		}
+		req.Retention = &retention
+	}
+	if body.Capacity != nil {
+		req.Capacity = &service.CapacityUpdate{
+			CapBytes:          body.Capacity.CapBytes,
+			WarningFreeBytes:  body.Capacity.WarningFreeBytes,
+			CriticalFreeBytes: body.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes: body.Capacity.SafetyMarginBytes,
+		}
+	}
+	settings, err := e.svc.UpdateSettings(r.Context(), req)
+	if err != nil {
+		refuseServiceError(w, "updateSettings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toContractSettings(settings))
+}
+
+// toContractSettings mirrors apps/common/webhost's own settings response,
+// minus the schema block, which service.Settings does not carry and
+// nothing the CLI prints reads.
+func toContractSettings(s service.Settings) apicontract.SettingsResponse {
+	out := apicontract.SettingsResponse{
+		Retention: apicontract.RetentionSettings{
+			Timezone:             s.Retention.Timezone,
+			WeekStartsOn:         s.Retention.WeekStartsOn,
+			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
+		},
+		Capacity: apicontract.CapacitySettings{
+			CapBytes:             s.Capacity.CapBytes,
+			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
+			CriticalFreeBytes:    s.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes:    s.Capacity.SafetyMarginBytes,
+			BackupRoot:           s.Capacity.BackupRoot,
+			BackupRootConfigured: s.Capacity.BackupRootConfigured,
+		},
+	}
+	for _, t := range s.Retention.Tiers {
+		out.Retention.Tiers = append(out.Retention.Tiers, apicontract.RetentionTier{
+			Name: t.Name, Granularity: t.Granularity, PeriodDays: t.PeriodDays,
+			Keep: t.Keep, WindowUnit: t.WindowUnit, Medium: t.Medium,
+		})
+	}
+	for _, m := range s.Mediums {
+		out.Mediums = append(out.Mediums, apicontract.StorageMediumSummary{
+			ID: m.ID, Type: m.Type, Bucket: m.Bucket, Region: m.Region,
+			StorageClass: m.StorageClass, ReadsRequireRestore: m.ReadsRequireRestore,
+		})
+	}
+	return out
 }
 
 // toContractBackupSet mirrors apps/common/webhost's toBackupSetResponse,

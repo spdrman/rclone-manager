@@ -131,6 +131,25 @@ func (c *Client) ClearBackupSetRetention(ctx context.Context, source, set string
 	return out, err
 }
 
+// GetSettings is GET /settings: the retention and capacity policy the
+// ENGINE is deciding with, resolved, which is a different fact from what
+// this host's config.yaml says and the whole reason to ask over HTTP.
+func (c *Client) GetSettings(ctx context.Context) (apicontract.SettingsResponse, error) {
+	var out apicontract.SettingsResponse
+	err := c.call(ctx, "getSettings", nil, nil, &out)
+	return out, err
+}
+
+// UpdateSettings is PATCH /settings, the other configuration write a
+// terminal can make. It is here rather than left for later because
+// `settings patch` is refused beside a running engine (#538) and this is
+// the only thing that can replace that refusal with a change that lands.
+func (c *Client) UpdateSettings(ctx context.Context, req apicontract.UpdateSettingsRequest) (apicontract.SettingsResponse, error) {
+	var out apicontract.SettingsResponse
+	err := c.call(ctx, "updateSettings", nil, req, &out)
+	return out, err
+}
+
 // SystemHealth is GET /system/health, half of what `status` reports.
 func (c *Client) SystemHealth(ctx context.Context) (apicontract.HealthResponse, error) {
 	var out apicontract.HealthResponse

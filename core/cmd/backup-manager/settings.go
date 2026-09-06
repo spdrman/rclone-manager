@@ -88,21 +88,26 @@ func cmdSettings(args []string) int {
 	}
 
 	ctx := context.Background()
-	// The intent is decided from the operand, before anything opens, and
-	// it has to be: `settings` reads and `settings patch` writes, and
-	// only a write is refused beside a running engine (#538,
-	// liveengine.go).
-	intent := readsConfig
-	if patching {
-		intent = writesConfig
-	}
-	svc, cleanup, err := openBackupService(ctx, *cfgPath, intent)
-	if err != nil {
-		return fail(err)
-	}
-	defer cleanup()
 
+	// The read and the write go through different doors, and which one is
+	// decided from the operand before anything opens.
+	//
+	// `settings` on its own reads, and a read beside a live engine is
+	// ordinary use of this binary that #538 was careful not to narrow. It
+	// answers from this host's configuration file, which is a fact about
+	// the file rather than about what the engine loaded; routing the READS
+	// so the two can never disagree is #544's, and this is one of the
+	// commands waiting for it.
+	//
+	// `settings patch` writes, which beside a running engine is a change
+	// that process would never see, so it goes through the route (#543).
 	if !patching {
+		svc, cleanup, err := openBackupService(ctx, *cfgPath, readsConfig)
+		if err != nil {
+			return fail(err)
+		}
+		defer cleanup()
+
 		settings, err := svc.Settings(ctx)
 		if err != nil {
 			return fail(err)
@@ -111,10 +116,16 @@ func cmdSettings(args []string) int {
 		return 0
 	}
 
+	route, cleanup, err := openConfigWriteRoute(ctx, *cfgPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer cleanup()
+
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
 	req := buildSettingsPatch(fs, timezone, weekStartsOn, protect, capBytes, warningFreeBytes, criticalFreeBytes, safetyMarginBytes)
-	settings, err := svc.UpdateSettings(ctx, req)
+	settings, err := route.UpdateSettings(ctx, req)
 	if err != nil {
 		return fail(err)
 	}

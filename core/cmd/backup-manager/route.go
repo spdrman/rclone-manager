@@ -42,9 +42,10 @@ import (
 // # What "engine-attached" now means, and what it still does not
 //
 // #542 decided the mode; it could not carry one of them out, because this
-// build had no route. It has one now for these three verbs, and only when
-// an operator has said where the engine is. Two shapes still refuse, and
-// both are refusals rather than gaps:
+// build had no route. It has one now for `backup-set create`, `patch` and
+// `remove` and for `settings patch`, and only when an operator has said
+// where the engine is. Two shapes still refuse, and both are refusals
+// rather than gaps:
 //
 // A `backup-manager daemon` announces that it serves this deployment and
 // serves no HTTP at all (core/service's liveengine.go says so in as many
@@ -113,6 +114,38 @@ type backupSetRoute interface {
 	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
 }
 
+// settingsRoute is `settings patch`'s half of the same seam.
+//
+// It is here rather than in a later issue because of what leaving it out
+// would have meant. `settings patch` is refused beside a running engine
+// (#538) and no issue in #536's plan routed it, so when the EPIC finished
+// it would have been the one configuration write permanently refused with
+// nothing able to replace the refusal. The seam is the same; the shapes
+// are a different pair in the same adapter.
+//
+// UpdateSettings is the write. Settings is here beside it because the
+// engine answers a patch with the WHOLE resolved policy and the command
+// prints that, so a route that could write and not read would be one that
+// could not report what it had done.
+type settingsRoute interface {
+	Settings(ctx context.Context) (service.Settings, error)
+	UpdateSettings(ctx context.Context, req service.UpdateSettingsRequest) (service.Settings, error)
+}
+
+// configWriteRoute is where a routed configuration write goes: both halves
+// together, because both are reached through one door and one claim.
+//
+// One door rather than one per command family, so that "this write can be
+// routed" is settled once, in the same act as the mode. Each command still
+// says what it needs by taking the narrower interface (backupSetRemoveWith
+// takes backupSetRemover, resolveKeyAndTrust takes backupSetCreatePrereqs),
+// which is what keeps a settings patch from being able to reach a
+// backup-set verb at all.
+type configWriteRoute interface {
+	backupSetRoute
+	settingsRoute
+}
+
 // attachToEngine builds this invocation's route to the serving process, or
 // reports that nothing named one.
 //
@@ -127,7 +160,7 @@ type backupSetRoute interface {
 // Nothing is contacted here. Whether the engine answers is the first
 // call's business, and it reports that with an address in it
 // (apiclient.Unreachable), which is what an operator has to check.
-func attachToEngine() (backupSetRoute, string, error) {
+func attachToEngine() (configWriteRoute, string, error) {
 	base := strings.TrimSpace(os.Getenv(apiURLEnv))
 	if base == "" {
 		return nil, "", nil

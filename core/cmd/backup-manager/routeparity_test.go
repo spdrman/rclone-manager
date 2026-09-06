@@ -79,6 +79,12 @@ var refusingInputs = []refusingInput{
 			return []string{"backup-set", "--config", configPath, "remove", "nosuch/set"}
 		},
 	},
+	{
+		name: "patch the settings with a timezone that is not one",
+		args: func(configPath, _ string) []string {
+			return []string{"settings", "--config", configPath, "patch", "--timezone", "Definitely/NotAZone"}
+		},
+	},
 }
 
 func TestARefusalIsTheSameOnBothRoutes(t *testing.T) {

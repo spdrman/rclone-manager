@@ -286,3 +286,116 @@ func wireSeconds(d time.Duration, flag string) (int, error) {
 	}
 	return int(d / time.Second), nil
 }
+
+// Settings is GET /settings: the retention and capacity policy the engine
+// is actually deciding with, resolved.
+func (r *engineRoute) Settings(ctx context.Context) (service.Settings, error) {
+	resp, err := r.client.GetSettings(ctx)
+	if err != nil {
+		return service.Settings{}, err
+	}
+	return settingsFromWire(resp), nil
+}
+
+// UpdateSettings is PATCH /settings.
+//
+// Every field crosses as a pointer, on both sides, and that is the load
+// bearing part rather than a style. Zero is a MEANING in three of the four
+// capacity fields ("no cap", "no warning line", "no critical line") and
+// --protect-last-known-good's zero value is already true, so a mapping
+// that read values instead of pointers would turn "leave this alone" into
+// "set it to zero" and "turn FR-19 protection off" into "leave it on",
+// both while reporting success. The CLI goes to the trouble of telling
+// those apart through fs.Visit; this is where that would be thrown away.
+func (r *engineRoute) UpdateSettings(ctx context.Context, req service.UpdateSettingsRequest) (service.Settings, error) {
+	body := apicontract.UpdateSettingsRequest{
+		AcknowledgeMediumDisclosure: req.AcknowledgeMediumDisclosure,
+	}
+	if req.Retention != nil {
+		retention := apicontract.UpdateRetentionSettings{
+			Timezone:             req.Retention.Timezone,
+			WeekStartsOn:         req.Retention.WeekStartsOn,
+			ProtectLastKnownGood: req.Retention.ProtectLastKnownGood,
+		}
+		// Tiers is nil from this CLI, which does not expose a whole-chain
+		// replacement (cmdSettings' own doc says why), and mapped anyway
+		// so that the one type doing the translating does not have a hole
+		// in it the day something else fills that field in.
+		for _, t := range req.Retention.Tiers {
+			retention.Tiers = append(retention.Tiers, retentionTierToWire(t))
+		}
+		body.Retention = &retention
+	}
+	if req.Capacity != nil {
+		body.Capacity = &apicontract.UpdateCapacitySettings{
+			CapBytes:          req.Capacity.CapBytes,
+			WarningFreeBytes:  req.Capacity.WarningFreeBytes,
+			CriticalFreeBytes: req.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes: req.Capacity.SafetyMarginBytes,
+		}
+	}
+
+	resp, err := r.client.UpdateSettings(ctx, body)
+	if err != nil {
+		return service.Settings{}, err
+	}
+	return settingsFromWire(resp), nil
+}
+
+// settingsFromWire turns the engine's answer back into the shape
+// printSettings already renders, so the two routes cannot grow two
+// renderings of one policy.
+//
+// SettingsResponse's schema block is deliberately dropped: service.Settings
+// carries no equivalent, nothing this command prints reads it, and
+// inventing a field to hold it would be this adapter deciding what
+// core/service's type is for.
+func settingsFromWire(s apicontract.SettingsResponse) service.Settings {
+	out := service.Settings{
+		Retention: service.RetentionSettings{
+			Timezone:             s.Retention.Timezone,
+			WeekStartsOn:         s.Retention.WeekStartsOn,
+			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
+		},
+		Capacity: service.CapacitySettings{
+			CapBytes:             s.Capacity.CapBytes,
+			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
+			CriticalFreeBytes:    s.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes:    s.Capacity.SafetyMarginBytes,
+			BackupRoot:           s.Capacity.BackupRoot,
+			BackupRootConfigured: s.Capacity.BackupRootConfigured,
+		},
+	}
+	for _, t := range s.Retention.Tiers {
+		out.Retention.Tiers = append(out.Retention.Tiers, service.RetentionTier{
+			Name:        t.Name,
+			Granularity: t.Granularity,
+			PeriodDays:  t.PeriodDays,
+			Keep:        t.Keep,
+			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
+		})
+	}
+	for _, m := range s.Mediums {
+		out.Mediums = append(out.Mediums, service.StorageMediumSummary{
+			ID:                  m.ID,
+			Type:                m.Type,
+			Bucket:              m.Bucket,
+			Region:              m.Region,
+			StorageClass:        m.StorageClass,
+			ReadsRequireRestore: m.ReadsRequireRestore,
+		})
+	}
+	return out
+}
+
+func retentionTierToWire(t service.RetentionTier) apicontract.RetentionTier {
+	return apicontract.RetentionTier{
+		Name:        t.Name,
+		Granularity: t.Granularity,
+		PeriodDays:  t.PeriodDays,
+		Keep:        t.Keep,
+		WindowUnit:  t.WindowUnit,
+		Medium:      t.Medium,
+	}
+}
