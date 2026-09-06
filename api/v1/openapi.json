@@ -24,7 +24,13 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-CSRF-Token",
-        "description": "The double-submit CSRF token (apps/common/csrf). Required on every state-changing operation, and on the two read-only-in-effect operations that still open an outbound connection to a caller-supplied host."
+        "description": "The double-submit CSRF token (apps/common/csrf). Required on every operation this API serves with a mutating verb, with no exception: that includes test-connection and host-key-probe, whose effect is read-only but which each open an outbound connection to a caller-supplied host, and a request that reaches the network is exactly what a cross-site form must not be able to make. It is never a value an operator configures or a client is issued out of band. The runtime mints it, delivers it in the bm_csrf cookie below, and a caller echoes that value back here unchanged; a generator that renders this as a user-supplied API key has read it wrongly. Whether an operation needs it is stated twice, in that operation's own security block and in its x-csrf-required, and scripts/api/check-contract-drift.sh fails when the two disagree."
+      },
+      "csrfCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "bm_csrf",
+        "description": "The other half of the double-submit pair above, and the half a client has to READ. The runtime issues this cookie on any response that does not already carry one, and a caller echoes its value back in X-CSRF-Token; the two are compared byte for byte. It is declared here because a client cannot implement the csrf requirement from this document without knowing which cookie to echo, and until it was, the only place that name existed was the two implementations."
       },
       "bootstrapToken": {
         "type": "apiKey",
@@ -215,6 +221,10 @@
             "type": "string",
             "description": "The optimistic-concurrency token a client echoes back on POST /operations. Read here rather than scraped out of a 409's prose."
           },
+          "deployment_id": {
+            "type": "string",
+            "description": "Which deployment this is, as opposed to what it currently holds. Minted once per instance and stable across every configuration edit, so two instances built from the same template are told apart by it where a config_revision, being a hash of configuration content, reports them as the same. A client about to send a mutation compares it against the deployment the command was aimed at, so a write typed at one instance with another instance's address configured is refused rather than carried out somewhere nobody was looking. Empty on an instance that cannot name itself, which a client reads as unconfirmable rather than as agreement."
+          },
           "ready": {
             "type": "boolean",
             "description": "True once the runtime has completed its startup sequence."
@@ -231,6 +241,7 @@
           "go_version",
           "engine_version",
           "config_revision",
+          "deployment_id",
           "ready",
           "configured"
         ]
@@ -951,7 +962,11 @@
           },
           "stable_for_seconds": {
             "type": "integer",
-            "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses."
+            "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses. Whole seconds, truncated rather than refused: a configuration is only required to make stable_for positive, so a stable_for of 1500ms loads and is served here as 1, and any window under a second is served as 0, which this field already spends on \"not the stable strategy\". A client cannot tell those two apart. The write path refuses a sub-second window instead of rounding it, on the grounds that a value meaning one thing over this wire and another in the file is a divergence both routes report as success; the read path does not, so a set configured with a sub-second window reads back here as a different set from the one that was written. Read it as the budget rounded down, never as the budget."
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "description": "How long this backup set may go without a fresh backup before it is reported as stale (FR-24's freshness budget). BackupSetSpec has always accepted it on the way in and UpdateBackupSetRequest has always been able to change it, so until now this was a field the API could write and could not read back, and a client that changed it had no way to show what it had changed it to. Zero is how an engine built before this field answers, and a client reads it as not reported rather than as a set with no freshness budget. It cannot mean a configured budget of none: a configuration that leaves stale_after unset or non-positive is one this service refuses to load. It can mean a budget under a second, because the value is truncated to whole seconds on the way out while nothing refuses sub-second precision on the way in, so `stale_after: 1500ms` is served as 1 and `stale_after: 500ms` as 0."
           },
           "validator_id": {
             "type": "string"
@@ -982,6 +997,7 @@
           "disabled",
           "read_only",
           "stable_for_seconds",
+          "stale_after_seconds",
           "retention_is_override"
         ]
       },
@@ -1865,7 +1881,7 @@
       },
       "ArtifactReinstateResponse": {
         "type": "object",
-        "description": "POST /quarantine/{id}/reinstate. Re-checks one quarantined backup's durable local copy and, when what it finds is enough, returns it to the state it already held so it counts as a restore point again. `reinstated` and `passed` are separate: `passed` is the verdict of the checks, `reinstated` is whether the backup actually moved. A backup reinstated this way NEVER authorises deleting its remote source again; that forfeiture is permanent and is what makes the action safe to offer.",
+        "description": "POST /quarantine/{source}/{set}/{name}/reinstate. Re-checks one quarantined backup's durable local copy and, when what it finds is enough, returns it to the state it already held so it counts as a restore point again. `reinstated` and `passed` are separate: `passed` is the verdict of the checks, `reinstated` is whether the backup actually moved. A backup reinstated this way NEVER authorises deleting its remote source again; that forfeiture is permanent and is what makes the action safe to offer.",
         "additionalProperties": false,
         "properties": {
           "reinstated": {
@@ -2031,7 +2047,7 @@
           },
           "stale_after_seconds": {
             "type": "integer",
-            "description": "The freshness window this set is judged against.",
+            "description": "The freshness window this set is judged against, in whole seconds, truncated rather than refused. A configuration is only required to make stale_after positive, so a stale_after of 1500ms loads and is reported here as 1, and any window under a second as 0. Zero is therefore a number no configuration could have asked for, and a client that reads one is looking at a window rounded away rather than at a set with no freshness budget. The state and reason beside it were computed from the real duration, not from this number, so the verdict is right even where this field is short.",
             "format": "int64"
           },
           "current_transfers": {
@@ -2239,7 +2255,7 @@
       },
       "SetEnabledRequest": {
         "type": "object",
-        "description": "POST /backup-sets/{id}/enabled. A disabled backup set is excluded from every run cycle and nothing already backed up is touched, which is why this is state-changing but not destructive.",
+        "description": "POST /backup-sets/{source}/{set}/enabled. A disabled backup set is excluded from every run cycle and nothing already backed up is touched, which is why this is state-changing but not destructive.",
         "additionalProperties": false,
         "properties": {
           "enabled": {
@@ -2252,7 +2268,7 @@
       },
       "SetReadOnlyRequest": {
         "type": "object",
-        "description": "POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup set's read-only status (issue #282). Turning it on only prevents a future deletion; turning it back off does not retroactively authorise deleting anything already retained under it, so this is state-changing but not destructive.",
+        "description": "POST /backup-sets/{source}/{set}/read-only. Declares, or withdraws, a backup set's read-only status (issue #282). Turning it on only prevents a future deletion; turning it back off does not retroactively authorise deleting anything already retained under it, so this is state-changing but not destructive.",
         "additionalProperties": false,
         "properties": {
           "read_only": {
@@ -2853,7 +2869,7 @@
       },
       "RetryFailedRequest": {
         "type": "object",
-        "description": "POST /backups/{id}/retry's optional body. Everything about the retry is decided by the backup's own recorded state, so there is nothing here that changes what happens: the note is recorded alongside the transition so a later failure of the same backup carries the context of what was tried last time, rather than only that something was.",
+        "description": "POST /backups/{source}/{set}/{name}/retry's optional body. Everything about the retry is decided by the backup's own recorded state, so there is nothing here that changes what happens: the note is recorded alongside the transition so a later failure of the same backup carries the context of what was tried last time, rather than only that something was.",
         "additionalProperties": false,
         "properties": {
           "note": {
@@ -3035,7 +3051,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -3448,7 +3465,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -3671,7 +3689,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -3794,7 +3813,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -3880,100 +3900,6 @@
         "x-authenticated": true
       }
     },
-    "/backup-sets/{id}": {
-      "get": {
-        "operationId": "getBackupSet",
-        "summary": "Read one backup set. The id is a two-part source/name identity, so it spans path segments.",
-        "tags": [
-          "backup-sets"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "The two-part identity, e.g. \"nas-a/photos\". Registered in the router as a catch-all for exactly that reason."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupSet"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Refused: UNAUTHENTICATED.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "UNAUTHENTICATED"
-            ]
-          },
-          "404": {
-            "description": "Refused: BACKUP_SET_NOT_FOUND.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "BACKUP_SET_NOT_FOUND"
-            ]
-          },
-          "500": {
-            "description": "Refused: INTERNAL.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "INTERNAL"
-            ]
-          },
-          "503": {
-            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "NOT_CONFIGURED"
-            ]
-          }
-        },
-        "x-destructive-gate": false,
-        "x-idempotency-key": "none",
-        "x-optimistic-concurrency": null,
-        "x-csrf-required": false,
-        "x-authenticated": true
-      }
-    },
     "/validators": {
       "get": {
         "operationId": "listValidators",
@@ -4041,7 +3967,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4136,7 +4063,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4300,7 +4228,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4408,7 +4337,8 @@
         ],
         "security": [
           {
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4509,6 +4439,7 @@
         "security": [
           {
             "csrf": [],
+            "csrfCookie": [],
             "bootstrapToken": []
           }
         ],
@@ -4611,7 +4542,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4712,7 +4644,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "responses": {
@@ -4837,7 +4770,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4996,7 +4930,7 @@
     "/backups": {
       "get": {
         "operationId": "listArtifacts",
-        "summary": "Every backup this deployment holds, optionally narrowed to one backup set. Unfiltered, this includes the backups of a backup set whose configuration has since been removed (issue #391): they stay on storage and stay listed here, which is what the removal's confirmation promises, and each is still reachable by GET /backups/{id}.",
+        "summary": "Every backup this deployment holds, optionally narrowed to one backup set. Unfiltered, this includes the backups of a backup set whose configuration has since been removed (issue #391): they stay on storage and stay listed here, which is what the removal's confirmation promises, and each is still reachable by GET /backups/{source}/{set}/{name}.",
         "tags": [
           "backups"
         ],
@@ -5074,10 +5008,10 @@
         "x-authenticated": true
       }
     },
-    "/backups/{id}": {
+    "/backups/{source}/{set}/{name}": {
       "get": {
         "operationId": "getArtifact",
-        "summary": "Read one backup. The id is a three-part source/set/name identity, so it spans path segments.",
+        "summary": "Read one backup. A backup's identity is three parts, the source and set holding it and its own name, so this path is three segments and each is a parameter of its own.",
         "tags": [
           "backups"
         ],
@@ -5088,13 +5022,31 @@
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "source",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "The three-part identity, e.g. \"nas-a/photos/2026-08-30.tar\". Registered in the router as three parameters for exactly that reason."
+            "description": "The configured source the backup set holding this backup is defined under."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set holding this backup, by its own name within that source."
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup's own name within that backup set. A backup's identity is exactly source/set/name, and a name never contains a separator, which is why this route declares three parameters rather than taking one value and splitting it."
           }
         ],
         "responses": {
@@ -5281,7 +5233,7 @@
         "x-authenticated": true
       }
     },
-    "/quarantine/{id}/revalidate": {
+    "/quarantine/{source}/{set}/{name}/revalidate": {
       "post": {
         "operationId": "revalidateArtifact",
         "summary": "Re-check one quarantined backup and report the verdict. Writes nothing and moves nothing.",
@@ -5290,18 +5242,38 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "source",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "The three-part source/set/name identity."
+            "description": "The configured source the backup set holding this backup is defined under."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set holding this backup, by its own name within that source."
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup's own name within that backup set. A backup's identity is exactly source/set/name, and a name never contains a separator, which is why this route declares three parameters rather than taking one value and splitting it."
           }
         ],
         "responses": {
@@ -5390,7 +5362,7 @@
         "x-authenticated": true
       }
     },
-    "/quarantine/{id}/retry": {
+    "/quarantine/{source}/{set}/{name}/retry": {
       "post": {
         "operationId": "retryArtifactIngestion",
         "summary": "Return one quarantined backup to the pipeline so it is attempted again.",
@@ -5399,18 +5371,38 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "source",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "The three-part source/set/name identity."
+            "description": "The configured source the backup set holding this backup is defined under."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set holding this backup, by its own name within that source."
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup's own name within that backup set. A backup's identity is exactly source/set/name, and a name never contains a separator, which is why this route declares three parameters rather than taking one value and splitting it."
           }
         ],
         "responses": {
@@ -5493,7 +5485,7 @@
         "x-authenticated": true
       }
     },
-    "/quarantine/{id}/reinstate": {
+    "/quarantine/{source}/{set}/{name}/reinstate": {
       "post": {
         "operationId": "reinstateArtifact",
         "summary": "Re-check one quarantined backup and, if the evidence is enough, trust it again. Forfeits its remote delete permanently.",
@@ -5502,18 +5494,38 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "source",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "The three-part source/set/name identity."
+            "description": "The configured source the backup set holding this backup is defined under."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set holding this backup, by its own name within that source."
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup's own name within that backup set. A backup's identity is exactly source/set/name, and a name never contains a separator, which is why this route declares three parameters rather than taking one value and splitting it."
           }
         ],
         "responses": {
@@ -5612,7 +5624,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -5731,6 +5745,107 @@
       }
     },
     "/backup-sets/{source}/{set}": {
+      "get": {
+        "operationId": "getBackupSet",
+        "summary": "Read one backup set. A backup set's identity is two parts, the configured source it belongs to and its own name within that source, so this path is two segments and each is a parameter of its own. The router serves it with a catch-all (\"/backup-sets/*\") because chi matches a parameter per segment; a caller fills the two declared here.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
       "patch": {
         "operationId": "updateBackupSet",
         "summary": "Change one already-persisted backup set's definition (issue #350). A sparse edit: only the properties the body carries are changed, and the ones it omits are left alone, so a client saving one field cannot silently ship another. State-changing but not destructive, so it carries CSRF and not the destructive gate, following POST /backup-sets' own precedent.",
@@ -5739,7 +5854,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -5877,7 +5994,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6075,7 +6194,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6179,7 +6300,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6276,7 +6399,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6403,7 +6528,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "responses": {
@@ -6474,7 +6601,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "responses": {
@@ -6646,7 +6775,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6785,7 +6916,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -6915,7 +7048,9 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -7001,7 +7136,7 @@
         "x-authenticated": true
       }
     },
-    "/backups/{id}/retry": {
+    "/backups/{source}/{set}/{name}/retry": {
       "post": {
         "operationId": "retryFailedIngestion",
         "summary": "Put one failed backup back into the pipeline so it is attempted again.",
@@ -7010,18 +7145,38 @@
         ],
         "security": [
           {
-            "session": []
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
           {
-            "name": "id",
+            "name": "source",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "The three-part source/set/name identity."
+            "description": "The configured source the backup set holding this backup is defined under."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set holding this backup, by its own name within that source."
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup's own name within that backup set. A backup's identity is exactly source/set/name, and a name never contains a separator, which is why this route declares three parameters rather than taking one value and splitting it."
           }
         ],
         "requestBody": {
@@ -7116,7 +7271,7 @@
   },
   "x-go-package": "apicontract",
   "x-generated": {
-    "go": "apps/common/webhost/apicontract/contract.gen.go",
+    "go": "core/apicontract/contract.gen.go",
     "typescript": "ui/shared/src/api/generated/contract.ts"
   }
 }

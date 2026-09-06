@@ -429,6 +429,17 @@ func renderGo(doc document, codes *schema, names []string, eps []endpoint, diges
 // in apps/common/webhost, is the definition of the boundary: edit
 // %s and re-run scripts/api/generate.sh.
 //
+// It lives in core/ rather than beside those handlers because the boundary
+// has two sides and only one of them may import the other. core/ may not
+// import apps/ (scripts/architecture/check-core-dependency-rule.sh proves
+// it by deleting apps/ and rebuilding core), while apps/common already
+// depends on core, so core/ is the only place both the server that serves
+// /api/v1 and the CLI client that calls it (core/internal/apiclient,
+// issue #541) can read one set of shapes from. Putting it under
+// apps/common/webhost would have left the CLI hand-writing a second copy
+// of every request and response body, which is the drift this generator
+// exists to prevent.
+//
 // A hand edit here is caught by scripts/api/check-contract-drift.sh, which
 // regenerates into a temporary directory and compares. A handler whose
 // shape stops matching one of these types is caught by

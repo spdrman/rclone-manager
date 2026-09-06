@@ -102,8 +102,8 @@ echo "==> generated output is generated, not edited"
 d=$(mutant go-binding-hand-edited)
 # A plausible hand edit rather than a syntax error: someone "fixing" a
 # field name in the generated Go instead of in the contract.
-sed -i.bak 's/json:"config_revision"/json:"configRevision"/' "$d/apps/common/webhost/apicontract/contract.gen.go"
-rm -f "$d/apps/common/webhost/apicontract/contract.gen.go.bak"
+sed -i.bak 's/json:"config_revision"/json:"configRevision"/' "$d/core/apicontract/contract.gen.go"
+rm -f "$d/core/apicontract/contract.gen.go.bak"
 expect_check_fails "a hand edit to the generated Go binding" "$d" \
   "the checked-in Go binding does not match" bash scripts/api/check-contract-drift.sh
 
@@ -166,6 +166,83 @@ with open(sys.argv[1], "w") as f:
 PY
 expect_check_fails "a provider SDK type on a public schema" "$d" \
   "an implementation type reached the public schema" bash scripts/api/check-contract-drift.sh
+
+echo
+echo "==> the contract says the same thing about a session and a token twice"
+
+# The rule these four controls are for is itself a repair: `security` and
+# the x-authenticated/x-csrf-required extensions declare one fact each to
+# two different readers, gen-bindings.go obeys only the extensions, and the
+# two had already parted on fifteen of forty-six operations with every gate
+# green (PR #546 review). A rule added to close a hole that had been open
+# that long has to be watched failing in both directions, and watched
+# refusing to answer at all when it has nothing to compare.
+
+d=$(mutant contract-security-drops-the-csrf-scheme)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+# removeBackupSet: mutating, behind requireCSRF, and its security block
+# quietly saying otherwise is exactly the state fifteen operations shipped
+# in.
+del doc["paths"]["/backup-sets/{source}/{set}"]["delete"]["security"][0]["csrf"]
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "an operation whose security block forgot the CSRF token it requires" "$d" \
+  "security does not declare 'csrf', and x-csrf-required is True" bash scripts/api/check-contract-drift.sh
+
+# The other direction, and the other pair: the extension moves and the
+# security block stays. A read-only-looking edit to one line, which is what
+# makes it worth a control.
+d=$(mutant contract-authenticated-extension-flipped)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+doc["paths"]["/auth/logout"]["post"]["x-authenticated"] = False
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "an operation whose x-authenticated no longer matches its security block" "$d" \
+  "security declares 'session', and x-authenticated is False" bash scripts/api/check-contract-drift.sh
+
+# Fail closed, not open: a security block this rule cannot decide has to be
+# a failure. A skipped operation is indistinguishable from a checked one in
+# the output, which is the shape of every gate this repository has had to
+# repair.
+d=$(mutant contract-security-shape-this-rule-cannot-read)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+del doc["paths"]["/backup-sets"]["post"]["security"]
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "an operation whose security block this rule cannot read" "$d" \
+  "This rule reads exactly one requirement set per operation" bash scripts/api/check-contract-drift.sh
+
+d=$(mutant contract-with-no-security-at-all)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+VERBS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+for item in doc["paths"].values():
+    for verb, op in item.items():
+        if verb in VERBS:
+            op.pop("security", None)
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "a contract with no security block left to compare anything against" "$d" \
+  "would pass vacuously" bash scripts/api/check-contract-drift.sh
 
 echo
 echo "==> a gate that inspected nothing refuses"
@@ -353,6 +430,44 @@ sed -i.bak 's|writeError(w, http.StatusNotFound, "OPERATION_NOT_FOUND"|writeErro
 rm -f "$d/apps/common/webhost/handlers_operations.go.bak"
 expect_check_fails "an error code no registry knows" "$d" \
   "which api/v1/openapi.json does not register as a wire code" bash -c 'cd apps/common && go test -count=1 -run TestContract ./webhost/'
+
+# The defect PR #546's review found, planted back: a resource identity that
+# spans path segments, published as ONE path parameter. Every other control
+# in this file stays green through it (the bindings regenerate, the shapes
+# match, chi still serves the route, the refusals are still declared), and a
+# client that fills the template builds a URL the engine does not route,
+# because a parameter is one segment in chi and in any client that escapes
+# what it is handed.
+d=$(mutant contract-path-no-client-can-build)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+item = doc["paths"].pop("/backups/{source}/{set}/{name}")
+for op in item.values():
+    op["parameters"] = [{
+        "name": "id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string"},
+        "description": "The three-part identity.",
+    }] + [p for p in op.get("parameters", []) if p.get("in") != "path"]
+doc["paths"]["/backups/{id}"] = item
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+(cd "$d" && bash scripts/api/generate.sh >/dev/null 2>&1) || true
+expect_check_fails "a path template no caller holding the resource's identity can fill" "$d" \
+  "which is not an instance of it" bash -c 'cd apps/common && go test -count=1 -run TestContract_ThePublishedTemplateIsTheShapeTheseRoutesAreDrivenAt ./webhost/'
+# The same mutation, seen from the wire rather than from the document: a
+# request built out of that template and served by the real router does not
+# reach the backup it names. This is the half core/internal/apiclient's own
+# suite structurally cannot see, because its fake engine compiles the
+# contract's parameters into one-segment patterns and so can never be
+# stricter than the contract is.
+expect_check_fails "a path built from that template, driven at the real router" "$d" \
+  "want 200 and that id back" bash -c 'cd apps/common && go test -count=1 -run TestContract_APathBuiltFromTheContractReachesTheResourceItNames ./webhost/'
 
 d=$(mutant profile-changes-backup-semantics)
 # A runtime profile reaching into a backup response is the fork this whole

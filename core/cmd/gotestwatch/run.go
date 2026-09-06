@@ -91,6 +91,57 @@ type Result struct {
 // far preferable to gotestwatch itself hanging with no report at all.
 const reapWait = 15 * time.Second
 
+// pollLag measures how late gotestwatch's own watchdog loop was run, and
+// it is the one number this tool publishes about the machine rather than
+// about the run under it (issue #533).
+//
+// The arithmetic is the gap between two consecutive turns, less the
+// interval that gap was supposed to be, less whatever the loop itself
+// spent on the previous turn. That last subtraction is the whole reason
+// this is a type instead of two lines in the loop. The turn takes the
+// tracker's mutex and the goroutine draining `go test`'s JSON stdout
+// holds the same mutex on every event, so under a firehose the loop can
+// genuinely still be working when the next tick fires, and counting that
+// as the host stalling it would be exactly the kind of claim #533 exists
+// to delete, one level down.
+//
+// What is left is a ceiling rather than an exact reading, in two named
+// directions. It cannot exclude gotestwatch's own GC pauses, which stop
+// this goroutine as surely as the scheduler does. And it under-reports
+// rather than over-reports whenever the loop was busy, because the
+// subtraction comes off a gap the host may also have stretched. Both are
+// the safe direction for a sentence an operator reads as "this is what
+// the machine took away from me", and the sentence in tracker.go says so.
+//
+// It is a maximum over the run, not an average: one 4s stall matters and
+// is invisible in a mean taken over thousands of on-time turns.
+type pollLag struct {
+	interval time.Duration
+	last     time.Time
+	spent    time.Duration
+	worst    time.Duration
+}
+
+// newPollLag starts a measurement of a loop that asks for a turn every
+// interval, whose first turn is being taken at `at`.
+func newPollLag(interval time.Duration, at time.Time) *pollLag {
+	return &pollLag{interval: interval, last: at}
+}
+
+// turn records that the loop was actually run at now, and clears the work
+// it did on the turn before, which has now been accounted for.
+func (p *pollLag) turn(now time.Time) {
+	if late := now.Sub(p.last) - p.interval - p.spent; late > p.worst {
+		p.worst = late
+	}
+	p.last = now
+	p.spent = 0
+}
+
+// worked records what the loop's own turn cost, so the next turn does not
+// charge it to the host. Called after the work, with what it measured.
+func (p *pollLag) worked(d time.Duration) { p.spent = d }
+
 // killAndWait sends SIGKILL to the process group pgid, then waits up to
 // reapWait for waited (fed by a goroutine blocked on cmd.Wait(), as Run
 // sets up) to report the child's exit. reaped is false if the group did
@@ -221,6 +272,18 @@ func Run(opts Options) (Result, error) {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
+	// What the host was doing, measured rather than guessed at (issue
+	// #533). See pollLag: the loop below asks for a turn every `poll`,
+	// and the part of the wait that is not the interval and not the
+	// loop's own work is the machine declining to run a process that was
+	// ready. That is the closest gotestwatch gets to a reading of the
+	// host, and it is worth having because the event stream cannot say
+	// whether a run that never finished was livelocked or was being
+	// starved: both arrive the same way. It does not settle the question
+	// either, and the trip's own sentence says so. It is a fact next to
+	// the numbers, not a verdict.
+	lag := newPollLag(poll, time.Now())
+
 	var (
 		waitErr error
 		tripped *trip
@@ -230,8 +293,39 @@ watch:
 		select {
 		case waitErr = <-waited:
 			break watch
-		case now := <-ticker.C:
-			if tripped = tr.check(now); tripped != nil {
+		case <-ticker.C:
+			// time.Now(), not the instant the tick itself carries. The
+			// two differ by exactly how long this goroutine waited to be
+			// run after the tick fired, which is both the quantity being
+			// measured here and the reason not to decide a kill from the
+			// tick's own timestamp: that clock reads early precisely
+			// when the host is loaded, so a stall would be measured
+			// short exactly when it matters. Same reasoning as observe's
+			// (see tracker.go): what a watchdog can act on is what it
+			// can observe, at the instant it observes it.
+			//
+			// It does cut the other way, and #533 is an issue about a
+			// watchdog killing a run it should not have, so it is worth
+			// saying out loud rather than leaving for somebody to find:
+			// sinceLast now carries this goroutine's own scheduling lag
+			// while the window it is measured against does not, so a
+			// loaded host makes a run very slightly EASIER to trip
+			// rather than harder. What keeps that from being a defect is
+			// the size of it against the bound. The lag is the number
+			// pollLag measures and every trip now prints: single-digit
+			// milliseconds on this project's own gate runs, against a
+			// no-progress floor of 45s (see main.go's defaultBounds), so
+			// a run it could decide is a run that was within
+			// milliseconds of the bound anyway. And a run where it grew
+			// into something that could matter says so on its own line,
+			// which is the whole reason the figure is printed.
+			now := time.Now()
+			lag.turn(now)
+			tripped = tr.check(now)
+			lag.worked(time.Since(now))
+			if tripped != nil {
+				tripped.pollInterval = poll
+				tripped.worstPollLag = lag.worst
 				// Kill the whole group, then still wait: a watchdog
 				// that leaves the tree it gave up on running behind
 				// defeats the one correctness property (see doc.go)
@@ -239,9 +333,9 @@ watch:
 				// all. That wait is itself bounded (see killAndWait):
 				// SIGKILL cannot terminate a process stuck in
 				// uninterruptible kernel I/O wait, and this trip has
-				// already been correctly diagnosed, so it is reported
-				// either way rather than risking gotestwatch itself
-				// hanging forever on the reap.
+				// already been decided, so it is reported either way
+				// rather than risking gotestwatch itself hanging
+				// forever on the reap.
 				var reaped bool
 				waitErr, reaped = killAndWait(pgid, waited, reapWait)
 				if !reaped {
@@ -267,8 +361,8 @@ watch:
 		return res, nil
 	}
 	if opts.Stderr != nil {
-		_, _ = fmt.Fprintf(opts.Stderr, "gotestwatch: %d events observed, slowest gap %s (%s), no-progress window %s\n",
-			events, slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
+		_, _ = fmt.Fprintf(opts.Stderr, "gotestwatch: %s observed, slowest gap %s (%s), no-progress window %s\n",
+			eventCount(events), slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
 	}
 	if waitErr == nil {
 		return res, nil

@@ -995,6 +995,46 @@ describe("httpApi requests the paths the contract declares", () => {
   });
 
 
+  // An id with the wrong number of parts is a caller error, and the only
+  // question is who gets blamed for it. Pasting "" in for the segments
+  // that are not there builds /api/v1/backups/artifact-1//, which the
+  // service answers 404 because it serves no such route, and that refusal
+  // reads as "this deployment does not have that endpoint" and sends
+  // whoever meets it to look at the server. core/internal/apiclient's
+  // fillPath refuses an empty path parameter for exactly this reason, and
+  // these paths are the same paths.
+  //
+  // Rejections rather than synchronous throws, because every method on
+  // this client is declared to return a promise and a caller that has one
+  // .catch for the request cannot also be expected to have a try around
+  // the call.
+  const malformedIds: Array<[string, string, (id: string) => Promise<unknown>]> = [
+    ["getSet", "src", (id) => httpApi.getSet(id)],
+    ["getArtifact", "artifact-1", (id) => httpApi.getArtifact(id)],
+    ["revalidate", "artifact-1", (id) => httpApi.revalidate(id)],
+    ["retryIngestion", "artifact-1", (id) => httpApi.retryIngestion(id)],
+    ["retryFailedIngestion", "artifact-1", (id) => httpApi.retryFailedIngestion(id)],
+    ["reinstate", "artifact-1", (id) => httpApi.reinstate(id)],
+    // The count is right and a part is empty, which splits into the right
+    // number of pieces and still cannot name anything.
+    ["getArtifact with an empty part", "production//bad.dump", (id) => httpApi.getArtifact(id)],
+    // encodeURIComponent returns ".." unchanged, so nothing further down
+    // would have escaped it either, and the path would climb out of the
+    // route the contract declares. fillPath refuses the same two values.
+    ["getArtifact with a relative part", "production/../bad.dump", (id) => httpApi.getArtifact(id)],
+    ["getSet with a relative part", "../settings", (id) => httpApi.getSet(id)]
+  ];
+
+  for (const [name, id, call] of malformedIds) {
+    it(`${name} refuses an id that cannot fill its path, rather than requesting one with empty segments`, async () => {
+      const fetchMock = mockFetchOk(undefined, 200);
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(call(id)).rejects.toThrow(/parts/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  }
+
   it("reads the version from /system/version, not /version", async () => {
     const fetchMock = mockFetchOk({
       api_version: "v1", core_version: "1.4.0", commit: "abc1234",
@@ -1594,8 +1634,8 @@ describe("listSets joins the per-set health report (issue #245)", () => {
           json: async () => ({ generated_at: "2026-08-30T10:00:00Z", backup_sets: health })
         });
       }
-      // GET /backup-sets returns the list; GET /backup-sets/{id} returns
-      // one set on its own, and both go through this join.
+      // GET /backup-sets returns the list; GET /backup-sets/{source}/{set}
+      // returns one set on its own, and both go through this join.
       const one = url.replace(/^.*\/backup-sets/, "") !== "";
       return Promise.resolve({
         ok: true,

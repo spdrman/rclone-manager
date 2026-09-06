@@ -102,6 +102,63 @@ func backupSetVerbNames() []string {
 // set of rules growing here is what backupsetcreate_test.go's refusal
 // table exists to catch.
 //
+// # Sharing the service layer is not reaching the running one
+//
+// Worth saying next to the paragraph above, because that paragraph is
+// exactly what makes the mistake easy. Sharing a service layer is a claim
+// about code, not about liveness: the methods are the same methods, and
+// calling one of them here still moves only this process's own view of
+// the deployment.
+//
+// So a verb that is about to change config.yaml (create, patch, remove,
+// and the retention forms that set or clear a policy) does not just call
+// it. It takes core/service's ConfigWriteGuard, asks whether anything has
+// announced itself as serving this deployment, and settles from inside
+// that claim where the change is going to go. There are three answers and
+// mode.go prints which one this invocation got.
+//
+// With nothing serving, this process is the deployment's only authority:
+// it opens its own BackupService over the same config.yaml and state
+// database, writes, reloads its OWN view of the file and exits, and an
+// engine started afterwards reads that file when it starts. With
+// something serving and a route to it, create, patch and remove hand the
+// change to that engine over its own API (#543, route.go and
+// engineroute.go), so the change is made BY the process that will serve
+// it and there is nothing to restart. With something serving and no
+// route, nothing is written, the exit is non-zero, and the operator is
+// told what was found and where the change can be made instead. There is
+// still no watcher and no SIGHUP reload, which is why a change left in
+// the file for a restart to find is the one outcome that never happens.
+//
+// Two writes under this noun have no route, and both are decisions rather
+// than gaps. `backup-set retention` could have had one: the client
+// carries setBackupSetRetention, clearBackupSetRetention and
+// getBackupSetRetention, and apicontract.RetentionOverride carries a
+// whole tier chain, so the wire is not what stops it. What #543 would not
+// do is route the write and leave the report beside it reading this
+// host's own file, because one verb answering out of two worlds is the
+// failure this EPIC exists to close, and #544 did not take that read half
+// either. So the verb stands whole on the direct path, and moving it is
+// one piece of work rather than two halves.
+//
+// The first configuration a create writes on an instance that has no
+// config.yaml yet has no route for a different reason: finding a process
+// serving the journal --state-database names says that deployment is
+// already configured, and POST /system/first-run is not an operation to
+// send an already configured engine. Both refuse beside a serving
+// process, exactly as every configuration write did before #543.
+//
+// That is issue #535: a `backup-set create` through docker exec against a
+// live server succeeded, `sources` listed both sets, and the Web UI showed
+// nothing. The help text and the doc comments here had said these verbs
+// were "the same operation POST /api/v1/backup-sets performs", which is
+// true inside one process and reads as a promise about the running one, so
+// #539 corrected every one of them. EPIC #536 is what changed the
+// behaviour: phase 1 refuses a write aimed at a configuration a running
+// engine holds (#538) and names the mode it decided (#542), and phase 2
+// gave this tree an API client (#541) and the route that carries these
+// three verbs to the engine rather than turning the operator away (#543).
+//
 // # The two create paths, and why one verb covers both
 //
 // A configured instance folds a new set into the file it already has
@@ -307,8 +364,13 @@ func (f *backupSetFlags) refuseEveryFlagBut(verb string, mine ...string) int {
 	return usageError("backup-set %s: --%s is not a %s flag; passing it here would change nothing and exit 0", verb, wrong, verb)
 }
 
-// backupSetCreate is the `create` verb: the same operation POST
-// /api/v1/backup-sets performs, through the same service layer.
+// backupSetCreate is the `create` verb. Where the set is actually made
+// depends on what is serving this deployment and on whether this command
+// has been told how to reach it: POST /api/v1/backup-sets against that
+// engine when it can be reached, and the same service layer that route is
+// built on, called in this process, when nothing is serving. See the note
+// on the package's process boundary above cmdBackupSet for the third
+// answer, and for the one create that has no route at all.
 func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 	// Both pairs below are alternatives, not a preference order. A caller
 	// who passed both has not said which one they meant, and picking one
@@ -363,9 +425,17 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 	return createIntoExistingConfig(ctx, *f.cfgPath, *f.keyFile, *f.trustHostKey, req)
 }
 
-// backupSetPatch is the `patch` verb: the same operation PATCH
-// /api/v1/backup-sets/{source}/{set} performs, through the same
-// BackupService.UpdateBackupSet.
+// backupSetPatch is the `patch` verb, and openConfigWriteRoute settles
+// which of two shapes it takes before any of it runs.
+//
+// With nothing serving this deployment it is BackupService.UpdateBackupSet
+// called in this process, the same method PATCH
+// /api/v1/backup-sets/{source}/{set} is built on, and the reload it
+// triggers is this process's own view of the file, which this process then
+// exits with. With a serving engine this command can reach, it IS that
+// PATCH, made against the process that will go on serving the result.
+// With a serving engine it cannot reach, it is refused with the file
+// untouched.
 func backupSetPatch(f *backupSetFlags, id string) int {
 	req, named := buildBackupSetPatch(f)
 	req.AcknowledgeRepoint = *f.acknowledgeRepoint
@@ -374,7 +444,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath)
+	route, cleanup, err := openConfigWriteRoute(ctx, *f.cfgPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -382,7 +452,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	updated, err := svc.UpdateBackupSet(ctx, id, req)
+	updated, err := route.UpdateBackupSet(ctx, id, req)
 	if err != nil {
 		return fail(err)
 	}
@@ -390,9 +460,10 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	return 0
 }
 
-// backupSetRemove is the `remove` verb: the same operation DELETE
-// /api/v1/backup-sets/{source}/{set} performs, through the same
-// BackupService.RemoveBackupSet.
+// backupSetRemove is the `remove` verb: DELETE
+// /api/v1/backup-sets/{source}/{set} against a serving engine this command
+// can reach, and the same BackupService.RemoveBackupSet that route is
+// built on, called in this process, when nothing is serving.
 //
 // It asks for no confirmation, and that is a decision rather than an
 // omission. Nothing this removes is a backup: every artifact the set
@@ -406,7 +477,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 // itself once the set is out of the configuration.
 func backupSetRemove(f *backupSetFlags, id string) int {
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath)
+	route, cleanup, err := openConfigWriteRoute(ctx, *f.cfgPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -414,7 +485,7 @@ func backupSetRemove(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	return backupSetRemoveWith(ctx, svc, id, os.Stdout)
+	return backupSetRemoveWith(ctx, route, id, os.Stdout)
 }
 
 // backupSetRemover is the two calls the remove verb makes, as an
@@ -431,14 +502,21 @@ type backupSetRemover interface {
 //
 // The count of what stays is read BEFORE the removal, because afterwards
 // this filter names a set the configuration no longer has and is refused
-// (#187). It is a courtesy, not a precondition: a journal read failing
-// here must not turn into "the removal failed", because the operator
-// asked for a set to stop collecting and the configuration can be
-// written, and leaving the set running for the sake of a number in a
-// sentence would be the wrong trade. A count that could not be taken is
-// said to be exactly that, never printed as 0, which is a specific and
-// reassuring claim about a thing that was not looked at. This mirrors
+// (#187). It is a courtesy, not a precondition: a read failing here must
+// not turn into "the removal failed", because the operator asked for a
+// set to stop collecting and the configuration can be written, and
+// leaving the set running for the sake of a number in a sentence would be
+// the wrong trade. A count that could not be taken is said to be exactly
+// that, never printed as 0, which is a specific and reassuring claim
+// about a thing that was not looked at. This mirrors
 // BackupService.artifactCountFor's own -1.
+//
+// Two things now reach that branch rather than one, which is why the
+// sentence no longer names the journal. Directly it is a journal read that
+// failed; over the engine route it is a count this build does not take at
+// all (engineroute.go's ErrArtifactsNotRouted, whose own doc says why).
+// Both are honestly "nobody counted", and an operator has one thing to do
+// about either.
 func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, out io.Writer) int {
 	kept := -1
 	if listed, err := svc.ListArtifacts(ctx, service.ArtifactFilter{BackupSetID: id}); err == nil {
@@ -458,7 +536,7 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 	// into a non-zero exit. Same reasoning as setup.go's cycle summary.
 	_, _ = fmt.Fprintf(out, "removed the configuration for %s\n", id)
 	if kept < 0 {
-		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage (the journal read failed); they are still there, and `backup-manager artifacts` lists them\n")
+		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage; they are still there, and `backup-manager artifacts` lists them\n")
 	} else {
 		_, _ = fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
 	}
@@ -485,9 +563,9 @@ const defaultStateDatabase = "/data/state/state.db"
 
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST
-// /api/v1/backup-sets calls.
+// /api/v1/backup-sets calls, in this process.
 func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
-	svc, cleanup, err := openBackupService(ctx, configPath)
+	route, cleanup, err := openConfigWriteRoute(ctx, configPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -495,11 +573,11 @@ func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, t
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	if err := resolveKeyAndTrust(ctx, svc, keyFile, trustHostKey, &req); err != nil {
+	if err := resolveKeyAndTrust(ctx, route, keyFile, trustHostKey, &req); err != nil {
 		return fail(err)
 	}
 
-	result, err := svc.CreateBackupSet(ctx, req)
+	result, err := route.CreateBackupSet(ctx, req)
 	if err != nil {
 		return fail(err)
 	}
@@ -526,6 +604,40 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 		// been told the backup started.
 		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `backup-manager run`")
 	}
+
+	// This path writes a configuration without ever going through
+	// openBackupService, so it has to ask openBackupService's question
+	// itself, and it has to ask it about the journal rather than about
+	// the configuration: there is no configuration here to read a journal
+	// path out of, which is the entire reason this branch was taken.
+	//
+	// Two ordinary mistakes land here against a LIVE deployment, and both
+	// used to exit 0 after writing a configuration nothing would ever
+	// read: a mistyped --config, and a config.yaml renamed out from under
+	// a running engine. --state-database is what still identifies the
+	// deployment in both, because it carries the same packaged default
+	// the first-run wizard writes, so a create that does not name one is
+	// still asking about the right journal.
+	//
+	// A genuine first run is untouched by this, and that is the half that
+	// had to stay true: a bare host has no journal, a host serving the
+	// setup wizard has not opened one yet, and neither announces itself
+	// as serving anything. Both still write their first configuration
+	// from here.
+	//
+	// It announces its mode too (#542), for the same reason it has to
+	// ask at all: this was the one configuration write in the binary with
+	// no route through openBackupService, so leaving it out would leave
+	// exactly one write that never says which world it believed it was
+	// in. What the decision can see here is narrower than elsewhere and
+	// liveengine.go says so out loud, but announcing the mode it did
+	// decide is the honest answer and is strictly more than the nothing
+	// this path said before.
+	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = guard.Release() }()
 
 	firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
 		ConfigPath:    configFile,
@@ -764,7 +876,26 @@ func printBackupSet(s service.BackupSet) {
 	if s.CompletionStrategy == "stable" {
 		fmt.Printf("  stable_for: %s\n", s.StableFor)
 	}
-	fmt.Printf("  stale_after: %s\n", s.StaleAfter)
+	// stale_after used to be the one field that survived a direct write
+	// and not a routed one. The API accepted it on the way in
+	// (BackupSetSpec) and UpdateBackupSetRequest could change it, and the
+	// BackupSet the engine answered with carried no such property at all,
+	// so a routed create printed "not reported" for a value the operator
+	// had typed on that very command line. #555 put stale_after_seconds on
+	// the wire and both routes now report it.
+	//
+	// Zero is still not a value, it is the absence of one:
+	// config.Validate refuses a configuration whose stale_after is not
+	// positive, so nothing that came out of a validated configuration can
+	// reach the second branch, and what can is an engine older than that
+	// field. Printing "0s" would be a specific claim about FR-24's
+	// freshness budget made from a field nothing looked at, which is the
+	// class of quiet wrongness this whole EPIC is about.
+	if s.StaleAfter > 0 {
+		fmt.Printf("  stale_after: %s\n", s.StaleAfter)
+	} else {
+		fmt.Printf("  stale_after: not reported (the engine that answered serves no stale_after; `backup-manager sources` reads it from the configuration)\n")
+	}
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
 	fmt.Printf("  read_only: %v\n", s.ReadOnly)

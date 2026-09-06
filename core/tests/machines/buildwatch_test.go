@@ -132,6 +132,68 @@ func TestDockerBuildProgressTracker_OverallCapCatchesALivelock(t *testing.T) {
 	if trip.kind != "overall" {
 		t.Fatalf("trip.kind = %q, want overall: %v", trip.kind, trip)
 	}
+
+	// Caught, and reported with the measurements behind it. What it must
+	// NOT do is name what it caught. This tracker's cap is clamped at
+	// overallMax on purpose (see defaultDockerBuildBounds), so a build
+	// slow enough to need more than the ceiling reaches the same cap this
+	// loop did, by construction, and the old sentence claimed the
+	// opposite: that reaching the cap proved the build was not merely
+	// slow, because a slow one "would have widened it". Issue #533.
+	msg := trip.String()
+	if strings.Contains(msg, "is a livelock") || strings.Contains(msg, "not a slow machine") {
+		t.Fatalf("the failure text names a cause, and this tracker's own clamp is what makes that claim false: a build needing more than overallMax (%s) reaches this cap without being stuck at all:\n%v",
+			defaultDockerBuildBounds.overallMax, trip)
+	}
+	for _, want := range []string{
+		trip.elapsed.Round(time.Millisecond).String(),
+		trip.overallCap.Round(time.Millisecond).String(),
+		"still building...",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("the failure text does not report %q, so a reader has nothing to work from now that it names no cause:\n%s", want, msg)
+		}
+	}
+}
+
+// TestDockerBuildProgressTracker_AClampedCapIsReachedByASlowBuildToo is
+// the evidence for the sentence above being removed rather than reworded.
+//
+// It plants no loop and nothing pathological: a build whose every step is
+// a legitimate, completed 8-second step, going about its business. The
+// derivation would give it a 160-second cap, the clamp refuses to go past
+// overallMax, and the build is killed for being slow. Under the old
+// wording it was killed for being slow AND told that being slow would have
+// widened its cap, which the clamp two screens up guarantees it would not
+// have.
+func TestDockerBuildProgressTracker_AClampedCapIsReachedByASlowBuildToo(t *testing.T) {
+	start := time.Now()
+	p := newDockerBuildProgressTracker(defaultDockerBuildBounds, start)
+
+	// Big enough that the derived cap (step x overallFactor) lands above
+	// overallMax, or the clamp is not what this build meets and the test
+	// proves nothing. The check below holds it to that.
+	const step = 8 * time.Second
+	at := start
+	for at.Sub(start) < defaultDockerBuildBounds.overallMax+step {
+		at = at.Add(step)
+		p.observe(fmt.Sprintf("#%d building", int(at.Sub(start)/step)), at)
+	}
+
+	if got := p.overallCap(); got != defaultDockerBuildBounds.overallMax {
+		t.Fatalf("overallCap = %s after steps of %s, want it clamped to overallMax %s; without the clamp this build would have had %s and this test would be proving nothing",
+			got, step, defaultDockerBuildBounds.overallMax, time.Duration(float64(step)*defaultDockerBuildBounds.overallFactor))
+	}
+	trip := p.check(at)
+	if trip == nil {
+		t.Fatalf("a build of steady %s steps ran past its clamped %s cap and was not caught", step, defaultDockerBuildBounds.overallMax)
+	}
+	if trip.kind != "overall" {
+		t.Fatalf("trip.kind = %q, want overall: %v", trip.kind, trip)
+	}
+	if msg := trip.String(); strings.Contains(msg, "is a livelock") || strings.Contains(msg, "not a slow machine") {
+		t.Fatalf("a build whose every step completed in %s, killed by a cap its own slowness was not allowed to widen, was told it was not merely slow:\n%s", step, msg)
+	}
 }
 
 func TestDockerBuildProgressTracker_OneSlowStepWidensTheCapForTheRestOfTheBuild(t *testing.T) {
@@ -190,7 +252,7 @@ func TestDockerBuildProgressTracker_NeitherBoundWidensPastItsCeiling(t *testing.
 			defaultDockerBuildBounds.overallMax)
 	}
 	if defaultDockerBuildBounds.stepMax >= defaultDockerBuildBounds.overallMax {
-		t.Fatalf("stepMax %s is not below overallMax %s, so a stalled build gets reported as a livelock instead of a stall",
+		t.Fatalf("stepMax %s is not below overallMax %s, so a stalled build waits for the overall cap, which can only say the build never finished, instead of tripping the no-progress window, which names the step it stalled after",
 			defaultDockerBuildBounds.stepMax, defaultDockerBuildBounds.overallMax)
 	}
 	if defaultDockerBuildBounds.overallMax <= defaultDockerBuildBounds.overallFloor {

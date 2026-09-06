@@ -138,14 +138,19 @@ func main() {
 }
 
 // run dispatches to one of the four commands and returns the process exit
-// code. Two is reserved for a usage error (no command, or one this binary
-// does not have) and one for a command that ran and failed, which is the
-// same split core/cmd/backup-manager uses, so a caller scripting either
-// binary reads them the same way.
+// code, from the constants beside fail below: 2 for a usage error (no
+// command, or one this binary does not have), 1 for a command that ran
+// and failed, and 3 for `serve` refused because something else already
+// serves this deployment (#551). That is the same split
+// core/cmd/backup-manager publishes in its own usage block, so a caller
+// scripting either binary reads them the same way. That last sentence was
+// already here while it was untrue: #551 gave the CLI a third status and
+// this binary kept returning 1 for the identical refusal, which is the
+// half of that issue this file is.
 func run(args []string) int {
 	if len(args) == 0 {
 		usage()
-		return 2
+		return exitUsage
 	}
 	switch args[0] {
 	case "serve":
@@ -159,7 +164,7 @@ func run(args []string) int {
 	default:
 		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown command %q\n\n", args[0])
 		usage()
-		return 2
+		return exitUsage
 	}
 }
 
@@ -366,7 +371,7 @@ func cmdServe(args []string) int {
 	stateDatabase := fset.String("state-database", envOrDefault("STATE_DATABASE", defaultStateDatabase),
 		"SQLite journal path written into a first-run configuration; ignored once a config file exists, which names its own")
 	if err := fset.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 
 	// Profile resolution happens before anything opens a file or a
@@ -376,22 +381,22 @@ func cmdServe(args []string) int {
 	runtimeProfile, err := profile.Lookup(*profileName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-		return 2
+		return exitUsage
 	}
 	if *legacyTrustedGateway != "" {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: serve does not take --trusted-gateway. The two hops trust different peers: --trusted-upstream (TRUSTED_UPSTREAM_CIDRS) is this container's own peer, the reverse proxy in front of it, while --trusted-gateway (TRUSTED_GATEWAY_CIDRS) names the platform gateway and belongs to serve-ui. A single value for both is the one configuration that cannot be correct.")
-		return 2
+		return exitUsage
 	}
 	if *trustedUpstream != "" {
 		if runtimeProfile.Gateway == nil {
 			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-upstream was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
-			return 2
+			return exitUsage
 		}
 		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedUpstream)
 	}
 	if err := checkAuthMode(*authMode, runtimeProfile); err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-		return 2
+		return exitUsage
 	}
 	// Fail closed before anything opens a file or a listener. A gateway
 	// profile whose trust boundary does not parse, or is not there at
@@ -400,7 +405,7 @@ func cmdServe(args []string) int {
 	if runtimeProfile.Gateway != nil {
 		if _, err := runtimeProfile.Gateway.Compile(); err != nil {
 			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q: %v\n", runtimeProfile.ID, err)
-			return 2
+			return exitUsage
 		}
 	}
 
@@ -484,7 +489,7 @@ func cmdServe(args []string) int {
 	platformAdapter, err := runtimeProfile.Adapter(profile.AdapterConfig{LocalAuth: localAuth})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-		return 2
+		return exitUsage
 	}
 	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q (%s), authentication: %s\n",
 		runtimeProfile.ID, runtimeProfile.DisplayName, authModeOf(runtimeProfile))
@@ -499,6 +504,23 @@ func cmdServe(args []string) int {
 
 	var handler http.Handler
 	var scheduler serve.Scheduler
+
+	// Issue #537: this process is about to serve the deployment, so it
+	// says so before it reads a thing. A `backup-set create` typed into a
+	// shell on the same host finds this announcement and refuses, rather
+	// than rewriting a configuration this process has already read and
+	// will never read again. Announcing before the open is what makes
+	// that check an exclusion rather than a sample; core/service's
+	// liveengine.go has the whole arrangement.
+	//
+	// On a first-run instance there is no configuration to name a journal
+	// yet, so this is a no-op and the announcement happens in Activate
+	// below instead, once setup has written one.
+	stopServing, err := service.AnnounceServing(*configPath)
+	if err != nil {
+		return failServing(err)
+	}
+	defer func() { _ = stopServing() }()
 
 	backend, cleanup, err := service.Open(ctx, *configPath)
 	switch {
@@ -542,9 +564,35 @@ func cmdServe(args []string) int {
 		}
 		engineConfig.FirstRun = firstRun
 		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
+			// The announcement the branch above could not make: there was
+			// no configuration to name a journal when this process
+			// started, and setup has just written one. From here on this
+			// instance is a running engine like any other, and a CLI
+			// write aimed at it has to be able to find it.
+			//
+			// No failServing here, and it is not an oversight: this
+			// process is not exiting. It is serving a setup flow, and a
+			// refusal here is reported to the operator through the API
+			// as restart_required (FirstRunEngine.activate), with the
+			// configuration already durably written. There is no exit
+			// status to carry #551's news on, and inventing one would
+			// mean tearing down a server for a fact the person in front
+			// of it can already read.
+			stopActivated, serveErr := service.AnnounceServing(*configPath)
+			if serveErr != nil {
+				return nil, nil, serveErr
+			}
 			opened, closeFn, openErr := service.Open(ctx, *configPath)
 			if openErr != nil {
+				_ = stopActivated()
 				return nil, nil, openErr
+			}
+			closeBoth := func() error {
+				closeErr := closeFn()
+				if stopErr := stopActivated(); stopErr != nil && closeErr == nil {
+					closeErr = stopErr
+				}
+				return closeErr
 			}
 			// Alerting is decided from the configuration setup just
 			// wrote, exactly as it is for a process that started with
@@ -552,7 +600,7 @@ func cmdServe(args []string) int {
 			// deployment shape where the alerts block does nothing until
 			// a restart.
 			enableAlerts(opened, platformAdapter)
-			return opened, closeFn, nil
+			return opened, closeBoth, nil
 		}
 
 		engine, engErr := serve.NewFirstRunEngine(engineConfig)
@@ -588,7 +636,7 @@ func cmdServe(args []string) int {
 	if err := serve.RunEngine(ctx, httpServer, scheduler, shutdownGrace, os.Stderr); err != nil {
 		return fail(err)
 	}
-	return 0
+	return exitOK
 }
 
 // enableAlerts is Work Package 3.5's proactive alerting wiring
@@ -629,13 +677,13 @@ func cmdServeUI(args []string) int {
 	uiRoot := fset.String("ui-root", envOrDefault("UI_ROOT", ""), "a directory of per-profile UI bundles; the bundle served is <ui-root>/<profile>")
 	uiDir := fset.String("ui-dir", envOrDefault("UI_DIR", ""), "one explicit UI bundle directory, which wins over --ui-root")
 	if err := fset.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 
 	runtimeProfile, err := profile.Lookup(*profileName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-		return 2
+		return exitUsage
 	}
 
 	// The trust boundary is resolved before anything opens a listener, and
@@ -652,17 +700,17 @@ func cmdServeUI(args []string) int {
 	edgeGateway, err := compileEdgeGateway(runtimeProfile, *trustedGateway)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-		return 2
+		return exitUsage
 	}
 
 	upstreamURL, err := url.Parse(*upstream)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "backup-manager-web: invalid --upstream %q: %v\n", *upstream, err)
-		return 2
+		return exitUsage
 	}
 	if upstreamURL.Scheme == "" || upstreamURL.Host == "" {
 		fmt.Fprintf(os.Stderr, "backup-manager-web: --upstream %q must be an absolute URL (e.g. http://rclone-manager:8080)\n", *upstream)
-		return 2
+		return exitUsage
 	}
 
 	embedded, err := fs.Sub(webui.Assets, "dist")
@@ -701,7 +749,7 @@ func cmdServeUI(args []string) int {
 	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {
 		return fail(err)
 	}
-	return 0
+	return exitOK
 }
 
 // cmdAuth dispatches `auth`'s own subcommands, one level deeper than
@@ -716,14 +764,14 @@ func cmdServeUI(args []string) int {
 func cmdAuth(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: auth requires a subcommand (create-admin)")
-		return 2
+		return exitUsage
 	}
 	switch args[0] {
 	case "create-admin":
 		return cmdAuthCreateAdmin(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown auth subcommand %q (only create-admin exists)\n", args[0])
-		return 2
+		return exitUsage
 	}
 }
 
@@ -749,15 +797,15 @@ func cmdAuthCreateAdmin(args []string) int {
 	username := fset.String("username", "", "administrator username to create (required)")
 	passwordStdin := fset.Bool("password-stdin", false, "read the administrator password from stdin (required)")
 	if err := fset.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 	if *username == "" {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --username is required")
-		return 2
+		return exitUsage
 	}
 	if !*passwordStdin {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | backup-manager-web auth create-admin --username U --password-stdin")
-		return 2
+		return exitUsage
 	}
 
 	password, err := readPasswordFromStdin(os.Stdin)
@@ -786,7 +834,7 @@ func cmdAuthCreateAdmin(args []string) int {
 		admin.Username, *authStorePath); err != nil {
 		return fail(fmt.Errorf("auth create-admin: writing confirmation: %w", err))
 	}
-	return 0
+	return exitOK
 }
 
 // readPasswordFromStdin reads all of r and returns it as a password,
@@ -824,22 +872,22 @@ func cmdHealthcheck(args []string) int {
 	fset := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	target := fset.String("url", localHealthcheckURL(envOrDefault("LISTEN_ADDR", defaultListenAddr)), "URL to GET")
 	if err := fset.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 
 	client := &http.Client{Timeout: healthcheckTimeout}
 	resp, err := client.Get(*target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: healthcheck:", err)
-		return 1
+		return exitFailure
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		fmt.Fprintf(os.Stderr, "backup-manager-web: healthcheck: %s returned status %d\n", *target, resp.StatusCode)
-		return 1
+		return exitFailure
 	}
-	return 0
+	return exitOK
 }
 
 // localHealthcheckURL turns a --listen/LISTEN_ADDR value ("[HOST]:PORT")
@@ -863,13 +911,83 @@ func localHealthcheckURL(listenAddr string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/"
 }
 
+// The exit statuses this binary promises, in one place, because they are
+// a contract a supervisor branches on rather than an implementation
+// detail. Three of them have always been here; the fourth is issue #551,
+// and it is here because container/compose.yaml runs
+// `/backup-manager-web serve`, so the deployment shape that code was
+// justified by (a supervisor replacing a container while the outgoing
+// process has not let go of the serving lock yet, where waiting and
+// trying again is the right answer) is THIS binary's shape rather than
+// `backup-manager daemon`'s. Leaving it out would have published a
+// contract that holds for the binary an operator types by hand and not
+// for the one their orchestrator restarts.
+//
+// # Why the numbers are written twice
+//
+// core/cmd/backup-manager carries the same four in its own setup.go, and
+// nothing imports them from here or from there. The layer rules run one
+// way, so a shared home would have to be a package under core/, and a
+// CLI's exit-status contract is not something the engine packages should
+// be growing to hold. Two copies of four integers, each next to the
+// binary that returns them and each covered by that binary's own tests,
+// is the cheaper arrangement. What keeps them honest is that they are
+// PUBLISHED rather than internal: the CLI prints the table in its usage
+// block, and a change on either side that is not made on the other is a
+// change to a documented contract.
+//
+// # What deliberately does not return 3
+//
+// `auth create-admin` refused because a server is running against the
+// same --auth-store (local.ErrStoreLocked) is the closest call on the
+// list, and it stays on 1. It is a different fact: that server holds the
+// auth STORE, which is not "another process is already serving this
+// deployment, so nothing was done", and the answer to it is to stop the
+// server rather than to wait, which is the opposite of what 3 invites.
+const (
+	// exitOK: the command did what it was asked.
+	exitOK = 0
+
+	// exitFailure: an ordinary failure. A configuration that will not
+	// load, a store that will not open, a healthcheck that got no 2xx.
+	exitFailure = 1
+
+	// exitUsage: the command line was wrong. An unknown command, an
+	// unknown flag, a missing or contradictory one.
+	exitUsage = 2
+
+	// exitEngineHoldsDeployment: another process is already serving this
+	// deployment, so nothing was done. The one failure here worth
+	// waiting on and starting again.
+	exitEngineHoldsDeployment = 3
+)
+
 // fail prints one line to stderr and returns the exit code for a command
 // that ran and did not work. The prefix matters more than it looks: this
 // process shares a container log with the engine and the UI host, so a
 // line without it is a line an operator cannot attribute.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
-	return 1
+	return exitFailure
+}
+
+// failServing is fail for the one failure in this binary that has an exit
+// status of its own: being told, at the moment this process announces it
+// is about to serve, that something else already serves this deployment
+// (issue #551, core/service's ErrAlreadyServing).
+//
+// Asked with errors.Is at the one call site that can produce it, rather
+// than folded into fail. fail then keeps a single rule for every other
+// failure in the binary, and a sentinel that turns up wrapped inside some
+// unrelated error later cannot quietly start changing the status a
+// supervisor reads. The message is untouched: what a script is meant to
+// branch on is the number, which is the whole reason this exists.
+func failServing(err error) int {
+	if errors.Is(err, service.ErrAlreadyServing) {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		return exitEngineHoldsDeployment
+	}
+	return fail(err)
 }
 
 // envOrDefault returns the environment variable key's value if set and

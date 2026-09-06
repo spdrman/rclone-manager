@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "2a8b4694d0f6212f9ffdbdbfca52900922fddaef21e3047c39a3f35227be9f46";
+export const CONTRACT_SHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -337,25 +337,6 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
-    id: "getBackupSet",
-    method: "GET",
-    path: "/backup-sets/{id}",
-    authenticated: true,
-    csrfRequired: false,
-    idempotencyKey: "none",
-    destructiveGate: false,
-    concurrency: "",
-    requestSchema: "",
-    responseSchema: "BackupSet",
-    successStatus: 200,
-    errorCodes: {
-      401: ["UNAUTHENTICATED"],
-      404: ["BACKUP_SET_NOT_FOUND"],
-      500: ["INTERNAL"],
-      503: ["NOT_CONFIGURED"],
-    }
-  },
-  {
     id: "removeBackupSet",
     method: "DELETE",
     path: "/backup-sets/{source}/{set}",
@@ -373,6 +354,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getBackupSet",
+    method: "GET",
+    path: "/backup-sets/{source}/{set}",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSet",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -616,7 +616,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "getArtifact",
     method: "GET",
-    path: "/backups/{id}",
+    path: "/backups/{source}/{set}/{name}",
     authenticated: true,
     csrfRequired: false,
     idempotencyKey: "none",
@@ -634,7 +634,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "retryFailedIngestion",
     method: "POST",
-    path: "/backups/{id}/retry",
+    path: "/backups/{source}/{set}/{name}/retry",
     authenticated: true,
     csrfRequired: true,
     idempotencyKey: "none",
@@ -765,7 +765,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "reinstateArtifact",
     method: "POST",
-    path: "/quarantine/{id}/reinstate",
+    path: "/quarantine/{source}/{set}/{name}/reinstate",
     authenticated: true,
     csrfRequired: true,
     idempotencyKey: "none",
@@ -785,7 +785,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "retryArtifactIngestion",
     method: "POST",
-    path: "/quarantine/{id}/retry",
+    path: "/quarantine/{source}/{set}/{name}/retry",
     authenticated: true,
     csrfRequired: true,
     idempotencyKey: "none",
@@ -805,7 +805,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "revalidateArtifact",
     method: "POST",
-    path: "/quarantine/{id}/revalidate",
+    path: "/quarantine/{source}/{set}/{name}/revalidate",
     authenticated: true,
     csrfRequired: true,
     idempotencyKey: "none",
@@ -1096,14 +1096,14 @@ export interface WireArtifactCheckResponse {
   reason?: string;
 }
 
-/** POST /quarantine/{id}/reinstate. Re-checks one quarantined
- *  backup's durable local copy and, when what it finds is enough,
- *  returns it to the state it already held so it counts as a restore
- *  point again. `reinstated` and `passed` are separate: `passed` is
- *  the verdict of the checks, `reinstated` is whether the backup
- *  actually moved. A backup reinstated this way NEVER authorises
- *  deleting its remote source again; that forfeiture is permanent and
- *  is what makes the action safe to offer. */
+/** POST /quarantine/{source}/{set}/{name}/reinstate. Re-checks one
+ *  quarantined backup's durable local copy and, when what it finds is
+ *  enough, returns it to the state it already held so it counts as a
+ *  restore point again. `reinstated` and `passed` are separate:
+ *  `passed` is the verdict of the checks, `reinstated` is whether the
+ *  backup actually moved. A backup reinstated this way NEVER
+ *  authorises deleting its remote source again; that forfeiture is
+ *  permanent and is what makes the action safe to offer. */
 export interface WireArtifactReinstateResponse {
   checked: boolean;
   passed: boolean;
@@ -1138,6 +1138,7 @@ export interface WireBackupSet {
   retention_is_override: boolean;
   source_name: string;
   stable_for_seconds: number;
+  stale_after_seconds: number;
   user: string;
   validator_id: string;
 }
@@ -1760,12 +1761,12 @@ export interface WireRetentionVerdict {
   tiers?: string[];
 }
 
-/** POST /backups/{id}/retry's optional body. Everything about the
- *  retry is decided by the backup's own recorded state, so there is
- *  nothing here that changes what happens: the note is recorded
- *  alongside the transition so a later failure of the same backup
- *  carries the context of what was tried last time, rather than only
- *  that something was. */
+/** POST /backups/{source}/{set}/{name}/retry's optional body.
+ *  Everything about the retry is decided by the backup's own recorded
+ *  state, so there is nothing here that changes what happens: the
+ *  note is recorded alongside the transition so a later failure of
+ *  the same backup carries the context of what was tried last time,
+ *  rather than only that something was. */
 export interface WireRetryFailedRequest {
   note?: string;
 }
@@ -1793,18 +1794,18 @@ export interface WireSessionResponse {
   username: string;
 }
 
-/** POST /backup-sets/{id}/enabled. A disabled backup set is excluded
- *  from every run cycle and nothing already backed up is touched,
- *  which is why this is state-changing but not destructive. */
+/** POST /backup-sets/{source}/{set}/enabled. A disabled backup set is
+ *  excluded from every run cycle and nothing already backed up is
+ *  touched, which is why this is state-changing but not destructive. */
 export interface WireSetEnabledRequest {
   enabled: boolean;
 }
 
-/** POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup
- *  set's read-only status (issue #282). Turning it on only prevents a
- *  future deletion; turning it back off does not retroactively
- *  authorise deleting anything already retained under it, so this is
- *  state-changing but not destructive. */
+/** POST /backup-sets/{source}/{set}/read-only. Declares, or
+ *  withdraws, a backup set's read-only status (issue #282). Turning
+ *  it on only prevents a future deletion; turning it back off does
+ *  not retroactively authorise deleting anything already retained
+ *  under it, so this is state-changing but not destructive. */
 export interface WireSetReadOnlyRequest {
   read_only: boolean;
 }
@@ -1980,6 +1981,7 @@ export interface WireVersionResponse {
   config_revision: string;
   configured: boolean;
   core_version: string;
+  deployment_id: string;
   engine_version: string;
   go_version: string;
   ready: boolean;

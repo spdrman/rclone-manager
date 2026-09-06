@@ -12,15 +12,47 @@ import (
 
 // cmdSettings is `backup-manager settings` (report the live retention and
 // capacity settings FR-18/FR-19/FR-21 are currently deciding with) and
-// `backup-manager settings patch [flags]` (change one of them in place,
-// hot-reloaded into a running process exactly as `PATCH /api/v1/settings`
-// already does -- see core/service.BackupService.UpdateSettings's own
-// doc). Issue #277's own investigation confirmed this is not fully
-// covered by "edit config.yaml and validate", the answer that already
-// covers creating a backup set: GET is a discovery surface a config file
-// has no equivalent of, since it reports the RESOLVED policy (defaults
-// included) rather than the file's own possibly-omitted keys, and PATCH
-// hot-reloads a running daemon without a restart.
+// `backup-manager settings patch [flags]` (change one of them in place).
+// Issue #277's own investigation confirmed this is not fully covered by
+// "edit config.yaml and validate", the answer that already covers
+// creating a backup set: GET is a discovery surface a config file has no
+// equivalent of, since it reports the RESOLVED policy (defaults included)
+// rather than the file's own possibly-omitted keys, and the API's PATCH
+// hot-reloads the process that served it without a restart.
+//
+// The patch goes one of three ways and prints which on a `mode:` line
+// (mode.go, liveengine.go). With something serving this deployment and a
+// route to it, the patch IS `PATCH /api/v1/settings` against that engine
+// (#543), so the hot reload is the serving process's own and there is
+// nothing to restart. With nothing serving, it is
+// core/service.BackupService.UpdateSettings called in this process, the
+// same method that route is built on: the file is written, this process
+// reloads its own view of it and exits, and an engine started afterwards
+// reads the new file when it starts. With something serving and no route,
+// the patch is REFUSED, nothing is written, and the operator is told what
+// was found and where the change can be made instead. That last one is a
+// refusal rather than a write because there is no watcher over
+// config.yaml, so a patch left in the file is one the serving process
+// would never read.
+//
+// The sentence all of that replaces said a patch here was hot-reloaded
+// "into a running process exactly as PATCH /api/v1/settings already
+// does", which is the claim issue #535 cost a real install. #539
+// corrected it, #538 and #542 turned the corrected sentence into
+// behaviour, and #543 made the original claim true for the one case it
+// was ever meant to describe, an engine that is really there and that
+// this command has been told how to reach.
+//
+// The READ is not routed and announces no mode at all. `settings` on its
+// own answers from this host's configuration file, which is a fact about
+// the file rather than about what the engine loaded, and it is not one of
+// the four surfaces #544 checks against a serving process.
+//
+// One more thing an operator meets before any of that: `settings patch`
+// with no patch flag at all is a usage error (exit 2) rather than a
+// refusal, because the command line is the thing that is wrong and
+// complaining about a running engine over a forgotten --timezone sends
+// somebody off to stop a daemon for nothing.
 //
 // PATCH deliberately does not expose a full retention tier-chain
 // replacement (core/service.RetentionUpdate.Tiers): replacing the whole
@@ -66,14 +98,44 @@ func cmdSettings(args []string) int {
 		}
 	}
 
-	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *cfgPath)
-	if err != nil {
-		return fail(err)
+	// A patch that names nothing is a usage mistake, and it has to be
+	// caught here rather than left to UpdateSettings to refuse. Beside a
+	// running engine everything downstream of this point answers with the
+	// engine refusal, so an operator who forgot a flag was sent off to go
+	// and stop a daemon over a missing --timezone. `backup-set patch`
+	// has always refused its empty patch before it opens anything, and
+	// this is the same rule: complain about the command line while the
+	// command line is still the thing that is wrong.
+	if patching && len(visitedSettingsPatchFlags(fs)) == 0 {
+		return usageError("settings patch: name at least one setting to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
 	}
-	defer cleanup()
 
+	ctx := context.Background()
+
+	// The read and the write go through different doors, and which one is
+	// decided from the operand before anything opens.
+	//
+	// `settings` on its own reads, and a read beside a live engine is
+	// ordinary use of this binary that #538 was careful not to narrow. It
+	// answers from this host's configuration file, which is a fact about
+	// the file rather than about what the engine loaded, and it still
+	// does: #544 routed `sources`, `status`, `artifacts` and the
+	// retention preview and stopped there, so this read announces no
+	// mode and is checked against no engine. Two surfaces can still
+	// disagree about the settings in force, and the way that happens is a
+	// hand-edited config.yaml rather than anything this binary writes.
+	//
+	// `settings patch` writes, and a write left in the file beside a
+	// running engine is a change that process would never see, so it goes
+	// through openConfigWriteRoute, which hands it to that process where
+	// it can and refuses where it cannot (#543).
 	if !patching {
+		svc, cleanup, err := openBackupService(ctx, *cfgPath, readsConfig)
+		if err != nil {
+			return fail(err)
+		}
+		defer cleanup()
+
 		settings, err := svc.Settings(ctx)
 		if err != nil {
 			return fail(err)
@@ -82,10 +144,16 @@ func cmdSettings(args []string) int {
 		return 0
 	}
 
+	route, cleanup, err := openConfigWriteRoute(ctx, *cfgPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer cleanup()
+
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
 	req := buildSettingsPatch(fs, timezone, weekStartsOn, protect, capBytes, warningFreeBytes, criticalFreeBytes, safetyMarginBytes)
-	settings, err := svc.UpdateSettings(ctx, req)
+	settings, err := route.UpdateSettings(ctx, req)
 	if err != nil {
 		return fail(err)
 	}

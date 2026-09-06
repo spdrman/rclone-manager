@@ -85,8 +85,16 @@ type dockerBuildBounds struct {
 // small enough that three simultaneously-pathological builds (450s) still
 // land inside `go test`'s 600s budget next to this package's own measured
 // ~64s of other work. stepMax of 120s sits below it so a build that
-// genuinely stalls is still reported as a stall rather than waiting to be
-// caught by the overall cap and mislabelled a livelock.
+// genuinely stalls is still reported as a stall, which is the bound that
+// says which step it stalled after, rather than waiting to be caught by
+// the overall cap, which says only that the build never finished.
+//
+// The clamps are also why neither trip names a cause any more (issue
+// #533). A derived bound that is allowed to widen without limit can at
+// least argue that a consistently slow build would have widened its way
+// out of trouble; one that is deliberately clamped cannot, because a
+// build slow enough to need more than the ceiling hits the ceiling by
+// construction and looks from out here exactly like a stuck one.
 //
 // Deliberately NOT a context.WithTimeout wrapped around the whole command,
 // which is what this function replaced: a context deadline firing produces
@@ -125,11 +133,11 @@ func (tr dockerBuildTrip) String() string {
 	switch tr.kind {
 	case "overall":
 		return fmt.Sprintf("docker build kept reporting progress but never finished: %s elapsed against a cap of %s, last line %q. %s. "+
-			"That is a livelock, not a slow machine: the cap is derived from this build's own slowest step, so a genuinely slow build would have widened it.",
+			"Why it never finished is not something this can say. The cap widens with a slow build only as far as overallMax, where defaultDockerBuildBounds deliberately clamps it to stay inside `go test`'s own package budget, so a build that reached a clamped cap is exactly as consistent with being genuinely slow as with being stuck (issue #533).",
 			tr.elapsed.Round(time.Millisecond), tr.overallCap.Round(time.Millisecond), tr.lastLine, measured)
 	default:
 		return fmt.Sprintf("docker build stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. "+
-			"This is a hang, not a slow machine: the window is derived from this build's own recent pace, so being consistently slow widens it and only being stuck trips it.",
+			"The window is derived from this build's own pace and clamped at stepMax, so a consistently slow build widens it and survives up to that ceiling, and a silence this much longer than any step this build has managed is most likely a hang. It is not proof of one: a build slow enough to need more than the ceiling, or load arriving on this machine after the pace was measured, stalls a healthy build the same way (issue #533).",
 			tr.lastLine, tr.sinceLast.Round(time.Millisecond), tr.window.Round(time.Millisecond), tr.elapsed.Round(time.Millisecond), measured)
 	}
 }
