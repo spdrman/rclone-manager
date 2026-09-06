@@ -76,17 +76,23 @@ import (
 // "nothing is running" are the same behaviour only if you are willing to
 // write the file anyway, which is the defect.
 //
-// # What deliberately has no mode yet
+// # Reads have their own, next door
 //
-// Reads. `settings`, `backup-set retention` shown, `restore` and every
-// command on openService answer from the configuration file and the
-// shared journal whether an engine is up or not, which is ordinary use of
-// this binary and which #538 was careful not to narrow. They will get a
-// mode when they get a route, which is #544. Saying so is the
-// alternative to leaving a gap indistinguishable from one nobody thought
-// of. Whoever picks that up should not read "read" as "no side effects":
-// `restore` is declared readsConfig and writes an operation row into the
-// journal, which is true of the configuration and not of the deployment.
+// They used to have none, and #544 gave them one: readmode.go decides the
+// same question the same way, once, and announces it, for `sources`,
+// `status`, `artifacts` and the retention preview. It does NOT take the
+// claim this file takes, because a read changes nothing and holding the
+// startup lock for the length of a `status` would stop containers
+// starting for no benefit, and it has a third mode this file does not,
+// because a read that cannot reach the engine still has to answer.
+//
+// What still has no mode is the rest of the reads: `settings`,
+// `backup-set retention` shown, `restore`, and every other command on
+// openService. Saying so is the alternative to leaving a gap
+// indistinguishable from one nobody thought of. Whoever picks those up
+// should not read "read" as "no side effects": `restore` is declared
+// readsConfig and writes an operation row into the journal, which is true
+// of the configuration and not of the deployment.
 
 // executionMode is where one invocation's configuration write actually
 // happened: through the process already serving this deployment, or

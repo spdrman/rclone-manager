@@ -45,8 +45,12 @@ import (
 // before any of the checks below could refuse it. The tests assert on
 // these rather than on the client's own account of what it did.
 type seenRequest struct {
-	Method     string
-	Path       string
+	Method string
+	Path   string
+	// Query is the raw query string, kept apart from Path because
+	// listArtifacts takes its backup-set filter there and a filter the
+	// engine never sees answers with every artifact in the deployment.
+	Query      string
 	Operation  string
 	CSRFHeader string
 	CSRFCookie string
@@ -205,7 +209,7 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	escaped := r.URL.EscapedPath()
 	ep, known := lookupRoute(r.Method, escaped)
 
-	seen := seenRequest{Method: r.Method, Path: escaped, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName), UserAgent: r.Header.Get("User-Agent")}
+	seen := seenRequest{Method: r.Method, Path: escaped, Query: r.URL.RawQuery, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName), UserAgent: r.Header.Get("User-Agent")}
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		seen.CSRFCookie = c.Value
 	}

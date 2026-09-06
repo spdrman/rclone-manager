@@ -277,19 +277,38 @@ func (c *Client) BaseURL() string { return c.base.Redacted() }
 // declares them. body, when non-nil, is marshalled as the request body.
 // out, when non-nil, receives the decoded response.
 func (c *Client) call(ctx context.Context, operation string, pathArgs []string, body any, out any) error {
+	return c.callQuery(ctx, operation, pathArgs, nil, body, out)
+}
+
+// callQuery is call for the one operation on this API that takes an
+// argument somewhere other than the path or the body.
+//
+// GET /backups carries its backup-set filter as ?setId=, and until issue
+// #544 nothing in this package could send a query at all. That mattered
+// more than a missing feature usually does: a filter this client dropped
+// would not fail, it would answer `artifacts --backup-set X` with every
+// artifact in the deployment, which is a wrong answer wearing a right
+// one's clothes.
+//
+// It is spelled as a second entry point rather than a fifth parameter on
+// call because forty-odd operations take no query and a nil argument at
+// every one of those call sites is forty places for the wrong value to be
+// invisible. The values are escaped by net/url, so a backup set named with
+// a space or an ampersand travels intact.
+func (c *Client) callQuery(ctx context.Context, operation string, pathArgs []string, query url.Values, body any, out any) error {
 	ep, err := endpoint(operation)
 	if err != nil {
 		return err
 	}
 	if !ep.Authenticated {
-		return c.do(ctx, ep, pathArgs, body, out)
+		return c.do(ctx, ep, pathArgs, query, body, out)
 	}
 
 	state, err := c.ensureSession(ctx)
 	if err != nil {
 		return err
 	}
-	err = c.do(ctx, ep, pathArgs, body, out)
+	err = c.do(ctx, ep, pathArgs, query, body, out)
 	if !isSessionRefusal(err) {
 		return err
 	}
@@ -317,7 +336,7 @@ func (c *Client) call(ctx context.Context, operation string, pathArgs []string, 
 	if _, err := c.ensureSession(ctx); err != nil {
 		return err
 	}
-	return c.do(ctx, ep, pathArgs, body, out)
+	return c.do(ctx, ep, pathArgs, query, body, out)
 }
 
 // endpoint resolves a contract operation id.
@@ -339,7 +358,7 @@ func endpoint(operation string) (apicontract.Endpoint, error) {
 
 // do is call without the sign-in, so that the sign-in itself can use it
 // without recursion.
-func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []string, body any, out any) error {
+func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []string, query url.Values, body any, out any) error {
 	path, err := fillPath(ep, pathArgs)
 	if err != nil {
 		return &ContractViolation{Operation: ep.ID, Method: ep.Method, Reason: err.Error()}
@@ -351,6 +370,12 @@ func (c *Client) do(ctx context.Context, ep apicontract.Endpoint, pathArgs []str
 	target, err := url.Parse(c.base.String() + apicontract.BasePath + path)
 	if err != nil {
 		return &ContractViolation{Operation: ep.ID, Method: ep.Method, Reason: "the request URL could not be built: " + err.Error()}
+	}
+	// Assigned rather than appended to whatever the base URL carried:
+	// New refuses a base URL with a query of its own, so there is never
+	// anything here to preserve, and Encode escapes each value.
+	if len(query) > 0 {
+		target.RawQuery = query.Encode()
 	}
 
 	var encoded []byte

@@ -158,7 +158,7 @@ func (c *Client) signIn(ctx context.Context) (sessionState, error) {
 	if err != nil {
 		return sessionState{}, err
 	}
-	if err := c.do(ctx, ep, nil, apicontract.CredentialsRequest{Username: c.username, Password: c.password}, nil); err != nil {
+	if err := c.do(ctx, ep, nil, nil, apicontract.CredentialsRequest{Username: c.username, Password: c.password}, nil); err != nil {
 		return sessionState{}, err
 	}
 	// Login answers 204 with no body, so the engine has not yet said whose
@@ -181,7 +181,7 @@ func (c *Client) readSession(ctx context.Context) (apicontract.SessionResponse, 
 		return apicontract.SessionResponse{}, err
 	}
 	var out apicontract.SessionResponse
-	if err := c.do(ctx, ep, nil, nil, &out); err != nil {
+	if err := c.do(ctx, ep, nil, nil, nil, &out); err != nil {
 		return apicontract.SessionResponse{}, err
 	}
 	if err := requireNamedSession(out); err != nil {
@@ -277,7 +277,7 @@ func (c *Client) Login(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := c.do(ctx, ep, nil, apicontract.CredentialsRequest{Username: c.username, Password: c.password}, nil); err != nil {
+	if err := c.do(ctx, ep, nil, nil, apicontract.CredentialsRequest{Username: c.username, Password: c.password}, nil); err != nil {
 		return err
 	}
 	c.remember(true)
@@ -363,7 +363,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = c.do(ctx, ep, nil, nil, nil)
+	err = c.do(ctx, ep, nil, nil, nil, nil)
 	// Unconditional, and whatever the engine answered: this client asked
 	// for the session to end, so it has no business acting as though it
 	// still has one.
