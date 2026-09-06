@@ -527,6 +527,19 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `backup-manager run`")
 	}
 
+	// The mode, before anything is written, exactly as openBackupService
+	// settles it for every other configuration write (#542). This path
+	// has no journal to open and no BackupService to open it with, so it
+	// would otherwise be the one write in this binary that reported no
+	// mode at all. What the detection can see here is limited, and
+	// liveengine.go says so out loud: a host serving the first-run wizard
+	// holds no journal yet, so this will decide "direct" underneath one.
+	// Announcing the mode it decided is still the honest answer, and it
+	// is strictly more than the nothing this path said before.
+	if err := enterConfigWriteMode(configFile, os.Stdout, os.Stderr); err != nil {
+		return fail(err)
+	}
+
 	firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
 		ConfigPath:    configFile,
 		StateDatabase: stateDatabase,

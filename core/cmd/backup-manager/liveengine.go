@@ -1,11 +1,6 @@
 package main
 
-import (
-	"fmt"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/service"
-)
+import "fmt"
 
 // Issue #538, Phase 1 of #536: the CLI refusing to write a configuration
 // a running engine holds, instead of writing it and reporting success.
@@ -87,28 +82,38 @@ const (
 )
 
 // refuseIfAnEngineHoldsTheConfiguration returns the refusal a
-// configuration write gets when another process is already running this
-// deployment, or nil when this process is the only authority there is.
+// configuration write gets when the mode decided for this invocation is
+// engine-attached, or nil when it is direct and this process is the only
+// authority there is.
 //
-// A detection that could not be PERFORMED is returned as an error too,
-// and deliberately so: "I could not tell" and "nothing is running" are
-// the same behaviour only if you are willing to write the file anyway,
-// which is the defect. core/service.DetectRunningEngine's own doc splits
-// that from the case where the configuration cannot be read, which is not
-// an error here because the open that follows this call fails on the same
-// file with the message the operator actually needs.
-func refuseIfAnEngineHoldsTheConfiguration(configPath string) error {
-	engine, err := service.DetectRunningEngine(configPath)
-	if err != nil {
-		return fmt.Errorf("cannot tell whether another process is already running this deployment, and a configuration change written while one is would never reach it: %w", err)
-	}
-	if engine == nil {
+// It takes the decision rather than a path, and therefore no longer asks
+// the kernel anything itself: #542 made the mode one answer per
+// invocation, so the probe happens once, in decideConfigWriteMode, and
+// everything downstream reads the value it produced. A refusal that
+// re-probed would be a second question about a world that can have
+// changed since the first, and an engine exiting in that gap would turn
+// this refusal into a direct write.
+//
+// A detection that could not be PERFORMED is still a refusal rather than
+// a "no", for the same reason it always was ("I could not tell" and
+// "nothing is running" are the same behaviour only if you are willing to
+// write the file anyway, which is the defect); that case never reaches
+// here, because decideConfigWriteMode returns it as an error and there is
+// no decision to act on.
+func refuseIfAnEngineHoldsTheConfiguration(d modeDecision) error {
+	held := d.heldBy()
+	if held == "" {
+		// Direct mode: nothing was found running this deployment, so this
+		// process is the only authority there is and the write goes
+		// ahead. heldBy rather than the mode field because the two are
+		// set from the same answer and reading them together is what
+		// stops them being read apart (modeDecision.heldBy says so).
 		return nil
 	}
-	// Resolved for the message, because --config may name the packaged
-	// configuration DIRECTORY (#196) and an operator matching this
-	// sentence against their own deployment needs the file, not the
-	// directory they typed.
+	// modeDecision.configFile is already resolved, because --config may
+	// name the packaged configuration DIRECTORY (#196) and an operator
+	// matching this sentence against their own deployment needs the file,
+	// not the directory they typed.
 	//
 	// The engine is named by the state database it was found holding
 	// rather than by a pid: flock(2) offers no portable way to ask which
@@ -118,5 +123,5 @@ func refuseIfAnEngineHoldsTheConfiguration(configPath string) error {
 	// container's own mounts.
 	return fmt.Errorf(
 		"another process is already running this deployment and holds its state database open (%s), so a configuration change made here would never reach it: that process read %s when it started and nothing re-reads that file. Make this change through the Web UI, or through the HTTP API that process serves, or stop that process and run this command again",
-		engine.StateDatabase, config.ResolvePath(configPath))
+		held, d.configFile)
 }

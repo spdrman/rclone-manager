@@ -158,6 +158,19 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // liveengine.go for why the check cannot live further in, beside the
 // write itself, and why a read beside a live engine must keep working.
 //
+// It is also where #542's mode decision is made, printed and carried, and
+// the two belong together: the refusal above is what engine-attached mode
+// MEANS in this build, so a caller that reached one without the other
+// would either write behind a running engine or refuse without saying
+// why. mode.go holds the reasoning, and enterConfigWriteMode is the one
+// call that does all three.
+//
+// The one configuration write that does not come through here is
+// createFirstConfig (backupset.go), which writes a deployment's FIRST
+// config.yaml and therefore has no journal to open and no BackupService
+// to open it with. It calls enterConfigWriteMode itself, so no
+// configuration write in this binary is without a mode.
+//
 // openService has no such argument because it structurally cannot write a
 // configuration: it hands back an internal/app.Service built from an
 // already-loaded *config.Config, which carries no path to persist to, and
@@ -171,7 +184,12 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	switch intent {
 	case readsConfig:
 	case writesConfig:
-		if err := refuseIfAnEngineHoldsTheConfiguration(configPath); err != nil {
+		// One call, and it is the whole of #542: the mode is decided
+		// here, printed here, and refused here when it is engine-attached
+		// and this build has no way to hand the change over. Nothing
+		// downstream asks again, so nothing downstream can get a
+		// different answer.
+		if err := enterConfigWriteMode(configPath, os.Stdout, os.Stderr); err != nil {
 			return nil, func() {}, err
 		}
 	default:
