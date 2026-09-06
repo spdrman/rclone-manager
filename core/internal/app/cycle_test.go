@@ -10,9 +10,71 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
+// FR-1's cycle, and the shared configuration fixtures the whole package
+// builds on.
+//
+// The fixtures live here because this is where they were first needed, and
+// they are worth reading before writing any test in this package.
+// config.Config values here are constructed by hand rather than loaded, so
+// nothing fills in the fields config.Validate would: testRetention mirrors
+// validateRetention's defaults, and resolveTestRetention runs the real
+// resolver rather than a second copy of it. A set left at the zero Retention
+// is not an unconfigured set, it is a chain that keeps nothing, and a test
+// built on one proves something about a configuration no operator could have.
+// That is why resolveTestRetention panics instead of returning an error, and
+// why a test that edits the global policy after building its config has to
+// call it again.
+//
+// The cycle cases themselves are arranged around one claim that is easy to
+// lose: a cycle can fail without any systemic error at all. Two of them come
+// at that from reconciliation, which is the path where a previously durable
+// artifact is found rotten by a pass that itself succeeded, and where an
+// implementation that only checked Err would report the cycle as fine. The
+// disabled-set case and the continue-after-failure case are the other half,
+// proving the loop skips what it should and keeps going through what it
+// should not.
+
+// testConfig builds the hand-made config.Config these tests run against, and
+// then resolves it the way config.Validate would.
+//
+// The resolve step is the part that matters and it is easy to leave out; see
+// resolveTestRetention just below for what a set left at the zero Retention
+// actually is. Anything constructing a config.Config directly rather than
+// through here inherits that trap.
 func testConfig(t *testing.T, sources ...config.Source) *config.Config {
 	t.Helper()
-	return &config.Config{Sources: sources, Retention: testRetention()}
+	c := &config.Config{Sources: sources, Retention: testRetention()}
+	// Issue #333: resolve each set's effective retention the way Validate
+	// does, for the same reason testRetention mirrors validateRetention's
+	// defaults. These fixtures are built by hand rather than loaded, so
+	// nothing else fills the resolved field in, and a set left at the zero
+	// Retention is not merely unconfigured, it is a different policy.
+	resolveTestRetention(c)
+	return c
+}
+
+// resolveTestRetention fills in every backup set's resolved Retention, by
+// running the real config.ResolveBackupSetRetention rather than a second
+// copy of it (issue #333). These fixtures are built by hand rather than
+// loaded, so nothing else fills that field in, and a set left at the zero
+// Retention is not merely unconfigured: it is a chain that keeps nothing,
+// which internal/retention refuses outright.
+//
+// A test that changes the global policy after building its config has to
+// call this again. Not re-resolving is exactly what #333 guarantees in
+// production, where an already-resolved set does not silently follow a
+// later edit to the global policy, so the fixture has to re-resolve to
+// mean "and this is the policy in force" rather than relying on the read
+// happening to be live.
+//
+// It panics rather than returning: a fixture whose policy does not resolve
+// would otherwise leave every set on that keep-nothing chain, and a test
+// that then passes has proved something about a config no operator could
+// ever have.
+func resolveTestRetention(c *config.Config) {
+	if err := c.ResolveBackupSetRetention(); err != nil {
+		panic("test fixture's retention does not resolve: " + err.Error())
+	}
 }
 
 // testRetention mirrors the defaults config.Validate fills in for a config
@@ -32,6 +94,8 @@ func testRetention() config.Retention {
 	}
 }
 
+// testSource wraps backup sets in a named source, since FR-7 makes identity
+// source-plus-set and nothing in this package accepts a bare set.
 func testSource(name string, backupSets ...config.BackupSet) config.Source {
 	return config.Source{Name: name, BackupSets: backupSets}
 }

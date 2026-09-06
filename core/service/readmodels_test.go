@@ -1,3 +1,21 @@
+// This file covers the read models the Web UI is drawn from: backups,
+// activity, operations, health, catalog, the per-set toggles and the
+// connection test.
+//
+// It is one file rather than one per surface because the thing being
+// proved is the same for all of them, and it is not the shape of the
+// response. Nearly every case runs a real cycle first and then asks what
+// the boundary says about what actually happened, so the assertions are
+// against journal facts a real pipeline produced rather than against
+// hand-seeded rows. A read model tested on rows the test wrote itself
+// proves the projection and nothing about whether the pipeline ever
+// produces that shape.
+//
+// The refusals grouped in the middle are here for the same reason: they
+// are what a screen full of healthy artifacts does when somebody clicks a
+// quarantine action on one of them, and every one of them has to be a
+// named refusal rather than a generic failure, because the API layer
+// turns each into a different answer.
 package service
 
 import (

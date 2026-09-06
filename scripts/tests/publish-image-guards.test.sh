@@ -125,6 +125,16 @@ EOF
   echo "$bin"
 }
 
+# run_guards drives the script through the GUARDS_ONLY seam, which stops
+# after the guard block and before the first Docker command. That seam is
+# what makes an automated control possible at all: the alternative is
+# either a suite that pushes images or a suite that reimplements the
+# guards and proves nothing about the script that runs on release day.
+#
+# The exit code and the output come back as one string with the code on
+# the first line, because a bash function has only one return channel and
+# every assertion here needs both: every refusal exits 2, so a code-only
+# check cannot tell a dirty tree from a private key sitting in it.
 run_guards() {
   local dir="$1"
   shift
@@ -150,6 +160,9 @@ run_publish_path() {
   echo "$out"
 }
 
+# expect asserts the code AND the message, and reports the code first.
+# When the exit status is wrong the message assertion is noise: the script
+# went somewhere else entirely, and the useful thing to print is where.
 expect() {
   local rc="$1" out="$2" want_rc="$3" want="$4"
   if [ "$rc" != "$want_rc" ]; then
@@ -162,6 +175,9 @@ expect() {
   esac
 }
 
+# refute is for the assertions that a message did NOT appear. It says
+# nothing on its own, so every use of it sits beside an expect: a run that
+# died early passes every refute in the file.
 refute() {
   local out="$1" unwanted="$2"
   case "$out" in
@@ -169,6 +185,8 @@ refute() {
   esac
 }
 
+# The two halves of what run_guards and run_publish_path return: the exit
+# code on the first line, everything the script printed after it.
 split_rc() { echo "$1" | head -n1; }
 split_out() { echo "$1" | tail -n +2; }
 

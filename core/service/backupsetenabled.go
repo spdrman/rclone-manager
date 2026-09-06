@@ -7,10 +7,37 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
+
+// This file is the three per-set switches an operator flips from a
+// screen: run this set or leave it alone, delete its remote sources or
+// never touch them, and does the thing still answer.
+//
+// The two toggles look symmetric and are not, in the same direction.
+// Turning a set off stops new restore points being made and touches
+// nothing already made; turning read-only off stops future artifacts
+// being retained and reaches back to authorise nothing. Both are
+// deliberately one-way about artifacts that already exist, which is the
+// shape #227's reinstatement established for this codebase: a change of
+// mind may alter what happens next, never what was already promised about
+// a copy somebody else's system is still holding.
+//
+// That asymmetry is why neither is a destructive operation in §50's
+// terms, despite one of them being spelled "read-only" and the other
+// stopping backups. Neither can delete anything, and the cost of the
+// scary-sounding one, a set going stale because nobody turned it back on,
+// is reported by FR-24 rather than hidden.
+//
+// Every write here runs the same sequence, which is written out once in
+// SetBackupSetEnabled and referred to from the others rather than
+// re-argued: re-read the file from disk, edit, encode BEFORE validation
+// resolves defaults in place, then persist and adopt. The encode ordering
+// is the subtle one. Validate fills in this release's defaults, so
+// encoding after it would freeze today's values into an operator's file
+// as though they had chosen them, and a toggle of one set would silently
+// pin the defaults of every other.
 
 // connectionTestTimeout bounds one reachability check. It is the same
 // ten seconds TestConnection uses for a candidate source: a test that can
@@ -107,12 +134,7 @@ func (b *BackupService) SetBackupSetEnabled(_ context.Context, id string, enable
 
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	b.adoptConfig(cfg)
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
@@ -208,12 +230,7 @@ func (b *BackupService) SetBackupSetReadOnly(_ context.Context, id string, readO
 
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	b.adoptConfig(cfg)
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
@@ -268,14 +285,27 @@ func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) 
 
 	r := found.Remote
 	src := transport.Source{
-		ID:                   "connection-test",
-		Type:                 r.Type,
-		Host:                 r.Host,
-		Port:                 r.Port,
-		User:                 r.User,
-		KeyFile:              r.Key.File,
-		KeyEnv:               r.Key.Env,
-		KeyCommand:           r.Key.Command,
+		ID:         "connection-test",
+		Type:       r.Type,
+		Host:       r.Host,
+		Port:       r.Port,
+		User:       r.User,
+		KeyFile:    r.Key.File,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
+		// The passphrase's own three sources travel too. Without them a
+		// set whose key is passphrase-protected cannot be tested at all:
+		// the adapter is handed a key it has no way to open, and the
+		// operator is told their host is unreachable.
+		PassphraseFile:    r.Key.Passphrase.File,
+		PassphraseEnv:     r.Key.Passphrase.Env,
+		PassphraseCommand: r.Key.Passphrase.Command,
+		// #355: this is the operator's REAL configured remote, so the
+		// ceiling they set on it has to come with it. A reachability
+		// check that runs uncapped against the one host they capped can
+		// fail where a cycle succeeds, or pass where a cycle fails, which
+		// makes the button worse than not having one.
+		MaxConnections:       r.MaxConnections,
 		KeyEncryptionFile:    st.inner.Config.KeyEncryption.File,
 		KeyEncryptionEnv:     st.inner.Config.KeyEncryption.Env,
 		KeyEncryptionCommand: st.inner.Config.KeyEncryption.Command,

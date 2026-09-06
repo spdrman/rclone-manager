@@ -25,7 +25,7 @@ services:
   # state database and the credentials. Publishes no port; reachable only
   # from backup-manager-ui over this project's own network.
   backup-manager:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.2.0}
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.0}
     command: ["/backup-manager-web", "serve", "--profile=openmediavault"]
 
     user: "${PUID:-1000}:${PGID:-100}"
@@ -110,7 +110,7 @@ services:
   # operator ever opens. OMV has no navigation entry for it, by design;
   # see README.md.
   backup-manager-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.2.0}
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.0}
     command: ["/backup-manager-web", "serve-ui", "--profile=openmediavault"]
 
     depends_on:

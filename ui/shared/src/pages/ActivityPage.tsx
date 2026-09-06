@@ -1,3 +1,15 @@
+/**
+ * The event log, filtered by set and by severity, and nothing else.
+ *
+ * Deliberately not overbuilt: two filters and a list. The temptation on a
+ * page like this is a search box, a date range and a saved-view mechanism,
+ * and none of those is the thing an operator actually does here, which is
+ * "show me what went wrong on this set".
+ *
+ * The severity filter ranks info and ok the same, because they are the
+ * same thing to somebody filtering: neither is a problem. That collapse is
+ * why the control offers a threshold rather than a set of checkboxes.
+ */
 import { useMemo, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -11,7 +23,9 @@ import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import type { Severity } from "@shared/types/operation";
 
-/** Deliberately not overbuilt (§19): four filters, one list. */
+/** Deliberately not overbuilt (§19): two filters, one list. It said four
+ *  until #299 took the "Time range" select away, which had no handler and
+ *  no endpoint parameter behind it to acquire one. */
 export function ActivityPage() {
   const api = useApi();
   const events = useAsync(() => api.listActivity(), [api]);

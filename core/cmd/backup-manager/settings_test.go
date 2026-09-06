@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+// The deployment-wide settings surface: reading it back, patching it, and
+// refusing what is not a patch.
+//
+// The read cell asserts a value the fixture chose rather than the shape of
+// the output, which is what tells a real read apart from a hardcoded
+// template. Everything else is about the write: it has to persist, and a
+// capacity of zero has to mean "remove the cap" rather than "cap at zero",
+// which is the one value in this surface where the obvious reading is the
+// dangerous one.
+
 func TestRun_SettingsGetAgainstAWorkingConfig(t *testing.T) {
 	configPath := writeTestConfig(t)
 	out := captureStdout(t, func() {

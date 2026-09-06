@@ -11,15 +11,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// The rules that are about one named platform rather than about
+// packaging in general, plus the readers that make a TrueNAS catalog
+// entry checkable at all.
+//
+// scan.go asks what a provider package IS. This file asks two questions
+// that only make sense once you know which platform you are looking at:
+// has this provider grown its own authentication, and has the OMV
+// adapter quietly become the native Workbench plugin v1 said it would
+// not be. Both are deferrals rather than impossibilities, and a deferral
+// decays silently, so each one is written as something that goes red.
+//
+// The TrueNAS half is here for a different reason. A catalog entry is
+// three files that only mean something together: questions.yaml asks the
+// operator for values, the template reads them, ix_values.yaml supplies
+// the defaults for the answers nobody changes. Checking them separately
+// proves nothing about the artifact a store install actually produces,
+// so the readers below reduce all three to one rendered document, which
+// the ordinary packaging rules can then read like any other Compose
+// file. The renderer understands one expression form and refuses
+// anything else on purpose: the template's own header promises to stay
+// loop-free and conditional-free precisely so this is possible, and a
+// renderer that grew to match a cleverer template would be re-deriving
+// what the install does rather than reading it.
+
+// The two rule identifiers this file adds to scan.go's set. Named, like
+// those, so a positive control can assert that this rule fired and not
+// merely that something did.
 const (
 	RuleBespokeAuth = "bespoke-auth-mechanism"
 	RuleOMVPlugin   = "native-omv-plugin"
 )
 
-// bespokeAuthMarkers are the fingerprints of a provider inventing its own
-// authentication instead of using §13A's reusable local auth. WP4.3 is
-// explicit: "All three use local-auth from the generic host; no platform
-// gets its own auth mechanism."
 // bespokeAuthRe matches the fingerprints of a provider inventing its own
 // authentication instead of using §13A's reusable local auth. WP4.3 is
 // explicit: "All three use local-auth from the generic host; no platform
@@ -129,6 +152,11 @@ func ScanForOMVPlugin(root string) ([]Violation, error) {
 	return out, nil
 }
 
+// scanText is the walk both content rules above share: skip npm's and the
+// build's output, skip binaries, hand every remaining file's text to
+// check, and sort so the report is diffable. It exists so a new
+// text-level rule is a closure rather than a fourth copy of a WalkDir
+// that could quietly disagree with the others about what it skips.
 func scanText(root string, check func(rel, text string) []Violation) ([]Violation, error) {
 	var out []Violation
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -190,6 +218,11 @@ func TrueNASQuestionVariables(path string) ([]string, error) {
 	return out, nil
 }
 
+// questionNode is the recursive shape of a TrueNAS question. attrs and
+// items are both children (one for objects, one for lists), and both are
+// followed, because a variable nested inside a list item is addressed by
+// the template exactly like any other and skipping it would make the
+// coverage check quietly incomplete.
 type questionNode struct {
 	Variable string `yaml:"variable"`
 	Schema   struct {
@@ -199,6 +232,10 @@ type questionNode struct {
 	} `yaml:"schema"`
 }
 
+// leaves flattens a question tree to the dotted paths a template can
+// actually read. Only leaves: an intermediate node is a grouping in the
+// installer's form and holds no value, so counting it would make the
+// template look as though it ignores a question that was never askable.
 func (q questionNode) leaves(prefix string) []string {
 	name := q.Variable
 	if prefix != "" {
@@ -281,6 +318,12 @@ func YAMLValue(path, dotted string) (string, bool, error) {
 	return fmt.Sprintf("%v", v), true, nil
 }
 
+// lookupYAMLValue is the shared descent behind LookupYAMLPath, YAMLValue
+// and the renderer. It returns whatever it lands on, scalar or not, and
+// leaves the "is that a usable value" judgement to the caller, because
+// the three callers answer it differently: existence is enough for one,
+// the other two need a scalar and report a map or a list as a missing
+// default rather than stringifying it into the output.
 func lookupYAMLValue(doc any, dotted string) (any, bool) {
 	cur := doc
 	for _, part := range strings.Split(dotted, ".") {

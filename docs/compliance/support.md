@@ -13,11 +13,13 @@ no forum and no chat, on purpose: a channel nobody reads is worse than one
 channel that is read, and a store listing that advertises three of them makes a
 reviewer check three.
 
-The repository is private today, so the issue tracker is reachable only by
-people with access to it. `docs/compliance/source-offer.md` covers what that
-means for anyone else and how to reach the project in the meantime, and
-`provenance/release-provenance.json` records the same fact in
-machine-readable form rather than letting the listing imply otherwise.
+The repository is public, so the issue tracker is reachable by anyone with a
+GitHub account. `provenance/release-provenance.json` records that in
+machine-readable form (`links.publiclyReachable`), derived from
+`distribution/packaging/compliance.json`'s one measured visibility field rather
+than asserted here, so this page and the bundle cannot drift apart.
+`docs/compliance/source-offer.md` still stands for anyone who has a package and
+no browser: Apache-2.0 §4a is owed to a recipient, not to a visitor.
 
 ## What to include in an issue
 

@@ -2,6 +2,29 @@ package transport
 
 import "context"
 
+// This file is how a copy that is happening RIGHT NOW is described to a
+// caller, and everything in it exists to keep that description in this
+// project's own words.
+//
+// The temptation it resists is the obvious one: rclone already counts
+// bytes, and handing a caller the *accounting.StatsInfo that holds them
+// would be one line. That line would put an rclone type in a signature
+// internal/app and the web API read, which is the leak failure-safety
+// invariant 13 forbids and, more practically, would tie a browser's
+// progress bar to an upstream struct this project upgrades on somebody
+// else's schedule. So the adapter reads rclone's counters and rewrites
+// them as ByteProgress, and nothing above the adapter can name anything
+// else.
+//
+// The reporter travels on a context rather than through the Transport
+// interface, which is the other decision worth knowing before changing
+// anything here. WithProgressReporter's own doc argues it.
+//
+// Nothing here is durable and nothing here decides anything. A sample is a
+// reading a surface may redraw from; a caller that misses every one of
+// them still gets an artifact that transferred, verified and committed
+// exactly as it would have.
+
 // ByteProgress is one sample of a copy that is happening right now,
 // expressed entirely in this package's own vocabulary.
 //
@@ -51,6 +74,11 @@ type ProgressReporterFunc func(ByteProgress)
 // CopyProgress calls f.
 func (f ProgressReporterFunc) CopyProgress(p ByteProgress) { f(p) }
 
+// progressReporterKey is the context key the reporter travels under. It is
+// an unexported empty struct type, the shape the context package's own doc
+// asks for: nothing outside this package can construct one, so nothing
+// outside this package can read or overwrite the reporter, and it cannot
+// collide with another package's key however that package spells its own.
 type progressReporterKey struct{}
 
 // WithProgressReporter returns a context that asks the transport to report

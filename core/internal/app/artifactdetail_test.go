@@ -9,6 +9,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Issue #284: the literal sentence the journal recorded, not a reconstruction
+// of it.
+//
+// internal/lifecycle already has QuarantineReason, which rebuilds a plausible
+// explanation from whatever else the record carries. GetArtifactDetail reads
+// state_transitions.detail, which is the text the step that failed actually
+// wrote and which nothing else in this codebase reads back. These tests are
+// what keep those two from being confused: each drives a real failure through
+// the real pipeline and then asserts the exact text came back, so a
+// reconstruction slipped in behind the same field would not satisfy them.
+//
+// FAILED gets its own case beside the two quarantine states because FR-10
+// gives FAILED no reason field anywhere else at all, so this read is the only
+// one there is.
+//
+// The healthy case is the negative control. Without it, an implementation
+// that returned the last transition's detail for every artifact would pass
+// everything above.
+
 // TestGetArtifactDetail_FailedArtifactCarriesTheJournalsOwnReason is issue
 // #284's core claim at the use-case layer: an artifact that reached FAILED
 // carries the diagnostic sentence internal/lifecycle recorded on the

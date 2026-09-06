@@ -1,3 +1,18 @@
+/**
+ * What retention is about to do, shown in full before any of it happens.
+ *
+ * The plan is issued by the server and immutable. This dialog never
+ * recomputes it, never filters it and never applies a subset: an operator
+ * confirms the exact deletion set they were shown, or nothing happens.
+ * That is why staleness matters enough to have a mechanism of its own,
+ * and why a stale plan disables apply rather than quietly fetching a
+ * fresh one, which would mean confirming a list nobody read.
+ *
+ * Everything shown here is per artifact, with the tiers that kept it and
+ * what selected it for each. A summary count would be smaller and would
+ * remove the only thing that lets an operator notice that the one backup
+ * they care about is on the wrong side of the line.
+ */
 import { useEffect, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
@@ -223,6 +238,27 @@ export function RetentionPreviewDialog({
                 <Stat label="Delete" value={String(p.deleteCount)} tone="var(--danger)" />
                 <Stat label="Reclaim" value={bytes(p.reclaimBytes)} />
               </div>
+
+              {/* Issue #333: which policy produced these verdicts, and
+                  what that policy says.
+                  "Why is this backup about to be deleted" has a different
+                  answer, and a different place to go and change it,
+                  depending on whether this set's own chain or the
+                  deployment's decided it, and this is the dialog that
+                  asks an operator to authorise a deletion. It is read
+                  off the plan rather than fetched beside it: a plan is
+                  pinned to the configuration revision it was computed
+                  against, so a separately-fetched policy could describe
+                  a chain that did not decide the list underneath it. */}
+              <p
+                style={{ margin: "12px 22px 0", fontSize: "var(--text-sm)", color: "var(--text-2)" }}
+              >
+                {(p.retentionIsOverride
+                  ? "Decided under this backup set's own retention policy: "
+                  : "Decided under the deployment's retention policy: ") +
+                  p.retention.tiers.map((t) => t.name + " " + t.keep).join(", ") +
+                  " · " + p.retention.timezone}
+              </p>
 
               <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
                 <div>

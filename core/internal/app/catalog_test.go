@@ -14,6 +14,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// Recovering the journal from the disk, and never the other way round.
+//
+// Every case here starts from an artifact that genuinely exists, produced by
+// a real cycle, and then takes the database away. That is what makes the
+// reconstruction meaningful: the manifests under test were written by the
+// product rather than by the test, so a change to what a sidecar carries
+// shows up here as a rebuild that can no longer put the row back.
+//
+// Three refusals matter more than the reconstruction itself. A manifest that
+// cannot be read is reported and does not abort the artifacts around it, so
+// one corrupt sidecar cannot cost an operator the rest of their catalog. A
+// manifest belonging to a different backup set is an error and writes no row,
+// because adopting it would file somebody's artifact under the wrong set's
+// policy. And the whole operation never touches a local or a remote file,
+// which is asserted directly rather than argued: a rebuild that repaired
+// anything on disk would be doing recovery work nobody reviewed.
+//
+// The reconcile-afterwards case is the one that proves the rebuild produced a
+// row the rest of the product can actually use, rather than one that merely
+// looks right in a report.
+
 // openJournalAt opens a real, on-disk journal at an explicit path, unlike
 // openJournal (helpers_test.go), which always picks a fresh one inside its
 // own t.TempDir(). This file's tests need to control the path: they close
@@ -135,7 +156,7 @@ func TestRebuildCatalog_ReconstructsFromSidecarManifestsAfterJournalLoss(t *test
 	if after.RemotePath != before.RemotePath {
 		t.Errorf("RemotePath = %q, want %q", after.RemotePath, before.RemotePath)
 	}
-	wantLocal := lifecycle.FinalArtifactPath(localDir, artifact)
+	wantLocal := mustFinalArtifactPath(t, localDir, artifact)
 	if after.LocalPath != wantLocal {
 		t.Errorf("LocalPath = %q, want %q", after.LocalPath, wantLocal)
 	}
@@ -320,7 +341,7 @@ func TestRebuildCatalog_NeverTouchesLocalOrRemoteFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewArtifactID: %v", err)
 	}
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final := mustFinalArtifactPath(t, localDir, artifact)
 	beforeContent, err := os.ReadFile(final)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -421,7 +442,7 @@ func TestRebuildCatalog_ThenReconcile_RemoteAbsentInvalidLocal_RoutesToQuarantin
 	// Now the boundary condition the integration bullet asks for: the
 	// remote copy is gone, and the local durable copy is invalid.
 	delete(tr.objects, "backup.dump")
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final := mustFinalArtifactPath(t, localDir, artifact)
 	if err := os.WriteFile(final, []byte("corrupted after rebuild"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -458,4 +479,16 @@ func TestRebuildCatalog_UnknownBackupSet_ReportsNotFound(t *testing.T) {
 	if _, err := svc.RebuildCatalog(context.Background(), unknown, true); err == nil {
 		t.Fatal("RebuildCatalog with an unconfigured backup set: want an error, got nil")
 	}
+}
+
+// mustFinalArtifactPath is the test-side spelling of the error return
+// lifecycle.FinalArtifactPath grew with issue #390's conversion. Every call
+// here supplies a real directory, so an error is a broken test.
+func mustFinalArtifactPath(t *testing.T, localDir string, artifact model.ArtifactID) string {
+	t.Helper()
+	p, err := lifecycle.FinalArtifactPath(localDir, artifact)
+	if err != nil {
+		t.Fatalf("lifecycle.FinalArtifactPath(%q, %s): %v", localDir, artifact, err)
+	}
+	return p
 }

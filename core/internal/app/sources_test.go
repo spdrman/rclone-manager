@@ -2,6 +2,18 @@ package app
 
 import "testing"
 
+// Whether every configured field actually reaches the summary.
+//
+// Sources is a projection and the only way it can be wrong is by dropping a
+// field, so these tests assert the fields rather than the shape. The two
+// booleans get a case each because they are the two that mean something an
+// operator acts on, and because a projection that forgets one reports a set
+// as running normally when it is switched off, or as deletable when it is
+// declared read-only.
+//
+// Both assert the false side too. A field that is never copied and a field
+// that is always true look identical to a test that only ever sets it.
+
 func TestSources_ListsConfiguredSourcesAndBackupSets(t *testing.T) {
 	bs := testBackupSet(t, "/var/backups/postgres")
 	bs.Remote.Type = "sftp"

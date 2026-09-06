@@ -3,6 +3,7 @@ package rclone
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -13,6 +14,29 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
+
+// This file covers #74's env and command key resolvers, and #269's
+// passphrase on top of them. Three things about how it is built are
+// deliberate and worth keeping.
+//
+// The key material is REAL. Every case runs against a freshly generated
+// ed25519 key, or against an ssh-keygen-produced encrypted one in both PEM
+// containers x/crypto/ssh knows about, rather than against a string that
+// looks key-shaped. The resolvers' whole job is to decide whether bytes
+// parse as a private key, so a fixture that never was one cannot exercise
+// the decision.
+//
+// The command resolver is driven by a real subprocess. /bin/cat, /bin/dd
+// and a temporary script are used instead of an in-process fake, because
+// the properties being checked (a bounded timeout that kills the process
+// group, a bounded stdout, stderr surfaced and stdout never) are
+// properties of os/exec's plumbing and not of this package's logic.
+//
+// And no case ever asserts that a secret appears somewhere. The rule this
+// file exists to enforce runs the other way: a refusal names the SHAPE of
+// the problem (empty, encrypted, not a key at all) and never the bytes
+// that had it, so the junk-stdout cases assert the resolver's output is
+// ABSENT from the error while the stderr case asserts stderr is present.
 
 // mustUnencryptedKeyPEM generates a fresh, unencrypted ed25519 private key
 // and returns its PEM bytes. It reuses ssh_test.go's
@@ -367,12 +391,51 @@ func TestResolveKeyFromCommand_RejectsOutputOverSizeLimit(t *testing.T) {
 	}
 }
 
+// keyCommandTestTimeout is the timeout resolveKeyFromCommand runs under in
+// the test below, standing in for the production 15 seconds.
+//
+// It used to be 200ms, and that is what made the test red other people's
+// branches under load (#394). The test has to separate two regimes: a
+// resolver whose c.Cancel really kills the process group returns at about
+// this timeout, and one whose c.Cancel does nothing returns at this
+// timeout plus resolverReapBackstop, because os/exec's own backstop is
+// then what reaps it. At 200ms the first regime is a number the SCHEDULER
+// decides on a loaded host and the second is a fixed 5.2s, so any bound
+// between them is really a bet on machine load. At two seconds the first
+// regime is set by a deadline rather than by the scheduler, which is what
+// makes the bound below mean something.
+const keyCommandTestTimeout = 2 * time.Second
+
+// keyCommandNeverAnswers is how long the test script sleeps. It is an
+// order of magnitude above the budget so that "returned before the sleep
+// finished" cannot be true by accident, which is the second way this test
+// could go vacuous: the old script slept for five seconds, and a build
+// with no timeout at all would have returned inside a five-second bound.
+const keyCommandNeverAnswers = 30 * time.Second
+
+// keyCommandReturnBudget bounds how long the call may take, and it is the
+// only assertion in this test that can tell a resolver that was KILLED
+// from one that was merely abandoned to os/exec's backstop.
+//
+// That is not obvious, and it is why a reasonable-looking number here
+// makes the whole test vacuous. The error text below looks like the proof:
+// it is not, because ctx.Err() is non-nil in both regimes, so the "killed
+// after exceeding its timeout" message appears either way. Only the clock
+// separates them.
+//
+// So the budget is derived rather than picked, and it goes strictly
+// between the two: three seconds above a correct run, two seconds below
+// resolverReapBackstop. Anything at or beyond keyCommandTestTimeout +
+// resolverReapBackstop can never fail, which is what
+// TestKeyCommandTimeoutBudget_CanStillFail exists to say out loud.
+const keyCommandReturnBudget = keyCommandTestTimeout + 3*time.Second
+
 func TestResolveKeyFromCommand_Timeout(t *testing.T) {
 	old := keyCommandTimeout
-	keyCommandTimeout = 200 * time.Millisecond
+	keyCommandTimeout = keyCommandTestTimeout
 	defer func() { keyCommandTimeout = old }()
 
-	script := mustScript(t, "sleep 5\n")
+	script := mustScript(t, fmt.Sprintf("sleep %d\n", int(keyCommandNeverAnswers.Seconds())))
 	start := time.Now()
 	_, err := resolveKeyFromCommand([]string{script}, "")
 	elapsed := time.Since(start)
@@ -383,8 +446,51 @@ func TestResolveKeyFromCommand_Timeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("error %q does not mention the timeout", err.Error())
 	}
-	if elapsed > 4*time.Second {
-		t.Fatalf("resolveKeyFromCommand took %s, the timeout does not appear to have been enforced", elapsed)
+	if elapsed > keyCommandReturnBudget {
+		t.Fatalf("resolveKeyFromCommand took %s, over its %s budget (timeout %s + %s slack).\n"+
+			"The timeout itself fired: ctx.Err() is what produced the error above. What did not happen inside the "+
+			"budget is the KILL. At about %s the resolver was reaped by os/exec's own WaitDelay backstop "+
+			"(resolverReapBackstop, %s) rather than by c.Cancel's SIGKILL to the process group, which is a real "+
+			"defect and not a slow machine, because both of those numbers are deadlines rather than scheduling. "+
+			"At about %s it was never killed at all.",
+			elapsed, keyCommandReturnBudget, keyCommandTestTimeout, keyCommandReturnBudget-keyCommandTestTimeout,
+			keyCommandTestTimeout+resolverReapBackstop, resolverReapBackstop, keyCommandNeverAnswers)
+	}
+}
+
+// TestKeyCommandTimeoutBudget_CanStillFail guards the three constants
+// above rather than any behaviour, because the way the test above stops
+// working is not a broken assertion, it is a budget quietly widened past
+// the point where it can fail.
+//
+// It is the same guard internal/lifecycle/verify_test.go keeps over
+// hookReturnBudget, and it is here because #394 was the sixth time this
+// repository found a timing bound that could not discriminate. A test that
+// cannot fail is worse than no test: it reports on a defect it would sit
+// green through.
+func TestKeyCommandTimeoutBudget_CanStillFail(t *testing.T) {
+	// A resolver that is never killed by c.Cancel is reaped by os/exec's
+	// backstop at exactly this point, with every other assertion in the
+	// test above passing. A budget here or beyond sits green through it.
+	if abandoned := keyCommandTestTimeout + resolverReapBackstop; keyCommandReturnBudget >= abandoned {
+		t.Errorf("keyCommandReturnBudget is %s, at or past the %s a resolver takes when c.Cancel kills nothing "+
+			"and os/exec's WaitDelay reaps it instead. At this budget TestResolveKeyFromCommand_Timeout passes "+
+			"against exactly the defect it is named for", keyCommandReturnBudget, abandoned)
+	}
+
+	// A resolver with no timeout at all runs the script to completion. If
+	// the script were shorter than the budget, that would pass too.
+	if keyCommandNeverAnswers <= keyCommandReturnBudget {
+		t.Errorf("the script sleeps %s, inside the %s budget, so a build with no timeout enforcement at all would "+
+			"return in time and pass", keyCommandNeverAnswers, keyCommandReturnBudget)
+	}
+
+	// And the budget has to leave a correct run room to be slow. A budget
+	// at or below the timeout fails every time, which is the opposite
+	// failure and just as useless.
+	if keyCommandReturnBudget <= keyCommandTestTimeout {
+		t.Errorf("keyCommandReturnBudget is %s, at or below the %s timeout itself, so a correct run cannot fit inside it",
+			keyCommandReturnBudget, keyCommandTestTimeout)
 	}
 }
 

@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+// This file is where the event vocabulary stops being a set of Go
+// identifiers and starts being an API.
+//
+// Each name is pinned against a literal typed out again here rather than
+// against the constant itself. That reads like duplication and is the whole
+// point: a table comparing EventStartup to EventStartup passes whatever
+// either one becomes, and the thing at risk is the string a dashboard
+// query, an alert rule or a jq filter matches on, none of which lives in
+// this repository to break loudly.
+//
+// The per-event tests then cover the two things a downstream reader depends
+// on past the name, which are the severity a line arrives at and the
+// attributes it always carries. Severity gets asserted even where the
+// method name makes it look obvious, because an alert rule keyed on level
+// is exactly as brittle as one keyed on the event field, and nothing
+// outside this package would notice either one moving.
+
 // TestEventNamesAreStable pins every event constant's literal string
 // against a value hardcoded independently, right here, rather than against
 // itself. If a future edit to events.go changes what EventLifecycleTransition

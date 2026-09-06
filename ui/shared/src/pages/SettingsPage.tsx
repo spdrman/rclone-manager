@@ -1,4 +1,22 @@
-import { useState } from "react";
+/**
+ * Everything an operator can configure from the UI, plus what this build
+ * and this platform are.
+ *
+ * Most of the page's history is subtraction. Several cards here used to be
+ * controls that rendered a value and saved nowhere: a polling interval in
+ * the wrong unit, a log level with no config key behind it, storage
+ * thresholds with no handler. Each was either removed or replaced with the
+ * real thing, and the notes in the JSX say which, because a decorative
+ * control is worse than a missing one. It teaches an operator that they
+ * have configured something.
+ *
+ * What is left splits three ways: cards that own a real config block and
+ * write it, capability copy that reports what this platform can do without
+ * ever claiming more, and build information. The version reads the shared
+ * node rather than fetching again, so this page and the compatibility
+ * banner above it cannot name two different versions.
+ */
+import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { usePlatform } from "@shared/platform/PlatformContext";
@@ -13,6 +31,7 @@ import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 import { CapacityCard } from "@shared/pages/CapacityCard";
 import { HelpField } from "@shared/components/FieldHelp";
+import { PasswordInput } from "@shared/components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
@@ -213,6 +232,11 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
 
   const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LENGTH;
   const mismatch = confirm.length > 0 && confirm !== next;
+  // Referenced rather than left inside the field's <label> to be swept into
+  // its name; see the matching note on EnrollmentPage and PasswordInput's
+  // doc for why the name no longer picks them up.
+  const tooShortId = useId();
+  const mismatchId = useId();
   const valid = current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && confirm === next;
 
   const submit = (e: React.FormEvent) => {
@@ -239,34 +263,34 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
       <div className="card__body">
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <HelpField label="Current password" help={FIELD_HELP.currentPassword}>
-            {(helpId) => (
-              <input
-                className="input"
-                type="password"
-                aria-describedby={helpId}
+            {(helpId, field) => (
+              <PasswordInput
+                label={field.label}
+                labelledBy={field.id}
                 autoComplete="current-password"
+                describedBy={helpId}
                 value={current}
-                onChange={(e) => setCurrent(e.target.value)}
+                onChange={setCurrent}
                 disabled={readOnly}
                 required
               />
             )}
           </HelpField>
           <HelpField label="New password" help={FIELD_HELP.newPassword}>
-            {(helpId) => (
+            {(helpId, field) => (
               <>
-                <input
-                  className="input"
-                  type="password"
-                  aria-describedby={helpId}
+                <PasswordInput
+                  label={field.label}
+                  labelledBy={field.id}
                   autoComplete="new-password"
+                  describedBy={tooShort ? helpId + " " + tooShortId : helpId}
                   value={next}
-                  onChange={(e) => setNext(e.target.value)}
+                  onChange={setNext}
                   disabled={readOnly}
                   required
                 />
                 {tooShort ? (
-                  <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                  <span id={tooShortId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                     {"Minimum " + MIN_PASSWORD_LENGTH + " characters."}
                   </span>
                 ) : null}
@@ -274,20 +298,20 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
             )}
           </HelpField>
           <HelpField label="Confirm new password" help={FIELD_HELP.confirmNewPassword}>
-            {(helpId) => (
+            {(helpId, field) => (
               <>
-                <input
-                  className="input"
-                  type="password"
-                  aria-describedby={helpId}
+                <PasswordInput
+                  label={field.label}
+                  labelledBy={field.id}
                   autoComplete="new-password"
+                  describedBy={mismatch ? helpId + " " + mismatchId : helpId}
                   value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
+                  onChange={setConfirm}
                   disabled={readOnly}
                   required
                 />
                 {mismatch ? (
-                  <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                  <span id={mismatchId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                     Passwords do not match.
                   </span>
                 ) : null}

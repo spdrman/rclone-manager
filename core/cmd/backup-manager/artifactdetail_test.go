@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+// The single-artifact detail view: that it prints the recorded reason a
+// backup is in trouble, and that it does not print two explanations for it.
+//
+// The recorded reason is the whole point of the view. It lives in the
+// journal's append-only transition log and nowhere else, so before this
+// existed an operator asking why an artifact was quarantined had to open
+// SQLite by hand. The cells here drive it end to end through a real
+// validator that refuses, so the sentence being printed is one the lifecycle
+// actually wrote rather than one the test handed in.
+//
+// The second cell is about a field this view deliberately does not print.
+// The API's own guess at a quarantine reason is reconstructed rather than
+// read, and it is sometimes non-empty and wrong; showing it beside the real
+// sentence would leave an operator with two disagreeing explanations and no
+// way to tell which to trust.
+
 // writeRejectingValidatorScript writes an executable shell script to a
 // fresh temp directory that always rejects (exit 1) and writes message to
 // its combined stdout/stderr, exactly the shape internal/lifecycle/

@@ -9,6 +9,19 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/health"
 )
 
+// The two ends of FR-24's freshness verdict, and the distinction between
+// them.
+//
+// A backup set that has never produced anything is DEGRADED and not STALE,
+// and those are different claims: stale says a backup that used to arrive has
+// stopped, which is a statement about history, and a set with no history
+// cannot support it. Getting that wrong sends an operator looking for a
+// regression in a set that has simply never run.
+//
+// The healthy case runs a real cycle first rather than writing a COMPLETE row,
+// so what is asserted is that the pipeline's own output satisfies
+// internal/health, not that a fixture does.
+
 // TestBuildHealthReport_NoHistoryIsDegradedNotStale proves BuildHealthReport
 // reaches into internal/health correctly for a backup set with no journal
 // history at all: FR-24's decideState treats that as DEGRADED (nothing has

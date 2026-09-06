@@ -85,6 +85,9 @@ if [ -z "$arches" ]; then
   exit 2
 fi
 
+# The same two-tool digest as record-release-hashes.sh, for the same
+# reason: this has to produce the identical value on Linux and on macOS or
+# the parity check is comparing a digest against a tool.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -93,6 +96,15 @@ sha256_of() {
   fi
 }
 
+# recorded reads the manifest through a JSON parser rather than a sed
+# expression, unlike publish-image.sh's json_string. The values here are
+# nested two levels down and keyed by architecture, and this comparison is
+# the whole point of the script: a pattern that silently matched the wrong
+# architecture's digest would report parity against the wrong binary.
+#
+# An architecture the manifest does not carry prints an empty string, so
+# the caller sees a mismatch and says which architecture it could not
+# find, instead of this failing with a traceback.
 recorded() {
   python3 - "$MANIFEST" "$1" "$2" <<'PY'
 import json, sys

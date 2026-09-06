@@ -1,3 +1,19 @@
+// CompareIdentity, checked against the situations it exists for rather than
+// against its own branches.
+//
+// The table is built by mutating one attribute of a shared base identity,
+// so every case reads as "the same object except this", which is exactly
+// the question FR-16 asks before a delete. Cases where a signal is missing
+// entirely matter as much as cases where it disagrees: the whole design
+// rests on degrading honestly when a backend cannot hash, and a suite that
+// only ever supplied hashes would never exercise the ladder below them.
+//
+// The awkward case is the one to keep: same path, same size, same
+// modification time, different content. That is what a replacement written
+// inside one mtime tick looks like, it is the only reason any of this is
+// more complicated than comparing two structs, and it has a positive
+// control of its own beside it to prove the fixture still is that case.
+
 package model
 
 import "testing"
@@ -6,6 +22,11 @@ import "testing"
 // so each case's diff from the others is exactly the attribute under test.
 var base = RemoteIdentity{Path: "backup.tar", Size: 1024, ModTime: 1_700_000_000}
 
+// withHash and withStableID copy base and set one attribute, so a table row
+// stays a single line and its difference from the others is the whole of
+// what it is testing. They take and return values rather than pointers
+// precisely so no case can mutate the shared base out from under the ones
+// after it.
 func withHash(r RemoteIdentity, alg, hash string) RemoteIdentity {
 	r.HashAlg, r.Hash = alg, hash
 	return r
@@ -217,6 +238,14 @@ func TestIdentityComparison_Preserve(t *testing.T) {
 	}
 }
 
+// The two String methods are tested for one case each that is not a
+// legitimate value: Confidence(99) and Verdict(99).
+//
+// That is the case worth pinning. Both types have a meaningful-looking zero
+// value, "none" and "unconfirmed", so a switch that fell through to a
+// default of that instead of printing the number would render an unhandled
+// value as the cautious answer, inside the audit line an operator reads to
+// find out why a deletion was refused.
 func TestConfidenceString(t *testing.T) {
 	tests := map[Confidence]string{
 		ConfidenceNone:   "none",

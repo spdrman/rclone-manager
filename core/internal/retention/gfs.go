@@ -349,7 +349,12 @@ func (v GFSVerdict) tierNames() []GFSTier {
 // complete backups" refers to: a durable local artifact the pipeline has
 // finished producing, that has not (yet, or ever) been found bad.
 //
-// Committed is the earliest of the three included here. lifecycle's own
+// Four states are included, and the count is worth stating because a
+// list that stops at three has already caused real harm here: see
+// internal/health's knownGood, whose doc records what an undercount of
+// this same set did to the README.
+//
+// Committed is the earliest of the four. lifecycle's own
 // package doc is explicit that "[f]rom here on the backup has already
 // succeeded, regardless of what happens to the remote copy next", so
 // waiting for RemoteDeletePending or Complete before considering an
@@ -383,6 +388,22 @@ var gfsManagedCompleteStates = map[lifecycle.State]bool{
 
 func gfsIsManagedComplete(raw string) bool {
 	return gfsManagedCompleteStates[lifecycle.State(raw)]
+}
+
+// gfsManagedCompleteNames is the map above rendered for a person:
+// "COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED".
+//
+// Every refusal in this package that turns gfsIsManagedComplete down has to
+// tell the operator which states it would have accepted, and issue #505 is
+// what happens when that list is typed out beside the map instead of read
+// off it: REMOTE_RETAINED joined the map with #282 and three sentences
+// stayed at three states, so the one operator most likely to be refused,
+// the one running a read-only backup set where REMOTE_RETAINED is the only
+// state anything ever reaches, was told by name that their artifacts' state
+// is not one of the permitted ones. Reading the map means the sentence
+// cannot be wrong about the map, whatever is added to it next.
+func gfsManagedCompleteNames() string {
+	return lifecycle.NameSet(gfsManagedCompleteStates)
 }
 
 // gfsWeekdaysByName mirrors config's own validWeekdays: any

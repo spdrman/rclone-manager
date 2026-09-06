@@ -45,6 +45,10 @@ func New(auth *local.Service) Adapter {
 	return Adapter{inner: inner}
 }
 
+// ID reports "generic". Every method on this type forwards to the profile
+// row rather than answering for itself, so that the row stays the single
+// place "generic" is defined; a constant returned here would be a second
+// definition that nothing compares against the first.
 func (a Adapter) ID() capabilities.PlatformID { return a.inner.ID() }
 
 // Capabilities reports every capability as unsupported: the generic host
@@ -62,6 +66,8 @@ func (a Adapter) Authenticator() capabilities.Authenticator { return a.inner.Aut
 // native notification capability, and §22 forbids emulating one.
 func (a Adapter) Notifier() capabilities.Notifier { return a.inner.Notifier() }
 
+// PlatformInfo forwards to the profile row, which is where the display
+// name and deployment description this reports actually live.
 func (a Adapter) PlatformInfo(ctx context.Context) (capabilities.PlatformInfo, error) {
 	return a.inner.PlatformInfo(ctx)
 }

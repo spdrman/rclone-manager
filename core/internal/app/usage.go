@@ -8,6 +8,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
+// FR-21's second input, and the two opposite failure policies it is read
+// under.
+//
+// The measurement itself is one journal query, and it would not need a file.
+// What needs one is that the same number is wanted by callers who disagree
+// about what to do when it cannot be had. A transfer about to begin must not
+// proceed on a guess, because a zero reads as "the whole cap is free" and
+// that is precisely the answer that lets a ceiling be breached. A health
+// report or an alerting pass must still be produced, because refusing to
+// report anything is worse than reporting that one figure is unknown.
+//
+// So both live here, next to each other, rather than one calling the other
+// from across the package with a comment explaining the difference. Anyone
+// adding a third caller has to pick a side while looking at both.
+
 // LocalUsage measures how much space this manager is currently occupying,
 // for FR-21's storage cap (issue #286).
 //

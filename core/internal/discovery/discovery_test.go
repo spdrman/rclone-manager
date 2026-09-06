@@ -1,3 +1,22 @@
+// These drive whole Discover passes, and they are deliberately split
+// between two kinds of transport.
+//
+// The strategy and filtering tests run against the REAL rclone adapter over
+// a local temp directory. That is the expensive choice and it is the right
+// one: the completeness strategies are claims about what a listing looks
+// like, and a hand-written double would let this package's beliefs about
+// recursion, path shapes and modification times drift from what the adapter
+// actually produces. TestDiscover_RenameStrategy_RecursesAndSkipsTempNames
+// exists precisely because that drift once happened.
+//
+// The hostile-input and failure tests use fakeTransport, because a real
+// backend will not hand back a name containing a backslash and will not fail
+// one Stat out of two on request.
+//
+// Every test here injects a fixed clock. Only the stable strategy reads it
+// for a decision, but every discovered row is stamped with it, so freezing
+// it everywhere keeps a failure message from depending on when the suite
+// ran.
 package discovery
 
 import (
@@ -15,6 +34,15 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// openJournal opens a real SQLite journal in a temp directory, one per
+// test.
+//
+// It is the real thing rather than an in-memory fake because the property
+// several of these tests turn on lives in the schema, not in this package:
+// the UNIQUE(source, backup_set, artifact_name) constraint is what turns a
+// basename collision into state.ErrAlreadyDiscovered, and a fake journal
+// would have to reimplement that to be useful, at which point the test would
+// be checking the fake.
 func openJournal(t *testing.T) *state.Journal {
 	t.Helper()
 	j, err := state.Open(context.Background(), filepath.Join(t.TempDir(), "journal.db"))
@@ -25,6 +53,9 @@ func openJournal(t *testing.T) *state.Journal {
 	return j
 }
 
+// mustSetID builds a validated backup set id, failing the test rather than
+// returning an error: a fixture this package cannot construct is not a case
+// under test.
 func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 	t.Helper()
 	id, err := model.NewBackupSetID(source, set)
@@ -34,6 +65,13 @@ func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 	return id
 }
 
+// backupSet assembles the config.BackupSet these tests hand to Discover.
+//
+// It sets ID explicitly, which is the field Discover refuses to run without.
+// That is not incidental: config.Validate is what normally populates ID, so
+// a test constructing a BackupSet literal is exactly the caller Discover's
+// "run it through config.Validate first" guard is aimed at, and every test
+// here has to satisfy that guard the same way the real pipeline does.
 func backupSet(t *testing.T, completion config.Completion, include []string) config.BackupSet {
 	t.Helper()
 	return config.BackupSet{
@@ -44,8 +82,14 @@ func backupSet(t *testing.T, completion config.Completion, include []string) con
 	}
 }
 
+// fixedNow freezes the clock Deps takes. See this file's header for why
+// every test uses one even when nothing reads it for a decision.
 func fixedNow(t time.Time) func() time.Time { return func() time.Time { return t } }
 
+// epoch is the single instant every test in this file treats as "now".
+// Modification times in the stable-strategy tests are expressed as offsets
+// from it, so the boundary between fresh and old is exact rather than a
+// race against how long the suite took to get there.
 var epoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
 // --- rename strategy, against the real rclone local adapter -------------
@@ -103,6 +147,24 @@ func TestDiscover_RenameStrategy_RecursesAndSkipsTempNames(t *testing.T) {
 	}
 }
 
+// TestDiscover_BasenameCollisionAcrossDirectoriesIsReported is the hazard
+// recursion created, staged exactly as a real producer would create it: one
+// directory per run, the same filename in each.
+//
+// The assertions are written to be indifferent to WHICH path wins, and that
+// is on purpose. Listing order is the adapter's business and could change,
+// so pinning a winner would make this a test of rclone. What must hold
+// either way is the relationship: exactly one row exists, the conflict names
+// the other path, and the conflict's RecordedPath is the path the journal
+// actually holds. An implementation that reported a conflict against a path
+// it had not stored would pass a weaker version of this and leave an
+// operator chasing a row that is not there.
+//
+// The journal read at the end is the part that would catch the worst
+// outcome, which is not a missing conflict report but a row whose RemotePath
+// was overwritten by the loser: that would leave the journal pointing a
+// stale path at an artifact that was replaced, which is the quiet corruption
+// the package doc names.
 func TestDiscover_BasenameCollisionAcrossDirectoriesIsReported(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "gitea-runs", "run-1", "backup.dump"), "first")
@@ -155,6 +217,16 @@ func TestDiscover_BasenameCollisionAcrossDirectoriesIsReported(t *testing.T) {
 
 // --- idempotency across two Discover calls -------------------------------
 
+// TestDiscover_SecondCallOnTheSamePathIsAlreadyKnownNotAnError is the other
+// side of the collision case, and the two have to be read together: the same
+// journal constraint fires in both, and this pins that Discover tells them
+// apart by comparing the stored path.
+//
+// Running twice over an unchanged remote is the normal case, once per
+// scheduled pass for the life of the artifact, so getting this wrong would
+// not be a rare bug. The explicit "not a conflict" assertion is what stops a
+// future change from routing every repeat pass into Conflicts, which would
+// bury the real collisions under one line per artifact per cycle.
 func TestDiscover_SecondCallOnTheSamePathIsAlreadyKnownNotAnError(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "backup.dump"), "payload")
@@ -188,6 +260,15 @@ func TestDiscover_SecondCallOnTheSamePathIsAlreadyKnownNotAnError(t *testing.T) 
 
 // --- marker strategy ------------------------------------------------------
 
+// TestDiscover_MarkerStrategy stages all four cases in one directory tree,
+// because the interesting assertions are about what does NOT appear.
+//
+// A marker file is a completion signal, not a payload, and it also matches
+// nothing in the include patterns, so there are two independent reasons it
+// should be skipped and only one of them is the one under test. The
+// assertions therefore check that neither marker shows up in Discovered nor
+// in Pending: reporting a marker as pending would be a line an operator sees
+// on every pass for ever, about a file that is behaving correctly.
 func TestDiscover_MarkerStrategy(t *testing.T) {
 	root := t.TempDir()
 	// Sibling per-artifact marker.
@@ -302,6 +383,13 @@ func TestDiscover_MarkerStrategy_ConfigurableManifestMarker(t *testing.T) {
 
 // --- stable strategy -------------------------------------------------------
 
+// TestDiscover_StableStrategy sets the modification times explicitly with
+// Chtimes rather than relying on when the files happened to be created.
+//
+// That is what makes the two cases mean something: "an hour old" and "one
+// second old" against a ten-minute window are both far from the boundary, so
+// the test cannot flip on a slow machine, and both are compared against the
+// same frozen now the code sees.
 func TestDiscover_StableStrategy(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "old.dump"), "old enough")
@@ -341,6 +429,15 @@ func TestDiscover_StableStrategy(t *testing.T) {
 
 // --- include filtering -----------------------------------------------------
 
+// TestDiscover_IncludeFiltersNonMatchingNamesSilently pins that a
+// non-matching name is not reported anywhere at all.
+//
+// The word doing the work is silently. A backup root routinely contains
+// files nobody asked this manager to back up, so an unmatched name reported
+// as Pending or Rejected would produce steady noise on every pass, and noise
+// on every pass is how a real rejection gets missed. Both buckets are
+// asserted empty for notes.txt because either one alone would leave the
+// other as an available place to put it.
 func TestDiscover_IncludeFiltersNonMatchingNamesSilently(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "backup.dump"), "payload")
@@ -375,6 +472,12 @@ func TestDiscover_IncludeFiltersNonMatchingNamesSilently(t *testing.T) {
 	}
 }
 
+// TestDiscover_EmptyIncludeMatchesEverything is the end-to-end version of
+// includeMatches' nil case, and it uses a name no plausible pattern would
+// match ("anything.bin") so it cannot pass by coincidence. The failure it
+// guards against is a backup set with no include configured discovering
+// nothing while looking perfectly healthy, which is the shape of outage that
+// is only noticed when a restore is needed.
 func TestDiscover_EmptyIncludeMatchesEverything(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "anything.bin"), "payload")
@@ -394,6 +497,19 @@ func TestDiscover_EmptyIncludeMatchesEverything(t *testing.T) {
 
 // --- hostile / malformed names ---------------------------------------------
 
+// TestDiscover_HostileBasenameIsRejectedNotIngested uses a backslash,
+// which is the case that needs a fake transport: the local adapter would
+// have to be running on a filesystem willing to create such a name.
+//
+// A backslash is not a path separator on the platforms this runs on, so it
+// survives isCleanRelativePath and is caught one step later by
+// model.NewArtifactID. That is the point of the case: it proves the second
+// gate is real rather than redundant, since a name can be a clean relative
+// path and still be unusable as an identity.
+//
+// Rejected rather than dropped is asserted explicitly. A hostile name is
+// exactly the thing an operator needs told about, so disappearing quietly
+// would be the worst available outcome.
 func TestDiscover_HostileBasenameIsRejectedNotIngested(t *testing.T) {
 	fake := &fakeTransport{
 		artifacts: []transport.RemoteArtifact{
@@ -419,6 +535,11 @@ func TestDiscover_HostileBasenameIsRejectedNotIngested(t *testing.T) {
 	}
 }
 
+// TestDiscover_TraversalShapedPathIsRejectedNotIngested covers the first
+// gate with two different shapes: a leading "..", and one buried mid-path
+// that only resolves to an escape after cleaning. The second is there
+// because a check that only looked at the start of the string would pass the
+// first case and let the second through.
 func TestDiscover_TraversalShapedPathIsRejectedNotIngested(t *testing.T) {
 	fake := &fakeTransport{
 		artifacts: []transport.RemoteArtifact{
@@ -444,6 +565,15 @@ func TestDiscover_TraversalShapedPathIsRejectedNotIngested(t *testing.T) {
 
 // --- per-candidate error resilience ----------------------------------------
 
+// TestDiscover_StatFailureIsPerCandidateNotFatal stages the real race:
+// an object listed a moment ago and gone by the time its identity is
+// captured, which is what a producer's own cleanup does routinely.
+//
+// The good artifact is asserted to have been discovered anyway, and that
+// half is the whole point. Returning early on the first candidate error
+// would make one vanishing file hide every other artifact in the listing, so
+// a busy source with steady producer churn could stop discovering anything
+// at all while reporting a single unremarkable error.
 func TestDiscover_StatFailureIsPerCandidateNotFatal(t *testing.T) {
 	fake := &fakeTransport{
 		artifacts: []transport.RemoteArtifact{
@@ -469,6 +599,16 @@ func TestDiscover_StatFailureIsPerCandidateNotFatal(t *testing.T) {
 	}
 }
 
+// TestDiscover_HashFailureDoesNotBlockDiscovery pins the degrade-honestly
+// rule for the one identity field a backend is allowed not to have.
+//
+// The hardened, shell-less SFTP account FR-6 recommends cannot compute a
+// SHA-256, and that is the recommended posture rather than a
+// misconfiguration, so a hash failure must not surface as a candidate error.
+// The last assertion is the honest half: the artifact is discovered with an
+// EMPTY hash rather than with something invented, so every later stage can
+// see that this identity has no hash to compare against instead of
+// comparing against a placeholder.
 func TestDiscover_HashFailureDoesNotBlockDiscovery(t *testing.T) {
 	fake := &fakeTransport{
 		artifacts: []transport.RemoteArtifact{
@@ -497,6 +637,9 @@ func TestDiscover_HashFailureDoesNotBlockDiscovery(t *testing.T) {
 
 // --- helpers ---------------------------------------------------------------
 
+// mustWrite creates a file and every directory above it. The MkdirAll is
+// what lets the nested-producer fixtures be written as one path each, which
+// is how the run-per-directory layouts in this file stay readable.
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -507,6 +650,11 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 }
 
+// pathSet indexes records by remote path so a test can ask "was this
+// discovered" without caring about order. Discover's output order follows
+// the listing, which is the adapter's business rather than this package's,
+// so asserting on a slice position would be pinning something no contract
+// promises.
 func pathSet(recs []state.Record) map[string]bool {
 	m := make(map[string]bool, len(recs))
 	for _, r := range recs {

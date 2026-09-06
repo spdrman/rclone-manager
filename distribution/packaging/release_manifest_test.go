@@ -398,7 +398,7 @@ func TestRegistryDigestComplaints_CoversEveryCombination(t *testing.T) {
 		{"published with a real digest", true, validIndex, arch("amd64", digest("sha256:"+strings.Repeat("c", 64))), ""},
 		{"no architectures at all, unpublished", false, nil, nil, "records no architecture at all"},
 		{"no architectures at all, published", true, validIndex, []ReleaseArchitecture{}, "records no architecture at all"},
-		{"nothing published but an index digest appeared anyway", false, digest("sha256:"+strings.Repeat("a", 64)), arch("amd64", nil), "image.published is false"},
+		{"nothing published but an index digest appeared anyway", false, digest("sha256:" + strings.Repeat("a", 64)), arch("amd64", nil), "image.published is false"},
 		{"published with no index digest at all", true, nil, validArchOnly, "records no index_digest"},
 		{"published with a local image ID where an index digest belongs", true, digest(strings.Repeat("b", 64)), validArchOnly, "which is not a sha256: digest"},
 		{"published with a real index digest", true, validIndex, validArchOnly, ""},

@@ -73,15 +73,15 @@ type components struct {
 }
 
 type schema struct {
-	Type             string              `json:"type"`
-	Description      string              `json:"description"`
-	Format           string              `json:"format"`
-	Enum             []string            `json:"enum"`
-	Properties       map[string]*schema  `json:"properties"`
-	Required         []string            `json:"required"`
-	Items            *schema             `json:"items"`
-	Ref              string              `json:"$ref"`
-	AllOf            []*schema           `json:"allOf"`
+	Type        string             `json:"type"`
+	Description string             `json:"description"`
+	Format      string             `json:"format"`
+	Enum        []string           `json:"enum"`
+	Properties  map[string]*schema `json:"properties"`
+	Required    []string           `json:"required"`
+	Items       *schema            `json:"items"`
+	Ref         string             `json:"$ref"`
+	AllOf       []*schema          `json:"allOf"`
 	// OneOf is modelled only where NEITHER binding generates a type from
 	// it: the body of an error response, which both bindings represent by
 	// their status and x-error-codes rather than by a schema. Anywhere a

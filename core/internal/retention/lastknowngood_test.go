@@ -10,6 +10,32 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// FR-19 protects one artifact per backup set, and nearly everything that
+// can go wrong with it produces a wrong answer that still looks like an
+// answer.
+//
+// The quarantined-newest case is the one to read first. A set whose most
+// recent arrival is QUARANTINED has to fall back to an older good artifact,
+// and both available wrong answers are plausible on their face: protect the
+// quarantined one, or conclude nothing is protected at all. Only a fixture
+// with a good older artifact sitting behind a bad newer one can tell those
+// three apart.
+//
+// The eligibility test compares this file's answer against
+// gfsIsManagedComplete itself rather than against a list of states typed
+// out here, because the two are required to be the same set and a
+// hand-written list is precisely how they come apart. That set has four
+// entries, and the fourth, RemoteRetained, is the only state a read-only
+// backup set ever reaches, so a drift in that direction reports a working
+// deployment as having no restore points whatsoever.
+//
+// The composition tests then cover the three shapes ApplyLastKnownGood can
+// produce: an artifact no tier kept, an artifact several tiers already
+// kept, and an artifact that is not in the verdicts at all. The last one
+// cannot happen when the verdicts and the protection came from the same
+// records, and it is tested anyway, because "cannot happen" is a claim
+// about every caller rather than about this code.
+
 // --- test helpers (prefixed lkg* so these never collide with gfs_test.go's
 // gfs*-prefixed helpers in this same package; gfsMustSet, gfsMustArtifact,
 // gfsRecSpec and gfsBuildRecords are generic enough to reuse directly) ---
@@ -73,10 +99,12 @@ func TestLastKnownGoodFallsBackPastQuarantinedNewest(t *testing.T) {
 
 // TestLastKnownGoodEligibilityMatchesGFSManagedComplete pins
 // LastKnownGoodDecide's eligibility to gfsIsManagedComplete, the exact same
-// Committed/RemoteDeletePending/Complete set gfs.go already uses (and, by
-// construction, the same set internal/health's decideState calls knownGood
-// for FR-24 -- see this file's package doc). Walking every lifecycle state
-// one at a time is a complete proof, not a sample.
+// four-state Committed/RemoteDeletePending/Complete/RemoteRetained set
+// gfs.go already uses (and, by construction, the same set internal/health's
+// decideState calls knownGood for FR-24, see this file's package doc).
+// Walking every lifecycle state one at a time is a complete proof, not a
+// sample, which is what makes this the check that catches the set being
+// written down short somewhere.
 func TestLastKnownGoodEligibilityMatchesGFSManagedComplete(t *testing.T) {
 	for _, st := range lifecycle.AllStates {
 		st := st

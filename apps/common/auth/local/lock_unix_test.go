@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+// The lock's three behaviours, and the middle one is the point.
+//
+// A second acquire on a held lock must fail with ErrStoreLocked, and that
+// is what makes a duplicate server or a create-admin racing a live one a
+// refusal instead of a corrupted store. The reacquire-after-release case is
+// the control: without it, an acquireStoreLock that failed unconditionally
+// would satisfy the first test perfectly.
+//
+// The build tag matches lock_unix.go's, so this file compiles exactly
+// where the implementation it tests does.
+
 // TestAcquireStoreLock_SecondAcquireOnSameFileFails is issue #322's
 // concurrency-safety requirement made concrete at the primitive level: a
 // second attempt to lock the same store (standing in for a running

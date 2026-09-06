@@ -1,5 +1,30 @@
 package webhost
 
+// The refusal that every deployment of this product is currently living
+// under, and the reason it is not a bug.
+//
+// Nothing shipped in this repository can make a destructive operation run.
+// Not a flag, not an environment variable, not a config key: the only
+// DestructiveGate implementation here reports false and takes no
+// parameters. That is easy to read as an unfinished feature and reach for
+// a way to switch it on, so this file is where the answer lives. Turning
+// it on means writing an implementation that has actually verified #92's
+// trusted-proxy identity check against real hardware, and until somebody
+// has done that, "destructive operations are off" is the honest state
+// rather than a placeholder.
+//
+// The shape is chosen to make that hard to undo by accident. A bool on
+// RouterConfig would be flipped by whoever next wires a router and would
+// look, in a diff, like configuration. An interface with no way to
+// construct a passing implementation from outside cannot be flipped
+// without somebody writing code and naming it, which is exactly the amount
+// of friction this deserves.
+//
+// The other thing to not get wrong is the scope. This answers one question
+// once for the whole deployment, and it must never grow a request
+// argument: per-request trust belongs on capabilities.Authenticator, which
+// is already given the headers and the peer address it would need.
+
 // DestructiveGate reports whether the trusted-proxy identity verification
 // required before any destructive/mutating operation may run has actually
 // been established for this deployment (docs/EPIC-B-multi-nas.md §13.3,

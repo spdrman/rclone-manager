@@ -1,3 +1,13 @@
+// These cover the manifest format itself: what a sidecar must carry, what
+// it must never carry, and what happens when one arrives that this binary
+// cannot honestly read.
+//
+// The shape of the file follows from what a recovery manifest is for. It
+// is read exactly once, at the worst moment, by code trying to rebuild a
+// journal that is already gone, so every test here is about refusing to
+// half-succeed: a manifest either round-trips every field a rebuild needs
+// or it is rejected with a reason, and there is no path where a partially
+// parsed one becomes a partially reconstructed row.
 package recovery
 
 import (
@@ -31,6 +41,16 @@ func TestManifestFieldsExcludeSecrets(t *testing.T) {
 	}
 }
 
+// testManifest is the one valid manifest every test here starts from,
+// mutating a single field to make its own case.
+//
+// The three timestamps are deliberately all different, and deliberately
+// not in the order you would guess: retention (02:59) is before received
+// (03:05), and the producer's own (03:00) sits between them. A fixture
+// that used one value for all three would let a field-crossing bug in
+// encode or decode round-trip perfectly, and the retention timestamps are
+// exactly the fields where crossing two of them changes which artifacts
+// FR-18 keeps.
 func testManifest() Manifest {
 	produced := time.Date(2026, 8, 20, 3, 0, 0, 0, time.UTC)
 	received := time.Date(2026, 8, 20, 3, 5, 0, 0, time.UTC)
@@ -53,6 +73,13 @@ func testManifest() Manifest {
 	}
 }
 
+// TestWriteReadManifest_RoundTrips is the whole contract in one case: a
+// manifest written to a directory and read back is the same manifest.
+//
+// It asserts the timestamps with Equal rather than ==, because these have
+// been through JSON and a time.Time that came back from RFC 3339 carries a
+// different location pointer than the one that went in even when it names
+// the same instant.
 func TestWriteReadManifest_RoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	m := testManifest()
@@ -98,6 +125,12 @@ func TestWriteReadManifest_RoundTrips(t *testing.T) {
 	}
 }
 
+// TestManifestPath_UsesArtifactBasenamePlusFixedSuffix pins the layout
+// that lets the writer in lifecycle/commit.go and the reader in catalog
+// rebuild find the same file without either of them knowing about the
+// other. The suffix is spelled out here rather than referenced through
+// manifestSuffix on purpose: a test that computes the answer the same way
+// the code does cannot catch the code changing it.
 func TestManifestPath_UsesArtifactBasenamePlusFixedSuffix(t *testing.T) {
 	got := ManifestPath("/data/backups/postgres-primary", "backup.dump")
 	want := filepath.Join("/data/backups/postgres-primary", "backup.dump.manifest.json")
@@ -106,6 +139,17 @@ func TestManifestPath_UsesArtifactBasenamePlusFixedSuffix(t *testing.T) {
 	}
 }
 
+// TestWriteManifest_RejectsInvalidManifest pins that Validate runs before
+// anything reaches disk, one broken field at a time.
+//
+// Refusing at write time and not only at read time is the point. A
+// manifest is written when everything is fine and read when nothing is, so
+// a bad one that is only caught on the way back in is caught by the
+// rebuild, at which point there is nothing left to reconstruct it from.
+//
+// "path-shaped name" is the case that is not just a missing value:
+// ArtifactName goes into a filesystem path, and a name containing ".."
+// would write the sidecar outside the backup set's own directory.
 func TestWriteManifest_RejectsInvalidManifest(t *testing.T) {
 	cases := map[string]func(*Manifest){
 		"empty artifact name": func(m *Manifest) { m.ArtifactName = "" },
@@ -128,6 +172,14 @@ func TestWriteManifest_RejectsInvalidManifest(t *testing.T) {
 	}
 }
 
+// TestReadManifest_RejectsNewerFormatVersion pins the refuse-rather-than-
+// guess rule this package shares with state/migrate.go. A manifest from a
+// newer binary may spell a field this one also has but means differently,
+// and a rebuild that read it anyway would produce a journal row that looks
+// right and is not, which is worse than a rebuild that stops and says so.
+//
+// It writes the JSON by hand rather than through WriteManifest, because
+// WriteManifest validates and would refuse to produce the fixture.
 func TestReadManifest_RejectsNewerFormatVersion(t *testing.T) {
 	dir := t.TempDir()
 	m := testManifest()
@@ -147,12 +199,23 @@ func TestReadManifest_RejectsNewerFormatVersion(t *testing.T) {
 	}
 }
 
+// TestReadManifest_MissingFile pins that a single missing sidecar is an
+// error for the caller that asked for that one artifact. It is the
+// deliberate opposite of ScanManifests' answer for a missing DIRECTORY: a
+// directory that was never created carries no claim, while a manifest
+// somebody asked for by name and did not get is a fact about that
+// artifact.
 func TestReadManifest_MissingFile(t *testing.T) {
 	if _, err := ReadManifest(filepath.Join(t.TempDir(), "nope.manifest.json")); err == nil {
 		t.Fatal("ReadManifest for a missing file: want an error, got nil")
 	}
 }
 
+// TestReadManifest_RejectsMalformedJSON covers the shape a crash actually
+// leaves behind: a truncated file. WriteManifest writes to a temp path and
+// renames precisely so this cannot happen at the real path, so this is the
+// check that the guarantee is still enforced on the way in even when
+// something outside this package put the bytes there.
 func TestReadManifest_RejectsMalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "broken.manifest.json")
@@ -164,6 +227,11 @@ func TestReadManifest_RejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+// TestManifestArtifact_RebuildsIdentity pins that the identity comes back
+// out of the three stored halves exactly as it went in. The manifest
+// stores source, set and name separately rather than one rendered string
+// so the rebuild goes back through model's own constructors and gets their
+// validation; this asserts that detour does not quietly change anything.
 func TestManifestArtifact_RebuildsIdentity(t *testing.T) {
 	m := testManifest()
 	artifact, err := m.Artifact()

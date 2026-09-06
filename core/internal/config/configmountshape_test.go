@@ -1,3 +1,19 @@
+// One failure message, for the upgrade that breaks on two platforms and no
+// others.
+//
+// TrueNAS and Unraid both carry an existing deployment's mappings forward,
+// so an upgrade past #196 can end up bind-mounting the OLD config.yaml file
+// at the new configuration DIRECTORY path. Everything downstream then reads
+// <that file>/config.yaml, gets ENOTDIR, and the engine crash-loops saying
+// "not a directory", which names neither the mount that is wrong nor the
+// migration that changed it.
+//
+// The pair of tests is the whole design. One proves the hint appears where
+// it applies, and the other proves it does not appear for a config that is
+// merely missing, because a hint attached to every read failure is a hint
+// nobody reads and would send an operator chasing a mount that is perfectly
+// correct.
+
 package config_test
 
 import (

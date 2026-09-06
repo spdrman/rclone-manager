@@ -8,6 +8,17 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The one thing in this package that runs before a Service can exist.
+//
+// Every other file here is a method on a Service, so it is handed an
+// already-loaded configuration and an already-open journal and never asks
+// where either came from. This file is where both are produced, and it is
+// the only production code in internal/app that calls
+// config.LoadAndValidate or state.Open. It should stay the only one: a
+// second caller of state.Open here would be a second opinion about whether
+// the database is usable, formed after something had already started using
+// it.
+
 // Check is the `backup-manager check` use case: a pre-flight answer to "can
 // this deployment actually start", checked before anything is asked to
 // process a single artifact.

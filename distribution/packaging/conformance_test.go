@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1289,4 +1290,74 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestTheInstallerDefaultsToTheCanonicalImage closes the one gap
+// TestEveryPlatformUsesTheExactCanonicalImage leaves open.
+//
+// That test holds every packaged platform to canonical.json, and it does
+// its job: cutting 0.2.0 made all eight adapters fail until each was
+// moved. scripts/install/install_docker_host.py is not one of those
+// platforms, though. It is a standalone script an operator runs directly,
+// it carries the image reference as an argparse default, and nothing
+// compared it to anything.
+//
+// So it did not move, and the 0.2.0 install on the real NAS pulled 0.1.0
+// and reported success, because a stale default is still a valid
+// reference to an image that really exists. The installer is the one
+// shipped artifact where the failure is silent rather than loud, which is
+// exactly why it needs the pin the adapters already have.
+func TestTheInstallerDefaultsToTheCanonicalImage(t *testing.T) {
+	c := MustLoad()
+
+	rel := filepath.Join("scripts", "install", "install_docker_host.py")
+	src, err := os.ReadFile(Path(rel))
+	if err != nil {
+		t.Fatalf("cannot read the installer: %v", err)
+	}
+
+	// FindAllSubmatch, not FindSubmatch. The first match is not the
+	// interesting one: a second --image default added later, or left
+	// behind by a restructure, is precisely the copy nobody looks at and
+	// therefore the one that drifts. There is one flag, so there is one
+	// default, and this says so rather than reading whichever comes first.
+	re := regexp.MustCompile(`add_argument\(\s*"--image"\s*,\s*default="([^"]*)"`)
+	matches := re.FindAllSubmatch(src, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no --image default found in %s. This test pins that default to the canonical reference in distribution/packaging/canonical.json, so if the flag was renamed or its default stopped being a literal, move the pin with it rather than deleting it.", rel)
+	}
+	if len(matches) > 1 {
+		found := make([]string, 0, len(matches))
+		for _, m := range matches {
+			found = append(found, string(m[1]))
+		}
+		t.Fatalf("%s declares %d --image defaults (%q), and there should be exactly one. Two defaults for one flag is how the one nobody reads goes stale.", rel, len(matches), found)
+	}
+	if got := string(matches[0][1]); got != c.Image.Reference {
+		t.Errorf("%s defaults --image to %q, want the canonical %q.\n\nThis is what made the 0.2.0 install pull 0.1.0 and still report success. Fix it in %s, on the --image default in _add_install_prereq_groups, and move it with the tag in distribution/packaging/canonical.json.", rel, got, c.Image.Reference, rel)
+	}
+
+	// Every mention of the image, each held to the same reference, and
+	// this is the half that used to be vacuous. It ran
+	// bytes.Contains(src, c.Image.Reference) AFTER the check above had
+	// already established the default IS that reference, so it was true
+	// by construction: drifting only the epilog's worked example to
+	// :0.1.0 and leaving the default at :0.2.0 kept the whole test green.
+	//
+	// So the question is inverted. Rather than "does the canonical
+	// reference appear at all", this asks whether any mention of this
+	// image carries a tag that is not the canonical one, which is the
+	// thing that actually hurts: an operator copies the epilog's command
+	// verbatim and gets the version it names.
+	prefix := c.Image.Registry + "/" + c.Image.Repository + ":"
+	anyRef := regexp.MustCompile(regexp.QuoteMeta(prefix) + `([A-Za-z0-9_][A-Za-z0-9._-]*)`)
+	mentions := anyRef.FindAllSubmatch(src, -1)
+	if len(mentions) < 2 {
+		t.Errorf("%s mentions %s%s %d time(s), expected at least two: the --image default and the epilog's worked example. If the example was removed, remove this count with it; if it moved, this pin follows it.", rel, prefix, c.Image.Tag, len(mentions))
+	}
+	for _, m := range mentions {
+		if tag := string(m[1]); tag != c.Image.Tag {
+			t.Errorf("%s names %s%s, want the canonical tag %q.\n\nEvery mention of this image in the installer is a version an operator can end up running: the --image default installs it, and the epilog is a command people copy. Move them together, from distribution/packaging/canonical.json.", rel, prefix, tag, c.Image.Tag)
+		}
+	}
 }

@@ -13,44 +13,43 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
-// TestRealPipeline_DeleteRemote_NeverConfirmsIdentityStrongly_KnownDefect is
-// the most favourable possible case for a delete to succeed: a real local
-// backend (full hash support, no SFTP shell restriction at all), a remote
-// object nobody ever touched after discovery, driven through the real
-// discovery.Discover -> lifecycle.Transfer -> lifecycle.Verify ->
-// lifecycle.Commit -> lifecycle.DeleteRemote pipeline. It proves a second
-// real defect this issue's test suites found (see the PR description
-// under its own heading): lifecycle.DeleteRemote's FR-16 re-identification
-// re-Stats the remote object but never calls Transport.RemoteHash, and
-// transport.RemoteArtifact from a real Stat call never carries a hash or a
-// backend stable id (see internal/transport/rclone/adapter.go's toArtifact,
-// which only ever fills in Path/Size/ModTime). So the "current" side of
-// model.CompareIdentity can never carry a hash, regardless of what the
-// "discovered" side captured or what the backend is actually capable of,
-// and the comparison can only ever reach ConfidenceWeak on a same-second,
-// same-size match: never the ConfidenceStrong hash match that would let a
-// delete proceed.
+// TestRealPipeline_DeleteRemote_ConfirmsIdentityAndProceeds drives the
+// whole real pipeline, Discover then Transfer then Verify then Commit then
+// DeleteRemote, against the real rclone local adapter, and proves the FR-16
+// re-identification can actually reach ConfidenceStrong and let a delete
+// happen.
 //
-// internal/lifecycle/remotedelete.go's own package doc attributes this
-// weak-confidence outcome to "docs/ssh-setup.md['s] hardened, shell-less
-// SFTP account", implying a more capable backend or account would do
-// better. This test shows that framing is incomplete: the local backend
-// has no shell restriction of any kind and can compute a real sha256
-// (this package's own discovery.go proves as much at discovery time), yet
-// DeleteRemote still cannot reach a strong-confidence match, because
-// DeleteRemote's own re-identification step never asks for one. The
-// practical consequence: as this code stands today, a remote object can
-// never be positively re-confirmed and deleted through this pipeline
-// against ANY backend registered in this binary, not only the
-// hardened-SFTP posture the comments call out; every real delete attempt
-// refuses. That fails safe (nothing is ever wrongly deleted) but is a real
-// "no artifact may be stuck with no way forward" violation once an
-// operator actually needs remote storage back. The recommended fix (out
-// of this PR's file scope: it touches internal/lifecycle/remotedelete.go,
-// production code) is for the real-adapter equivalent of "current
-// identity" to attempt Transport.RemoteHash best-effort when the
-// discovered side carries one, mirroring exactly the pattern
-// captureRemoteIdentity already uses in this package's own discovery.go.
+// It was written to prove the opposite, and the history is worth keeping
+// because it explains both the fixture and the file it lives in.
+//
+// The A213 sweep set up the most favourable case a delete could possibly
+// get: a local backend with full hash support and no shell restriction at
+// all, and a remote object nobody touched between discovery and delete. The
+// delete was refused anyway. DeleteRemote's re-identification re-Statted the
+// object but never called Transport.RemoteHash, and the adapter's Stat only
+// ever filled in path, size and modification time, so the "current" side of
+// model.CompareIdentity could never carry a hash no matter what the
+// discovered side had captured or what the backend was capable of. The best
+// available outcome was a weak same-size, same-second match, and DeleteRemote
+// requires a strong one.
+//
+// That mattered because remotedelete.go's own doc blamed the weak outcome on
+// docs/ssh-setup.md's hardened, shell-less SFTP account, which implied a more
+// capable backend would do better. It would not have: no backend in this
+// binary could reach a strong match, so no remote object could ever be
+// deleted through this pipeline. It failed safe, in that nothing was ever
+// wrongly deleted, and it was still a real "no artifact may be stuck with no
+// way forward" violation for any operator who needed the remote space back.
+//
+// Stat now asks the backend for a hash and a stable id, so the delete
+// proceeds. The fixture stayed rather than being deleted along with the
+// defect: driving all five stages end to end against a real backend is
+// exactly the regression the fix needs, and nothing else in the tree covers
+// that path.
+//
+// The last assertion is the one that keeps this honest. Reporting success
+// without deleting anything would satisfy every check above it, so the test
+// finishes by looking for the object on disk.
 func TestRealPipeline_DeleteRemote_ConfirmsIdentityAndProceeds(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

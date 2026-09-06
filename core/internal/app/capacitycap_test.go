@@ -100,11 +100,22 @@ type capScenario struct {
 	local   string
 }
 
+// Both numbers are deliberately absurd, and that is what makes the matched
+// set below decisive. Every case runs on an ordinary developer or CI temp
+// filesystem with gigabytes free, so a refusal at a cap of a thousand-odd
+// bytes cannot be explained by free space: FR-21's cap and FR-21's disk
+// threshold are two different questions, and numbers anywhere near a real
+// filesystem's would let one answer stand in for the other.
 const (
 	capScenarioPayload   = "payload bytes" // 13 bytes
 	capScenarioSpentSize = int64(1000)
 )
 
+// newCapScenario builds that fixture: a discovered 13-byte artifact ready to
+// transfer, against a catalog already claiming a thousand bytes in use. Only
+// the cap differs between the tests, so each one is a single-variable
+// experiment rather than three separate setups that have to be compared by
+// eye.
 func newCapScenario(t *testing.T) capScenario {
 	t.Helper()
 	local := t.TempDir()

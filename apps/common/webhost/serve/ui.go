@@ -12,6 +12,32 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 )
 
+// The UI half of the two-container split: the only process with a
+// published port, and therefore the only hop that can tell a real client
+// from a forged one.
+//
+// That position is what makes this file's three sanitising steps
+// load-bearing rather than defensive. It deletes any X-Forwarded-For the
+// client sent before recomputing it from the real peer address, because
+// the engine behind it is configured to believe that header and a client
+// that could set it would pick a fresh rate-limit bucket per request. It
+// resolves the identity-header trust boundary here, at the hop the
+// platform gateway actually connects to, rather than one hop further in
+// where every request looks like it came from this container; the section
+// comment further down, beside UIConfig.Gateway, has that argument in
+// full, including why an unconditional strip would be wrong. And it
+// deletes the upstream's copies of the browser security headers so this
+// container is the single authority for what a browser is told, which is
+// also the honest arrangement since it is the one talking to the browser.
+//
+// The proxy itself is net/http's, on purpose. Forwarding two path prefixes
+// unchanged to one fixed upstream does not justify a second server in the
+// image.
+//
+// The static handler falls back to the app shell for anything that is not
+// a real file, which is what a client-side router needs for a hard refresh
+// on a deep link to reach the app instead of a 404.
+
 // UIConfig is everything NewUI needs to build the UI-host container's
 // handler.
 type UIConfig struct {

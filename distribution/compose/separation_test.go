@@ -452,6 +452,15 @@ func checkSeparation(t *testing.T, source string, mountFor func(containerPath st
 // rather than disappear from the comparison silently.
 var privatePathAbsences = map[string]string{}
 
+// TestPrivateStateIsSeparateFromBackupDataOnEveryClaimedPlatform is the
+// suite this file exists for. Two of its guards look like paranoia and
+// are not: the artifact count refuses to run against a contract that
+// registers only the canonical definition, because the claim is about
+// DERIVED artifacts and a one-element list would prove it vacuously, and
+// the cleanup refuses a run where no artifact declared a private mount
+// next to a backup destination, because per-artifact subtests that all
+// find nothing to compare report a green suite that compared nothing.
+// The counter is atomic because those subtests run in parallel.
 func TestPrivateStateIsSeparateFromBackupDataOnEveryClaimedPlatform(t *testing.T) {
 	t.Parallel()
 

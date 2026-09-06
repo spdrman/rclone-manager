@@ -14,6 +14,17 @@ import (
 	_ "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// The one test whose import list is half the test.
+//
+// The blank import above is load-bearing and looks removable; its own comment
+// says why it is there. What that leaves this file responsible for is failing
+// LOUDLY if it ever goes, which is why the assertion is "not empty and not
+// unknown" rather than a comparison against whatever version happens to be
+// pinned today. A test asserting the pinned string would have to be edited on
+// every rclone bump, and the first person to make it pass by relaxing it to
+// "non-empty" would hand this file a green tick on a binary where the feature
+// reports nothing.
+
 func TestBuildVersionInfo_ReportsEverySection(t *testing.T) {
 	info := BuildVersionInfo("1.2.3", "abc123")
 

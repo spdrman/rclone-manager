@@ -8,10 +8,19 @@ import (
 // Tests for issue #156 (B3.8): Retention.Tiers, the generalized FR-18
 // retention chain, and its relationship to the three legacy scalars.
 
+// retentionWithTiers builds a Retention that is already resolved except for
+// its tiers, so a case that fails can only have failed on a tier. Timezone
+// and week start are set rather than left to default because
+// validateRetention would otherwise report those alongside whatever the
+// test is actually about.
 func retentionWithTiers(tiers ...RetentionTier) Retention {
 	return Retention{Timezone: "UTC", WeekStartsOn: "monday", Tiers: tiers}
 }
 
+// mustValidateRetention runs the exported override entry point, not
+// Config.Validate, because that is the path the CLI's retention flags take
+// and the whole claim of the exported function is that it applies the
+// identical rules.
 func mustValidateRetention(t *testing.T, r *Retention) {
 	t.Helper()
 	if err := ValidateRetention(r); err != nil {

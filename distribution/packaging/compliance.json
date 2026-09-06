@@ -38,13 +38,79 @@
     "noticeFile": "NOTICE",
     "inventory": "provenance/third-party-licenses.json",
     "rationale": [
-      "Every one of the 54 modules linked into the two shipped binaries, and every",
-      "one of the 9 production npm packages in the web bundle, is permissive:",
-      "MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 or CC0-1.0. rclone itself, the",
-      "one dependency this product is built around, is MIT. Nothing in the graph is",
-      "copyleft, so the choice was open, and third-party-licenses.json is checked",
-      "against the live module graph on every run so it stays open by evidence",
-      "rather than by memory.",
+      "Every component that reaches a shipped artifact is permissive (MIT,",
+      "BSD-2-Clause, BSD-3-Clause, Apache-2.0 or CC0-1.0) except the two named",
+      "below. That set is the Go modules `go list -deps` reports as linked into",
+      "either binary on either shipped architecture, plus the production packages",
+      "in ui/shared's lockfile, and third-party-licenses.json is re-derived from",
+      "both on every run. The tally lives there and is not repeated here: this",
+      "file used to carry a module count that had been stale for a long time,",
+      "and a number in prose is a claim nothing checks, so",
+      "TestTheProseCarriesNoCountNobodyChecks refuses one. rclone itself, the one",
+      "dependency this product is built around, is MIT.",
+      "",
+      "Two components are NOT permissive, and this file used to say the graph had",
+      "no copyleft in it. That stopped being true when rclone's s3 backend was",
+      "registered (#235), and the sentence is deleted rather than softened.",
+      "github.com/hashicorp/go-cleanhttp@v0.5.2 and",
+      "github.com/hashicorp/go-retryablehttp@v0.7.8 are both MPL-2.0. They arrive",
+      "under backend/s3 through github.com/IBM/go-sdk-core/v5, which",
+      "backend/s3's ibm_signer.go imports with no build tag, so registering the",
+      "backend and not linking them is not a choice this project has.",
+      "",
+      "They are in the binaries and not merely in go.mod, which is a difference",
+      "worth measuring rather than asserting: `go tool nm` on a linux/amd64",
+      "backup-manager finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
+      "surviving dead-code elimination, among them the code symbols NewClient,",
+      "DefaultRetryPolicy, DefaultBackoff and DefaultPooledTransport. The MPL",
+      "code ships and runs, and nothing below should be read as suggesting it",
+      "does not.",
+      "",
+      "Shipping it is a decision and it was taken on purpose. MPL-2.0 is",
+      "FILE-level weak copyleft: it scopes reciprocity to the covered files, and",
+      "§3.3 permits distributing a Larger Work under other terms, so Apache-2.0",
+      "over the whole is not foreclosed. The two alternatives both cost more than",
+      "they buy. Dropping the s3 backend removes the only non-local storage medium",
+      "the product has. Forking rclone to delete ibm_signer.go is a cost on every",
+      "upgrade, and docs/rclone-upgrade.md exists to keep that surface at zero.",
+      "",
+      "§3.3's permission is conditional, and the condition is the whole cost:",
+      "a Larger Work may ship under terms of this project's choice PROVIDED it",
+      "also complies with the MPL for the covered software. So Apache-2.0 here",
+      "rests on §3.2 being met, not merely on §3.3 existing.",
+      "",
+      "§3.2(a) asks two things, and they are worth keeping apart because they",
+      "land differently. The source has to be made available: it is, at the",
+      "immutable Go module proxy address recorded in acceptedNonPermissive",
+      "below, per RELEASE rather than per licence, at no charge, without an",
+      "account, and independently of this",
+      "repository being private. Neither module is modified or vendored, so that",
+      "address serves the same bytes that were compiled and go.sum pins them. And",
+      "recipients OF THE EXECUTABLE FORM have to be informed how to obtain it:",
+      "NOTICE and docs/compliance/source-offer.md do that, naming each module at",
+      "its exact version with its own address, and the gate reads both and fails",
+      "if either stops. NOTICE also travels with what this project distributes:",
+      "the runtime image carries it at /licenses/NOTICE, beside /licenses/LICENSE",
+      "and the inventory both of them point at. TestTheImageCarriesTheLicenceMaterials",
+      "reads the runtime stage and fails if a COPY goes, and",
+      "TestTheBuiltImageCarriesTheLicenceMaterials in apps/generic/tests/dockercli",
+      "copies the files back out of a built image and compares them to the tree,",
+      "which is the half that proves delivery rather than intent. Until #407 the",
+      "image copied the binaries and the frontend bundle and nothing else, a gap",
+      "that predates this decision and cost Apache-2.0 §4(d) the same way.",
+      "",
+      "acceptedNonPermissive is a third category rather than two more entries on",
+      "permissiveIds, and that is not bookkeeping. permissiveIds says what a",
+      "licence IS and it is the list a reviewer reads to find out whether this",
+      "graph is permissive. Widening it would have cleared the check in one line",
+      "by making this file assert something false about the two components it is",
+      "least true of. An entry in acceptedNonPermissive cannot be a bare id: it",
+      "has to name the clause, the licence text address, a per-release source",
+      "address and the exact releases it covers, and",
+      "LicenceObligationComplaints reads the artifacts it claims and",
+      "fails the build when they do not carry the offer. So the acceptance is",
+      "checked the same way the permissive claim is, and turning it into a",
+      "formality takes deleting a test rather than editing a list.",
       "",
       "Apache-2.0 over MIT for three reasons that all bite in this project's",
       "specific situation. It grants patent rights explicitly and terminates them",
@@ -58,8 +124,11 @@
       "adapter.",
       "",
       "The known cost: Apache-2.0 is incompatible with GPL-2.0-only. That is free",
-      "here because the graph has no GPL in it, and copyleftBlocksTheLicenseChoice",
-      "below is the check that keeps it free rather than assumed."
+      "here because the graph has no GPL in it, and permissiveIds is what keeps it",
+      "free rather than assumed: an id is admitted by being named, so GPL arriving",
+      "through a new dependency is a red build and not a discrepancy nobody looks",
+      "for. MPL-2.0 raises no such question, because §3.3 is what permits the",
+      "Larger Work to ship under these terms in the first place."
     ],
     "copyleftBlocksTheLicenseChoice": true,
   "permissiveIds": [
@@ -77,27 +146,74 @@
       "AGPL-1.0-only", "AGPL-3.0-only", "AGPL-3.0-or-later",
       "MPL-1.1", "MPL-2.0", "EPL-1.0", "EPL-2.0", "CDDL-1.0", "CDDL-1.1",
       "SSPL-1.0", "BUSL-1.1"
+    ],
+    "acceptedNonPermissive": [
+      {
+        "spdxId": "MPL-2.0",
+        "scope": "File-level weak copyleft. Reciprocity reaches the MPL-covered files themselves and nothing this project writes: a Larger Work combining them with other code may ship under other terms, which is what §3.3 says and what this release does.",
+        "obligation": "MPL-2.0 §3.2(a), read rather than remembered: distributing the covered files in Executable Form obliges this project to make their Source Code Form available as §3.1 describes, AND to inform recipients OF THE EXECUTABLE FORM how to obtain that Source Code Form by reasonable means, in a timely manner, at no more than the cost of distribution. §3.1 adds that recipients must be told the source is governed by the MPL and how to obtain a copy of the licence. §3.2(b) forbids the terms of the executable from limiting or altering their rights in that source, and Apache-2.0 over the Larger Work does not touch them. §3.4 forbids stripping notices out of the covered source, which is moot here because neither module is modified.",
+        "licenceTextUrl": "https://mozilla.org/MPL/2.0/",
+        "sourceRetrieval": "https://proxy.golang.org/{module}/@v/{version}.zip",
+        "components": [
+          "github.com/hashicorp/go-cleanhttp@v0.5.2",
+          "github.com/hashicorp/go-retryablehttp@v0.7.8"
+        ],
+        "dischargedBy": [
+          "NOTICE",
+          "docs/compliance/source-offer.md"
+        ],
+        "rationale": [
+          "Accepted, not tolerated. The two modules arrive under rclone's s3 backend",
+          "through github.com/IBM/go-sdk-core/v5 and backend/s3 imports that with no",
+          "build tag, so the backend cannot be registered without them. Not shipping",
+          "the backend removes the only non-local storage medium the product has, and",
+          "forking rclone to drop ibm_signer.go is a cost on every upgrade.",
+          "",
+          "The discharge is cheap because neither module is modified or vendored: the",
+          "immutable module proxy serves the exact source that was compiled, go.sum",
+          "pins its hash, and each module ships its own MPL text inside that zip. So",
+          "a recipient can fetch the source, check it against the release, and read",
+          "the licence, without an account and without this repository being public.",
+          "",
+          "sourceRetrieval renders per component rather than naming a project,",
+          "because §3.2 is about the source of what shipped and a link to a moving",
+          "branch does not identify that.",
+          "",
+          "components names the exact releases somebody read, and the acceptance",
+          "covers those and nothing else. A version bump is a different upload with",
+          "its own licence bytes and its own source address, so it is refused until",
+          "it is read and added here, by the policy check itself and not only by",
+          "the artifacts going stale. The list is checked against the inventory in",
+          "both directions, so it cannot hold a release the graph no longer links",
+          "either: the bump that removed one is when the offer wants reading again."
+        ]
+      }
     ]
   },
 
   "sourceRepository": {
     "url": "https://github.com/spdrman/rclone-manager",
-    "visibility": "private",
+    "visibility": "public",
     "visibilityNote": [
       "Measured, not assumed: `gh repo view spdrman/rclone-manager --json visibility`",
-      "answers PRIVATE today. §73 WP5.2 wants the source, privacy, licence and",
-      "support links to resolve to real, current content for a store reviewer, and a",
-      "private repository resolves to a 404 for everyone outside the ACL. So every",
-      "link whose target is this repository is NOT publicly reachable while this says",
-      "private, which is why storeReadyForPublicLinks is derived from this one field",
-      "instead of being asserted per link. Flipping it to public is the operator",
-      "action that closes the criterion; nothing here can do it, and nothing here",
-      "pretends otherwise.",
+      "answers PUBLIC. §73 WP5.2 wants the source, privacy, licence and support links",
+      "to resolve to real, current content for a store reviewer, and they now do:",
+      "every link whose target is this repository resolves for anyone, which is why",
+      "storeReadyForPublicLinks is derived from this one field instead of being",
+      "asserted per link.",
       "",
-      "docs/compliance/source-offer.md is the written offer that stands in the",
-      "meantime: it is what a reviewer is given when the repository itself cannot be",
-      "opened, and it is the artifact Apache-2.0 §4a's redistribution obligation is",
-      "discharged through."
+      "This said private until issue #484, under the sentence above claiming it was",
+      "measured. It had been measured, and then the repository was made public and",
+      "nothing came back to re-measure it, so the file carried a stale reading with a",
+      "note asserting its freshness - which is worse than an unmeasured value,",
+      "because the note is what stops anyone checking. Re-run the command above when",
+      "this is in doubt rather than reading the note.",
+      "",
+      "docs/compliance/source-offer.md stays. It stood in while the repository was",
+      "private and it is still the artifact Apache-2.0 §4a's redistribution obligation",
+      "is discharged through for a recipient who has a package and no browser: a link",
+      "resolving is not the same as an offer having been made, and the two are",
+      "different obligations to different people."
     ]
   },
 
@@ -159,8 +275,55 @@
       "",
       "Every target additionally ships the canonical multi-architecture OCI image.",
       "That is recorded once, in container/release-manifest.json, not repeated per",
-      "target here."
+      "target here. Which is also why every target below records a licenceDelivery:",
+      "the sentence above is the whole reason the image can be one target's answer",
+      "for the licence, and it was a note about checksums that nothing read."
     ],
+
+    "licenceDelivery": {
+      "note": [
+        "How a recipient of each target receives LICENSE, NOTICE and the",
+        "third-party inventory, recorded per target rather than inferred from the",
+        "note above. #407 asked for the decision rather than the inference, and",
+        "the inference would have been wrong for one of them.",
+        "",
+        "\"image\" means the canonical OCI image carries them and this target ships",
+        "no copy of its own. Right for every target that is metadata pulling the",
+        "same image: a catalog entry, a template, a compose profile, a store",
+        "manifest. A second copy beside a compose file would be another file to",
+        "keep in step and no recipient would read it, because what they run is the",
+        "image. It is only an answer while the image really carries them, so",
+        "declaring it makes container/Dockerfile's runtime stage the thing that has",
+        "to prove it, and LicenceDeliveryComplaints reads one against the other.",
+        "",
+        "\"package-payload\" is for a target whose package installs the binaries and",
+        "never pulls the image, which is the .spk and only the .spk. Its licences",
+        "cannot come from /licenses in an image nobody downloaded, so it says so,",
+        "and because this repository does not build it the obligation is written",
+        "into its unbuiltReason where a reader of the provenance bundle meets it.",
+        "",
+        "imagePaths is where in the image each file lands. It is a declaration",
+        "checked against the runtime stage in both directions, and it is what",
+        "apps/generic/tests/dockercli reads before copying /licenses back out of a",
+        "real built image. Deriving it from the Dockerfile there instead would have",
+        "made that test agree with the Dockerfile by construction.",
+        "",
+        "labels are what `docker inspect` answers. Distroless has no shell, so a",
+        "recipient cannot look around inside the image; the OCI licences",
+        "annotation names the licence and the path label says where the text is,",
+        "which is the half an id on its own leaves out."
+      ],
+      "imagePaths": {
+        "LICENSE": "/licenses/LICENSE",
+        "NOTICE": "/licenses/NOTICE",
+        "provenance/third-party-licenses.json": "/licenses/third-party-licenses.json"
+      },
+      "labels": {
+        "org.opencontainers.image.licenses": "Apache-2.0",
+        "com.iasbuilt.backupmanager.licenses.path": "/licenses"
+      }
+    },
+
     "targets": {
       "generic": {
         "artifacts": [
@@ -168,7 +331,8 @@
           "container/.env.example",
           "container/Dockerfile"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "truenas": {
         "artifacts": [
@@ -178,28 +342,32 @@
           "apps/truenas/catalog/templates/docker-compose.yaml",
           "apps/truenas/compose/backup-manager.yaml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "unraid": {
         "artifacts": [
           "apps/unraid/template/backup-manager-ui.xml",
           "apps/unraid/template/backup-manager.xml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "openmediavault": {
         "artifacts": [
           "apps/openmediavault/compose/backup-manager.env",
           "apps/openmediavault/compose/backup-manager.yml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "proxmox": {
         "artifacts": [
           "apps/proxmox/compose/backup-manager.env",
           "apps/proxmox/compose/backup-manager.yml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "portainer": {
     "artifacts": [
@@ -208,33 +376,39 @@
      "apps/portainer/templates.json",
      "apps/portainer/logo.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "dockge": {
     "artifacts": [],
-    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
+    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice",
+    "licenceDelivery": "image"
    },
    "casaos": {
     "artifacts": [
      "apps/casaos/compose/backup-manager.yml",
      "apps/casaos/icon.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "zimaos": {
     "artifacts": [
      "apps/zimaos/compose/backup-manager.yml",
      "apps/zimaos/icon.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "synology": {
         "artifacts": [],
-        "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"
+        "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json, and it owns getting LICENSE, NOTICE and provenance/third-party-licenses.json into the package too: the .spk installs the binaries natively and never pulls the canonical image, so the image's /licenses reaches nobody who installed this way",
+        "licenceDelivery": "package-payload"
       },
       "ugos": {
         "artifacts": [],
-        "unbuiltReason": "the shipped artifact is a .upk, packed by ugcli against a known canonical image digest; that build is EPIC D's #83 and its App Center submission is #178, neither of which happens in this repository's gate"
+        "unbuiltReason": "the shipped artifact is a .upk, packed by ugcli against a known canonical image digest; that build is EPIC D's #83 and its App Center submission is #178, neither of which happens in this repository's gate",
+        "licenceDelivery": "image"
       }
     }
   },

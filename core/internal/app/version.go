@@ -5,6 +5,26 @@ import (
 	"runtime/debug"
 )
 
+// Answering "which rclone is this" without importing rclone.
+//
+// FR-3 draws a containment boundary around internal/transport/rclone, and
+// `version` is the one command whose whole output is a fact about what is on
+// the other side of it. The obvious implementations both cost something real:
+// calling fs.Version puts an rclone import in the application layer, and
+// exporting an accessor from the adapter puts a version-reporting API on a
+// transport boundary that has no other reason to have one.
+//
+// Reading it back out of the binary's own build info costs neither, and it
+// is not a trick: go.mod pins the version, the toolchain stamps the pin into
+// every binary, and this reads back exactly what was compiled rather than
+// what a constant somewhere claims. BuildVersionInfo's doc carries the
+// verification against the production build flags, which is the part worth
+// re-reading before anyone assumes -trimpath or -ldflags "-s -w" strips it.
+//
+// The consequence is that this file is the only one in the package that
+// imports runtime/debug, and it should stay that way. A second reader of
+// build info would be a second answer to a question that has one.
+
 // rcloneModulePath is github.com/rclone/rclone's module path, exactly as
 // it appears in go.mod and therefore exactly as it appears in this
 // binary's embedded build info.

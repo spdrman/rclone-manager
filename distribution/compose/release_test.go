@@ -1,3 +1,24 @@
+// The release-facing half of issue #167: the claims a published image
+// makes about itself, checked against the places those claims are
+// independently written down.
+//
+// Every test here is an agreement test rather than a correctness test,
+// and that is deliberate. Nothing in this repository can prove that a
+// linux/arm64 image exists, or that a digest names the bytes an operator
+// will pull; a test run on a laptop has no registry and no builder. What
+// it can prove is that the architectures, the profiles, the contract
+// version, the digest policy and the health checks are not recorded in
+// three places that disagree, which is the failure this actually keeps
+// hitting: someone adds an architecture to the build, the canonical
+// metadata still lists one, and the adapters derived from that metadata
+// ship a single-arch claim to a store reviewer.
+//
+// So the shape of each test is: read the same fact from the runtime
+// definition an operator deploys, from canonical.json, and from the
+// release manifest that records what was built, then normalise and
+// compare. Where a fact only lives in two of the three, the test says
+// which two and why the third is silent, rather than quietly comparing
+// one value with itself.
 package compose_test
 
 import (

@@ -74,6 +74,12 @@ var StatesWithNoLocalCopy = []State{
 // behalf of a state it does not define.
 func HoldsLocalCopy(s State) bool { return holdsLocalCopy[s] }
 
+// holdsLocalCopy is StatesHoldingLocalCopy as a set, built once at init.
+//
+// The lookup exists so HoldsLocalCopy is a map read rather than a linear
+// scan: the capacity guard calls it once per artifact per pass, and a backup
+// set holding thousands of artifacts would otherwise pay a slice walk for
+// each one.
 var holdsLocalCopy = func() map[State]bool {
 	m := make(map[State]bool, len(StatesHoldingLocalCopy))
 	for _, s := range StatesHoldingLocalCopy {

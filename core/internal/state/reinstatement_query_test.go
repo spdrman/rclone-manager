@@ -45,6 +45,10 @@ func walkToCommitted(t *testing.T, j *Journal, artifact model.ArtifactID, keyPre
 	}
 }
 
+// recordEdge writes one exact from -> to transition. The edge is spelled by
+// the caller rather than derived, because these tests are about which edges
+// the query notices and a helper that inferred a plausible From would hide
+// exactly the cases they exist to distinguish.
 func recordEdge(t *testing.T, j *Journal, artifact model.ArtifactID, key, from, to string, at time.Time) {
 	t.Helper()
 	if _, err := j.RecordTransition(context.Background(), Transition{

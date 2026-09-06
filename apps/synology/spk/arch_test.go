@@ -2,6 +2,16 @@ package spk
 
 import "testing"
 
+// The architecture table, checked in both directions.
+//
+// Every family this package claims has to map to a target the canonical
+// release actually builds, and a target the release does not build has to
+// be refused rather than mapped to something plausible. That second
+// direction is the one worth having: a table that quietly accepted an
+// unbuildable GOARCH would produce a package referencing a binary nobody
+// ever produced, and the failure would surface as a missing file at build
+// time with no explanation of why that architecture was ever attempted.
+
 // TestArchMapping pins this project's claimed architectures to Synology's
 // own Appendix A platform/arch mapping table. §68's Provider Test Matrix
 // requires "a representative DSM 7.x amd64 and/or arm64 model for each

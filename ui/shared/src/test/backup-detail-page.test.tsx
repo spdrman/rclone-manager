@@ -1,3 +1,19 @@
+/**
+ * The backup detail page, and the one bug its state ownership exists to
+ * prevent.
+ *
+ * The case worth reading first is the stale-flash one. React Router keeps
+ * this component mounted when only the `:artifactId` changes, so a page
+ * that renders whatever data it already has while the new fetch is in
+ * flight shows one artifact's checksum, size and lifecycle under a
+ * different artifact's URL. On a page whose whole purpose is telling an
+ * operator whether THIS backup is safe, that is a correctness bug and not
+ * a flicker, and it is why the fetch here stayed page-local.
+ *
+ * The remaining cases are the ordinary contract: every documented field
+ * reaches the screen, and a failure produces a stated error rather than a
+ * blank page.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
@@ -111,8 +127,14 @@ describe("backup detail page reads the artifact", () => {
     renderDetail(target.id, api);
     await screen.findByText(target.filename);
 
+    // "Ingestion path" was "Local path" until issue #240. The old label
+    // read as "this is where your backup is", which the field has never
+    // meant: it is where ingestion landed, and it stays populated for an
+    // artifact still transferring (a partial file) and for one whose local
+    // copy has since been moved to a storage medium. Where the bytes
+    // actually are is the Copies card's question now.
     for (const label of [
-      "Artifact ID", "Backup set", "Remote original", "Local path",
+      "Artifact ID", "Backup set", "Remote original", "Ingestion path",
       "Producer timestamp", "Received timestamp", "Size", "Checksum",
       "Validation result", "Retention classes", "Remote source removed"
     ]) {

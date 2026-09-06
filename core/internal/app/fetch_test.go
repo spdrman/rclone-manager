@@ -7,6 +7,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
+// The dry run's promise, and the real run being the same pipeline.
+//
+// `fetch --dry-run` is only useful if it is genuinely safe, so the assertion
+// is that the journal is untouched afterwards rather than that the preview
+// looks right. A preview that quietly journaled a DISCOVERED row would still
+// print the correct objects.
+//
+// The real-run case exists to prove the other half: a fetch is one backup
+// set's share of the SAME cycle, not a second implementation of it, so the
+// artifact has to come out the far end in the state a full cycle would have
+// left it in.
+//
+// The unknown-set case is the same *NotFoundError ListArtifacts returns for
+// the same mistake, and it is here so the two doors cannot drift into
+// answering a typo differently.
+
 // TestFetch_DryRun_DoesNotTouchJournal proves `fetch --dry-run` never
 // records anything: the remote listing comes back in Preview, but the
 // journal stays exactly as it was (no DISCOVERED rows created).

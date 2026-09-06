@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -11,6 +12,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/recovery"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
+
+// Rebuilding the journal from what is on the disk, when the journal is the
+// thing that was lost.
+//
+// Every other read in this package treats the journal as the truth and a
+// sidecar manifest as something written beside an artifact for later. This
+// file is the one place that runs the other way round, for the one situation
+// where it has to: the database is gone or unreadable, the backups are all
+// still there, and the manifests are the only record of what they are.
+//
+// That inversion is exactly why nothing here overwrites. A sidecar is an
+// untrusted PROPOSAL, not a source of truth (FR-32), so a row that already
+// exists is left alone, and a sidecar that disagrees with an existing row
+// about a hash, a size or a retention timestamp is reported as a conflict and
+// applied to nothing. Resolving a disagreement in the sidecar's favour would
+// be a path by which a stale or tampered file on the backup root rewrites
+// what retention keeps and what verification compares against, which is a
+// much worse failure than a rebuild that needs a person to look at it.
+//
+// CONFLICT and ALREADY_PRESENT are separate outcomes for the same reason: to
+// a person reading the report they mean opposite things, one being "nothing
+// to do here" and the other "two things that should agree do not".
 
 // CatalogRebuildAction classifies what RebuildCatalog did, or would do,
 // for one artifact whose sidecar recovery manifest it read.
@@ -27,6 +50,24 @@ const (
 	// RebuildCatalog left it untouched rather than risk overwriting
 	// whatever normal processing has since done to it.
 	CatalogRebuildAlreadyPresent CatalogRebuildAction = "ALREADY_PRESENT"
+
+	// CatalogRebuildConflict means a journal row already existed AND the
+	// sidecar disagrees with it about something that matters: a different
+	// content hash, a different size, or a different retention timestamp.
+	//
+	// It is reported and never applied (EPIC E, FR-32). A sidecar is an
+	// untrusted PROPOSAL, and a reconstruction that resolved a
+	// disagreement in the sidecar's favour would be a path by which a
+	// stale or tampered file on the backup root rewrites the journal's own
+	// hashes and timestamps, which is to say rewrites what retention keeps
+	// and what verification compares against. The operator is told, and
+	// the row stays exactly as it was.
+	//
+	// It is a distinct outcome from ALREADY_PRESENT rather than a variant
+	// of it, because the two mean opposite things to a person reading the
+	// report: already-present is "nothing to do here", and a conflict is
+	// "two things that should agree do not, and you need to find out why".
+	CatalogRebuildConflict CatalogRebuildAction = "CONFLICT"
 )
 
 // CatalogRebuildFinding is RebuildCatalog's outcome for one sidecar
@@ -34,6 +75,28 @@ const (
 type CatalogRebuildFinding struct {
 	Artifact model.ArtifactID
 	Action   CatalogRebuildAction
+
+	// ManifestPath is the sidecar this finding came from. It is carried
+	// on the finding, the same way CatalogRebuildError already carries
+	// one, so a caller reporting a conflict can name the file without
+	// recomputing the path or importing internal/recovery to do it.
+	ManifestPath string
+
+	// Conflicts names, in words, each way the sidecar disagreed with the
+	// existing journal row. It is populated only for
+	// CatalogRebuildConflict, and it is prose rather than a structured
+	// diff on purpose: the audience is an operator deciding whether a
+	// sidecar is stale or a journal is wrong, and neither answer comes
+	// from the shape of the difference.
+	Conflicts []string
+
+	// Notes are things the operator needs to know about a reconstruction
+	// that otherwise succeeded: what the sidecar said that this rebuild
+	// read and did not adopt.
+	//
+	// A note is not a failure and not a conflict. The row was rebuilt and
+	// is correct as far as it goes; a note says where it stops going.
+	Notes []string
 }
 
 // CatalogRebuildError reports one sidecar manifest RebuildCatalog could
@@ -189,6 +252,7 @@ func (s *Service) RebuildCatalog(ctx context.Context, set model.BackupSetID, dry
 			})
 			continue
 		}
+		finding.ManifestPath = recovery.ManifestPath(bs.LocalPath, m.ArtifactName)
 		report.Findings = append(report.Findings, finding)
 	}
 	return report, nil
@@ -226,9 +290,15 @@ func (s *Service) RebuildCatalog(ctx context.Context, set model.BackupSetID, dry
 // empty, exactly the same honest degrade FR-16 already documents for a
 // backend that never reported a hash at all.
 func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact model.ArtifactID, m recovery.Manifest, dryRun bool) (CatalogRebuildFinding, error) {
-	_, err := s.Journal.Get(ctx, artifact)
+	existing, err := s.Journal.Get(ctx, artifact)
 	switch {
 	case err == nil:
+		// The row is left exactly as it is either way. What changes is
+		// what the operator is told: a sidecar that agrees is nothing to
+		// act on, and one that does not is (EPIC E, FR-32).
+		if conflicts := manifestConflicts(existing, m); len(conflicts) > 0 {
+			return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildConflict, Conflicts: conflicts}, nil
+		}
 		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildAlreadyPresent}, nil
 	case errors.Is(err, state.ErrArtifactNotFound):
 		// fall through: this artifact needs reconstructing.
@@ -236,11 +306,16 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 		return CatalogRebuildFinding{}, err
 	}
 
+	notes := unadoptablePlacementNotes(m)
+
 	if dryRun {
-		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed}, nil
+		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed, Notes: notes}, nil
 	}
 
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final, err := lifecycle.FinalArtifactPath(localDir, artifact)
+	if err != nil {
+		return CatalogRebuildFinding{}, fmt.Errorf("resolving where %s belongs under %q: %w", artifact, localDir, err)
+	}
 	remoteSize := m.SizeBytes
 	remote := state.RemoteIdentity{Size: &remoteSize, ModTime: m.ProducerTimestamp}
 
@@ -278,9 +353,84 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 		return CatalogRebuildFinding{}, fmt.Errorf("recovery: populating verification evidence for %s: %w", artifact, err)
 	}
 
-	return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed}, nil
+	return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed, Notes: notes}, nil
 }
 
+// unadoptablePlacementNotes describes every copy the sidecar names that a
+// rebuild reads and deliberately does not write into the journal.
+//
+// A reconstructed row gets its local placement the trusted way, derived
+// from the backup set's own root and the artifact's name, exactly as
+// ingestion derives it. There is no equivalent derivation for an object in
+// a bucket: the only source for it is the sidecar, and a sidecar is an
+// untrusted proposal (FR-32). Writing an ACTIVE medium placement on its
+// say-so would put a copy nobody has verified into the journal, where
+// FR-30's standing invariant counts it as one of the artifact's durable
+// copies and a medium-aware prune becomes willing to delete an object on
+// the strength of it.
+//
+// Dropping it silently is the other wrong answer, and it is the one that
+// bites during a real recovery: the operator whose journal is gone is
+// exactly the person who needs to be told their sidecar says there is a
+// copy somewhere else. So it is reported and not applied, which is the
+// shape the conflict verdict above already has.
+func unadoptablePlacementNotes(m recovery.Manifest) []string {
+	var out []string
+	for _, p := range m.Placements {
+		if p.Medium == "" || p.Medium == state.MediumLocal {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"the sidecar records a copy on medium %q at %q, which this rebuild reports and does not adopt: a placement on a medium can only come from the sidecar, and a sidecar is a proposal",
+			p.Medium, p.Location))
+	}
+	return out
+}
+
+// manifestConflicts lists the ways m disagrees with the journal row that
+// already exists for the same artifact.
+//
+// It compares only the three facts a rebuild would otherwise have written,
+// and that a later verification or retention decision then acts on: the
+// content hash, the size, and the retention-relevant timestamp. It
+// deliberately does not compare everything a manifest carries. A validation
+// detail string that has been reworded, or a remote path that changed
+// because a producer moved its output directory, are not disagreements
+// about the artifact; flagging them would train an operator to scroll past
+// this report, which is the failure mode a conflict report has.
+//
+// A field the sidecar does not carry at all is not a conflict either. An
+// artifact verified without hash: sha256 has no checksum in its manifest
+// and none in its journal row, and an older manifest may predate a field
+// entirely; absence is silence, and silence disagrees with nothing.
+func manifestConflicts(rec state.Record, m recovery.Manifest) []string {
+	var out []string
+
+	if m.Checksum != "" && rec.LocalHash != "" && !strings.EqualFold(m.Checksum, rec.LocalHash) {
+		out = append(out, fmt.Sprintf(
+			"the sidecar records checksum %s but the journal recorded %s at verification",
+			m.Checksum, rec.LocalHash))
+	}
+	if m.SizeBytes > 0 && rec.Transfer != nil && rec.Transfer.BytesTransferred != m.SizeBytes {
+		out = append(out, fmt.Sprintf(
+			"the sidecar records %d bytes but the journal recorded %d transferred",
+			m.SizeBytes, rec.Transfer.BytesTransferred))
+	}
+	if !m.RetentionTimestamp.IsZero() && !m.RetentionTimestamp.Equal(rec.DiscoveredAt) {
+		out = append(out, fmt.Sprintf(
+			"the sidecar records a retention timestamp of %s but the journal recorded %s, which would place this artifact in a different retention bucket",
+			m.RetentionTimestamp.UTC().Format(time.RFC3339), rec.DiscoveredAt.UTC().Format(time.RFC3339)))
+	}
+	return out
+}
+
+// validationUpdateFrom carries a sidecar's FR-13 validation outcome onto a
+// reconstructed row, and carries nothing when the sidecar recorded none.
+//
+// A nil ValidationPassed and a false one are different facts and the nil
+// pointer is what keeps them apart: nothing ran, against it ran and failed.
+// Flattening them would let a rebuild write "this artifact failed its
+// restore test" onto every artifact whose manifest predates the field.
 func validationUpdateFrom(m recovery.Manifest) *state.ValidationUpdate {
 	if m.ValidationPassed == nil {
 		return nil

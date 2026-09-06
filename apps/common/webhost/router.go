@@ -9,6 +9,32 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
 
+// The route table, which is where this package's security tiering
+// actually lives.
+//
+// Every route is one of three tiers, and the tier is decided by what the
+// route touches rather than by how the button reads. Read-only routes
+// carry neither CSRF nor the destructive gate. State-changing but
+// non-destructive routes carry CSRF: they write configuration, move a
+// journal row, or open an outbound connection, none of which touches
+// backup data. The two routes that can delete backup data carry both.
+// docs/EPIC-B-multi-nas.md §50 is the source of those buckets, and the
+// long comments below are the per-route argument for which one applies,
+// several of which were argued out in review and would otherwise be
+// re-litigated by the next person adding a route.
+//
+// Two structural decisions make the tiering hold rather than merely
+// describe it. Authentication is applied once through r.Use on the whole
+// /api/v1 group, so there is no way to add a route inside this function
+// that skips it. And the return type is http.Handler rather than *chi.Mux,
+// so a caller cannot register further routes onto the value this returns,
+// outside the reach of the test that proves no route bypasses auth.
+//
+// The unconfigured branch near the top is the same idea again: a fresh
+// install gets a different, much smaller table rather than this one with
+// guards sprinkled through it, so a route added below is unreachable
+// before setup by construction instead of by somebody remembering.
+
 // RouterConfig is everything NewRouter needs to build the /api/v1 surface.
 type RouterConfig struct {
 	// Platform supplies both the Authenticator every /api/v1 request is
@@ -242,6 +268,73 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// reason (a fixed source/set arity, and a literal "/read-only"
 		// tail a catch-all would swallow).
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/read-only", h.setBackupSetReadOnly)
+		// Issue #333: one backup set's own retention policy, as a
+		// sub-resource with three methods rather than as keys on the set
+		// itself. PUT because an override replaces the deployment's whole
+		// chain and is never merged with it, and DELETE because "go back
+		// to inheriting" cannot be spelled as a value on a request where
+		// an absent field already means "leave this alone" (see
+		// handlers_backupsetretention.go's own doc for both).
+		//
+		// Registered with the same two named segments and literal tail as
+		// /enabled and /read-only above, and ahead of the "/backup-sets/*"
+		// catch-all in the same way the retention/preview route already
+		// is: chi's trie matches static, then param, then catch-all, so a
+		// GET on this exact shape reaches this handler and every other GET
+		// still falls through to getBackupSet.
+		//
+		// CSRF on the two writes, no destructive gate on any of them: this
+		// writes configuration and moves no backup data. It does change
+		// what a later retention apply would delete, in both directions,
+		// which is precisely the case the comment on PATCH /settings below
+		// already settles for turning FR-19's protection off — the apply
+		// is the gated act and it re-reads the policy at plan time.
+		r.Get("/backup-sets/{source}/{set}/retention", h.getBackupSetRetention)
+		r.With(requireCSRF).Put("/backup-sets/{source}/{set}/retention", h.setBackupSetRetention)
+		r.With(requireCSRF).Delete("/backup-sets/{source}/{set}/retention", h.clearBackupSetRetention)
+		// Issue #350: the edit half of backup-set CRUD. Registered as two
+		// named segments with no tail, which is why it needs a method chi
+		// can tell apart from getBackupSet's "/backup-sets/*" catch-all
+		// below: PATCH and GET are different methods, so the two coexist
+		// on overlapping paths without either shadowing the other.
+		//
+		// PATCH, because this is a partial edit of a resource and this
+		// package already spells that PATCH at /settings; see the
+		// handler's own doc for why not PUT, and for why it carries
+		// requireCSRF and not requireDestructiveGate (creation's
+		// precedent, not the gate's: the gate is for run_immediately and
+		// for retention apply, not for writing a set).
+		r.With(requireCSRF).Patch("/backup-sets/{source}/{set}", h.updateBackupSet)
+		// Issue #391: removing one backup set's configuration. Registered
+		// on the same two named segments as the PATCH above, which is why
+		// it can share a path with it and with getBackupSet's
+		// "/backup-sets/*" catch-all below: chi tells the three apart by
+		// method.
+		//
+		// requireCSRF and NOT requireDestructiveGate, the same tier as the
+		// PATCH beside it and as POST /backup-sets
+		// (destructiveGateExemptRoutes, router_test.go). The word on the
+		// button is "Remove" and the dialog is styled destructive, but
+		// §50's bucket is decided by what is touched, not by how it
+		// reads: this writes configuration, and every byte of backup data
+		// the set collected stays on storage and stays listed. Gating it
+		// would also put it out of reach of an operator who has not
+		// turned destructive operations on, for an operation whose whole
+		// point is to STOP this manager doing things.
+		r.With(requireCSRF).Delete("/backup-sets/{source}/{set}", h.removeBackupSet)
+		// Issue #350's edit hold. The read is read-only (§50) and carries
+		// neither CSRF nor the gate; both writes carry CSRF and, like
+		// every other route in this group, not the destructive gate. A
+		// hold STOPS work rather than starting or deleting any, so
+		// gating it would mean an operator who has not turned
+		// destructive operations on cannot safely edit a set at all.
+		//
+		// Registered as two named segments plus a static tail, the same
+		// shape as the retention preview above, so chi's own node
+		// ordering matches them ahead of the "/backup-sets/*" catch-all.
+		r.Get("/backup-sets/{source}/{set}/edit-hold", h.getBackupSetEditHold)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold", h.takeBackupSetEditHold)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold/release", h.releaseBackupSetEditHold)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
 		// Issue #211: the backups this deployment actually holds, and the
@@ -254,6 +347,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// having to interpret one.
 		r.Get("/backups", h.listArtifacts)
 		r.Get("/backups/{source}/{set}/{name}", h.getArtifact)
+
+		// Issue #419: the operator route out of FAILED. It carries
+		// requireCSRF and not requireDestructiveGate, exactly like the
+		// quarantine retry below and for the same reason one state along:
+		// it moves a journal row back into the pipeline and cannot reach
+		// a remote delete at all, because FAILED is only ever reached
+		// before COMMITTED.
+		r.With(requireCSRF).Post("/backups/{source}/{set}/{name}/retry", h.retryFailedIngestion)
 		r.Get("/activity", h.listActivity)
 		r.Get("/quarantine", h.listQuarantine)
 
@@ -269,6 +370,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/revalidate", h.revalidateArtifact)
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/retry", h.retryArtifactIngestion)
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/reinstate", h.reinstateArtifact)
+
+		// Issue #443: prove one declared storage medium works before a
+		// cycle carrying a real backup finds out for an operator. CSRF,
+		// because it writes a probe object to real storage and deletes it
+		// again; not the destructive gate, because the only object it can
+		// reach is the one it just wrote (see handlers_mediums.go).
+		r.With(requireCSRF).Post("/storage-mediums/{id}/preflight", h.preflightStorageMedium)
 
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only

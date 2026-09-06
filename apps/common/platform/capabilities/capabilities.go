@@ -21,6 +21,13 @@ import (
 // before adding a value here.
 type PlatformID string
 
+// The provider identifiers this product recognises. The set is closed on
+// purpose: an adapter cannot invent one, because a value the shared
+// frontend's literal union does not also carry reaches the browser as an
+// unhandled platform and degrades to nothing useful. Synology has an
+// entry despite shipping as a native .spk rather than an OCI image
+// (apps/synology/spk) because what the SPK wraps is the same binary, and
+// the binary still has to say which host it believes it is on.
 const (
 	PlatformGeneric        PlatformID = "generic"
 	PlatformUGOS           PlatformID = "ugos"
@@ -37,6 +44,13 @@ const (
 // reason PlatformID above does.
 type AuthMode string
 
+// The two ways a caller's identity can have been established. There is no
+// third: either this product's own local-account service verified a
+// password (apps/common/auth/local), or the platform did and told us over
+// a header from a verified peer (apps/common/platform/profile's Gateway).
+// An anonymous caller has no AuthMode at all, it has Authenticated:false,
+// which is why there is no "none" here for a handler to accidentally
+// treat as a mode it recognises.
 const (
 	AuthModeLocalAccount  AuthMode = "local-account"
 	AuthModeNativeSession AuthMode = "native-session"
@@ -139,6 +153,14 @@ type PlatformAdapter interface {
 // failure, instead of a bare nil that panics at the call site.
 var ErrCapabilityUnsupported = errors.New("capability not supported by this platform adapter")
 
+// unsupportedAuthenticator and unsupportedNotifier are the null objects
+// BasePlatformAdapter hands out. They are unexported so that no caller can
+// type-assert for them: "is this platform capable" is a question answered
+// by Capabilities(), and the failure is recognised with
+// errors.Is(err, ErrCapabilityUnsupported). A caller that could reach the
+// concrete type would start branching on it, and then a provider that
+// supplies its own equally-unsupported implementation would take a
+// different path for the same fact.
 type unsupportedAuthenticator struct{}
 
 func (unsupportedAuthenticator) Authenticate(context.Context, AuthRequest) (AuthContext, error) {
@@ -172,6 +194,17 @@ func (unsupportedNotifier) Notify(context.Context, string, string) error {
 // every provider must supply them itself.
 type BasePlatformAdapter struct{}
 
+// Authenticator returns the null-object authenticator, which refuses every
+// caller with ErrCapabilityUnsupported. A provider that genuinely
+// authenticates overrides this; the value of the default is that
+// forgetting to override is a typed refusal at the call site rather than a
+// nil-interface panic, and a refusal to authenticate fails in the safe
+// direction.
 func (BasePlatformAdapter) Authenticator() Authenticator { return unsupportedAuthenticator{} }
 
+// Notifier returns the null-object notifier, which fails every send with
+// ErrCapabilityUnsupported rather than accepting the message and dropping
+// it. Silently succeeding is the specific failure §22 is about: an
+// operator who is never told is worse off than one whose alerting is
+// visibly off, because the first has no way to find out.
 func (BasePlatformAdapter) Notifier() Notifier { return unsupportedNotifier{} }

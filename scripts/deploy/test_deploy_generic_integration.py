@@ -40,6 +40,15 @@ SFTP_UID = "1001"
 
 
 def _require_tools():
+    """Skip rather than fail when this machine cannot run the suite.
+
+    Everything here is checked, docker included, and the daemon is
+    probed rather than assumed from the binary being on PATH: `docker`
+    installed with nothing to talk to is the normal state of a CI
+    container, and a failure there says nothing about the code. Any
+    exception at all is a skip, since every way `docker info` can go
+    wrong means the same thing to this suite.
+    """
     for tool in ("docker", "ssh-keygen", "ssh-keyscan"):
         if shutil.which(tool) is None:
             raise unittest.SkipTest(f"{tool} not found on PATH")
@@ -50,10 +59,24 @@ def _require_tools():
 
 
 def _sh(*args: str, **kwargs) -> subprocess.CompletedProcess:
+    """Run a command, capture both streams, and always under a timeout.
+
+    The timeout is the reason this exists rather than bare
+    subprocess.run calls: every command here talks to Docker or to an
+    SSH server that is still starting, and a suite that hangs on one of
+    those tells nobody anything.
+    """
     return subprocess.run(args, capture_output=True, text=True, timeout=kwargs.pop("timeout", 30), **kwargs)
 
 
 def _keygen(path: Path, key_type: str = "ed25519", bits: str = "") -> None:
+    """Generate a keypair with no passphrase and no comment.
+
+    Both are deliberate. A passphrase would need an agent, and the
+    comment carries the generating machine's user and hostname, which
+    would make the fixture's files differ between developers for no
+    reason anything here cares about.
+    """
     args = ["ssh-keygen", "-q", "-t", key_type, "-N", "", "-C", "", "-f", str(path)]
     if bits:
         args += ["-b", bits]
@@ -86,6 +109,15 @@ class GenericSFTPFixture:
         self.upload_dir = run_dir / "upload"
 
     def start(self) -> None:
+        """Bring the SFTP server up and get to the point where it will accept a
+        login.
+
+        Three separate waits, because three things become true at different
+        times and each has its own way of failing: the container publishing
+        its port, the host keys being offered, and the account actually
+        accepting an SFTP session. A test that started as soon as `docker
+        run` returned would fail intermittently on all three.
+        """
         self.run_dir.mkdir(parents=True, exist_ok=True)
         host_key_ed25519 = self.run_dir / "ssh_host_ed25519_key"
         _keygen(host_key_ed25519)
@@ -124,6 +156,13 @@ class GenericSFTPFixture:
         self._wait_for_ssh_ready()
 
     def _wait_for_published_port(self) -> int:
+        """The host port Docker actually chose, once it has chosen one.
+
+        The port is not requested, it is read back, because a fixed one
+        collides with whatever else the machine is running and a collision
+        here reads as a broken deployment script. Polling rather than one
+        read: `docker run` returns before the port mapping is published.
+        """
         deadline = time.time() + 15
         while time.time() < deadline:
             result = _sh("docker", "port", self.container_id, "22/tcp")
@@ -134,6 +173,20 @@ class GenericSFTPFixture:
         raise RuntimeError("sftp fixture container never published its SSH port")
 
     def _keyscan(self) -> None:
+        """Record the server's host keys, under both names it will be reached by.
+
+        The scanned bytes belong to the server instance and not to the
+        address used to reach it, which is why the same key is written a
+        second time keyed to the host:port a CONTAINER connects through.
+        This host process reaches the fixture on 127.0.0.1 and the deployed
+        container does not, so a known_hosts with only the first entry
+        authenticates the test's own probe and then fails the deployment it
+        is supposed to be proving. Real known_hosts files carry several
+        patterns per key for the same reason.
+
+        Both key types are waited for, since ssh-keyscan answers as soon as
+        the server offers any one of them.
+        """
         deadline = time.time() + 15
         while time.time() < deadline:
             result = _sh("ssh-keyscan", "-p", str(self.port), "-t", "rsa,ed25519", "127.0.0.1", timeout=10)
@@ -160,6 +213,14 @@ class GenericSFTPFixture:
         raise RuntimeError("ssh-keyscan never returned both host key types")
 
     def _wait_for_ssh_ready(self) -> None:
+        """Wait until the account will actually serve SFTP.
+
+        Checked by speaking SFTP rather than by running a remote command,
+        because atmoz/sftp forces internal-sftp for this account: there is
+        no shell, so `ssh ... true` is refused by design and would never
+        report ready. `sftp -b -` with an immediate quit is the smallest
+        thing that asks the real question.
+        """
         # atmoz/sftp forces `internal-sftp` for this account (no shell), so
         # readiness has to be checked by actually speaking SFTP (the `sftp`
         # CLI in batch mode, quitting immediately) rather than running an
@@ -192,14 +253,34 @@ class GenericSFTPFixture:
         raise RuntimeError(f"sftp fixture never became ready: {last_err}")
 
     def seed_artifact(self, name: str, content: str) -> None:
+        """Put a file where the SFTP account will serve it from.
+
+        Written on the host side of the bind mount rather than uploaded,
+        because the fixture exists to give the backup something real to
+        fetch and staging it through SFTP would be testing the fixture.
+        """
         (self.upload_dir / name).write_text(content)
 
     def stop(self) -> None:
+        """Remove the fixture container, if one was ever started.
+
+        Force removal and no error check: this runs from teardown, on a path
+        that may be reached because start() failed halfway, and a cleanup
+        that raises replaces the real failure with its own.
+        """
         if self.container_id:
             _sh("docker", "rm", "-f", self.container_id)
 
 
 def _compose_container_id(project: str, env_file: Path, timeout: float = 30) -> str:
+    """The engine container Compose created, once it exists.
+
+    Asked of Compose by project and service name rather than matched on
+    a name pattern, so this is looking at the container the script under
+    test actually produced. Polling, because `up -d` returns before the
+    container is listed, and a single read here would fail the test for
+    being early.
+    """
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
@@ -221,6 +302,15 @@ def _compose_container_id(project: str, env_file: Path, timeout: float = 30) -> 
     "(builds/starts real containers; not run by default alongside the fast unit tests)",
 )
 class DeployGenericIntegrationTest(unittest.TestCase):
+    """The end-to-end run: a real SFTP server, the real script, one real
+    backup cycle.
+
+    Behind an environment variable rather than an automatic skip on
+    tool availability, unlike the fixture's own checks. It builds and
+    starts containers and takes tens of seconds, so it is opt-in
+    alongside the fast unit suite; the tool checks then decide whether
+    an opted-in run can proceed at all.
+    """
     def setUp(self):
         _require_tools()
         self.tmp = Path(tempfile.mkdtemp(prefix="deploy-generic-it-"))
@@ -242,6 +332,12 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         self.addCleanup(self._compose_down)
 
     def _compose_down(self):
+        """Take the deployed stack down, volumes included.
+
+        Volumes too, because the next run in this suite has to start from
+        nothing: a surviving state database would let a second run pass on
+        the artifacts the first one catalogued.
+        """
         _sh(
             "docker", "compose", "-p", self.project, "-f", str(deploy_generic.COMPOSE_FILE),
             "--env-file", str(self.env_file),
@@ -249,6 +345,13 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         )
 
     def _deploy_args(self) -> list[str]:
+        """The command line this suite hands to the script under test.
+
+        Assembled here rather than inline so the one thing each test varies
+        is visible against a fixed background, and so the arguments are the
+        ones an operator would type rather than a shape only this suite
+        uses.
+        """
         return [
             "--ssh-key", str(self.fixture.client_key),
             "--known-hosts", str(self.fixture.known_hosts),

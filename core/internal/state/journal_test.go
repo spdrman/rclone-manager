@@ -1,3 +1,19 @@
+// The write path: everything RecordTransition promises, proven against a
+// real SQLite file rather than a fake.
+//
+// A fake would be the wrong subject. Most of what this package guarantees
+// is not Go logic, it is what SQLite does to bytes on a disk under a
+// transaction, so the tests here open a database in a temp dir, write
+// through the real driver, and in the durability cases close the handle and
+// reopen it to prove the write outlived the process that made it.
+//
+// The centre of the file is idempotency, and it is covered from three
+// angles because they fail differently. A replayed key must not apply
+// twice. A key reused for a genuinely different transition must be refused
+// rather than served the earlier one. And two goroutines racing the same
+// key must resolve to exactly one application, which is the case a
+// sequential test cannot see at all.
+
 package state
 
 import (
@@ -12,6 +28,13 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// openJournal opens a real journal on a real file under t.TempDir, and
+// hands back the path as well as the handle.
+//
+// A real file rather than ":memory:" because half of what is asserted here
+// is what survives the handle being closed, and an in-memory database is
+// gone the moment it is. The path is returned for the tests that reopen it
+// or inspect it with a second connection.
 func openJournal(t *testing.T) (*Journal, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "journal.db")
@@ -23,6 +46,10 @@ func openJournal(t *testing.T) (*Journal, string) {
 	return j, path
 }
 
+// testArtifact is the one identity most tests here use, built through
+// model.NewArtifactID rather than as a struct literal so a change that made
+// this name invalid would fail loudly instead of producing a journal row
+// nothing else in the product could ever address.
 func testArtifact(t *testing.T) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")
@@ -50,6 +77,11 @@ func TestOpen_EnablesWAL(t *testing.T) {
 	}
 }
 
+// FR-16's capture has to survive the process, because the comparison it
+// exists for happens on a later run: discovery records what the object
+// looked like, and something hours later recaptures and compares before
+// deleting. An identity that only lived in memory would pass every
+// same-process assertion and be worthless for the one job it has.
 func TestDiscover_PersistsRemoteIdentity(t *testing.T) {
 	j, _ := openJournal(t)
 	ctx := context.Background()
@@ -419,6 +451,9 @@ func TestRecordTransition_FullLifecycleRoundTrips(t *testing.T) {
 	}
 }
 
+// Reconciliation and retry scheduling both act on "everything currently in
+// state X", so a listing that leaked one artifact in a neighbouring state
+// would hand a destructive pass an artifact it was never meant to see.
 func TestListByState_ScopesToOneState(t *testing.T) {
 	j, _ := openJournal(t)
 	ctx := context.Background()

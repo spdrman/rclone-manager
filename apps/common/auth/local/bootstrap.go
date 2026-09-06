@@ -9,6 +9,24 @@ import (
 	"time"
 )
 
+// The single-use secret that stands between an unclaimed deployment and
+// whoever reaches its port first.
+//
+// §49.1's requirement is easy to state and easy to get subtly wrong:
+// reaching the port must not be enough to claim the administrator account.
+// The token this file issues is what makes the difference, and its three
+// properties all exist because of a specific way the naive version leaks.
+// It is held in memory only, so a restart before enrollment completes
+// invalidates whatever a previous run printed rather than leaving a
+// standing credential in a file somebody might later read. There is only
+// ever one live at a time, so a second start cannot leave two valid
+// claims. And consume marks it used inside the same lock that checks it,
+// so two requests arriving together cannot both win.
+//
+// It is printed to the process's own stdout and nowhere else. That is not
+// a limitation to work around later: any channel that could deliver it
+// elsewhere would be a channel an attacker could try to reach.
+
 // bootstrapTokenTTL bounds how long a printed enrollment token remains
 // valid (§49.1: "SHALL be single-use and SHALL expire"). 30 minutes is
 // long enough for an operator to read the container's own startup log

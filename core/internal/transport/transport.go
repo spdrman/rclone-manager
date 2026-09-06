@@ -14,6 +14,20 @@ import "context"
 // HashAlgorithm names a checksum the manager may ask a backend for.
 type HashAlgorithm string
 
+// SHA256 is the only algorithm this boundary speaks, and the absence of a
+// second constant is the enforcement rather than an omission. FR-32 holds
+// only if there is no way to ask a backend for the weaker checksum it
+// would otherwise hand back, and config.Validation accepts "" or "sha256"
+// and nothing else, so a second value here would be a capability no
+// configuration could reach and a comparison nothing should make.
+//
+// MediumStore.ObjectChecksum in medium.go names the weaker checksum FR-32
+// is about and explains why nothing here carries one. This file cannot
+// repeat that explanation and does not try: internal/placement has a guard
+// that keeps the word itself out of production code, precisely so there is
+// nothing anywhere to compare a content hash against, and it admits only
+// the four files that exist to say why they hold none. Writing this
+// paragraph the obvious way is what turned that guard red.
 const SHA256 HashAlgorithm = "sha256"
 
 // Source identifies one configured remote.
@@ -73,7 +87,39 @@ type Source struct {
 	KeyEncryptionCommand []string
 
 	KnownHosts string
-	Root       string
+
+	// MaxConnections caps how many simultaneous SFTP connections ONE
+	// OPERATION against this source may open, mapping to rclone's sftp
+	// `connections` option. Zero means unset, which is rclone's own
+	// default of unlimited and is what every Source built before #264
+	// existed means.
+	//
+	// Per operation, not per host, and the wording is deliberate (#355).
+	// rclone's token dispenser lives on an Fs, and internal/transport/rclone
+	// builds one Fs per operation, so two operations against one host are
+	// two independent budgets. The daemon and the web API's own
+	// reachability check are exactly that case.
+	//
+	// This is not the same setting as the per-file request window (rclone's
+	// `concurrency`, which internal/transport/rclone pins at 64). That one
+	// governs how many requests are outstanding inside one connection and
+	// says nothing about how many connections get opened, which is exactly
+	// the confusion that let this go unnoticed: a source can look
+	// thoroughly tuned for concurrency and still open an unbounded number
+	// of connections.
+	//
+	// It exists because a hardened host can refuse the connection rather
+	// than queue it. Both production sources this manager pulls from carry
+	// an iptables rule rejecting a third simultaneous SSH connection from
+	// one address with a TCP reset, so an unbounded transfer does not run
+	// slowly, it fails, and it fails as a bare "connection refused" that
+	// names nothing an operator could act on. What actually holds this
+	// manager under such a cap is the adapter's own bound of one connection
+	// per operation (oneConnectionAtATime in adapter.go); this is the
+	// belt over that, enforced by rclone itself.
+	MaxConnections int
+
+	Root string
 }
 
 // RemoteArtifact is the identity of a remote object at a point in time.
@@ -91,9 +137,37 @@ type RemoteArtifact struct {
 }
 
 // TransferResult reports what a copy actually did.
+//
+// One field, and the one that is absent is the interesting one. This type
+// used to carry a Checksummed bool saying the copy had compared a hash of
+// its own, which internal/lifecycle/verify.go read as a verification
+// already performed and used to skip its own RemoteHash call. No
+// production copy ever set it, so the shortcut was dead, and #492 removed
+// both rather than wiring it up, because wiring it up honestly is the
+// worse of the two outcomes.
+//
+// rclone's copy does compare a hash, and it picks which one with
+// operations.CommonHash: the first type the two sides share, in the order
+// its own hash package registered them. The weaker checksum registers
+// first, so on a local destination it is the answer against local and
+// against sftp alike, and it is the only answer an s3 medium can give at
+// all. This boundary speaks one algorithm (see SHA256 above, and
+// MediumStore.ObjectChecksum in medium.go for why the other one is named
+// nowhere it could be compared against anything). A field reporting "the
+// copy compared SOMETHING" is therefore a field that can only ever mean
+// "the copy compared the weaker one", and a `hash: sha256` policy
+// discharged by that is the silent downgrade of configured verification
+// FR-13 forbids.
+//
+// state.TransferResult still has the field, because it is a column in
+// shipped, immutable migrations. Nothing writes it any more, and
+// verify.go no longer reads it.
 type TransferResult struct {
+	// BytesTransferred is what the destination reports it holds after the
+	// copy, read off the written object rather than counted on the way
+	// past, so it is a statement about what landed and not about what was
+	// sent.
 	BytesTransferred int64
-	Checksummed      bool
 }
 
 // Transport is the only surface lifecycle code is allowed to depend on.

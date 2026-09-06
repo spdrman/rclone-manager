@@ -1,3 +1,15 @@
+// LastTransition, and the distinction it exists for: not when an artifact
+// last became COMMITTED, but whether it got there by coming out of
+// quarantine.
+//
+// The reason this needs proving rather than reading is that both artifacts
+// look identical everywhere else. A re-trusted one and one that was never
+// distrusted are both simply COMMITTED on the artifacts row, and the
+// append-only log is the last place that still holds which of the two
+// happened. FR-15's delete gate decides on that difference, so a query that
+// quietly widened to "last entered COMMITTED" would keep passing every
+// assertion about timestamps while handing the gate the wrong answer.
+
 package state
 
 import (

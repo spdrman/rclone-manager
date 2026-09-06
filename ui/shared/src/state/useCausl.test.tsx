@@ -1,3 +1,14 @@
+/**
+ * Whether the React binding keeps causl's promises: a commit re-renders a
+ * reader with no props, two readers of one node never disagree within a
+ * commit, and a render carrying no commit reads the same reference back.
+ *
+ * All three are properties of the hook, not of any screen, which is why
+ * every case builds its own throwaway graph instead of the app singleton.
+ * The third is the one that pays for the caching in useCausl.ts, and it
+ * uses an object-valued node on purpose: with a number it would pass
+ * whether the cache existed or not.
+ */
 import { describe, expect, it } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { createCausl } from "@causlts/core";

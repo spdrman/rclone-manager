@@ -227,8 +227,15 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 
 // TransferStats logs EventTransferStats for one completed FR-11 transfer:
 // bytesTransferred and duration describe what moved and how long it took,
-// and checksummed reports whether the transport backend verified the copy
-// against a checksum itself (transport.TransferResult.Checksummed).
+// and checksummed carries state.TransferResult.Checksummed straight
+// through.
+//
+// That field is a journal column nothing writes any more (#492 removed the
+// transport-side claim it came from, and its doc says why), so this
+// attribute is false on every real transfer. The key stays in the event
+// because the shape of a log line is an operator-visible surface under
+// FR-35, and it stays honest because false is exactly what "no copy-time
+// checksum was recorded" should read as.
 func (l *Logger) TransferStats(ctx context.Context, artifact string, bytesTransferred int64, duration time.Duration, checksummed bool) {
 	l.emit(ctx, LevelInfo, EventTransferStats, "transfer complete",
 		slog.String("artifact", artifact),

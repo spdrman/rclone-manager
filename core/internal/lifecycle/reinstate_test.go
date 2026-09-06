@@ -1,3 +1,18 @@
+// These cover issue #220's second quarantine exit: keeping the local copy
+// and trusting it again, rather than throwing it away and re-fetching.
+//
+// It is the more dangerous of the two exits, so most of this file is
+// refusals. The edge exists because the ordinary exit is useless in exactly
+// the case that motivated the issue, an unmounted volume making a perfectly
+// good backup look corrupt, and it is safe to have only because reinstating
+// permanently forfeits the artifact's remote delete. Everything here is
+// about the conditions under which it may be taken: evidence gathered in the
+// same call, evidence that addresses the reason for the distrust rather than
+// merely being strong, and a state the artifact provably held before.
+//
+// The observation channel note below is the other thing to read before
+// changing anything here, because it explains why every "nothing was
+// written" assertion counts log rows instead of watching a timestamp.
 package lifecycle
 
 import (
@@ -19,6 +34,8 @@ import (
 // it byte-for-byte identical, so "UpdatedAt did not move" is compatible
 // with a write having happened. Counting log rows is not.
 
+// transitionCount is that channel: how many rows this artifact has in the
+// append-only log. A refusal must leave it unchanged.
 func transitionCount(t *testing.T, j *state.Journal, artifact model.ArtifactID) int {
 	t.Helper()
 	events, err := j.RecentActivity(context.Background(), 1000)
@@ -126,6 +143,13 @@ func remoteRetainedQuarantinedFixture(t *testing.T) (*state.Journal, model.Artif
 	return j, artifact
 }
 
+// conclusiveEvidence is the minimum that justifies a reinstatement: one
+// check that could have failed on content did run, and passed.
+//
+// It is a function rather than a package-level value so each test gets its
+// own copy to mutate. Several of the refusal tests start from this and
+// weaken exactly one field, which is what isolates which part of the
+// evidence rule they are testing.
 func conclusiveEvidence() ReinstatementEvidence {
 	return ReinstatementEvidence{
 		HashMatched: true,

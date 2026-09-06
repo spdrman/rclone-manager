@@ -1,3 +1,17 @@
+/**
+ * Revalidate and Retry ingestion, when the request is rejected.
+ *
+ * Both resolve with nothing worth reading, so their only visible effect is
+ * the list reloading. That made a rejection invisible: the button
+ * un-disabled itself and the page sat there, which is indistinguishable
+ * from a click that never registered. Each case therefore asserts two
+ * things, that a failure is stated and that the list is NOT reloaded,
+ * because reloading on a failure would put the old rows back and complete
+ * the illusion.
+ *
+ * The success case is the positive control. Without it a page that always
+ * showed an error and never reloaded would pass everything above.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,13 +36,23 @@ const ARTIFACT: BackupArtifact = {
   checksumAlgorithm: "sha256",
   validation: "failed",
   retentionClasses: [],
+  retentionPolicy: "configured",
   remoteSourceRemovedAt: null,
   quarantine: {
     reason: "checksum-mismatch",
     detail: "sha256 mismatch: local file hashes to deadbeef, remote reports feedface",
     detectedAt: "2026-08-28T02:06:00+02:00",
     remoteSourceRetained: true
-  }
+  },
+  placements: [
+    {
+      medium: "local", mediumType: "local",
+      location: "/data/backups/production/postgres/pg-2026-08-28.dump.zst",
+      sizeBytes: 1024, storageClass: "",
+      verificationClass: null, verifiedAt: null,
+      access: "immediate", status: "ACTIVE"
+    }
+  ]
 };
 
 function renderPage(api: BackupManagerApi, reload: () => void) {

@@ -98,8 +98,9 @@ func headingAnchors(doc string) map[string]bool {
 // brokenLinks returns one complaint per markdown link in doc that does
 // not resolve: a relative path with no file behind it, or a same
 // document anchor with no heading behind it. External links are not
-// followed; this repository is private, so a reachability check here
-// would test the reviewer's credentials rather than the document.
+// followed. Fetching them would test whoever is running the gate (their
+// network, a proxy, a rate limit) rather than the document, and it would
+// go red for reasons no edit to this repository can fix.
 func brokenLinks(doc, root string) []string {
 	anchors := headingAnchors(doc)
 	var out []string

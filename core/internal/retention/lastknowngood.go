@@ -34,8 +34,13 @@ import (
 //
 // A backup is eligible as known-good only if it is a valid committed or
 // complete restore point that has satisfied required verification: exactly
-// gfsIsManagedComplete's Committed/RemoteDeletePending/Complete set, the
-// same one gfs.go already uses for "managed, completed backup". FAILED,
+// gfsIsManagedComplete's Committed/RemoteDeletePending/Complete/
+// RemoteRetained set, the same one gfs.go already uses for "managed,
+// completed backup". That is four states, and writing the count out is
+// deliberate. REMOTE_RETAINED is easy to leave off this list and costly
+// to: it is the only state a read-only backup set ever reaches, so
+// omitting it reads as "a read-only set has no restore points at all".
+// The README said exactly that until #478. FAILED,
 // QUARANTINED, QUARANTINED_LOST and every .partial (pre-Committed) state
 // are excluded, matching FR-19's own wording. That is also, by
 // construction, the identical state set internal/health's decideState
@@ -43,7 +48,7 @@ import (
 // map (health depends on nothing upstream of it, and importing it here
 // would invert that), so the equivalence is enforced by review and by
 // TestLastKnownGoodEligibilityMatchesGFSManagedComplete rather than by a
-// shared symbol, but the three states involved are the same three states,
+// shared symbol, but the four states involved are the same four states,
 // on purpose, in both places.
 //
 // Reusing gfs.go's own eligibility check is not just convenient: it is
@@ -159,7 +164,7 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 	}
 
 	if newest == nil {
-		result.Reason = "no eligible restore point exists in this backup set (nothing is committed, remote-delete-pending or complete)"
+		result.Reason = fmt.Sprintf("no eligible restore point exists in this backup set (nothing is %s)", gfsManagedCompleteNames())
 		return result, nil
 	}
 

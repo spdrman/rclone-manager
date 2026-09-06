@@ -10,6 +10,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// The advisory lock that makes store.go's "a single process owns this
+// path" true rather than merely assumed.
+//
+// The mechanism is flock(2) on a sidecar file, chosen over a PID file for
+// one reason that matters more than any other property: the kernel drops
+// it when the holding process dies, including when it is killed outright.
+// A PID-file lock left behind by a crashed server would block every
+// subsequent start and every create-admin until somebody found and deleted
+// it, which turns one crash into an outage that needs a human.
+//
+// This is the unix half of a build-tagged pair. lock_other.go refuses
+// outright rather than pretending to lock, which is the right answer for a
+// platform this project neither ships nor tests: a lock that silently does
+// nothing is worse than no lock, because the code above it goes on
+// believing it is safe.
+
 // ErrStoreLocked is returned by acquireStoreLock (and, through it,
 // CreateAdmin and Service.New - provision.go/service.go) when another
 // process already holds path's exclusive advisory lock.

@@ -49,6 +49,7 @@ import (
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/health"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
 // ContentType is the MIME type a caller should set on an HTTP response
@@ -60,6 +61,19 @@ const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 // name, backup-manager, with the hyphen replaced by an underscore, since a
 // Prometheus metric name may not contain a hyphen.
 const namePrefix = "backup_manager_"
+
+// newestGoodBackupAgeHelp names, in the HELP line a scraping operator
+// reads, exactly the states internal/health counts as known-good.
+//
+// It is built from lifecycle's own durable-restore-point set rather than
+// typed out here, which is issue #505: the hand-typed version named three
+// states and had done since REMOTE_RETAINED joined that set with #282. An
+// operator running a read-only backup set reads this line to find out what
+// the gauge beneath it is measuring, and every artifact they have is
+// REMOTE_RETAINED, so the line named none of the states it was measuring
+// for them and read as "this gauge does not cover you".
+var newestGoodBackupAgeHelp = "Age of the newest known-good (" +
+	lifecycle.DurableRestorePointNames() + ") backup, in seconds."
 
 // healthStates lists FR-24's four backup-set states in the fixed order
 // backup_set_state always renders them in, so sample order never depends
@@ -85,7 +99,7 @@ func Render(report health.Report) string {
 	writeState(&b, sets)
 
 	writeGauge(&b, sets, "newest_good_backup_age_seconds",
-		"Age of the newest known-good (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE) backup, in seconds.",
+		newestGoodBackupAgeHelp,
 		func(s health.BackupSetHealth) (float64, bool) {
 			if s.NewestGoodBackupAge == nil {
 				return 0, false
@@ -168,6 +182,62 @@ func Render(report health.Report) string {
 				return 0, false
 			}
 			return float64(s.LastCompletedBackupAt.Unix()), true
+		})
+
+	// Issue #444, FR-24's placement half. These are the metrics that make
+	// "the moves have been failing for a week" alertable, which is the
+	// whole shape of the defect: the fact was visible for one pass, on a
+	// terminal nobody was watching, and then gone.
+	//
+	// away_from_home is reported unconditionally because zero is the real
+	// and common reading (every deployment whose artifacts are where they
+	// belong, and every deployment that declares no medium at all). The
+	// two ages beside it are not: an age only exists when there is
+	// something to be the age of, and a zero would read as "this happened
+	// just now", which is the opposite of missing.
+	writeGauge(&b, sets, "away_from_home",
+		"Artifacts whose durable copy is not on the storage medium this backup set's retention chain says it belongs on.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			return float64(s.Placement.AwayFromHome), true
+		})
+
+	writeGauge(&b, sets, "away_from_home_oldest_age_seconds",
+		"How long the oldest away-from-home copy has existed on the medium it is sitting on, in seconds. An upper bound on how long it has been in the wrong place: nothing durable records when an artifact's home last changed.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			if s.Placement.OldestAwayFromHomeAge == nil {
+				return 0, false
+			}
+			return s.Placement.OldestAwayFromHomeAge.Seconds(), true
+		})
+
+	writeGauge(&b, sets, "open_moves",
+		"Relocations this backup set has open in the move journal, in any non-terminal phase.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			return float64(s.Placement.OpenMoves), true
+		})
+
+	writeGauge(&b, sets, "open_move_oldest_age_seconds",
+		"How long the oldest open relocation has been open, in seconds, whether or not anything has been recorded against it. Not every way a move gets stuck leaves a reason on the row, so this keeps growing where failed_moves cannot see the problem.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			if s.Placement.OldestOpenMoveAge == nil {
+				return 0, false
+			}
+			return s.Placement.OldestOpenMoveAge.Seconds(), true
+		})
+
+	writeGauge(&b, sets, "failed_moves",
+		"Open relocations whose last attempt failed. This is the number that turns an otherwise-healthy backup set DEGRADED.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			return float64(s.Placement.FailedMoves), true
+		})
+
+	writeGauge(&b, sets, "failed_move_oldest_age_seconds",
+		"How long the oldest failing relocation has been open, in seconds, measured from when this manager wrote the move down. This is the difference between a blip and a wedge, and it is the one to alert on.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			if s.Placement.OldestFailedMoveAge == nil {
+				return 0, false
+			}
+			return s.Placement.OldestFailedMoveAge.Seconds(), true
 		})
 
 	writeGauge(&b, sets, "last_retention_run_timestamp_seconds",

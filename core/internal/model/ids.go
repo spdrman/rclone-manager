@@ -47,6 +47,11 @@ func ParseBackupSetID(s string) (BackupSetID, error) {
 	return NewBackupSetID(source, set)
 }
 
+// String renders the canonical "source/set" form, which is not just for
+// humans: it is the exact shape ParseBackupSetID reads back, and it is what
+// ends up in log lines, API paths and error messages. The reservation of
+// the separator in validPart is what makes that round trip unambiguous, so
+// the two have to move together or not at all.
 func (b BackupSetID) String() string { return b.Source + separator + b.Set }
 
 // IsZero reports whether this is the unset value. Callers should treat a zero
@@ -54,6 +59,21 @@ func (b BackupSetID) String() string { return b.Source + separator + b.Set }
 // id in a retention query would span every set at once.
 func (b BackupSetID) IsZero() bool { return b.Source == "" && b.Set == "" }
 
+// validPart is the rule both halves of a BackupSetID obey.
+//
+// Each clause is defending something specific rather than enforcing taste.
+// Empty would let a half-built id compare equal to another half-built one.
+// The separator is reserved because {"a", "b/c"} and {"a/b", "c"} would
+// otherwise render identically and one set's retention pass could act on
+// the other's artifacts. Surrounding whitespace is refused rather than
+// trimmed, because trimming makes two ids that an operator typed
+// differently silently become the same id, and this value reaches a
+// delete. Control characters are refused because these strings are printed
+// into logs and shell-adjacent contexts, where an embedded newline turns
+// one audit line into two.
+//
+// what names the half being checked so the message says which field the
+// operator has to fix, since both halves run through the same rules.
 func validPart(what, v string) error {
 	switch {
 	case v == "":
@@ -97,4 +117,12 @@ func NewArtifactID(set BackupSetID, name string) (ArtifactID, error) {
 	return ArtifactID{Set: set, Name: name}, nil
 }
 
+// String renders "source/set/name".
+//
+// There is deliberately no ParseArtifactID to read it back. Nothing needs
+// one: an artifact id travels as three columns in the journal and as a set
+// id plus a name everywhere else, and the only consumer of this rendering
+// is a human reading a message. Adding a parser would create a second way
+// to build an ArtifactID that skips NewArtifactID's validation, which is
+// the one thing standing between a remote-supplied name and a delete.
 func (a ArtifactID) String() string { return a.Set.String() + separator + a.Name }

@@ -1,3 +1,12 @@
+/**
+ * Whether the edit-staleness check answers the question it claims to.
+ *
+ * The interesting cases are the two it must NOT fire on: a commit to an
+ * unrelated node, and a re-read that changed nothing. A version counter
+ * that moved on any app activity at all would make every inline edit
+ * unsavable on a polling app, which is the failure this file is here to
+ * catch early.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { graph, resetGraphForTests } from "./graph";
 import { quarantineNode } from "./appNodes";
@@ -10,22 +19,13 @@ import {
 import type { BackupSet } from "@shared/types/backup";
 import type { ActivityEvent } from "@shared/types/operation";
 
-const RETENTION = {
-  daily: 7,
-  weekly: 13,
-  monthly: 12,
-  timezone: "Europe/Berlin",
-  weekStartsOn: "monday" as const,
-  protectLastKnownGood: true
-};
-
 const SET_V1: BackupSet = {
   id: "set_test", source: "production", set: "postgres-primary",
   name: "Production PostgreSQL",
   host: "prod-db-01.internal", port: 22, username: "backup-agent",
   remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
-  excludePatterns: ["*.tmp"], completionMethod: "completion-marker",
-  destination: "/data/backups/production/postgres/", retention: RETENTION,
+  excludePatterns: ["*.tmp"], completionMethod: "completion-marker", stableForSeconds: 0,
+  destination: "/data/backups/production/postgres/", retentionIsOverride: false,
   validations: ["transfer", "checksum"],
   state: "healthy",
   stateNote: "Verified nightly dump.",

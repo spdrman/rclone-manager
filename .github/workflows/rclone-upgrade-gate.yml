@@ -72,11 +72,15 @@ jobs:
           GOWORK: "off"
         run: |
           echo "### 3. Unit tests" >> "$GITHUB_STEP_SUMMARY"
-          (cd core && go test ./...)
+          # -race, the same as scripts/ci-local.sh's own core step
+          # (#417). An rclone upgrade is exactly the change most likely to
+          # move concurrency underneath this module, so this is the last
+          # place that should be running the suite without the detector.
+          (cd core && go test -race ./...)
           if git ls-files '*_test.go' | grep -v '^core/tests/' | grep -q .; then
-            echo "ENFORCED: go test ./... ran the unit suite above." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "ENFORCED: go test -race ./... ran the unit suite above." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "PENDING: no *_test.go files exist in the module yet, so go test ./... ran clean but exercised nothing. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "PENDING: no *_test.go files exist in the module yet, so go test -race ./... ran clean but exercised nothing. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: "4. Transport contract tests"

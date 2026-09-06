@@ -105,6 +105,11 @@ func NewFirstRunEngine(cfg EngineConfig) (*FirstRunEngine, error) {
 	return e, nil
 }
 
+// ServeHTTP dispatches through whichever handler is installed right now,
+// reading the pointer atomically so a request arriving during activation
+// gets one coherent handler rather than a half-swapped one. Every request
+// pays one atomic load for the life of the process, which is the cost of
+// never needing a lock on the serving path.
 func (e *FirstRunEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	(*e.handler.Load()).ServeHTTP(w, r)
 }

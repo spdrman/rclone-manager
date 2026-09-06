@@ -3,9 +3,32 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
+
+// This file is FR-9's answer to "the journal is gone, or it is missing
+// rows nobody can explain": rebuild what can be rebuilt from the
+// non-secret sidecar recovery manifests every committed artifact already
+// carries next to its bytes, and report honestly on the rest.
+//
+// It aggregates across every configured backup set and takes no set id,
+// which is the unit the event actually comes in. A journal is one
+// database for the whole deployment, so an operator who has lost it has
+// lost it for every set at once, and an API that made them rebuild one
+// set at a time would turn a single recovery into a loop they can get
+// half way through.
+//
+// The two entry points below are one code path with a flag, on purpose.
+// A preview computed by a second implementation is a preview of something
+// other than what runs, and the thing an operator is deciding from this
+// report is whether to let it write.
+//
+// Nothing here contacts a remote. Rebuild reads manifests that are
+// already on local disk and writes only to the local journal, so it is
+// available in exactly the situation that needs it, which is the one
+// where the state of the remotes is the question rather than the answer.
 
 // CatalogReport is the outcome of a catalog scan or rebuild across every
 // configured backup set (FR-9's journal, reconstructed from the non-secret
@@ -74,6 +97,15 @@ func (b *BackupService) RebuildCatalog(ctx context.Context) (CatalogReport, erro
 	return b.catalogPass(ctx, false)
 }
 
+// catalogPass is the single implementation behind both entry points, with
+// dryRun deciding only whether anything is written.
+//
+// One function rather than two because the preview's whole job is to
+// predict the rebuild, and two implementations would eventually predict
+// each other rather than the tree. It also means the aggregation rule (a
+// failure anywhere is recorded and the walk continues) is decided once:
+// stopping at the first unreadable backup set would make a whole
+// deployment's recovery depend on its least healthy set.
 func (b *BackupService) catalogPass(ctx context.Context, dryRun bool) (CatalogReport, error) {
 	st := b.state.Load()
 	out := CatalogReport{DryRun: dryRun}
@@ -100,6 +132,26 @@ func (b *BackupService) catalogPass(ctx context.Context, dryRun bool) (CatalogRe
 					out.Reconstructed++
 				case app.CatalogRebuildAlreadyPresent:
 					out.AlreadyPresent++
+				case app.CatalogRebuildConflict:
+					// A conflicting sidecar is a manifest this pass could
+					// not apply, which is what Failures means, and it must
+					// not be silently absent: FR-32's whole point is that a
+					// disagreement between a sidecar and a journal row is
+					// reported rather than resolved. It is deliberately NOT
+					// counted as AlreadyPresent, which reads as "the
+					// journal already had this and all is well".
+					//
+					// The response shape does not change for it: a conflict
+					// travels the failures[] channel the catalog routes
+					// already have, so nothing downstream needs
+					// regenerating. A dedicated count belongs with the
+					// issue that owns the artifact surface.
+					out.Failures = append(out.Failures, CatalogFailure{
+						BackupSetID: bs.ID.String(),
+						Path:        f.ManifestPath,
+						Reason: fmt.Sprintf("%s already has a journal row and this sidecar disagrees with it; nothing was changed: %s",
+							f.Artifact, strings.Join(f.Conflicts, "; ")),
+					})
 				}
 			}
 			for _, e := range report.Errors {

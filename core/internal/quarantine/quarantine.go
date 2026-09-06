@@ -56,21 +56,35 @@ type Entry struct {
 	// given.
 	Age time.Duration
 
-	// TimesReturned is the record's RetryCount: how many times this
-	// artifact has been sent back to DISCOVERED for a fresh attempt from
-	// an exceptional state (today, exclusively via
-	// lifecycle.ReleaseFromQuarantine's QUARANTINED -> DISCOVERED exit; see
-	// that function's doc for why FR-22's future FAILED -> DISCOVERED exit
-	// is expected to share the same counter rather than add a second one).
-	TimesReturned int
+	// AttemptsSpent is the record's RetryCount: how many attempts this
+	// artifact has already spent from an exceptional state.
+	//
+	// It was called TimesReturned, and the narrower name stopped being
+	// true when issue #419 landed the first half of FR-22. Two things
+	// increment the counter now, and only one of them is a return:
+	// lifecycle.ReleaseFromQuarantine's QUARANTINED -> DISCOVERED exit,
+	// and a verification that could not be COMPLETED at all recording the
+	// stalled attempt against its budget while the artifact stays at
+	// VERIFYING (lifecycle.Verify's recordStall). Sharing the counter is
+	// what quarantine.go's own package doc asked for rather than a
+	// surprise: "when FR-22 lands, its exit is expected to increment this
+	// same counter rather than invent a second one", and this field
+	// reports it with that combined meaning rather than under a name that
+	// says something narrower than the number means.
+	AttemptsSpent int
 
-	// Repeated is TimesReturned > 0: this artifact has been released from
-	// quarantine before and is, once again, sitting in a quarantine state
-	// now. This is Phase 4's "repeated quarantine of the same artifact
-	// should be visible rather than looking like fresh failures each
-	// time", answered as a single field a caller can filter or alert on
-	// directly.
-	Repeated bool
+	// Retried is AttemptsSpent > 0: something has already been spent
+	// trying to get this artifact through, and it is sitting in a
+	// quarantine state anyway.
+	//
+	// This is Phase 4's "repeated quarantine of the same artifact should
+	// be visible rather than looking like fresh failures each time",
+	// answered as a single field a caller can filter or alert on
+	// directly, and it still answers it: an artifact that was released
+	// and re-quarantined has this true, and so does one that was worked
+	// on for six cycles before anybody was asked. Neither is a fresh
+	// failure, which is the thing that must not look ordinary.
+	Retried bool
 
 	// Reason is lifecycle.QuarantineReason's best-effort explanation of
 	// why this artifact is quarantined. See that function's doc for
@@ -90,8 +104,8 @@ type Report struct {
 	// Lost is how many entries are QUARANTINED_LOST (irrecoverable: no
 	// copy exists anywhere).
 	Lost int
-	// RepeatOffenders is how many entries have Repeated == true.
-	RepeatOffenders int
+	// PreviouslyAttempted is how many entries have Retried == true.
+	PreviouslyAttempted int
 }
 
 // quarantineStates are the two lifecycle states Summarize ever reports on.
@@ -138,8 +152,8 @@ func Summarize(records []state.Record, now time.Time) Report {
 			Recoverable:   st == lifecycle.Quarantined,
 			QuarantinedAt: rec.UpdatedAt,
 			Age:           now.Sub(rec.UpdatedAt),
-			TimesReturned: rec.RetryCount,
-			Repeated:      rec.RetryCount > 0,
+			AttemptsSpent: rec.RetryCount,
+			Retried:       rec.RetryCount > 0,
 			Reason:        lifecycle.QuarantineReason(rec),
 		}
 
@@ -150,8 +164,8 @@ func Summarize(records []state.Record, now time.Time) Report {
 		} else {
 			report.Lost++
 		}
-		if entry.Repeated {
-			report.RepeatOffenders++
+		if entry.Retried {
+			report.PreviouslyAttempted++
 		}
 	}
 

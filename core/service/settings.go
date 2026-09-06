@@ -33,7 +33,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
@@ -81,6 +80,18 @@ type RetentionTier struct {
 	// WindowUnit measures the look-back in a unit other than Granularity;
 	// empty means "the same as Granularity", which is the ordinary case.
 	WindowUnit string
+	// Medium names the storage medium this tier's artifacts live on
+	// (EPIC E, FR-27); empty means the local backup root, which is what
+	// every tier of every configuration written before EPIC E means.
+	//
+	// It is carried here for a reason stronger than symmetry with the
+	// config schema. RetentionUpdate.Tiers REPLACES the whole chain, so
+	// a field this type cannot hold is a field a settings save deletes
+	// from the operator's file: editing daily's keep would have quietly
+	// moved monthly's artifacts back onto local disk. A lossy boundary
+	// between the file and the form is a configuration change nobody
+	// asked for, made by the act of changing something else.
+	Medium string
 }
 
 // RetentionSettings is the FR-18/FR-19 policy as it is actually
@@ -154,6 +165,12 @@ type CapacitySettings struct {
 type Settings struct {
 	Retention RetentionSettings
 	Capacity  CapacitySettings
+
+	// Mediums is every storage medium this configuration declares, in
+	// declaration order, described without any credential material at all
+	// (FR-33; see StorageMediumSummary). Empty for every configuration
+	// written before EPIC E, which is the compatibility case FR-35 pins.
+	Mediums []StorageMediumSummary
 }
 
 // CapacityUpdate names the capacity fields a settings write should change.
@@ -253,6 +270,20 @@ func (u RetentionUpdate) namesNothing() bool {
 type UpdateSettingsRequest struct {
 	Retention *RetentionUpdate
 	Capacity  *CapacityUpdate
+
+	// AcknowledgeMediumDisclosure carries the operator's acknowledgment of
+	// StorageSchema().MediumDisclosure (EPIC E, FR-27).
+	//
+	// It is required on, and only on, a write that sends a retention
+	// tier's artifacts to a non-local medium the running configuration
+	// does not already send them to. Without it that write is refused with
+	// ErrMediumDisclosureRequired, and the refusal carries the disclosure
+	// itself.
+	//
+	// It is not a setting. A request carrying nothing but this
+	// acknowledgment still names no setting to change and is refused as
+	// such, which is why namesNothing does not consult it.
+	AcknowledgeMediumDisclosure bool
 }
 
 // namesNothing reports a request that asks for no change at all: no
@@ -342,6 +373,7 @@ func (b *BackupService) Settings(_ context.Context) (Settings, error) {
 	return Settings{
 		Retention: toRetentionSettings(cfg.Retention),
 		Capacity:  toCapacitySettings(cfg),
+		Mediums:   toStorageMediumSummaries(cfg),
 	}, nil
 }
 
@@ -411,6 +443,20 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	cfg, err := config.Load(b.configPath)
 	if err != nil {
 		return Settings{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	// The consent gate (FR-27), before anything is encoded or written.
+	//
+	// It runs against the file as it actually is right now, re-read above,
+	// rather than against this process's loaded copy: consent is about
+	// what the operator's configuration is being changed FROM, and a
+	// change made out of band since this service started is part of that.
+	var introduced []tierMedium
+	if req.Retention != nil {
+		introduced = newTierMediumMappings(cfg.Retention.EffectiveTiers(), req.Retention.Tiers)
+	}
+	if len(introduced) > 0 && !req.AcknowledgeMediumDisclosure {
+		return Settings{}, mediumDisclosureRefusal(introduced)
 	}
 
 	if req.Retention != nil {
@@ -485,20 +531,14 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	applyValidators()
 
 	// The one atomic swap that makes the new policy take effect, with the
-	// same {inner, revision} non-torn guarantee CreateBackupSet's own
-	// Store() carries; see BackupService.state's doc. prevInner is read
-	// once, before the swap, purely to carry the already-wired Transport
-	// and alert state forward.
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	// same {inner, revision} non-torn guarantee every other write carries;
+	// see adoptConfig and BackupService.state's doc.
+	b.adoptConfig(cfg)
 
 	return Settings{
 		Retention: toRetentionSettings(cfg.Retention),
 		Capacity:  toCapacitySettings(cfg),
+		Mediums:   toStorageMediumSummaries(cfg),
 	}, nil
 }
 
@@ -550,6 +590,14 @@ func applyRetentionUpdate(r *config.Retention, u RetentionUpdate) {
 				PeriodDays:  t.PeriodDays,
 				Keep:        t.Keep,
 				WindowUnit:  t.WindowUnit,
+				// Carried through rather than dropped: this assignment
+				// replaces the operator's whole chain, so a field left
+				// out here is a field the save deletes from their file.
+				// Whether the named medium exists is config.Validate's
+				// question, asked over the whole config a few lines
+				// after this one; nothing here second-guesses it, which
+				// is what keeps every medium rule in one package.
+				Medium: t.Medium,
 			})
 		}
 		// The three scalars are sugar for the default chain, and
@@ -577,6 +625,7 @@ func toRetentionTiers(in []config.RetentionTier) []RetentionTier {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
 		})
 	}
 	return out

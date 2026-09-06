@@ -6,6 +6,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// The values a caller hands to RecordTransition and gets back from the
+// read side: one Record per artifact, and one small struct per optional
+// fact a transition can carry.
+//
+// The shape is the whole point. Every update-carrying field on a
+// Transition is a pointer, and nil means "this transition says nothing
+// about that", never "set it to the zero value". A transition reporting a
+// transfer and a transition reporting a retry each touch a handful of
+// columns and have to leave the rest exactly as they were, so the
+// alternative of one flat struct written wholesale would silently blank a
+// hash every time somebody recorded a retry. journal.go's updateArtifact
+// builds its SET clause from exactly the non-nil ones.
+//
+// The same discipline runs down into individual fields for a different
+// reason: zero is a real answer. A zero-byte artifact exists, and so does
+// a backend that reports no size at all, and the two must not read the
+// same. RemoteIdentity is the extreme case, where every field is optional
+// by contract because backends do not agree on what they can report.
+//
+// Nothing here interprets any of it. State is a plain string because the
+// FR-10 vocabulary belongs to internal/lifecycle, RetentionUpdate.Tier is
+// a plain string because FR-18's policy belongs to internal/retention, and
+// this package's job stops at storing what they decided.
+
 // RemoteIdentity is the remote object identity captured at discovery (FR-16),
 // so it can be compared against the remote object's identity again
 // immediately before deletion elsewhere. Backends do not all report every
@@ -24,7 +48,23 @@ type RemoteIdentity struct {
 // TransferResult is what the copy step actually did (FR-11, FR-13).
 type TransferResult struct {
 	BytesTransferred int64
-	Checksummed      bool
+
+	// Checksummed is a column, not a signal. Nothing writes it any more.
+	//
+	// It mirrors artifacts.transfer_checksummed, which lives in shipped
+	// migrations that TestShippedMigrationsAreImmutable holds fixed, so
+	// the column outlives the reason it was added. That reason was
+	// transport.TransferResult.Checksummed, a claim no adapter ever made,
+	// which #492 removed rather than wired up: read its doc for why an
+	// honest version of the claim would have been worse than a dead one.
+	//
+	// A true here therefore only ever came from a test fixture or from a
+	// journal somebody hand-edited. It must never again be read as a
+	// verification verdict, and internal/lifecycle/verify_test.go's
+	// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum
+	// is what keeps that true: it sets this field and insists the backend
+	// is asked anyway.
+	Checksummed bool
 }
 
 // HashUpdate carries a locally computed hash, typically attached to the
@@ -97,4 +137,19 @@ type Record struct {
 
 	RetentionTier      string
 	RetentionExpiresAt *time.Time
+
+	// Placements is where this artifact's durable copies actually are
+	// (EPIC E, FR-29), one entry per copy, ordered by medium.
+	//
+	// It is empty for an artifact that has no durable copy yet, which is a
+	// real state and not a gap: a DISCOVERED artifact has zero copies. It
+	// is also empty on a Record built by hand rather than read from the
+	// journal, which is how most of this repository's tests build one, and
+	// ReadableLocalPath's fallback is what keeps those honest.
+	//
+	// LocalPath keeps meaning exactly what it always meant, the ingestion
+	// landing path. What changed is that the callers asking "can I read
+	// this artifact off disk" ask ReadableLocalPath instead of assuming
+	// that field names a readable file.
+	Placements []Placement
 }

@@ -1,3 +1,11 @@
+// This file is in package compose rather than compose_test, which is the
+// opposite of every other test here, and the exception is the whole
+// point of it. The rule it guards exists in two places by necessity:
+// this package walks YAML and cannot read Unraid's XML template, so
+// packaging keeps a copy that can. Two implementations of one refusal is
+// a divergence waiting to happen, and it did happen. Comparing them
+// means calling the unexported one, so the test lives inside the
+// package; there is exactly one test here, and nothing else belongs.
 package compose
 
 import (

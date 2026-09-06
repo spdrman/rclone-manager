@@ -57,9 +57,43 @@ function defaultCapacityFixture(): AppSettings["capacity"] {
   };
 }
 
+/** The ladder and the two disclosures, as core/service serves them.
+ *  Reproduced here rather than imported because these tests stand in for
+ *  a SERVER, and a fixture that invented different words would hide the
+ *  drift the real surface exists to prevent. */
+export const STORAGE_SCHEMA: AppSettings["schema"]["storage"] = {
+  verificationClasses: [
+    {
+      className: "content",
+      proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
+      requires: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+      downloadsObject: true
+    },
+    {
+      className: "attested",
+      proves: "the provider's stored full-object checksum equals the recorded hash",
+      requires: "one metadata call, no egress, trusting the endpoint's own checksum",
+      downloadsObject: false
+    },
+    {
+      className: "existence",
+      proves: "an object exists at the recorded key, at the recorded size",
+      requires: "one HEAD request, which says nothing about the bytes",
+      downloadsObject: false
+    }
+  ],
+  mediumDisclosure:
+    "Backups that only this tier keeps will live only on that storage medium. " +
+    "After a backup uploads and I verify it, I delete the copy on this machine.",
+  retrievalDisclosure:
+    "Reading a copy back off a storage medium is billed by your provider. " +
+    "I hold no price list and no knowledge of your rates."
+};
+
 function settingsFixture(
   overrides: Partial<AppSettings["retention"]> = {},
-  schema: AppSettings["schema"]["retention"] = SCHEMA
+  schema: AppSettings["schema"]["retention"] = SCHEMA,
+  mediums: AppSettings["mediums"] = []
 ): AppSettings {
   return {
     retention: {
@@ -74,7 +108,8 @@ function settingsFixture(
       ...overrides
     },
     capacity: defaultCapacityFixture(),
-    schema: { retention: schema }
+    mediums,
+    schema: { retention: schema, storage: STORAGE_SCHEMA }
   };
 }
 

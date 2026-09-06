@@ -1,3 +1,19 @@
+/**
+ * What is happening now and what has happened: operations, their live
+ * progress, the activity log, and the system health summary.
+ *
+ * The organising rule here is that nothing describes work that has not
+ * been measured. There is no field for how far through a whole run cycle
+ * the service is, because a cycle discovers what it will do as it goes and
+ * no honest denominator exists before it ends. There is no uptime, no cost
+ * and no restore estimate, for the same reason in three other places.
+ *
+ * That rule is not an aspiration, it is a repair. Nine displayed fields
+ * that nothing computed were removed from this file at once, and the
+ * shapes below are written so the mistake is harder to repeat: an optional
+ * field means the service genuinely may not report it, and a surface has
+ * to handle the absence rather than default it.
+ */
 export type OperationKind =
   | "transfer"
   | "validation"
@@ -86,6 +102,16 @@ export interface TransferProgress {
   bytesPerSecond?: number;
 }
 
+/**
+ * One durable record of work the service did or is doing.
+ *
+ * Durable is the word that matters. This survives the process that started
+ * it, which is why `status` and `progress` are separate and why both
+ * `progress` and `cycle` are nullable: the record outlives the live
+ * reading, and an operation swept to failed after a restart has a status
+ * and no measurements. Each of those nulls is argued for at the field,
+ * because the tempting default for both is a zero that makes a claim.
+ */
 export interface Operation {
   id: string;
   setId: string;
@@ -110,6 +136,75 @@ export interface Operation {
   /** True for read-only passes; the UI says so explicitly. */
   nonDestructive: boolean;
   startedAt: string;
+  /**
+   * What a FINISHED run cycle actually got done, or null.
+   *
+   * Null for anything that is not a finished run cycle, and null rather
+   * than a pair of zeroes for the same reason `progress` above is null
+   * rather than 0%: a cycle that is still running has not walked nothing,
+   * it has not finished walking. "0 got through" is the loudest thing
+   * this object can say, and a renderer that produced it for an operation
+   * nobody has measured would raise an alarm about a deployment that is
+   * fine.
+   */
+  cycle: CycleOutcome | null;
+}
+
+/**
+ * The two counts that tell a barren run cycle from a good one.
+ *
+ * An operation "completed" when the cycle ran to the end, which is
+ * deliberately narrower than it reads: a backup's own quarantine is a
+ * business outcome rather than an operation failure, so a cycle that
+ * backed nothing up finishes with exactly the same status as one that
+ * backed everything up. Issue #361 was that lie told to a cron job; #368
+ * put these two numbers into the record, and this is what renders them.
+ */
+export interface CycleOutcome {
+  backupSetsProcessed: number;
+  /** How many backups the cycle had a reason to touch. */
+  artifactsWalked: number;
+  /** How many of those ended it with their bytes on durable storage. */
+  artifactsThrough: number;
+  /**
+   * What the cycle's move pass got done, or null when the recorded
+   * summary does not carry it.
+   *
+   * Null is not a pair of zeroes, and the distinction is the same one
+   * `cycle` itself draws one level up: a cycle recorded by a build that
+   * did not write these counts has not moved nothing, it has not said.
+   * A renderer that drew zeroes for it would report the worst outcome it
+   * can express about a cycle nobody measured.
+   */
+  moves: CycleMoveOutcome | null;
+}
+
+/**
+ * What a cycle's move pass got done.
+ *
+ * A retention tier with a `medium` says where those backups belong. A
+ * deployment where every move is refused, which is what one unset
+ * credential produces, completes a cycle that backed everything up and
+ * left every artifact somewhere else. Without these two numbers that
+ * cycle is indistinguishable from a perfect one on every surface.
+ *
+ * There is no reason string, and there is not going to be one: the
+ * engine's own refusal sentence is assembled out of transport errors
+ * about an endpoint, a bucket and a credential reference, so FR-33 keeps
+ * it off this boundary. It reaches an operator on a terminal and in the
+ * event stream instead.
+ */
+export interface CycleMoveOutcome {
+  /**
+   * How many artifacts the move pass took up: a move it resumed, a move
+   * it planned, or a plan it refused outright.
+   */
+  attempted: number;
+  /**
+   * How many of those reached their home medium with the source gone,
+   * which is the only outcome that is a move.
+   */
+  landed: number;
 }
 
 /**
@@ -131,8 +226,16 @@ export function progressPercent(progress: TransferProgress): number | null {
   return Math.max(0, Math.min(100, pct));
 }
 
+/** How loudly an activity entry should read. `info` and `ok` are both
+ *  "nothing is wrong" and are ranked equally by the Activity page's
+ *  filter, which is why that control offers a threshold rather than a
+ *  checkbox per value. */
 export type Severity = "info" | "ok" | "warn" | "error";
 
+/** What happened, as a closed vocabulary. It reads as the lifecycle in
+ *  order and then the departures from it: the first seven trace one backup
+ *  from noticed to retained, and the last four are the failures and the
+ *  deployment-level changes that interrupt that story. */
 export type ActivityEventType =
   | "backup-discovered"
   | "transfer-started"
@@ -146,6 +249,11 @@ export type ActivityEventType =
   | "storage-critical"
   | "configuration-updated";
 
+/** One line in the log. `text` and `detail` are separate so a list can
+ *  render the sentence prominently and the specifics quietly, and
+ *  `correlationId` is carried on every entry, not only on failures, so any
+ *  line here can be traced into the service's own log. `setId` is null for
+ *  the events that belong to the deployment rather than to a set. */
 export interface ActivityEvent {
   id: string;
   at: string;

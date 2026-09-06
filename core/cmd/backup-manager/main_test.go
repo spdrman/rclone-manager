@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+// The dispatch smoke tests, and the fixture most of this package's other
+// suites are built on.
+//
+// Everything here calls run() with an argv rather than calling a cmd
+// function, because the thing being checked is what an operator's shell
+// gets back: an unknown command, a missing operand and a working config all
+// have exit statuses this binary promises, and only the top of the dispatch
+// decides them.
+//
+// writeTestConfig is the shared fixture and it earns its place by being
+// real. A local directory standing in as the remote, wired through the local
+// transport backend, means a `run` in these tests performs an actual
+// discover, transfer, verify, commit and delete against actual files, with
+// no network and no Docker. That is what makes the exit-status cells in the
+// files around this one worth anything: they are reading the status of a
+// cycle that happened.
+
 func TestRun_NoArgsPrintsUsageAndFails(t *testing.T) {
 	if got := run(nil); got != 2 {
 		t.Errorf("run(nil) = %d, want 2", got)

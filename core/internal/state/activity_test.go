@@ -1,3 +1,17 @@
+// The two "show me what has been happening" reads, RecentActivity over the
+// transition log and ListOperations over the operations table, tested
+// together because they have the same two failure modes and neither one is
+// visible in a passing assertion about contents alone.
+//
+// Order is asserted everywhere, not as a tidiness check. A feed rendered
+// oldest-first is a different product: an operator opening it lands on the
+// deployment's first day and concludes nothing has happened since.
+//
+// A non-positive limit is asserted to be a refusal rather than "everything",
+// because both tables only ever grow. The reading that would be convenient
+// here, zero means unbounded, is the one that makes a dashboard load get
+// slower every week until somebody notices.
+
 package state
 
 import (

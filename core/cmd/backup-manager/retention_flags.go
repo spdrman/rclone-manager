@@ -9,6 +9,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
+// The retention override flags, from the flag.FlagSet variables that back
+// them to the resolved policy they fold onto a loaded config.
+//
+// Three steps rather than one, and the middle one is why. Declaring, then
+// resolving into an explicit "what the operator actually said" value, then
+// applying, is what keeps an unset flag distinguishable from a flag set to
+// its zero value: the config layer reads several of these zeros as "the
+// operator did not say", so collapsing the two would silently turn
+// --protect-last-known-good=false into no opinion at all.
+//
+// Nothing here validates. Every value is handed to the config layer
+// unparsed beyond the split, so a mistake typed at a flag is refused for the
+// identical reason, in the identical words, as the same mistake written into
+// the YAML file. An operator who fixed one by reading its message should not
+// meet a different message from the other.
+
 // retentionFlags holds the flag.FlagSet variables backing the FR-18/FR-19
 // retention override flags `backup-manager retention` accepts (issue #111,
 // B3.6, extended by #156, B3.8). Each one is optional: an operator who
@@ -165,6 +181,15 @@ func resolveRetentionFlags(rf *retentionFlags) retentionOverrides {
 // operator who touches no new surface gets exactly today's behavior"
 // true: applyRetentionOverrides with a zero-valued o is a no-op on an
 // already-resolved r, by construction, not by a special case here.
+//
+// Folding r is only half the step for a caller holding a whole
+// *config.Config. Since issue #333 every retention decision reads a backup
+// set's own resolved config.BackupSet.Retention, which config.Validate
+// computed from the global policy as it stood at load, so a caller that
+// folds onto cfg.Retention and stops has changed nothing any decision
+// reads. cmdRetention re-runs cfg.Validate after this returns; see its own
+// comment for why that is the whole re-resolution step and what it means
+// for a set that declares its own policy.
 //
 // Folding is all-or-nothing: a refused override leaves *r exactly as the
 // caller passed it. That matters most for the two mutual-exclusion

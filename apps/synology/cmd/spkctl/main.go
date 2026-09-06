@@ -28,8 +28,14 @@ import (
 	"github.com/spdrman/rclone-manager/apps/synology/spk"
 )
 
+// main defers to run so the whole CLI is reachable from a test without a
+// process, the same split cmd/backup-manager-web uses.
 func main() { os.Exit(run(os.Args[1:])) }
 
+// run dispatches and returns the exit code. Two means the invocation was
+// wrong and one means the command ran and the answer was no, which for
+// verify is the distinction that matters: a release pipeline has to be
+// able to tell "I called this wrong" from "the package does not conform".
 func run(args []string) int {
 	if len(args) == 0 {
 		usage()
@@ -47,6 +53,9 @@ func run(args []string) int {
 	}
 }
 
+// usage writes the command surface. The text is an operator-visible
+// surface like any other, so a reworded line is a change somebody's
+// runbook sees.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: spkctl <command> [flags]
 
@@ -74,6 +83,10 @@ verify flags:
 `)
 }
 
+// cmdBuild wraps one architecture's already-built release binaries and UI
+// bundle into a .spk. Every input is a path to something somebody else
+// produced; this command compiles nothing, for the reason spk.Build's own
+// file states.
 func cmdBuild(args []string) int {
 	fset := flag.NewFlagSet("build", flag.ContinueOnError)
 	arch := fset.String("arch", "", "release architecture (amd64 or arm64)")
@@ -100,6 +113,13 @@ func cmdBuild(args []string) int {
 	return 0
 }
 
+// cmdVerify opens a finished .spk and prints the conformance report.
+//
+// It prints the whole report to stdout and the count of failures to
+// stderr, then exits non-zero. Both halves are deliberate: a release
+// pipeline branches on the exit code and a person reads the report, and
+// putting the summary on stderr means a redirected stdout still carries
+// the complete evidence rather than a truncated version of it.
 func cmdVerify(args []string) int {
 	fset := flag.NewFlagSet("verify", flag.ContinueOnError)
 	spkPath := fset.String("spk", "", "the .spk to check")
