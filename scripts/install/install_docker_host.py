@@ -256,7 +256,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
 CARRIED_RELEASE = "0.3.0"
-CARRIED_RELEASE_DIGEST = None
+CARRIED_RELEASE_DIGEST = "sha256:95e0bd377ed35cb0e267da1cd48f2dae3070f6686babc4b712c9e4170b62d994"
 
 # Where that release lives. Split into two halves rather than written as
 # one reference on purpose: the --image default is the one literal
