@@ -2070,9 +2070,10 @@ naming the proof it could not perform. Reporting `ok` for a backup nobody proved
 the worst version of the failure this whole ledger exists to prevent.
 
 A component that is not in the tree at all is not a skip: its checks are inapplicable, and
-the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`
-are the absent ones; `apps/generic` and `apps/synology` are present and are built, vetted,
-tested and linted on every run.
+the run can still be `ok`. Nothing is absent today: `apps/generic`, `apps/synology` and
+`apps/ugos/backend` are all present and are built, vetted, tested and linted on every run,
+and `apps/ugos/frontend/upk-proof` is type-checked and built alongside the other JS
+workspaces once its dependencies are installed.
 
 ## How this document is kept honest
 

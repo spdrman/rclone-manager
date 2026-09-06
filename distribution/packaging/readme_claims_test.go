@@ -306,9 +306,7 @@ func TestREADMELinksResolve(t *testing.T) {
 // the entry is what stops the check from firing, and an entry without a
 // reason is just a silenced finding.
 var declaredAbsentPaths = map[string]string{
-	"apps/ugos/backend":            "named in the gate section as a component that is absent from this tree, which is why its checks are inapplicable rather than skipped",
-	"apps/ugos/frontend/upk-proof": "same: absent, and scripts/ci-local.sh's preflight names it for exactly that reason",
-	"tools/backup-manager/":        "the path this project was originally scoped at inside iasbuilt/iac; the README carries the correction and has to be able to name the old location",
+	"tools/backup-manager/": "the path this project was originally scoped at inside iasbuilt/iac; the README carries the correction and has to be able to name the old location",
 }
 
 func TestREADMEBacktickedPathsResolve(t *testing.T) {
@@ -319,7 +317,7 @@ func TestREADMEBacktickedPathsResolve(t *testing.T) {
 
 	// Positive control, both halves: a path that is gone is reported,
 	// and the declared-absent list actually suppresses one.
-	control := "Read `core/internal/no-such-package/` and `apps/ugos/backend` and `core/internal/state/` and `core/service.Open`.\n"
+	control := "Read `core/internal/no-such-package/` and `tools/backup-manager/` and `core/internal/state/` and `core/service.Open`.\n"
 	got := missingBacktickedPaths(control, Path("."), declaredAbsentPaths)
 	if len(got) != 1 || !strings.Contains(got[0], "no-such-package") {
 		t.Errorf("positive control: want exactly the missing path reported, got %v", got)
@@ -332,10 +330,11 @@ func TestREADMEBacktickedPathsResolve(t *testing.T) {
 	// returns before its os.Stat for anything in this map, so once a
 	// declared-absent path lands the README keeps describing it as
 	// missing and nothing fires, and the entry is precisely what stops
-	// anyone noticing. Two of the three name paths that are actively
-	// expected to appear, and #122 is open against the UPK proof right
-	// now. This cannot produce a false positive: the map is this file's
-	// own declaration, so a red here means the declaration is stale.
+	// anyone noticing. It has already caught one: apps/ugos/backend and
+	// apps/ugos/frontend/upk-proof were both on this list until #122
+	// landed them, and this loop is what made the stale entries fail.
+	// This cannot produce a false positive: the map is this file's own
+	// declaration, so a red here means the declaration is stale.
 	for tok, reason := range declaredAbsentPaths {
 		if _, err := os.Stat(Path(strings.TrimSuffix(tok, "/"))); err == nil {
 			t.Errorf("`%s` now exists, but readme_claims_test.go still declares it absent: %q. The README's claim of absence needs re-deriving against what actually landed, and this entry needs removing, or the path stays exempt from the check for as long as the entry survives.", tok, reason)

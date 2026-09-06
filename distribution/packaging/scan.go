@@ -110,6 +110,13 @@ var frontendExtensions = map[string]bool{
 	".svg":  true,
 	".png":  true,
 	".md":   true,
+	// A bundler's entry document. It is inert markup on the same terms
+	// as .css is inert styling, and the content rules below still read
+	// it: an .html carrying a shebang, a `sh -c` or an --entrypoint is
+	// reported exactly as any other non-.md file is. It is here because
+	// apps/ugos/frontend/upk-proof is a real Vite app rather than a
+	// handful of bridge modules, and Vite's entry point is index.html.
+	".html": true,
 }
 
 // allowedBareNames are files the extension allowlist cannot admit,
