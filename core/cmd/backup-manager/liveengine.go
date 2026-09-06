@@ -34,6 +34,24 @@ import (
 // rather than down beside the write in core/service where both routes
 // meet.
 //
+// # The one shape this cannot see, said out loud
+//
+// A host serving the FIRST-RUN flow (issue #176: an install with no
+// config.yaml serves a setup wizard rather than refusing to start) holds
+// no journal. apps/generic opens one only in its Activate callback, after
+// its own POST has written the configuration, so until then there is no
+// lock to find and no lock-based detector can find one. A CLI
+// `backup-set create` on such a host takes createFirstConfig's path,
+// writes the first configuration underneath the wizard, and the wizard
+// goes on serving setup until it is restarted.
+//
+// That is the same family as #535 and it is not fixed here, because it is
+// not detectable here: there is no journal, no port this binary knows
+// about, and no credential it holds. #536 Phase 2 is where it closes, by
+// giving this binary a real route to the running process instead of a way
+// to notice one. Naming it is the alternative to leaving a gap
+// indistinguishable from one nobody thought of.
+//
 // # And why reads are left alone
 //
 // A CLI read beside a live engine is ordinary use of this binary and
