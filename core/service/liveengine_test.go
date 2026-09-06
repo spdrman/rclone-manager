@@ -385,8 +385,8 @@ func TestBeginConfigWrite_OnAHostWhoseStateDirectoryIsNotThereYet(t *testing.T) 
 
 // TestDetectRunningEngine_SaysNothingAboutAConfigurationItCannotRead:
 // with no readable configuration there is no journal path to probe, and
-// nothing this answer feeds can write either — the open that follows it
-// fails on the same file. Reporting an error here would replace the
+// nothing this answer feeds can write either, because the open that
+// follows it fails on the same file. Reporting an error here would replace the
 // "your deployment has not been set up yet" message an operator needs
 // (ErrConfigAbsent) with a locking complaint about a file that is not
 // there.

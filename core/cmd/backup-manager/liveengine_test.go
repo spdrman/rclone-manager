@@ -33,9 +33,10 @@ import (
 //
 // Not "the message says something". Two things an operator can check:
 // the command did not report success, and config.yaml on disk is byte for
-// byte what it was beforehand. Either one alone is weak — a command that
-// refused but wrote anyway, or one that wrote nothing but exited 0, is
-// still the defect — so both are asserted for every mutating verb.
+// byte what it was beforehand. Either one alone is weak, because a
+// command that refused but wrote anyway, or one that wrote nothing but
+// exited 0, is still the defect. Both are asserted for every mutating
+// verb.
 //
 // # And the half that keeps it honest
 //

@@ -15,8 +15,9 @@ import (
 // already running the engine. It wrote config.yaml, adopted the change in
 // its own memory, exited 0 and printed the new set. The engine had read
 // that file when it started and has no watcher on it, so the Web UI never
-// showed the set. `sources` -- another CLI process, reading the file --
-// showed it. Two surfaces, two answers, no complaint from either.
+// showed the set. `sources`, which is another CLI process reading that
+// same file, showed it. Two surfaces, two answers, no complaint from
+// either.
 //
 // Refusing is not the end state. #536 Phase 2 gives this binary a real
 // route to the engine, and then a mutation will REACH it rather than be
@@ -88,7 +89,7 @@ import (
 // reached a storage medium at all, which is what a bare boolean at a
 // choke point costs: the wrong value is invisible at the call site and
 // silently permissive. Here the wrong value is worse than a missing
-// feature -- it is #535 coming back -- so the argument says out loud
+// feature, because it is #535 coming back, so the argument says out loud
 // which of the two things this command does, and the table in
 // liveengine_test.go checks every writing command against a real running
 // engine rather than trusting the declaration.
