@@ -11,7 +11,7 @@
         "backup-manager-web": "a3a86b36e32a673b40bc49ef7bd62eae7c944860c4b8ee8610ffc8465aaca72f"
       },
       "local_image_id_sha256": "450741ef4e3b40689c025f65efb6e56fb1e266faaa61c848c6b6d10dbdefa249",
-      "registry_digest": null
+      "registry_digest": "sha256:ff9b73155d12858e8941a55cbf856786d32a73d3b26ca0b878b5d2977ccd0e4b"
     },
     {
       "architecture": "arm64",
@@ -20,7 +20,8 @@
         "backup-manager-web": "4ad25c69ee21249290d3c3a429aa13bc6d342b1b0b0851fe7c53b42488eb85cd"
       },
       "local_image_id_sha256": "3b15b631a3cff20e2601c1124b7741520f449ae00d1489cb63a0f74c5db452e8",
-      "registry_digest": null
+      "registry_digest": "sha256:50d3f76392edbb222f0613101ef56d4cb54c1b0f99c889be0927fce5ec5afd8e"
     }
-  ]
+  ],
+  "index_digest": "sha256:95e0bd377ed35cb0e267da1cd48f2dae3070f6686babc4b712c9e4170b62d994"
 }
