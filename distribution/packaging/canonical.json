@@ -389,6 +389,27 @@
         "source": "container/compose.yaml",
         "contract": "1.2.0"
       }
+    },
+    "ugos": {
+      "uiBridge": "apps/ugos/frontend/platform.ts",
+      "displayName": "UGREEN UGOS Pro",
+      "tier": "A",
+      "storageMount": "/volume1/backups/backup-manager",
+      "hostPaths": {
+        "state": "/volume1/docker/backup-manager/state",
+        "backups": "/volume1/backups/backup-manager",
+        "config": "/volume1/docker/backup-manager/config",
+        "sshKey": "/volume1/docker/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/volume1/docker/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "UGOS Pro's own layout, checked against a real device rather than assumed: /volume1/docker and /volume1/backups both exist on a stock UGOS Pro NAS. Private application state, configuration and key material live under /volume1/docker/backup-manager and retained artifacts land in a dedicated child of the backups share, so the two security domains stay separate and an uninstall that offers to remove the app's own data cannot reach a retained artifact. The backup root is a child of the share rather than the share itself, because the share is very likely one the operator already uses.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The UPK's compose file declares its own project network with a pinned subnet, created and destroyed with the app, whose only two members are these two containers. The engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention, which is what apps/common/auth/local requires. The Web UI's own gateway trust is a separate and much narrower set: the bridge gateway address alone, reachable only because the published port is bound to loopback.",
+      "profile": "ugos",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
     }
   }
 }

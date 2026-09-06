@@ -43,7 +43,8 @@
     "apps/synology/compose/backup-manager.yml",
     "apps/portainer/compose/backup-manager.yml",
     "apps/casaos/compose/backup-manager.yml",
-    "apps/zimaos/compose/backup-manager.yml"
+    "apps/zimaos/compose/backup-manager.yml",
+    "apps/ugos/upk/rootfs_common/docker-compose.yaml"
   ],
 
   "_dockge_comment": [

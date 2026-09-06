@@ -1,0 +1,75 @@
+# The UGOS Pro App Center package for Backup Manager (issue #83, D1.2).
+#
+# THE HARD RULE THIS FILE SITS UNDER: the .UPK packages the exact
+# canonical image and binary content for a release and an architecture.
+# It may not compile a behaviourally different UGOS build. There is no
+# UGOS build: there is one canonical executable, and `--profile=ugos` in
+# rootfs_common/docker-compose.yaml is how it changes host-dependent
+# behaviour. Nothing under this directory compiles anything.
+#
+# What that means mechanically is that rootfs_<arch>/images/ is FETCHED,
+# never built. build-upk.sh pulls the canonical release by digest, saves
+# it, and refuses to pack when the bytes inside the tar are not the bytes
+# container/release-manifest.json recorded for that architecture. The
+# check is distribution/packaging's VerifyUPKStage, and it runs before
+# `ugcli pack` rather than after, so a divergent image fails the build
+# instead of shipping.
+#
+# Field reference: https://developer.ugnas.com/doc/tools/project-yaml.html
+# Docker app guide: https://developer.ugnas.com/doc/backend/quick-start/develop-docker-app.html
+spec_version: "2.1"
+
+app_id: com.spdrman.backupmanager
+
+# The canonical release version, and it is not free to differ: this is
+# what build-upk.sh resolves the image reference and the release manifest
+# entry from, and distribution/packaging pins it to canonical.json's own
+# image tag.
+version: 0.3.0
+
+# Both architectures the release builds. The claim comes from the release
+# once, which is why it is this pair and not the one architecture there
+# happens to be hardware for here: a per-package architecture claim is a
+# second answer that can be wrong on its own
+# (distribution/packaging/derive.go, FieldArchitectures).
+#
+# Hardware acceptance is a separate statement and is made separately:
+# apps/ugos/docs/upk-acceptance-procedure.md records amd64 as run on real
+# UGREEN hardware and arm64 as unrun for want of an arm64 device.
+support_arch:
+  - amd64
+  - arm64
+
+# A Docker app: UGOS installs it by loading the image tars under
+# rootfs_<arch>/images/ and bringing up rootfs_common/docker-compose.yaml.
+is_docker_app: true
+
+# The port UGOS reverse-proxies the app on. It matches the host side of
+# the Web UI's published port in the compose file, which is bound to
+# loopback so the UGOS gateway is the only thing that can reach it; the
+# compose file's own comment has the trust argument that rests on it.
+port: 28080
+
+# Opens inside the UGOS desktop rather than in a standalone browser tab,
+# which is what makes the platform gateway the request path and therefore
+# what makes the trusted-gateway profile mean anything.
+open_type: inner
+
+tag_types:
+  - backup
+
+depend_fw_version: 1.13.0.0000
+depend_docker_version: 1.7.0.0000
+
+i18n:
+  en-US:
+    name: Backup Manager
+    description: >-
+      Scheduled, verified pull-based backups with daily, weekly and monthly
+      retention tiers. Two containers run from one image: the engine holds the
+      catalogue and the credentials and publishes no port, and the web UI is
+      the only thing UGOS reaches. Signs you in through your UGOS session. No
+      privileged mode, no Docker socket, no host networking.
+    author: spdrman
+    official: https://github.com/spdrman/rclone-manager
+    help: https://github.com/spdrman/rclone-manager/blob/main/apps/ugos/README.md
