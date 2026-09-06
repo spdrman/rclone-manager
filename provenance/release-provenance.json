@@ -18,17 +18,17 @@
   "imageReference": "ghcr.io/spdrman/backup-manager:0.3.1",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "c1a5c752fdec5413779b4276a6d65620bef051702f8fcff6d4f0730e6f21d23e",
+    "sha256": "911234927759a41c8d0a49f4d946581744a0b1c3a22e39daba4f0e2449b36f4d",
     "commit": "f6077d6c6508a34f4114dd91094b34db1fedb5c2",
     "recordedBuildVersion": "0.3.1",
     "architectures": [
       "amd64",
       "arm64"
     ],
-    "published": false,
+    "published": true,
     "registryDigests": {
-      "amd64": null,
-      "arm64": null
+      "amd64": "sha256:8aee1aaf6c89e26f966a183c9f7adf256763919d0ed2cf59f0b23923edb37f33",
+      "arm64": "sha256:c207d984ebe14e380d314ffc435a4eaeebf9b9313ffb2a6df33f5f8e23149e96"
     },
     "versionIsABuildStamp": false
   },
@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "3c8f7319603d87b8d26fe5c4aeb4cac454114d36fa8c8d4165d8e7734b7797ab",
+    "sha256": "f8d6e001e6493897f45dcb32d25ce1fb69c8daa84143bca68f686452544e3994",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -190,14 +190,12 @@
     "reason": "the source repository is public, so every declared link resolves for a reviewer outside the project"
   },
   "signing": {
-    "status": "unsigned",
+    "status": "signed",
     "method": "sigstore-keyless",
     "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
-      "Nothing has been pushed to ghcr.io/spdrman/backup-manager:0.3.1, so there is no digest to sign and no signature to verify.",
-      "The mechanism is scripts/release/publish-image.sh; the key design is in docs/compliance/release-provenance.md.",
-      "There is no signing key to store, rotate or leak: the workflow's OIDC identity is exchanged for a short-lived Fulcio certificate at signing time."
+      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release ghcr.io/spdrman/backup-manager:0.3.1"
     ]
   },
   "performance": {
