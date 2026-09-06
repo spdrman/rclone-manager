@@ -55,14 +55,20 @@ func TestMediumPreflightIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 		says string
 	}{
 		{
+			// The arity refusal names the verbs that exist rather than
+			// the one that existed when this was written, so the
+			// expectation is built from the same table the message is.
+			// That keeps this cell about arity: it asks whether the
+			// refusal happened and said what shape it wanted, and does
+			// not go red the day a second verb is added.
 			name: "no verb and no medium",
 			args: nil,
-			says: "expected preflight <medium-id>",
+			says: "expected " + strings.Join(mediumVerbNames(), "|") + " <medium-id>",
 		},
 		{
 			name: "a verb but no medium",
 			args: []string{"preflight"},
-			says: "expected preflight <medium-id>",
+			says: "expected " + strings.Join(mediumVerbNames(), "|") + " <medium-id>",
 		},
 		{
 			name: "a medium but no verb this command has",

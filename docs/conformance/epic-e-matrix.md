@@ -96,6 +96,15 @@ end, by `TestUsage_EveryRegisteredCommandIsPinned` in `core/cmd/backup-manager`,
 which requires every verb the binary dispatches to have its usage entry pinned in
 `06b-cli-usage-block`.
 
+It reads the dispatch map, which is keyed by the first word, so it reaches a
+SUBCOMMAND only where the command keeps a verb table of its own. `backup-set` and
+`medium` do, and `TestUsage_NamesEveryBackupSetVerb` and
+`TestUsage_NamesEveryMediumVerb` hold those tables against the usage block, which
+puts a new subcommand under either of them into the block and from there into the
+pin. `catalog` and `quarantine` still dispatch against string literals, so a second
+`catalog` verb or a fourth `quarantine` one could ship listed nowhere with nothing
+saying so. Giving them tables is the same small change `medium` took.
+
 ## What has landed since this file was written
 
 #236 (E1.4, placement records) merged, bringing `core/migrations/0007_placements.sql`

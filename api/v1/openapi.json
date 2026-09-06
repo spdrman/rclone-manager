@@ -957,7 +957,7 @@
           },
           "stable_for_seconds": {
             "type": "integer",
-            "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses."
+            "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses. Whole seconds, truncated rather than refused: a configuration is only required to make stable_for positive, so a stable_for of 1500ms loads and is served here as 1, and any window under a second is served as 0, which this field already spends on \"not the stable strategy\". A client cannot tell those two apart. The write path refuses a sub-second window instead of rounding it, on the grounds that a value meaning one thing over this wire and another in the file is a divergence both routes report as success; the read path does not, so a set configured with a sub-second window reads back here as a different set from the one that was written. Read it as the budget rounded down, never as the budget."
           },
           "validator_id": {
             "type": "string"
@@ -2037,7 +2037,7 @@
           },
           "stale_after_seconds": {
             "type": "integer",
-            "description": "The freshness window this set is judged against.",
+            "description": "The freshness window this set is judged against, in whole seconds, truncated rather than refused. A configuration is only required to make stale_after positive, so a stale_after of 1500ms loads and is reported here as 1, and any window under a second as 0. Zero is therefore a number no configuration could have asked for, and a client that reads one is looking at a window rounded away rather than at a set with no freshness budget. The state and reason beside it were computed from the real duration, not from this number, so the verdict is right even where this field is short.",
             "format": "int64"
           },
           "current_transfers": {

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
-	"os"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/tests/compat"
 )
 
 // Where the pinned copy of the usage block lives, and how a line of it is
@@ -30,6 +30,14 @@ const (
 	// corpus with it in front, and nothing normalizes anything inside the
 	// block: the two substitutions that package makes are the throwaway
 	// root directory and runtime.Version(), and neither appears here.
+	//
+	// This is the one thing about the capture still held in two places.
+	// The corpus FORMAT is not: loadPinnedUsageLines decodes through
+	// compat.LoadCorpus below. The prefix is a literal in
+	// capture_cli.go's own body rather than a constant it exports, so
+	// copying it is the only way to read it from here, and the fatal in
+	// loadPinnedUsageLines is what makes the copy going stale loud
+	// instead of silent.
 	usageCapturePrefix = "  err| "
 
 	// usageRecaptureHint is the one command that fixes a failure below, and
@@ -77,11 +85,35 @@ const (
 //     re-capture.
 //   - the exit status each command actually returns. That is
 //     06-cli-surfaces' job, for the commands its argv table drives.
+//   - a SUBCOMMAND of a command whose dispatch is a string literal rather
+//     than a table. This test reads main.go's map, which is keyed by the
+//     first word, so `medium` being in it says nothing about `medium
+//     preflight`. Two commands close that themselves, one level down:
+//     backupSetVerbNames feeds TestUsage_NamesEveryBackupSetVerb and
+//     mediumVerbNames feeds TestUsage_NamesEveryMediumVerb, and once a
+//     verb is listed in usage() the loop below pins its entry line like
+//     any other. `catalog` and `quarantine` still compare against
+//     literals in their own files, so a second catalog verb or a fourth
+//     quarantine one could ship listed nowhere and nothing here would
+//     say so. Giving them tables is the same small change medium just
+//     took, and this list is where the gap lives until somebody does.
 //
 // So the promise is narrower than "the usage block is pinned", and it is
 // exactly the one that was missing: every verb an operator can run is a
 // verb whose entry line somebody captured, so FR-35 has something to hold
 // the next reword against.
+//
+// It is also narrower than "this repository's operator-facing text is
+// pinned", because it reads one binary's dispatch map by name. There are
+// six package main binaries in this tree and apps/synology/cmd/spkctl is
+// the other one an operator types, with a command table of its own that
+// nothing in here can see: this test lives in package main precisely
+// because that is the only place the map is readable, so a second binary
+// wanting the same protection needs its own copy of this file beside its
+// own map, and a corpus cell capturing its usage block for that copy to
+// compare against. Neither exists today. That is a real gap and a cheap
+// one to close when a binary earns it, and it is written down here so
+// the next person meets it as a decision rather than as a discovery.
 //
 // scripts/compat/selftest.sh mutation-tests all three rules below against
 // the real tree, because a guard nobody has watched fail is not a guard.
@@ -130,6 +162,42 @@ func TestUsage_EveryRegisteredCommandIsPinned(t *testing.T) {
 	}
 }
 
+// TestUsage_NamesEveryMediumVerb closes the level the test above cannot
+// reach, for `medium`.
+//
+// The map in main.go has one entry for `medium`, so everything above is
+// satisfied the moment `medium preflight <medium-id>` is listed and
+// pinned, and stays satisfied forever after. A `medium compact` added
+// tomorrow would be dispatchable, absent from usage(), invisible to the
+// black-box verb guard in the tests repository, and pinned by nothing,
+// which is the whole shape of failure #549 is about. It is also the
+// example the doc above reaches for, which made it the sharper of the two
+// gaps a reviewer found in this file: the guard cited a failure it could
+// not itself see.
+//
+// This is TestUsage_NamesEveryBackupSetVerb's argument applied to the
+// other command that has verbs, and it works the same way. The verbs come
+// off mediumVerbs, which is cmdMedium's own dispatch rather than a list
+// typed here, so adding one over there is checked here without anybody
+// remembering this test exists. Listing it in usage() then hands it to
+// TestUsage_EveryRegisteredCommandIsPinned, which requires its entry line
+// to be captured, so the two together take a new subcommand from
+// dispatchable to discoverable to pinned.
+func TestUsage_NamesEveryMediumVerb(t *testing.T) {
+	verbs := mediumVerbNames()
+	if len(verbs) == 0 {
+		t.Fatal("mediumVerbNames() is empty, so this test would check nothing and pass. Either mediumVerbs lost its entries, in which case `medium` dispatches nothing at all, or the table moved and this test is now reading the wrong one.")
+	}
+
+	out := captureStderr(t, usage)
+	for _, verb := range verbs {
+		if !strings.Contains(out, "medium "+verb+" ") {
+			t.Errorf("usage() does not list \"medium %s\"; an operator cannot discover it, the black-box verb guard cannot see it, and TestUsage_EveryRegisteredCommandIsPinned cannot ask for its entry line to be pinned because there is no entry line. Give it one in usage(), then %s.",
+				verb, usageRecaptureHint)
+		}
+	}
+}
+
 // usageEntryLines returns the lines of the usage block that introduce a
 // command, which is the index an operator scans to find out what they can
 // run.
@@ -155,6 +223,14 @@ func usageEntryLines(text string) []string {
 
 // loadPinnedUsageLines reads the usage lines the FR-35 corpus holds.
 //
+// Through core/tests/compat's own LoadCorpus, rather than a local struct
+// that redeclares the file's shape. Both packages are in the core module
+// and compat's corpus.go is the pure half of it (it reads no database,
+// builds no binary and runs no command), so importing it costs this test
+// nothing and takes the format out of two places at once. A renamed JSON
+// key now fails to compile here instead of decoding into an empty cell
+// and being caught, one step later, by the fatal below.
+//
 // Every refusal in here is a t.Fatal rather than a skip on purpose. This
 // test's whole claim is that a command's text is pinned somewhere else, and
 // "I could not find the somewhere else" and "it is pinned" are the two
@@ -164,18 +240,9 @@ func usageEntryLines(text string) []string {
 func loadPinnedUsageLines(t *testing.T) map[string]bool {
 	t.Helper()
 
-	blob, err := os.ReadFile(usageCorpusPath)
+	corpus, err := compat.LoadCorpus(usageCorpusPath)
 	if err != nil {
 		t.Fatalf("reading the FR-35 corpus at %s: %v\n\nThis test compares the usage block against the lines that file pins. If the corpus moved, move this path with it rather than leaving the check to pass against a file that is not there.", usageCorpusPath, err)
-	}
-
-	var corpus struct {
-		Cells map[string]struct {
-			Lines []string `json:"lines"`
-		} `json:"cells"`
-	}
-	if err := json.Unmarshal(blob, &corpus); err != nil {
-		t.Fatalf("parsing %s: %v", usageCorpusPath, err)
 	}
 
 	cell, ok := corpus.Cells[usageCorpusCell]
