@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -27,11 +28,13 @@ import (
 // core/cmd/backup-manager, arrives as a red cell in this package, which is
 // the intended and only route.
 //
-// Two things are normalized before anything is compared and no more: the
-// throwaway root directory, and the Go toolchain version. Both are the
-// machine's facts rather than the product's, and each is argued where it
-// happens (normalizeRoot in capture_state.go, normalizeGoVersion below).
-// The rclone version deliberately is not normalized.
+// Three things are normalized before anything is compared and no more: the
+// throwaway root directory, the Go toolchain version, and the wall clock
+// on an FR-23 event line. All three are the machine's facts rather than
+// the product's, and each is argued where it happens (normalizeRoot in
+// capture_state.go, normalizeGoVersion and normalizeEventTime below). The
+// rclone version deliberately is not normalized, and neither is anything
+// else on those event lines.
 //
 // The argv table is chosen rather than exhaustive, and captureCLI says
 // which surfaces it leaves out and why, because a surface nobody mentions
@@ -65,6 +68,17 @@ func buildCLI(coreRoot, outDir string) (string, error) {
 type cliCase struct {
 	label string
 	args  []string
+
+	// env is added to the scrubbed environment runCLI builds, and is the
+	// only way anything beyond PATH, HOME and TZ reaches the child. Empty
+	// for every case that is about argv alone, which is most of them.
+	//
+	// Every loop over a cliCase passes it through, including the ones
+	// whose cases all leave it empty. A table that quietly dropped it
+	// would make a case set here and ignored, which is the shape of bug
+	// that reads as the product behaving differently from what the
+	// capture says it was asked.
+	env []string
 }
 
 // captureCLI runs the fixed argv table against the seeded, medium-free
@@ -100,23 +114,23 @@ type cliCase struct {
 // the one gap in this cell worth knowing about.
 func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, error) {
 	cases := []cliCase{
-		{"version", []string{"version"}},
-		{"sources", []string{"sources", "--config", cfgPath}},
-		{"artifacts, unfiltered", []string{"artifacts", "--config", cfgPath}},
-		{"artifacts, filtered to the source", []string{"artifacts", "--config", cfgPath, "--source", "production"}},
-		{"artifacts, filtered to a source nobody configured", []string{"artifacts", "--config", cfgPath, "--source", "nope"}},
-		{"artifacts, one artifact's detail", []string{"artifacts", "--config", cfgPath, "production/postgres-primary/recent-daily.dump"}},
-		{"artifacts, a quarantined artifact's detail", []string{"artifacts", "--config", cfgPath, "production/postgres-primary/quarantined-newest.dump"}},
-		{"artifacts, an artifact that does not exist", []string{"artifacts", "--config", cfgPath, "production/postgres-primary/no-such.dump"}},
-		{"artifacts, a filter combined with an operand", []string{"artifacts", "--config", cfgPath, "--source", "production", "production/postgres-primary/recent-daily.dump"}},
-		{"settings", []string{"settings", "--config", cfgPath}},
-		{"check", []string{"check", "--config", cfgPath}},
-		{"a config path that is not there", []string{"check", "--config", filepath.Join(root, "absent.yaml")}},
+		{label: "version", args: []string{"version"}},
+		{label: "sources", args: []string{"sources", "--config", cfgPath}},
+		{label: "artifacts, unfiltered", args: []string{"artifacts", "--config", cfgPath}},
+		{label: "artifacts, filtered to the source", args: []string{"artifacts", "--config", cfgPath, "--source", "production"}},
+		{label: "artifacts, filtered to a source nobody configured", args: []string{"artifacts", "--config", cfgPath, "--source", "nope"}},
+		{label: "artifacts, one artifact's detail", args: []string{"artifacts", "--config", cfgPath, "production/postgres-primary/recent-daily.dump"}},
+		{label: "artifacts, a quarantined artifact's detail", args: []string{"artifacts", "--config", cfgPath, "production/postgres-primary/quarantined-newest.dump"}},
+		{label: "artifacts, an artifact that does not exist", args: []string{"artifacts", "--config", cfgPath, "production/postgres-primary/no-such.dump"}},
+		{label: "artifacts, a filter combined with an operand", args: []string{"artifacts", "--config", cfgPath, "--source", "production", "production/postgres-primary/recent-daily.dump"}},
+		{label: "settings", args: []string{"settings", "--config", cfgPath}},
+		{label: "check", args: []string{"check", "--config", cfgPath}},
+		{label: "a config path that is not there", args: []string{"check", "--config", filepath.Join(root, "absent.yaml")}},
 	}
 
 	var lines []string
 	for _, c := range cases {
-		res, err := runCLI(ctx, bin, c.args, root)
+		res, err := runCLI(ctx, bin, c.args, root, c.env...)
 		if err != nil {
 			return Cell{}, Cell{}, err
 		}
@@ -150,10 +164,10 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	// artifact detail below, which is compared exactly.
 	var usage []string
 	for _, c := range []cliCase{
-		{"no arguments at all", []string{}},
-		{"an unknown subcommand", []string{"definitely-not-a-command"}},
+		{label: "no arguments at all", args: []string{}},
+		{label: "an unknown subcommand", args: []string{"definitely-not-a-command"}},
 	} {
-		res, err := runCLI(ctx, bin, c.args, root)
+		res, err := runCLI(ctx, bin, c.args, root, c.env...)
 		if err != nil {
 			return Cell{}, Cell{}, err
 		}
@@ -161,7 +175,7 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	}
 
 	return Cell{
-		Certifies: "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way, with nothing serving this deployment and with something serving it. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
+		Certifies: "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way, in three worlds: with nothing serving this deployment, with something serving it and no route to that process, and with a route set to an address that is not this deployment's engine. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
 		Rule:      RuleIdentical,
 		Lines:     lines,
 	}, Cell{
@@ -189,7 +203,7 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 // serving, so the whole engine-attached half of this binary's behaviour
 // was outside the gate.
 //
-// # The table, and why it is four rows rather than one
+// # The table, and why it is seven rows rather than one
 //
 // A cell that only recorded the 3s could not tell this binary from one
 // that exits 3 for everything while an engine is up. So the two refusals
@@ -198,6 +212,26 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 // still 2, and an ordinary read-only command, which is unaffected and
 // still 0. Between them the cell fails if the refusal loses its code and
 // fails if the code spreads.
+//
+// The last three are the misaimed route, and they are here because the
+// four above them all describe a host that was told nothing about its
+// engine. That is the half of engine-attached mode this corpus had, and
+// the other half, an operator who DID set an address and got it wrong, is
+// where the sentences a script reads actually live: the write refusals
+// name $BACKUP_MANAGER_API_URL, the exit-code table promises a named route
+// that did not answer is a 1 and not a 3, and #544's caveat line is the
+// only thing standing between a read and an answer about somebody else's
+// world. None of it was pinned anywhere. Two writes and one read, because
+// the whole point of the read is that the same broken address that refuses
+// a write must not refuse it: it says so and answers.
+//
+// What this pins is the reachable half of a misaim, an address that names
+// no engine. The other half, an address that reaches an engine serving a
+// DIFFERENT deployment, cannot be captured from here: it needs a process
+// speaking /api/v1, and core has no such server outside package main's own
+// test fixtures. #555 is what makes that shape refuse rather than write
+// somewhere else, and pinning it wants a cell that can stand an engine up,
+// which is a bigger thing than this file.
 //
 // # How the engine is faked, and why it is not faked
 //
@@ -221,12 +255,26 @@ func captureBesideAServingProcess(ctx context.Context, bin, cfgPath, root string
 	// like any other, so the section cannot quietly move either.
 	lines := []string{"# and the same binary with another process serving this deployment:"}
 	for _, c := range []cliCase{
-		{"a settings patch, refused", []string{"settings", "--config", cfgPath, "patch", "--timezone", "America/Toronto"}},
-		{"a backup-set patch, refused", []string{"backup-set", "--config", cfgPath, "patch", "production/postgres-primary", "--stale-after", "48h"}},
-		{"a usage mistake, which is still a usage mistake", []string{"settings", "--config", cfgPath, "patch"}},
-		{"a read-only command, which is unaffected", []string{"check", "--config", cfgPath}},
+		{label: "a settings patch, refused", args: []string{"settings", "--config", cfgPath, "patch", "--timezone", "America/Toronto"}},
+		{label: "a backup-set patch, refused", args: []string{"backup-set", "--config", cfgPath, "patch", "production/postgres-primary", "--stale-after", "48h"}},
+		{label: "a usage mistake, which is still a usage mistake", args: []string{"settings", "--config", cfgPath, "patch"}},
+		{label: "a read-only command, which is unaffected", args: []string{"check", "--config", cfgPath}},
 	} {
-		res, runErr := runCLI(ctx, bin, c.args, root)
+		res, runErr := runCLI(ctx, bin, c.args, root, c.env...)
+		if runErr != nil {
+			_ = release()
+			return nil, runErr
+		}
+		lines = append(lines, res...)
+	}
+
+	lines = append(lines, "# and with a route set to an address that is not this deployment's engine:")
+	for _, c := range []cliCase{
+		{label: "a settings patch through a route that answers nothing", args: []string{"settings", "--config", cfgPath, "patch", "--timezone", "America/Toronto"}, env: misaimedRoute()},
+		{label: "a backup-set patch through the same route", args: []string{"backup-set", "--config", cfgPath, "patch", "production/postgres-primary", "--stale-after", "48h"}, env: misaimedRoute()},
+		{label: "a read through the same route, which answers anyway", args: []string{"sources", "--config", cfgPath}, env: misaimedRoute()},
+	} {
+		res, runErr := runCLI(ctx, bin, c.args, root, c.env...)
 		if runErr != nil {
 			_ = release()
 			return nil, runErr
@@ -319,15 +367,48 @@ retention:
 `, root, root, root)
 }
 
+// misaimedRoute is the three route variables set to an address that is not
+// this deployment's engine.
+//
+// Port 1 on the loopback interface, because a capture has to produce the
+// same bytes on every machine that runs it and this is close to the only
+// address that does. Binding it takes root, so nothing is ever listening,
+// and a loopback connection to a closed port is refused at once rather
+// than waiting out a timeout, which an address off this host (203.0.113.1,
+// say) would do for the client's whole thirty seconds and would make this
+// cell the slowest thing in the package.
+//
+// The credentials are placeholders and nothing ever reads them: the
+// connection is refused before there is a server to present them to. They
+// are set rather than left out because an operator who set an address set
+// all three, and a case that left two of them unset would be pinning a
+// half-configured route rather than a misaimed one.
+func misaimedRoute() []string {
+	return []string{
+		"BACKUP_MANAGER_API_URL=http://127.0.0.1:1",
+		"BACKUP_MANAGER_API_USERNAME=operator",
+		"BACKUP_MANAGER_API_PASSWORD=placeholder-never-sent",
+	}
+}
+
 // runCLI executes one invocation and renders it as corpus lines.
 //
 // Both streams and the exit status, every time. A command that starts
 // printing a warning it did not print before has changed what an operator
 // sees, and a cell that only looked at stdout would call that identical.
-func runCLI(ctx context.Context, bin string, args []string, root string) ([]string, error) {
+//
+// The environment is built rather than inherited, and extra is the one way
+// anything else gets into it. A developer with $BACKUP_MANAGER_API_URL
+// exported for their own deployment would otherwise capture a different
+// corpus from CI, and the difference would be that every refusal in this
+// file quietly became a routed write aimed at their engine, which is the
+// same hazard clearInheritedRouteSettings guards in package main. So the
+// scrub stays, and a case that wants a route says so at the call site
+// where a reader can see it.
+func runCLI(ctx context.Context, bin string, args []string, root string, extra ...string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = root
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TZ=UTC"}
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TZ=UTC"}, extra...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -352,8 +433,8 @@ func runCLI(ctx context.Context, bin string, args []string, root string) ([]stri
 	return lines, nil
 }
 
-// normalizeGoVersion is the second and last normalization this package
-// does, and unlike the first it is not about tidiness.
+// normalizeGoVersion is the second normalization this package does, and
+// unlike the first it is not about tidiness.
 //
 // `backup-manager version` prints the Go runtime it was built with, and
 // that is the machine's fact, not the product's. Pinning it into a
@@ -370,6 +451,31 @@ func normalizeGoVersion(s string) string {
 	return strings.ReplaceAll(s, runtime.Version(), "<GOVERSION>")
 }
 
+// eventTime matches the timestamp FR-23 puts at the front of every
+// structured event line, and nothing else on it.
+var eventTime = regexp.MustCompile(`"time":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z"`)
+
+// normalizeEventTime is the third normalization, and it arrived with the
+// routed-write rows in captureBesideAServingProcess.
+//
+// A routed configuration write emits FR-23's two startup events on stdout
+// before it reaches the engine (settings.go and backupset.go call
+// logStartup once the route is open), so pinning what an operator sees
+// from one means pinning a wall-clock instant, which is different on every
+// run. That is the machine's fact in the most literal sense there is.
+//
+// The pattern is deliberately the whole field including its name, anchored
+// to the RFC 3339 shape obs writes, rather than "a timestamp-looking
+// thing". Everything else on those lines stays exactly as it was captured:
+// the event names, the level, the version and commit a plain `go build`
+// produces, and the embedded rclone version, which is pinned in go.mod and
+// is a change this corpus is supposed to notice. A looser pattern is how a
+// normalization stops being a normalization and starts being a place
+// things hide.
+func normalizeEventTime(s string) string {
+	return eventTime.ReplaceAllString(s, `"time":"<TIME>"`)
+}
+
 func redactArgs(args []string, root string) []string {
 	out := make([]string, 0, len(args))
 	for _, a := range args {
@@ -383,7 +489,7 @@ func redactArgs(args []string, root string) []string {
 // what an operator sees, and a gate that trims it would not notice a
 // widened column.
 func splitStream(s, root string) []string {
-	s = normalizeRoot(normalizeGoVersion(s), root)
+	s = normalizeRoot(normalizeEventTime(normalizeGoVersion(s)), root)
 	if s == "" {
 		return nil
 	}

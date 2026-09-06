@@ -182,6 +182,128 @@ func TestCompareRefusesTheShapesThatCannotFail(t *testing.T) {
 			t.Fatal("the same lines in a different order were reported as identical")
 		}
 	})
+
+	// Certifies is the sentence printed at whoever meets the red cell, and
+	// it is the only thing telling them whether the lines that moved
+	// matter. A cell whose claim changed while its lines did not is a cell
+	// now promising something nobody checked, so it goes red like any
+	// other drift. #560 reworded one of these, and nothing noticed.
+	t.Run("a claim that drifted", func(t *testing.T) {
+		reworded := Corpus{Cells: map[string]Cell{
+			"a": {Certifies: "something else entirely", Rule: RuleIdentical, Lines: []string{"one", "two"}},
+		}}
+		if findings := Compare(full, reworded); len(findings) == 0 {
+			t.Fatal("a cell whose certification sentence changed was reported as compatible, so the sentence a reader is judged against can drift from the code with nothing going red")
+		}
+	})
+}
+
+// TestSaveRoundTripsWhatItWasGiven covers the two ways this file's writer
+// used to disagree with its own promises.
+//
+// The note first. MergeCells hands Save a corpus carrying the checked-in
+// note, on the stated promise that a scoped re-capture leaves everything it
+// was not asked about exactly as it was, and Save used to overwrite that
+// field unconditionally, which made the promise decoration. It now defaults
+// the note and never replaces one.
+//
+// And the escaping. encoding/json escapes < > & by default, so a note
+// containing a literal <cell-name> came back as \u003ccell-name\u003e.
+// Nothing went red, because the comparison is on the decoded string, and
+// every re-capture after it carried a one-line diff nobody asked for, which
+// is the class of thing #549 was filed about.
+func TestSaveRoundTripsWhatItWasGiven(t *testing.T) {
+	cells := map[string]Cell{"a": {Certifies: "something", Rule: RuleIdentical, Lines: []string{"one"}}}
+
+	t.Run("a note the caller set survives", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "corpus.json")
+		if err := (Corpus{Note: "carried through from the baseline", Cells: cells}).Save(path); err != nil {
+			t.Fatalf("saving: %v", err)
+		}
+		back, err := LoadCorpus(path)
+		if err != nil {
+			t.Fatalf("loading: %v", err)
+		}
+		if back.Note != "carried through from the baseline" {
+			t.Errorf("Save replaced the note it was given with %q, so a scoped re-capture cannot leave the file's own note alone", back.Note)
+		}
+	})
+
+	t.Run("no note gets the standing one", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "corpus.json")
+		if err := (Corpus{Cells: cells}).Save(path); err != nil {
+			t.Fatalf("saving: %v", err)
+		}
+		back, err := LoadCorpus(path)
+		if err != nil {
+			t.Fatalf("loading: %v", err)
+		}
+		if back.Note != corpusNote {
+			t.Errorf("a corpus saved with no note of its own came back with %q, and a file nobody can read the rule off is how a red build turns into a regenerate", back.Note)
+		}
+	})
+
+	t.Run("angle brackets are written as themselves", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "corpus.json")
+		if err := (Corpus{Note: "run COMPAT_UPDATE=<cell-name> & read the diff", Cells: cells}).Save(path); err != nil {
+			t.Fatalf("saving: %v", err)
+		}
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading it back: %v", err)
+		}
+		if !strings.Contains(string(blob), "COMPAT_UPDATE=<cell-name> & read the diff") {
+			t.Errorf("the bytes on disk escaped what they were given, so every re-capture carries a diff nobody asked for:\n%s", blob)
+		}
+	})
+}
+
+// TestNormalizeEventTimeTakesTheClockAndNothingElse is the control for the
+// third normalization this package does.
+//
+// A normalization is the one thing in here that can hide a real change, so
+// each of the three is narrow on purpose and this one gets driven rather
+// than read: it has to take the wall clock out of an FR-23 event line and
+// leave every other field on it, including the two that a corpus is
+// supposed to go red over, the build's version and the embedded rclone's.
+func TestNormalizeEventTimeTakesTheClockAndNothingElse(t *testing.T) {
+	const line = `{"time":"2026-09-06T19:49:05.212202Z","level":"INFO","msg":"backup-manager starting","event":"startup","version":"dev","commit":"none","go_version":"go1.24.0"}`
+
+	got := normalizeEventTime(line)
+	if strings.Contains(got, "2026-09-06T19:49:05") {
+		t.Errorf("the clock survived, so this cell is red on every run:\n%s", got)
+	}
+	for _, keep := range []string{`"level":"INFO"`, `"event":"startup"`, `"version":"dev"`, `"commit":"none"`, `"go_version":"go1.24.0"`} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("normalizing the clock also took %s, and a normalization that takes more than the machine's fact is a place a real change hides:\n%s", keep, got)
+		}
+	}
+
+	// A timestamp that is not the event line's own field is left alone: a
+	// product that started printing one in a message would be a change
+	// this corpus has to notice.
+	const inProse = `  err| backup-manager: last run at 2026-09-06T19:49:05Z did not finish`
+	if normalizeEventTime(inProse) != inProse {
+		t.Errorf("a timestamp in an ordinary sentence was normalized away:\n%s", normalizeEventTime(inProse))
+	}
+}
+
+// TestTheCheckedInNoteIsTheStandingOne stops the note the file carries
+// drifting away from the constant now that Save no longer rewrites it on
+// every write.
+//
+// That is the cost of making MergeCells's promise real, and it is worth
+// paying with a control rather than with a rule nobody enforces: the note
+// is the first thing somebody meeting a red cell reads, and one that has
+// gone stale sends them to run a command that is no longer the command.
+func TestTheCheckedInNoteIsTheStandingOne(t *testing.T) {
+	baseline, err := LoadCorpus(CorpusPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", CorpusPath, err)
+	}
+	if baseline.Note != corpusNote {
+		t.Errorf("the corpus file's note has drifted from corpusNote, so it tells the next person to meet a red cell something the tooling no longer does.\n file: %q\n code: %q", baseline.Note, corpusNote)
+	}
 }
 
 // TestUpgradingAndInstallingFreshAgreeWithEachOther is the one assertion in
