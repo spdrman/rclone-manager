@@ -108,22 +108,32 @@ func backupSetVerbNames() []string {
 // exactly what makes the mistake easy. Sharing a service layer is a claim
 // about code, not about liveness. There is no HTTP client anywhere under
 // core/cmd/backup-manager, so none of these verbs calls the API and none
-// of them reaches an engine that is already up: each one opens its own
-// BackupService over the same config.yaml and state database, writes,
-// hot-reloads its OWN view of the file, and exits. A daemon in another
-// process read its configuration when it started and there is no watcher
-// and no SIGHUP reload, so it keeps serving what it loaded until it is
-// restarted.
+// of them reaches an engine that is already up.
+//
+// So none of them writes while one is up either. A verb here that is
+// about to change config.yaml (create, patch, remove, and the retention
+// forms that set or clear a policy) takes core/service's
+// ConfigWriteGuard, asks whether anything has announced itself as serving
+// this deployment, and stops if something has: nothing is written, the
+// exit is non-zero, and the operator is told what was found and where the
+// change can be made instead. There is no version of this that lands in
+// the file and waits for a restart, which is what the help text used to
+// promise. With nothing serving, the verb opens its own BackupService
+// over the same config.yaml and state database, writes, reloads its OWN
+// view of the file and exits, and an engine started afterwards reads that
+// file when it starts. There is still no watcher and no SIGHUP reload,
+// which is why those are the only two cases there are.
 //
 // That is issue #535: a `backup-set create` through docker exec against a
 // live server succeeded, `sources` listed both sets, and the Web UI showed
 // nothing. The help text and the doc comments here had said these verbs
 // were "the same operation POST /api/v1/backup-sets performs", which is
 // true inside one process and reads as a promise about the running one, so
-// #539 corrected every one of them. EPIC #536 is what changes the
+// #539 corrected every one of them. EPIC #536 is what changed the
 // behaviour: phase 1 refuses a write aimed at a configuration a running
-// engine holds, phase 2 gives this tree an API client and a mode it names
-// in its output. Until then, the accurate sentence is the one above.
+// engine holds (#538) and names the mode it decided (#542), phase 2 gives
+// this tree an API client and a route that reaches the engine rather than
+// turning the operator away.
 //
 // # The two create paths, and why one verb covers both
 //
@@ -392,8 +402,10 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 // backupSetPatch is the `patch` verb: the same
 // BackupService.UpdateBackupSet that PATCH
 // /api/v1/backup-sets/{source}/{set} is built on, called in this process
-// rather than over that route. The hot reload it triggers is this
-// process's own, and this process then exits.
+// rather than over that route. So it only runs when this process is the
+// deployment's only authority: openBackupService refuses it, with the
+// file untouched, while another process is serving. When it does run, the
+// reload it triggers is this process's own, and this process then exits.
 func backupSetPatch(f *backupSetFlags, id string) int {
 	req, named := buildBackupSetPatch(f)
 	req.AcknowledgeRepoint = *f.acknowledgeRepoint

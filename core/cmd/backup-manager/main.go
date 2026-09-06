@@ -95,7 +95,9 @@ func usage() {
 
 commands:
   run                                            perform one processing cycle and exit
-  daemon                                         repeat the processing cycle at poll_interval
+  daemon                                         repeat the processing cycle at poll_interval. One engine per
+                                                  deployment: it is refused rather than started if another
+                                                  process is already serving that state database (#536)
   check                                          validate config and the state database, then exit
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
@@ -106,12 +108,15 @@ commands:
                                                   create a backup set, through the same service layer POST
                                                   /api/v1/backup-sets uses, not by calling it. On an instance with
                                                   no config.yaml yet this writes the first one (#176), and
-                                                  --state-database names the journal it points at
+                                                  --state-database names the journal it points at, which is also
+                                                  the journal that case is guarded against: a create is refused
+                                                  either way while something serves that deployment (#536)
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                                                   change one configured backup set in place; only the flags you pass are
-                                                  changed, and the change is persisted and reloaded in this process,
-                                                  not in one already running (#350)
+                                                  changed. Nothing here edits a running engine's configuration, so a
+                                                  patch is refused, with the file untouched, while one is serving
+                                                  this deployment (#350, #536)
   backup-set remove <source/backup-set>          take one backup set out of the configuration, through the same
                                                   service layer DELETE /api/v1/backup-sets/{source}/{set} uses, not
                                                   by calling it. Configuration only: the backups it collected stay on
@@ -185,8 +190,14 @@ every command except version accepts --config (default /etc/backup-manager/confi
 a directory resolves to config.yaml inside it, which is what packaging mounts)
 
 no command here calls the API. backup-manager opens its own service over the same config.yaml
-and state database an engine uses, so a create, patch or remove made here reaches an engine
-that is already running only when that engine restarts: there is no config watcher and no
-SIGHUP reload in this build (#535)
+and state database an engine uses, and there is still no config watcher and no SIGHUP reload
+in this build, so a change made here could never reach a running engine. It is refused rather
+than made: while another process is serving this deployment, backup-set create, patch and
+remove, a backup-set retention that sets or clears a policy, and settings patch all stop with
+nothing written, so there is no half-made change for a restart to pick up. With nothing
+serving, the change is written here and an engine started afterwards reads it when it starts.
+Each of those commands says which of the two it did, on a "mode: direct" or "mode:
+engine-attached" line. Nothing else is refused: status, sources, artifacts, run, fetch and
+the rest are ordinary beside a running engine (#535)
 `)
 }

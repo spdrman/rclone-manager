@@ -135,19 +135,29 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // *config.Config, has no notion of at all. That is `settings`, every
 // `backup-set` verb, and `restore`.
 //
+// A `settings patch`, a `backup-set create`, `patch` or `remove`, or a
+// `backup-set retention` that sets or clears a policy, typed at a
+// terminal never reaches an engine that is already running, and is
+// refused rather than written while one is serving this deployment. The
+// reading forms of those same commands are not touched, which is what the
+// intent argument below is for. Nothing lands in the file and waits for a
+// restart: the command stops, config.yaml is byte for byte what it was,
+// and the operator is told what was found. With nothing serving, the
+// write happens here, and an engine started afterwards reads the new file
+// when it starts, because there is no config watcher and no SIGHUP reload
+// in this build. Issue #539 took the API-equivalence claim out, #538 and
+// #542 made this refuse rather than write, and the sentence above is what
+// those two together mean: a help text that told an operator to restart
+// into a command-line change was describing a binary that no longer makes
+// one.
+//
 // service.Open is the identical production constructor
 // apps/common/webhost's Open uses, so a CLI-driven write goes through the
 // same service layer, and the same persist-then-hot-reload sequence
 // (BackupService.UpdateSettings's own doc), that an HTTP PATCH does. It
 // does not go through it BY CALLING that route, and the difference is the
 // whole of issue #535: the hot reload is this process's own view of the
-// file, and this process then exits. A `settings patch`, or a `backup-set
-// create`, `patch` or `remove`, typed at a terminal reaches an engine
-// that is already running only when that engine restarts, because there
-// is no config watcher and no SIGHUP reload in this build. Issue #539
-// corrects that claim wherever this tree made it; the intent argument
-// below is what stops this binary reporting such a write as a success in
-// the meantime.
+// file, and this process then exits.
 //
 // intent is issue #538, and it is why this function has an argument
 // openService does not need. Every route that rewrites an EXISTING

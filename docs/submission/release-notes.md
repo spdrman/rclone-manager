@@ -64,12 +64,23 @@ installing, not after.
   administrator's path to an alert is the app's own dashboard.
 - Native platform sign-on is not wired up on these targets; the app uses its own local
   account.
-- The command line does not talk to a running engine. `backup-manager` opens its own
-  service over the same configuration file and catalog, so a backup set created, changed or
-  removed from a terminal is written to the file, and an engine that is already running
-  keeps serving the configuration it loaded until it is restarted. Restart the engine after
-  a command-line change, or make the change in the web interface, where it takes effect at
-  once.
+- The command line does not talk to a running engine, so it will not change the
+  configuration while one is up. `backup-manager` opens its own service over the same
+  configuration file and catalog, and nothing re-reads that file once an engine has started,
+  so a change typed at a terminal could never reach it. Rather than write one an engine will
+  never see, the command refuses: creating, changing or removing a backup set, changing a
+  backup set's retention policy, and changing the deployment's retention or capacity settings
+  all stop with nothing written to the configuration file and a non-zero exit, and say what
+  they found. There is nothing to restart into, because nothing was written. Make the change
+  in the web interface, where it takes effect at once, or stop the engine, run the command,
+  and start it again. Each of those commands prints which of the two situations it was in, as
+  a `mode: direct` or `mode: engine-attached` line. Nothing else from the command line is
+  refused: status, backup set listings, the backup catalog and an on-demand cycle all work
+  alongside a running engine.
+- One engine per deployment. Starting a second `backup-manager daemon`, or a second web host,
+  against a state database another one is already serving is refused rather than started. Two
+  of them would run two schedules over one set of backups and hold two independent copies of
+  one configuration, which is the same divergence the limitation above closes.
 
 ### Upgrading
 

@@ -75,15 +75,27 @@ pass the directory and it resolves `config.yaml` inside it. `backup-manager` wit
 arguments prints that same list and exits 2.
 
 **No command in that table calls the API.** `backup-manager` opens its own service over the
-same `config.yaml` and state database an engine uses, so a `backup-set create`, `patch`,
-`remove` or `settings patch` typed at a terminal reaches an engine that is already running
-only when that engine restarts. There is no config watcher and no SIGHUP reload in this
-build, and that is what issue #535 cost a real install: a `create` through `docker exec`
-against a live server succeeded, `sources` listed both new sets, and the Web UI showed
-nothing until the engine was restarted. The help text used to describe these commands as
-"the same operation `POST /api/v1/backup-sets` performs", which is true inside one process
+same `config.yaml` and state database an engine uses, and there is no config watcher and no
+SIGHUP reload in this build, so a change typed at a terminal could never reach an engine that
+is already running. It is refused rather than made. While another process is serving this
+deployment, `backup-set create`, `patch` and `remove`, a `backup-set retention` that sets or
+clears a policy, and `settings patch` all stop with nothing written and a non-zero exit,
+naming what they found and where the change can be made instead. Nothing lands in the file for
+a restart to pick up. With nothing serving, the change is written directly, and an engine
+started afterwards reads it when it starts. Each of those commands prints which of the two it
+did, on a `mode: direct` or `mode: engine-attached` line. Nothing else is touched: `status`,
+`sources`, `artifacts`, `run` and the rest go on working beside a live engine exactly as they
+always have.
+
+The refusal is there because of what issue #535 cost a real install: a `create` through
+`docker exec` against a live server succeeded, `sources` listed both new sets, and the Web UI
+showed nothing until the engine was restarted. The help text used to describe these commands
+as "the same operation `POST /api/v1/backup-sets` performs", which is true inside one process
 and reads as a promise about the running one. Issue #536 is the campaign that makes the two
-surfaces one live system; until it lands, this paragraph is the whole of the truth.
+surfaces one live system: phase 1 is the refusal above, and phase 2 gives the CLI a route to
+the running engine, so a change reaches it instead of being turned away. One engine per
+deployment goes with it: a `daemon` or a web host started against a state database something
+else is already serving is refused rather than started.
 
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, last-known-good protection, local prune,
@@ -278,10 +290,12 @@ goes through at boot and written through the same atomic replace.
 One thing to be plain about, because it is the same for `settings patch` and is easy to
 assume otherwise: the hot reload is in-process. A change made through the API takes effect
 immediately in the engine that served it, because that engine is also the thing running the
-schedule. A change made by a separate `backup-manager backup-set patch` invocation writes
-`config.yaml` and reloads that invocation's own view of it, and a `daemon` already running
-in another process keeps using the configuration it loaded at start until it is restarted.
-There is no config watcher and no SIGHUP reload in this build.
+schedule. A separate `backup-manager backup-set patch` invocation is a different process, and
+there is no config watcher and no SIGHUP reload in this build, so a `daemon` already running
+would never see what it wrote. That is why it is not allowed to write: while a process is
+serving this deployment the patch is refused, `config.yaml` is left byte for byte as it was,
+and the command says so. With nothing serving, it writes the file, reloads its own view of it,
+exits, and an engine started afterwards reads the new file at startup.
 
 A set's name and source are deliberately not patchable: they key every journal row, artifact
 id and recovery manifest the set has ever produced, so renaming one is a migration rather

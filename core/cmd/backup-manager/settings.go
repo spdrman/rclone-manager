@@ -23,13 +23,27 @@ import (
 // possibly-omitted keys, and the API's PATCH hot-reloads the process that
 // served it without a restart.
 //
-// This command does not. It hot-reloads this process, which then exits,
-// and a daemon already running keeps the settings it loaded until it is
-// restarted: there is no watcher over config.yaml. The sentence this
-// replaces said a patch here was hot-reloaded "into a running process
-// exactly as PATCH /api/v1/settings already does", which is the claim
-// issue #535 cost a real install, and #539 corrects everywhere it is
-// made.
+// This command does not, and it no longer pretends the difference is
+// only a matter of timing. There is no watcher over config.yaml, so a
+// patch typed here could never reach a daemon that is already running,
+// and rather than write one and leave it to a restart, `settings patch`
+// is REFUSED while another process serves this deployment: nothing is
+// written, and the operator is told so and told where the change can be
+// made instead (mode.go, liveengine.go). With nothing serving, the patch
+// is written straight into the file, this process reloads its own view of
+// it and exits, and an engine started afterwards reads the new file when
+// it starts. Which of those two happened is printed as a `mode:` line.
+//
+// The sentence this replaces said a patch here was hot-reloaded "into a
+// running process exactly as PATCH /api/v1/settings already does", which
+// is the claim issue #535 cost a real install; #539 corrected it, and
+// #538 and #542 are what turned the corrected sentence into behaviour.
+//
+// One more thing an operator meets before any of that: `settings patch`
+// with no patch flag at all is a usage error (exit 2) rather than a
+// refusal, because the command line is the thing that is wrong and
+// complaining about a running engine over a forgotten --timezone sends
+// somebody off to stop a daemon for nothing.
 //
 // PATCH deliberately does not expose a full retention tier-chain
 // replacement (core/service.RetentionUpdate.Tiers): replacing the whole
