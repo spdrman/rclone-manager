@@ -64,11 +64,18 @@ type Corpus struct {
 
 // corpusNote is written into the file so the next person to see a red
 // build reads the rule before they reach for the regenerate command.
+//
+// It names the scoped form first because that is the one almost every
+// change wants, and the sweep second with what it costs, rather than the
+// other way round. A note that offers the sweep as THE regenerate command
+// is how a change about one surface ends up carrying five others (#549).
 const corpusNote = "Captured by core/tests/compat. Every line here is something a " +
 	"medium-free deployment does today. EPIC E's FR-35 says it must keep doing all " +
 	"of it, so a diff in this file is a behavior change somebody has to justify, " +
-	"never a number to refresh. Regenerate with COMPAT_UPDATE=1 go test ./tests/compat/ " +
-	"and put the reason in the commit message."
+	"never a number to refresh. Re-capture the one cell that moved with " +
+	"COMPAT_UPDATE=<cell-name> go test ./tests/compat/ and put the reason in the " +
+	"commit message. COMPAT_UPDATE=1 sweeps every cell instead, and brings back " +
+	"whatever drifted in the surfaces your change never touched."
 
 // Save writes the corpus to path with stable formatting.
 func (c Corpus) Save(path string) error {
@@ -81,6 +88,87 @@ func (c Corpus) Save(path string) error {
 		return err
 	}
 	return os.WriteFile(path, append(blob, '\n'), 0o644)
+}
+
+// ParseUpdateRequest reads what COMPAT_UPDATE is asking for: the whole
+// corpus, or the named cells and nothing else.
+//
+// "1" is the sweep, which is what it has always meant. Anything else is a
+// comma-separated list of cell names.
+//
+// The scoped form exists because the sweep is dangerous in a way that does
+// not show up in a green build. EPIC #536 had to respell six published API
+// path templates, and renaming a template takes lines off a list this
+// corpus only lets grow, so a sweep was forced rather than chosen. It came
+// back carrying about 117 further lines from five other surfaces that had
+// nothing to do with the change, and that commit was safe only because
+// somebody read all 171 insertions and wrote down what each one was. A
+// re-capture aimed at one cell cannot launder the others, so an honest
+// small change stops being expensive and a careless one stops being
+// dangerous (#549).
+//
+// A spec that is neither is an error rather than a fallback to either
+// behaviour. "COMPAT_UPDATE=true" quietly meaning "compare, do not update"
+// leaves somebody believing they re-captured when they did not, and quietly
+// meaning "sweep everything" is the exact thing this is here to stop.
+//
+// Duplicates are collapsed, in the order they were first named, so the
+// count this reports back is the count of cells that will actually move.
+func ParseUpdateRequest(spec string) (all bool, cells []string, err error) {
+	if spec == "" {
+		return false, nil, fmt.Errorf("COMPAT_UPDATE is empty, so nothing was asked for")
+	}
+	if spec == "1" {
+		return true, nil, nil
+	}
+	seen := map[string]bool{}
+	for _, part := range strings.Split(spec, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return false, nil, fmt.Errorf(
+				"COMPAT_UPDATE=%q has an empty cell name in it. Naming nothing is how a re-capture that meant to write one cell writes none and still reads as done; spell the cells out, or use COMPAT_UPDATE=1 for the whole corpus",
+				spec)
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		cells = append(cells, name)
+	}
+	return false, cells, nil
+}
+
+// MergeCells returns the baseline with the named cells replaced by what
+// this run captured, and every other cell left exactly as it was checked
+// in.
+//
+// A name the current capture does not hold is refused rather than skipped.
+// A typo that quietly wrote nothing would leave somebody believing they had
+// re-captured, which is worse than a red gate, because the red gate is at
+// least honest about what it knows.
+//
+// Cells the baseline has and this run did not capture are carried through
+// untouched. Dropping them here would let a scoped re-capture shrink the
+// gate, which is the failure Compare refuses in the first of its three
+// structural rules.
+func MergeCells(baseline, current Corpus, names []string) (Corpus, error) {
+	if len(names) == 0 {
+		return Corpus{}, fmt.Errorf("a scoped re-capture was asked for and no cell was named")
+	}
+	out := Corpus{Note: baseline.Note, Cells: make(map[string]Cell, len(baseline.Cells))}
+	for name, cell := range baseline.Cells {
+		out.Cells[name] = cell
+	}
+	for _, name := range names {
+		cell, ok := current.Cells[name]
+		if !ok {
+			return Corpus{}, fmt.Errorf(
+				"this run captured no cell named %q, so there is nothing to write into the corpus for it. The cells it did capture are: %s",
+				name, strings.Join(sortedKeys(current.Cells), ", "))
+		}
+		out.Cells[name] = cell
+	}
+	return out, nil
 }
 
 // LoadCorpus reads a corpus from path.
@@ -125,8 +213,8 @@ func Compare(baseline, current Corpus) []string {
 	for _, name := range sortedKeys(current.Cells) {
 		if _, ok := baseline.Cells[name]; !ok {
 			findings = append(findings, fmt.Sprintf(
-				"cell %q was captured but has no corpus baseline, so it is currently comparing against nothing. Capture one with COMPAT_UPDATE=1.",
-				name))
+				"cell %q was captured but has no corpus baseline, so it is currently comparing against nothing. Capture one with COMPAT_UPDATE=%s.",
+				name, name))
 		}
 	}
 

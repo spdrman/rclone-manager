@@ -134,6 +134,14 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	// violation this cell family exists to catch, an additive column
 	// rendered where there is no non-local placement, lands in the
 	// artifact detail below, which is compared exactly.
+	//
+	// What it cannot refuse is a command that never got captured at all,
+	// because a line that is not here is a line this rule has no opinion
+	// about. `unconfigured` and `medium preflight` both shipped that way
+	// and this cell stayed green throughout. That hole is closed from the
+	// other end, by TestUsage_EveryRegisteredCommandIsPinned in
+	// core/cmd/backup-manager, which is where the list of registered
+	// commands can be read rather than guessed at (#549).
 	var usage []string
 	for _, c := range []cliCase{
 		{"no arguments at all", []string{}},

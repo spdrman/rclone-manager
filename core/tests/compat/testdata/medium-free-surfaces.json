@@ -1,5 +1,5 @@
 {
-  "note": "Captured by core/tests/compat. Every line here is something a medium-free deployment does today. EPIC E's FR-35 says it must keep doing all of it, so a diff in this file is a behavior change somebody has to justify, never a number to refresh. Regenerate with COMPAT_UPDATE=1 go test ./tests/compat/ and put the reason in the commit message.",
+  "note": "Captured by core/tests/compat. Every line here is something a medium-free deployment does today. EPIC E's FR-35 says it must keep doing all of it, so a diff in this file is a behavior change somebody has to justify, never a number to refresh. Re-capture the one cell that moved with COMPAT_UPDATE=<cell-name> go test ./tests/compat/ and put the reason in the commit message. COMPAT_UPDATE=1 sweeps every cell instead, and brings back whatever drifted in the surfaces your change never touched.",
   "cells": {
     "01-config-validation": {
       "certifies": "FR-35 clause 1: a medium-free config validates to the same outcome, with the same resolved policy per backup set, and the refusals it can hit still come in the same words.",

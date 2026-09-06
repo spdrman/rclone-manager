@@ -91,13 +91,19 @@ compat_gate() {
   (cd core && GOWORK=off go test -count=1 ./tests/compat/)
 }
 
-# expect_cell_fails <label> <dir> <cell-name>
+# expect_cell_fails <label> <dir> <cell-name> [cell that must stay quiet]
 #
 # The cell name is the expected substring, so a mutation that broke the
 # build, or broke a different promise, does not read as this control
 # passing.
+#
+# The optional fourth argument is for the one control where a cell staying
+# QUIET is half of what is being claimed. A scoped re-capture has to have
+# actually re-captured the cell it named, and "the other cell is still red"
+# is equally what a scoped re-capture that silently did nothing at all would
+# produce, so that control names both halves rather than one.
 expect_cell_fails() {
-  local label=$1 dir=$2 cell=$3
+  local label=$1 dir=$2 cell=$3 quiet=${4:-}
   if selftest_stale_verdict "$label"; then
     return 0
   fi
@@ -111,6 +117,10 @@ expect_cell_fails() {
   elif ! grep -qF "$cell" "$tmp/out"; then
     echo "SELFTEST FAIL: $label. The gate failed, but never named the cell whose promise was broken." >&2
     echo "    expected its output to mention: $cell" >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  elif [ -n "$quiet" ] && grep -qF "$quiet" "$tmp/out"; then
+    echo "SELFTEST FAIL: $label. The gate named $quiet, and this control requires that cell to have been dealt with already." >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
   else
@@ -156,19 +166,26 @@ expect_unit_check_fails() {
   fi
 }
 
-# expect_unit_gate_passes <label> <dir> <package> is expect_gate_passes for
-# the one control that reads its verdict out of a package rather than out of
-# the corpus. Same argument: a mutation that turns a suite red proves
-# nothing about the mutation if the suite was red already.
+# expect_unit_gate_passes <label> <dir> <package> [run pattern] is
+# expect_gate_passes for the controls that read their verdict out of a
+# package rather than out of the corpus. Same argument: a mutation that
+# turns a suite red proves nothing about the mutation if the suite was red
+# already.
+#
+# The pattern defaults to everything, which is what `go test` does anyway,
+# so a caller that wants the whole package says nothing. core/cmd/backup-manager
+# is the caller that does not: the rest of its suite has nothing to do with
+# the control being set up, and a negative control that goes red for a
+# neighbour's reason is a negative control nobody can read.
 expect_unit_gate_passes() {
-  local label=$1 dir=$2 pkg=$3
+  local label=$1 dir=$2 pkg=$3 pattern=${4:-.*}
   if selftest_stale_verdict "$label"; then
     return 0
   fi
   if selftest_anchors_only "$label"; then
     return 0
   fi
-  if (cd "$dir/core" && GOWORK=off go test -count=1 "$pkg") >"$tmp/out" 2>&1; then
+  if (cd "$dir/core" && GOWORK=off go test -count=1 -run "$pattern" "$pkg") >"$tmp/out" 2>&1; then
     echo "  ok (clean):  $label"
     pass=$((pass + 1))
   else
@@ -384,6 +401,70 @@ expect_cell_fails "a usage line reworded under an operator who already read it" 
   "06b-cli-usage-block"
 
 echo
+echo "==> the commands nothing pinned in the first place"
+
+# The other half of clause 4, and the reason #549 was filed. The cell above
+# only fails on a line the corpus already holds, so a command whose usage
+# lines were never captured is not protected by it at all: `unconfigured`
+# and `medium preflight` shipped registered, listed and pinned nowhere, and
+# 06b stayed green the whole time because additive-only forgives a line that
+# is merely new.
+#
+# The guard that closes it lives in core/cmd/backup-manager rather than in
+# the corpus package, because the list of registered commands is a map only
+# package main can read, and reading the map beats parsing the file that
+# declares it. It holds three real lists against each other, the map, the
+# usage block this build prints and the corpus, and there is one control per
+# way they can disagree.
+#
+# The first is the one #549 is about, and the thing worth knowing while
+# reading it is that core/tests/compat is GREEN against exactly this mutant:
+# `vacuum` is registered, listed in the usage block and pinned nowhere, and
+# every cell of that corpus passes. That is the hole. This is the thing that
+# sees it.
+expect_unit_gate_passes "the registered-command pin guard on an unmutated tree" "$root" \
+  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+
+d=$(mutant command-registered-and-listed-but-never-pinned)
+swap "$d/core/cmd/backup-manager/main.go" \
+  '	"version":      cmdVersion,
+}' \
+  '	"version":      cmdVersion,
+	"vacuum":       cmdVersion,
+}'
+swap "$d/core/cmd/backup-manager/main.go" \
+  '  version                                        report version information' \
+  '  vacuum                                         compact the state database
+  version                                        report version information'
+expect_unit_check_fails "a command registered and listed, with nothing pinning a word of what it prints" "$d" \
+  "is a registered command whose usage entry nothing pins" \
+  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+
+d=$(mutant command-registered-and-never-listed)
+# The shape `backup-set remove` shipped in (#391), which usage_test.go
+# already catches for the backup-set verbs and for nothing else.
+swap "$d/core/cmd/backup-manager/main.go" \
+  '	"version":      cmdVersion,
+}' \
+  '	"version":      cmdVersion,
+	"vacuum":       cmdVersion,
+}'
+expect_unit_check_fails "a command that is dispatchable and undiscoverable" "$d" \
+  "is registered in the commands map and the usage block does not list it" \
+  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+
+d=$(mutant usage-lists-a-verb-nothing-dispatches)
+# And the same gap read the other way: the only reference an operator has,
+# offering them a command that answers "unknown command".
+swap "$d/core/cmd/backup-manager/main.go" \
+  '  version                                        report version information' \
+  '  vacuum                                         compact the state database
+  version                                        report version information'
+expect_unit_check_fails "a usage entry for a verb nothing dispatches" "$d" \
+  "and nothing dispatches it" \
+  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+
+echo
 echo "==> what the /api/v1 contract already promises"
 
 d=$(mutant contract-drops-a-response-property)
@@ -493,6 +574,34 @@ if [ "$selftest_dry_run" != 1 ]; then
 fi
 expect_cell_fails "the same backfill, with the corpus regenerated to accept it" "$d" \
   "differs between a fresh install and an in-place upgrade"
+
+# And the property the scoped form of that command has to have, or it is
+# just the sweep with extra typing (#549). Two unrelated things move here: a
+# usage line, deliberately, and a config decision that has nothing to do with
+# it. The re-capture names the usage cell and only the usage cell, so the
+# config cell has to still be red afterwards. A COMPAT_UPDATE=1 in the same
+# place would have absorbed both and left a commit claiming to be about
+# wording carrying a changed validation outcome, which is the laundering
+# EPIC #536 came within one careful reviewer of shipping.
+d=$(mutant scoped-recapture-cannot-launder-another-cell)
+swap "$d/core/cmd/backup-manager/main.go" \
+  '  reconcile                                      run FR-17 reconciliation for every backup set' \
+  '  reconcile                                      run FR-17 reconciliation across the deployment'
+swap "$d/core/internal/config/config.go" \
+  'func (t RetentionTier) EffectiveMedium() string {
+	if t.Medium == "" {
+		return MediumLocal
+	}
+	return t.Medium
+}' \
+  'func (t RetentionTier) EffectiveMedium() string {
+	return t.Medium
+}'
+if [ "$selftest_dry_run" != 1 ]; then
+  (cd "$d/core" && COMPAT_UPDATE=06b-cli-usage-block GOWORK=off go test -count=1 -run TestMediumFreeSurfacesAreUnchanged ./tests/compat/ >/dev/null 2>&1) || true
+fi
+expect_cell_fails "an unrelated cell, still red after a re-capture scoped to the one that moved" "$d" \
+  "01-config-validation" "06b-cli-usage-block"
 
 echo
 echo "==> the matrix cannot claim a suite that is not there"

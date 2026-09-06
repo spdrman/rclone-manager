@@ -56,6 +56,13 @@ func run(args []string) int {
 // A verb here and not there is dispatchable and undiscoverable, which is how
 // `backup-set remove` went out, so the gap between them is something a test
 // can see rather than something only a reader would notice.
+//
+// There is a third list, and it is the one that had nothing watching it:
+// core/tests/compat's corpus, which pins what each verb prints. A verb can
+// be in both lists here and in none of that, which is how `unconfigured`
+// and `medium preflight` shipped with FR-35 protecting not one word of
+// their text. TestUsage_EveryRegisteredCommandIsPinned holds all three
+// against each other now (#549).
 var commands = map[string]func([]string) int{
 	"run":          cmdRun,
 	"daemon":       cmdDaemon,
