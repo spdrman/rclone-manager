@@ -330,11 +330,17 @@ func checkUPKLayout(r *UPKReport, stage, arch string) (bool, string, *UPKImageSo
 		problems = append(problems, fmt.Sprintf("rootfs_%s/images holds %d image tars (%v); UGOS loads all of them and the compose file's image reference then silently selects whichever won", arch, len(tars), tars))
 	}
 
+	// The sidecar lives at the project ROOT rather than beside the tar it
+	// describes, and that is ugcli's rule rather than a preference:
+	// `ugcli check` refuses any file under rootfs_<arch>/images that is
+	// not a .tar, and refuses anything under rootfs_<arch> that is not
+	// the images directory. Measured on a real UGOS Pro NAS, both
+	// refusals by name.
 	var source *UPKImageSource
-	sourcePath := filepath.Join(imagesDir, "image-source.json")
+	sourcePath := filepath.Join(stage, "image-source-"+arch+".json")
 	raw, srcErr := os.ReadFile(sourcePath)
 	if srcErr != nil {
-		problems = append(problems, fmt.Sprintf("no rootfs_%s/images/image-source.json, so nothing records which digest these bytes were fetched at", arch))
+		problems = append(problems, fmt.Sprintf("no image-source-%s.json, so nothing records which digest these bytes were fetched at", arch))
 	} else {
 		var s UPKImageSource
 		if err := json.Unmarshal(raw, &s); err != nil {

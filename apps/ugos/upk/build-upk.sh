@@ -129,7 +129,7 @@ echo "==> docker save -> ${images_dir}/${tar_name}"
 rm -f "${images_dir}"/*.tar
 docker save "${reference}" -o "${images_dir}/${tar_name}"
 
-python3 - "$images_dir/image-source.json" "$reference" "$requested_digest" "$arch" "$tar_name" "$source_ref" "$daemon_digests" <<'SIDECAR'
+python3 - "${stage}/image-source-${arch}.json" "$reference" "$requested_digest" "$arch" "$tar_name" "$source_ref" "$daemon_digests" <<'SIDECAR'
 import json, sys, datetime
 path, reference, digest, arch, tar, requested, daemon = sys.argv[1:8]
 if not digest.startswith("sha256:"):
@@ -146,7 +146,7 @@ json.dump({
 }, open(path, "w"), indent=2)
 open(path, "a").write("\n")
 SIDECAR
-echo "==> wrote ${images_dir}/image-source.json (${requested_digest})"
+echo "==> wrote ${stage}/image-source-${arch}.json (${requested_digest})"
 
 "${stage}/draw-icon.py" "${stage}/rootfs_common/icon.png"
 echo "==> drew ${stage}/rootfs_common/icon.png"

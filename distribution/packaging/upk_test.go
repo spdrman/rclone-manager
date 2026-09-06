@@ -234,7 +234,7 @@ open_type: inner
 	writeImageArchive(t, tarPath, c.Image.Reference, arch, [][]layerFile{base, top})
 
 	digest := "sha256:" + strings.Repeat("ab", 32)
-	writeJSON(t, filepath.Join(stage, "rootfs_"+arch, "images", "image-source.json"), UPKImageSource{
+	writeJSON(t, filepath.Join(stage, "image-source-"+arch+".json"), UPKImageSource{
 		Reference:    c.Image.Reference,
 		Digest:       digest,
 		Architecture: arch,
@@ -491,7 +491,7 @@ func TestVerifyUPKStage_RefusesTheWrongArchitecturesImage(t *testing.T) {
 func TestVerifyUPKStage_RefusesAnImageFetchedFromSomewhereElse(t *testing.T) {
 	t.Parallel()
 	f := newUPKFixture(t, "amd64")
-	writeJSON(t, filepath.Join(f.stage, "rootfs_amd64", "images", "image-source.json"), UPKImageSource{
+	writeJSON(t, filepath.Join(f.stage, "image-source-amd64.json"), UPKImageSource{
 		Reference:    f.canonical.Image.Reference,
 		Digest:       "sha256:" + strings.Repeat("ee", 32),
 		Architecture: "amd64",
@@ -501,6 +501,51 @@ func TestVerifyUPKStage_RefusesAnImageFetchedFromSomewhereElse(t *testing.T) {
 	requireUPKPass(t, r, UPKCheckBinaryContentParity)
 }
 
+// TestVerifyUPKStage_RefusesASidecarTheDaemonNeverAgreedWith is the
+// consistency check inside the provenance record. The sidecar names a
+// pull digest and, beside it, what the local daemon said it held; a
+// digest the daemon never reported is a hand-edited record, and a
+// hand-edited provenance record is the one thing this half of the claim
+// cannot survive.
+func TestVerifyUPKStage_RefusesASidecarTheDaemonNeverAgreedWith(t *testing.T) {
+	t.Parallel()
+	f := newUPKFixture(t, "amd64")
+	digest := *f.manifest.Architectures[0].RegistryDigest
+	writeJSON(t, filepath.Join(f.stage, "image-source-amd64.json"), UPKImageSource{
+		Reference:    f.canonical.Image.Reference,
+		Digest:       digest,
+		Architecture: "amd64",
+		DaemonRepoDigests: []string{
+			"ghcr.io/spdrman/backup-manager@sha256:" + strings.Repeat("11", 32),
+		},
+	})
+	r := f.verify()
+	requireUPKFail(t, r, UPKCheckRegistryDigestParity, "does not include it")
+}
+
+// TestVerifyUPKStage_AcceptsASidecarThatNamesTheIndexAlongsideTheManifest
+// is that rule's own boundary, and the reason the daemon record is a list
+// rather than a value. A multi-architecture release makes the daemon
+// report two digests, the index and this architecture's manifest, and a
+// package fetched by either of them is a package fetched from the
+// release.
+func TestVerifyUPKStage_AcceptsASidecarThatNamesTheIndexAlongsideTheManifest(t *testing.T) {
+	t.Parallel()
+	f := newUPKFixture(t, "amd64")
+	digest := *f.manifest.Architectures[0].RegistryDigest
+	writeJSON(t, filepath.Join(f.stage, "image-source-amd64.json"), UPKImageSource{
+		Reference:    f.canonical.Image.Reference,
+		Digest:       digest,
+		Architecture: "amd64",
+		DaemonRepoDigests: []string{
+			"ghcr.io/spdrman/backup-manager@sha256:" + strings.Repeat("99", 32),
+			"ghcr.io/spdrman/backup-manager@" + digest,
+		},
+	})
+	r := f.verify()
+	requireUPKPass(t, r, UPKCheckRegistryDigestParity)
+}
+
 // TestVerifyUPKStage_RefusesAPackageWithNoRecordOfWhereItCameFrom: the
 // sidecar missing is not "nothing to check", it is "nobody wrote down
 // where these bytes came from", and the release records a digest they
@@ -508,11 +553,11 @@ func TestVerifyUPKStage_RefusesAnImageFetchedFromSomewhereElse(t *testing.T) {
 func TestVerifyUPKStage_RefusesAPackageWithNoRecordOfWhereItCameFrom(t *testing.T) {
 	t.Parallel()
 	f := newUPKFixture(t, "amd64")
-	if err := os.Remove(filepath.Join(f.stage, "rootfs_amd64", "images", "image-source.json")); err != nil {
+	if err := os.Remove(filepath.Join(f.stage, "image-source-amd64.json")); err != nil {
 		t.Fatalf("remove sidecar: %v", err)
 	}
 	r := f.verify()
-	requireUPKFail(t, r, UPKCheckStageLayout, "image-source.json")
+	requireUPKFail(t, r, UPKCheckStageLayout, "image-source-amd64.json")
 }
 
 // TestVerifyUPKStage_RefusesAVersionThatIsNotTheCanonicalRelease covers
