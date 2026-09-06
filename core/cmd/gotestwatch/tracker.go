@@ -78,6 +78,36 @@ type trip struct {
 	slowestLabel string
 	running      []string // tests with a "run" seen but no pass/fail/skip yet, sorted
 
+	// runSlowest and runSlowestLabel are the slowest gap of the WHOLE
+	// run and what it was between, which is a different number from
+	// slowestStep above: that one is the slowest of the most recent
+	// slowestStepMemory gaps, and it is the one both bounds are derived
+	// from. Nothing is derived from these two. They are here because
+	// issue #533 is about a run being killed against a cap that had
+	// tightened back to its floor while the run's own record said it had
+	// been stalled for seconds at a time, over and over, by something
+	// else on the machine. A reader cannot see that from the recent
+	// window, by construction, since the recent window is what rolled
+	// past it.
+	runSlowest      time.Duration
+	runSlowestLabel string
+
+	// pollInterval and worstPollLag are set by run.go, not by anything
+	// in this file (tracker.go stays free of process/I/O concerns; see
+	// the package doc comment at the top of this file): the interval
+	// gotestwatch's own watchdog loop asked to be run on, and the worst
+	// it was actually late by over the run.
+	//
+	// That lag is the only reading this tool has on the host itself. The
+	// loop does nothing but wake up and look, so anything it is late by
+	// is the machine declining to run a process that was ready, which is
+	// a fact about the host rather than an inference from the test
+	// stream. Zero pollInterval means nothing measured it (the synthetic
+	// clock tests, mostly) and the sentence is left out rather than
+	// printed as a reading of zero.
+	pollInterval time.Duration
+	worstPollLag time.Duration
+
 	// reapTimedOut and reapWait are set by run.go, not by anything in
 	// this file (tracker.go stays free of process/I/O concerns; see the
 	// package doc comment at the top of this file), when the process
@@ -85,9 +115,8 @@ type trip struct {
 	// reapWait. SIGKILL cannot end a process stuck in uninterruptible
 	// kernel I/O wait, a real possibility for exactly the class of hang
 	// this tool targets (stuck Docker/SFTP I/O); a trip that has already
-	// correctly diagnosed the problem is still reported when that
-	// happens, rather than run.go blocking indefinitely on a reap that
-	// may never come.
+	// been decided is still reported when that happens, rather than
+	// run.go blocking indefinitely on a reap that may never come.
 	reapTimedOut bool
 	reapWait     time.Duration
 }
@@ -96,36 +125,82 @@ type trip struct {
 // is where the whole design either pays off or does not.
 //
 // A watchdog that says only "timed out" leaves the reader with the same
-// question a fixed -timeout leaves them: was this stuck, or just slow? So each
-// message names what was still running, how many events had been observed,
-// and what the bound was derived from. The overall case says outright that a
-// consistently slow run would have widened its own cap, because that is the
-// inference the reader has to make and it is not obvious from a number.
+// question a fixed -timeout leaves them: was this stuck, or just slow? So
+// each message names what was still running, how many events had been
+// observed, what the bound was derived from, how the run's own worst gap
+// compares to the recent ones the bound came from, and how late the host
+// was running gotestwatch's own watchdog loop while all of that happened.
+//
+// What it no longer does is name a cause, and issue #533 is why. The
+// overall case used to end "That is a livelock, not a slow machine: the
+// cap is derived from this run's own recent pace, so a genuinely,
+// consistently slow run would have widened it", and it killed a gate run
+// with that sentence while another project on the same machine was running
+// a Playwright suite and the load was swinging between 11 and 72. The test
+// it named passed in 8.156s on its own minutes later. The reasoning is
+// sound against a machine that is CONSISTENTLY slow and false against a
+// bursty one: a quiet stretch sets a fast pace, the cap tightens to match
+// it, and then one burst pushes the run past a cap that was set while
+// nothing was competing.
+//
+// It is not a wording problem, so it did not get a wording fix. A run that
+// keeps reporting progress and never finishes produces the same arrival
+// pattern whether it is livelocked or being starved of the machine, down
+// to the individual gap (see
+// TestTracker_ALivelockAndALoadedHostProduceTheSameEvidence, which builds
+// both from their own causes and finds the watchdog holding an identical
+// trip), so no rule over what the tracker can see separates them: not the
+// recent maximum, not the whole-run one, not whether the gaps are growing.
+// Naming a cause it cannot distinguish is worse than naming none, because
+// a guard that is wrong in a particular direction sends the next person
+// hunting a deadlock that does not exist.
 func (tr trip) String() string {
 	running := "no test was reported as running, so the last thing observed at all is named above"
 	if len(tr.running) > 0 {
 		running = "test(s) still reported running: " + strings.Join(tr.running, ", ")
 	}
-	measured := fmt.Sprintf("%d events observed, slowest recent gap %s (%s)", tr.events, tr.slowestStep.Round(time.Millisecond), tr.slowestLabel)
-	if tr.events == 0 {
+	measured := fmt.Sprintf("%s observed, slowest recent gap %s (%s)", eventCount(tr.events), tr.slowestStep.Round(time.Millisecond), tr.slowestLabel)
+	switch {
+	case tr.events == 0:
 		measured = "no event had arrived yet, so the window was still the unmeasured floor"
+	case tr.runSlowest > tr.slowestStep:
+		// The mechanism from issue #533, stated as the measurement it
+		// is: this run has already been through a gap the bound it was
+		// killed against can no longer see.
+		measured += fmt.Sprintf("; the slowest gap of the whole run was %s (%s), which the recent window has already rolled past",
+			tr.runSlowest.Round(time.Millisecond), tr.runSlowestLabel)
+	}
+	host := ""
+	if tr.pollInterval > 0 {
+		host = fmt.Sprintf(" gotestwatch's own watchdog loop asked for a turn every %s and was late by up to %s over this run, which is what the host was giving a process that does nothing but wake up and look.",
+			tr.pollInterval.Round(time.Millisecond), tr.worstPollLag.Round(time.Microsecond))
 	}
 	var out string
 	switch tr.kind {
 	case "overall":
-		out = fmt.Sprintf("go test kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. %s. "+
-			"That is a livelock, not a slow machine: the cap is derived from this run's own recent pace, so a genuinely, consistently slow run would have widened it.",
-			tr.elapsed.Round(time.Millisecond), tr.overallCap.Round(time.Millisecond), tr.lastEvent, running, measured)
+		out = fmt.Sprintf("go test kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. %s.%s "+
+			"Why it never finished is not something this can tell you. A run reporting progress it never completes looks the same from out here whether it is livelocked, whether something else on this machine is taking the CPU away from it, or whether it is simply a suite that needs longer than the cap, so take the measurements above and not a cause from this line.",
+			tr.elapsed.Round(time.Millisecond), tr.overallCap.Round(time.Millisecond), tr.lastEvent, running, measured, host)
 	default:
-		out = fmt.Sprintf("go test stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. %s. "+
-			"This is a hang, not a slow machine: the window is derived from this run's own recent pace, so being consistently slow widens it and only being stuck trips it.",
-			tr.lastEvent, tr.sinceLast.Round(time.Millisecond), tr.window.Round(time.Millisecond), tr.elapsed.Round(time.Millisecond), running, measured)
+		out = fmt.Sprintf("go test stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. %s.%s "+
+			"The window is derived from this run's own recent pace, so a consistently slow run widens it and survives, and a silence this much longer than the pace the run had just been keeping is most likely a hang. It is not proof of one: load that arrives after that pace was measured stalls a healthy run the same way, which is what the numbers above are for.",
+			tr.lastEvent, tr.sinceLast.Round(time.Millisecond), tr.window.Round(time.Millisecond), tr.elapsed.Round(time.Millisecond), running, measured, host)
 	}
 	if tr.reapTimedOut {
 		out += fmt.Sprintf(" The killed process group had still not exited %s after being sent SIGKILL (likely stuck in uninterruptible I/O, which SIGKILL cannot end); reporting this trip anyway rather than waiting on the reap indefinitely.",
 			tr.reapWait.Round(time.Second))
 	}
 	return out
+}
+
+// eventCount is "1 event" or "N events". A small thing, and the sentence
+// it goes in is read by somebody at the exact moment their gate just died,
+// so "1 events observed" is worth not printing at them.
+func eventCount(n int) string {
+	if n == 1 {
+		return "1 event"
+	}
+	return fmt.Sprintf("%d events", n)
 }
 
 // slowestStepMemory bounds how many of the most recently observed gaps
@@ -177,6 +252,16 @@ type tracker struct {
 	recentHead   int
 	recentLen    int
 
+	// runSlowest and runSlowestLabel are the same measurement kept over
+	// the whole run instead of the recent window, and deliberately not
+	// used to derive anything (see the field comment on trip, and issue
+	// #533). Keeping both is the point: the rolling one is what the
+	// bounds are made of, and the difference between them is the only
+	// record a run has that it was stalled and recovered, which is
+	// exactly what a bound made of the recent window cannot show.
+	runSlowest      time.Duration
+	runSlowestLabel string
+
 	running map[string]struct{}
 }
 
@@ -194,11 +279,16 @@ func (t *tracker) observe(ev testEvent, at time.Time) {
 
 	label := ev.label()
 	if d := at.Sub(t.lastAt); d > 0 {
+		gap := t.lastEvent + " -> " + label
 		t.recentGaps[t.recentHead] = d
-		t.recentLabels[t.recentHead] = t.lastEvent + " -> " + label
+		t.recentLabels[t.recentHead] = gap
 		t.recentHead = (t.recentHead + 1) % slowestStepMemory
 		if t.recentLen < slowestStepMemory {
 			t.recentLen++
+		}
+		if d > t.runSlowest {
+			t.runSlowest = d
+			t.runSlowestLabel = gap
 		}
 	}
 	t.lastAt = at
@@ -275,6 +365,9 @@ func (t *tracker) check(now time.Time) *trip {
 		slowestStep:  slowest,
 		slowestLabel: slowestLabel,
 		running:      t.runningNames(),
+
+		runSlowest:      t.runSlowest,
+		runSlowestLabel: t.runSlowestLabel,
 	}
 	switch {
 	case tr.sinceLast > tr.window:

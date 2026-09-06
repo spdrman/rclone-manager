@@ -221,6 +221,19 @@ func Run(opts Options) (Result, error) {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
+	// What the host was doing, measured rather than guessed at (issue
+	// #533). The loop below asks for a turn every `poll` and does nothing
+	// with it but look at the tracker, so however late it is actually run
+	// is the machine declining to schedule a process that was ready. That
+	// is the only reading gotestwatch has on the host, and it is worth
+	// having because the event stream on its own cannot say whether a run
+	// that never finished was livelocked or was being starved: both
+	// arrive the same way. It does not settle the question either, and
+	// the trip's own sentence says so. It is a fact next to the numbers,
+	// not a verdict.
+	var worstPollLag time.Duration
+	lastTick := time.Now()
+
 	var (
 		waitErr error
 		tripped *trip
@@ -230,8 +243,24 @@ watch:
 		select {
 		case waitErr = <-waited:
 			break watch
-		case now := <-ticker.C:
+		case <-ticker.C:
+			// time.Now(), not the instant the tick itself carries. The
+			// two differ by exactly how long this goroutine waited to be
+			// run after the tick fired, which is both the quantity being
+			// measured here and the reason not to decide a kill from the
+			// tick's own timestamp: that clock reads early precisely
+			// when the host is loaded, so a stall would be measured
+			// short exactly when it matters. Same reasoning as observe's
+			// (see tracker.go): what a watchdog can act on is what it
+			// can observe, at the instant it observes it.
+			now := time.Now()
+			if late := now.Sub(lastTick) - poll; late > worstPollLag {
+				worstPollLag = late
+			}
+			lastTick = now
 			if tripped = tr.check(now); tripped != nil {
+				tripped.pollInterval = poll
+				tripped.worstPollLag = worstPollLag
 				// Kill the whole group, then still wait: a watchdog
 				// that leaves the tree it gave up on running behind
 				// defeats the one correctness property (see doc.go)
@@ -239,9 +268,9 @@ watch:
 				// all. That wait is itself bounded (see killAndWait):
 				// SIGKILL cannot terminate a process stuck in
 				// uninterruptible kernel I/O wait, and this trip has
-				// already been correctly diagnosed, so it is reported
-				// either way rather than risking gotestwatch itself
-				// hanging forever on the reap.
+				// already been decided, so it is reported either way
+				// rather than risking gotestwatch itself hanging
+				// forever on the reap.
 				var reaped bool
 				waitErr, reaped = killAndWait(pgid, waited, reapWait)
 				if !reaped {
@@ -267,8 +296,8 @@ watch:
 		return res, nil
 	}
 	if opts.Stderr != nil {
-		_, _ = fmt.Fprintf(opts.Stderr, "gotestwatch: %d events observed, slowest gap %s (%s), no-progress window %s\n",
-			events, slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
+		_, _ = fmt.Fprintf(opts.Stderr, "gotestwatch: %s observed, slowest gap %s (%s), no-progress window %s\n",
+			eventCount(events), slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
 	}
 	if waitErr == nil {
 		return res, nil

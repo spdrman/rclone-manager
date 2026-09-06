@@ -1177,3 +1177,125 @@ func TestKillAndWait_ReturnsPromptlyWhenTheProcessDoesReap(t *testing.T) {
 		t.Fatalf("killAndWait took %s to return an already-delivered result; it waited on the reap bound instead of the channel", elapsed)
 	}
 }
+
+// The numbers testdata/fixtures/burstpkg is built from, duplicated as
+// constants of the same name in that fixture's own burst_test.go (it is a
+// separate module under testdata/, so it cannot be imported from here);
+// keep the two in sync by hand.
+const (
+	burstPace       = 20 * time.Millisecond
+	burstQuietLines = 30
+	burstStall      = 800 * time.Millisecond
+)
+
+// TestRun_ABurstyHostIsKilledWithoutBeingToldWhy is issue #533 end to end,
+// and it is also the first thing in this file to exercise the overall cap
+// against a real subprocess at all: everything above it is about the
+// no-progress window.
+//
+// tracker_test.go proves against a synthetic clock that a livelock and a
+// starved host leave the watchdog holding an identical trip, so there is
+// nothing in the evidence to name a cause from. This runs the contended
+// half of that for real, and checks the two things the synthetic clock
+// cannot: that the blind spot is really there in a live run (the cap that
+// kills it has rolled the stall out of memory and sits at its floor, while
+// the run's own record still holds the stall), and that the sentence an
+// operator actually reads no longer picks a cause out of it.
+func TestRun_ABurstyHostIsKilledWithoutBeingToldWhy(t *testing.T) {
+	const poll = 50 * time.Millisecond
+	dir := filepath.Join("testdata", "fixtures", "burstpkg")
+
+	// Both floors are measured rather than picked, for the reason
+	// TestRun_CatchesAGenuineHang above measures its own (#379): the
+	// tracker's clock starts when Run does, and `go test` spends real
+	// time loading packages, linking and starting the binary before the
+	// first event arrives.
+	warmBuildCache(t, dir)
+	startup := warmBuildCache(t, dir)
+
+	// The no-progress floor has to clear the planted stall, or this
+	// fixture trips the wrong bound and proves nothing about the cap.
+	floor := 2 * time.Second
+	if measured := 4 * startup; measured > floor {
+		floor = measured
+	}
+
+	// The cap has to close after the stall has had time to roll out of
+	// the rolling memory, which takes slowestStepMemory further events at
+	// burstPace, and comfortably after that rather than right on it.
+	overallFloor := 4500 * time.Millisecond
+	if measured := 4*startup + 3*time.Second; measured > overallFloor {
+		overallFloor = measured
+	}
+	t.Logf("no-progress floor %s, overall floor %s, from a warm `go test` startup of %s on this host",
+		floor.Round(time.Millisecond), overallFloor.Round(time.Millisecond), startup.Round(time.Millisecond))
+
+	var stdout, stderr bytes.Buffer
+	res, err := Run(Options{
+		Dir:  dir,
+		Args: []string{"-count=1", "./..."},
+		Bounds: bounds{
+			stepFloor:     floor,
+			stepFactor:    defaultBounds.stepFactor,
+			overallFloor:  overallFloor,
+			overallFactor: defaultBounds.overallFactor,
+		},
+		Poll:   poll,
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		t.Fatalf("Run returned an error instead of a trip: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+	if res.Trip == nil {
+		t.Fatalf("a run that reported progress forever was never caught\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
+	}
+	if res.Trip.kind != "overall" {
+		skipCannotMeasure(t, "the run tripped the no-progress window (%v) rather than the cap, so this host stalled it harder than the %s the fixture plants and the cap was never reached",
+			res.Trip, burstStall)
+	}
+
+	// The fixture really did what it says: quiet stretch, stall,
+	// recovery, all replayed before the decision.
+	replayed := stdout.String()
+	for _, want := range []string{
+		fmt.Sprintf("burstpkg: quiet line %d", burstQuietLines-1),
+		"burstpkg: stalling for",
+		fmt.Sprintf("burstpkg: recovered line %d", slowestStepMemory),
+	} {
+		if !strings.Contains(replayed, want) {
+			skipCannotMeasure(t, "the fixture never got as far as %q, so this run is about this host's startup rather than about the burst it plants:\n%s", want, replayed)
+		}
+	}
+
+	// The blind spot, measured. The bound this run was killed against is
+	// derived from a recent window that no longer holds anything like the
+	// stall, while the run as a whole plainly went through one.
+	if res.Trip.slowestStep >= burstStall {
+		skipCannotMeasure(t, "the recent window still held a %s gap when the cap closed, so the planted %s stall had not rolled out of it and this run is not reproducing the blind spot",
+			res.Trip.slowestStep.Round(time.Millisecond), burstStall)
+	}
+	if res.Trip.runSlowest < burstStall {
+		t.Fatalf("the run's slowest gap is reported as %s (%s), but the fixture stalled for %s and `go test` replayed the line that says so; the whole-run measurement is not being kept",
+			res.Trip.runSlowest.Round(time.Millisecond), res.Trip.runSlowestLabel, burstStall)
+	}
+
+	msg := res.Trip.String()
+	if phrase := namesACause(msg); phrase != "" {
+		t.Fatalf("a run that was stalled by something outside itself, recovered, and was still reporting progress when it died was told it %q:\n%s", phrase, msg)
+	}
+	// Removing the claim is only half of it. What a reader is left with
+	// has to carry the two observations that argue against a livelock,
+	// and both of them only exist because #533 added them.
+	if !strings.Contains(msg, "the slowest gap of the whole run was") {
+		t.Fatalf("the report does not say the run had already been through a stall the cap can no longer see, which is the whole of what it has to offer instead of a cause:\n%s", msg)
+	}
+	if res.Trip.pollInterval != poll {
+		t.Fatalf("trip.pollInterval = %s, want the %s Run was actually polling on: the host reading is not reaching the report", res.Trip.pollInterval, poll)
+	}
+	if !strings.Contains(msg, "watchdog loop") {
+		t.Fatalf("the report does not say how late this host was running gotestwatch's own loop, which is the only reading it has on the machine:\n%s", msg)
+	}
+
+	t.Logf("bursty run killed by the cap: %s", msg)
+}
