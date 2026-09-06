@@ -8,6 +8,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/service"
 )
 
 // cmdDaemon is FR-1's `daemon` execution mode: repeat the same processing
@@ -53,6 +54,20 @@ func cmdDaemon(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Issue #537: say out loud that this process is about to serve this
+	// deployment, so a `backup-set create` typed in another shell can
+	// find it instead of writing a configuration this daemon will never
+	// read. It is announced BEFORE the configuration is opened, which is
+	// what makes the CLI's check an exclusion rather than a sample: by
+	// the time a writer is granted its claim on the deployment, an engine
+	// that got there first is already visible. See core/service's
+	// liveengine.go for the whole arrangement.
+	stopServing, err := service.AnnounceServing(*cfgPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = stopServing() }()
 
 	svc, cfg, cleanup, err := openService(ctx, *cfgPath, true)
 	if err != nil {

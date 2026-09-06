@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"time"
 )
 
 // This file is what lock_unix.go's advisory locking becomes on a GOOS
@@ -47,6 +48,13 @@ func acquireStartupLock(lockPath string) (*startupLock, error) {
 	return nil, fmt.Errorf("service: startup locking is not implemented on %s", runtime.GOOS)
 }
 
+// acquireStartupLockWithin mirrors lock_unix.go's bounded-wait variant.
+// There is nothing to wait for on a build with no locking, so it refuses
+// at once rather than sleeping first.
+func acquireStartupLockWithin(lockPath string, wait time.Duration) (*startupLock, error) {
+	return acquireStartupLock(lockPath)
+}
+
 func (l *startupLock) release() error { return nil }
 
 // ErrJournalInUse mirrors lock_unix.go's sentinel of the same name so
@@ -70,8 +78,28 @@ func (l *journalLock) downgradeToShared() error { return nil }
 
 func (l *journalLock) release() error { return nil }
 
-// journalHeldByAnotherProcess cannot be answered on a GOOS with no
-// advisory locking wired up, and says so rather than answering "no".
+// ErrAlreadyServing mirrors lock_unix.go's sentinel of the same name so
+// callers on any GOOS name one identifier; it is never actually returned
+// on this build.
+var ErrAlreadyServing = errors.New("service: another process is already serving this deployment")
+
+// servingLock is the non-unix stand-in for lock_unix.go's real
+// implementation.
+type servingLock struct{}
+
+// acquireServingLock refuses rather than pretending, for the same reason
+// every other acquire in this file does: a process that believed it had
+// announced itself as this deployment's engine, on a build where nothing
+// can hear the announcement, would be invisible to exactly the check that
+// exists to find it.
+func acquireServingLock(lockPath string) (*servingLock, error) {
+	return nil, fmt.Errorf("service: serving locks are not implemented on %s", runtime.GOOS)
+}
+
+func (l *servingLock) release() error { return nil }
+
+// servingLockHeld cannot be answered on a GOOS with no advisory locking
+// wired up, and says so rather than answering "no".
 //
 // "No" is the dangerous default here: it is the answer that lets a second
 // process rewrite a configuration a running engine holds and report
@@ -79,6 +107,6 @@ func (l *journalLock) release() error { return nil }
 // condition this codebase cannot honestly assess is reported, never
 // quietly skipped, and a detector is exactly the place that rule earns
 // its keep.
-func journalHeldByAnotherProcess(lockPath string) (bool, error) {
-	return false, fmt.Errorf("service: cannot tell whether another process holds this journal on %s, because journal locking is not implemented there", runtime.GOOS)
+func servingLockHeld(lockPath string) (bool, error) {
+	return false, fmt.Errorf("service: cannot tell whether another process is serving this deployment on %s, because advisory locking is not implemented there", runtime.GOOS)
 }

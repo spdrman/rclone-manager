@@ -500,6 +500,23 @@ func cmdServe(args []string) int {
 	var handler http.Handler
 	var scheduler serve.Scheduler
 
+	// Issue #537: this process is about to serve the deployment, so it
+	// says so before it reads a thing. A `backup-set create` typed into a
+	// shell on the same host finds this announcement and refuses, rather
+	// than rewriting a configuration this process has already read and
+	// will never read again. Announcing before the open is what makes
+	// that check an exclusion rather than a sample; core/service's
+	// liveengine.go has the whole arrangement.
+	//
+	// On a first-run instance there is no configuration to name a journal
+	// yet, so this is a no-op and the announcement happens in Activate
+	// below instead, once setup has written one.
+	stopServing, err := service.AnnounceServing(*configPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = stopServing() }()
+
 	backend, cleanup, err := service.Open(ctx, *configPath)
 	switch {
 	case err == nil:
@@ -542,9 +559,26 @@ func cmdServe(args []string) int {
 		}
 		engineConfig.FirstRun = firstRun
 		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
+			// The announcement the branch above could not make: there was
+			// no configuration to name a journal when this process
+			// started, and setup has just written one. From here on this
+			// instance is a running engine like any other, and a CLI
+			// write aimed at it has to be able to find it.
+			stopActivated, serveErr := service.AnnounceServing(*configPath)
+			if serveErr != nil {
+				return nil, nil, serveErr
+			}
 			opened, closeFn, openErr := service.Open(ctx, *configPath)
 			if openErr != nil {
+				_ = stopActivated()
 				return nil, nil, openErr
+			}
+			closeBoth := func() error {
+				closeErr := closeFn()
+				if stopErr := stopActivated(); stopErr != nil && closeErr == nil {
+					closeErr = stopErr
+				}
+				return closeErr
 			}
 			// Alerting is decided from the configuration setup just
 			// wrote, exactly as it is for a process that started with
@@ -552,7 +586,7 @@ func cmdServe(args []string) int {
 			// deployment shape where the alerts block does nothing until
 			// a restart.
 			enableAlerts(opened, platformAdapter)
-			return opened, closeFn, nil
+			return opened, closeBoth, nil
 		}
 
 		engine, engErr := serve.NewFirstRunEngine(engineConfig)

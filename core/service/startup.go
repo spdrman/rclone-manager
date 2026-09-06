@@ -38,6 +38,28 @@ const startupLockSuffix = ".startup-lock"
 // rather than one.
 const journalLockSuffix = ".journal-lock"
 
+// servingLockSuffix names the third lock file, and the only one that
+// means "an engine is running here". A process that is going to SERVE
+// this deployment takes it SHARED before it reads anything and holds it
+// for as long as it serves (AnnounceServing, liveengine.go); nothing
+// else takes it at all.
+//
+// It is a separate file from the journal lock because the journal lock
+// answers a different question and cannot be made to answer this one:
+// every `backup-manager status`, every `sources`, every cron `run` holds
+// the journal lock too, which is exactly what openUnderSharedLock's own
+// doc says is ordinary use of this CLI. Asking the journal lock "is an
+// engine running" gets "somebody has this journal open", and issue #537
+// is explicit that reporting an engine that is not there strands the CLI
+// on the host the direct path exists for.
+//
+// Like the other two it lives beside the journal rather than in a shared
+// location, so "same deployment" and "same lock" are the identical
+// question with no configuration to get wrong. That is also what lets a
+// CLI that cannot read config.yaml at all still ask about the journal
+// --state-database names.
+const servingLockSuffix = ".serving-lock"
+
 // runStartupSequence performs §46.1's ordered startup steps against
 // dbPath and returns the opened, fully migrated journal together with the
 // release func for the shared journal lock the caller must hold for as
