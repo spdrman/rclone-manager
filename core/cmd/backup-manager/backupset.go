@@ -402,7 +402,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath, writesConfig)
+	route, cleanup, err := openBackupSetRoute(ctx, *f.cfgPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -410,7 +410,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	updated, err := svc.UpdateBackupSet(ctx, id, req)
+	updated, err := route.UpdateBackupSet(ctx, id, req)
 	if err != nil {
 		return fail(err)
 	}
@@ -435,7 +435,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 // itself once the set is out of the configuration.
 func backupSetRemove(f *backupSetFlags, id string) int {
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath, writesConfig)
+	route, cleanup, err := openBackupSetRoute(ctx, *f.cfgPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -443,7 +443,7 @@ func backupSetRemove(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	return backupSetRemoveWith(ctx, svc, id, os.Stdout)
+	return backupSetRemoveWith(ctx, route, id, os.Stdout)
 }
 
 // backupSetRemover is the two calls the remove verb makes, as an
@@ -460,14 +460,22 @@ type backupSetRemover interface {
 //
 // The count of what stays is read BEFORE the removal, because afterwards
 // this filter names a set the configuration no longer has and is refused
-// (#187). It is a courtesy, not a precondition: a journal read failing
-// here must not turn into "the removal failed", because the operator
-// asked for a set to stop collecting and the configuration can be
-// written, and leaving the set running for the sake of a number in a
-// sentence would be the wrong trade. A count that could not be taken is
-// said to be exactly that, never printed as 0, which is a specific and
-// reassuring claim about a thing that was not looked at. This mirrors
+// (#187). It is a courtesy, not a precondition: a read failing here must
+// not turn into "the removal failed", because the operator asked for a
+// set to stop collecting and the configuration can be written, and
+// leaving the set running for the sake of a number in a sentence would be
+// the wrong trade. A count that could not be taken is said to be exactly
+// that, never printed as 0, which is a specific and reassuring claim
+// about a thing that was not looked at. This mirrors
 // BackupService.artifactCountFor's own -1.
+//
+// Two things now reach that branch rather than one, which is why the
+// sentence no longer names the journal. Directly it is a journal read that
+// failed; through a running engine it is a read this build cannot make at
+// all, because listing artifacts over the API is #544's and the client has
+// neither the call nor the query-parameter support it needs
+// (engineroute.go's ErrArtifactsNotRouted). Both are honestly "nobody
+// counted", and an operator has one thing to do about either.
 func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, out io.Writer) int {
 	kept := -1
 	if listed, err := svc.ListArtifacts(ctx, service.ArtifactFilter{BackupSetID: id}); err == nil {
@@ -487,7 +495,7 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 	// into a non-zero exit. Same reasoning as setup.go's cycle summary.
 	_, _ = fmt.Fprintf(out, "removed the configuration for %s\n", id)
 	if kept < 0 {
-		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage (the journal read failed); they are still there, and `backup-manager artifacts` lists them\n")
+		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage; they are still there, and `backup-manager artifacts` lists them\n")
 	} else {
 		_, _ = fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
 	}
@@ -516,7 +524,7 @@ const defaultStateDatabase = "/data/state/state.db"
 // that already exists, through the same BackupService method POST
 // /api/v1/backup-sets calls, in this process.
 func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
-	svc, cleanup, err := openBackupService(ctx, configPath, writesConfig)
+	route, cleanup, err := openBackupSetRoute(ctx, configPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -524,11 +532,11 @@ func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, t
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	if err := resolveKeyAndTrust(ctx, svc, keyFile, trustHostKey, &req); err != nil {
+	if err := resolveKeyAndTrust(ctx, route, keyFile, trustHostKey, &req); err != nil {
 		return fail(err)
 	}
 
-	result, err := svc.CreateBackupSet(ctx, req)
+	result, err := route.CreateBackupSet(ctx, req)
 	if err != nil {
 		return fail(err)
 	}
@@ -827,7 +835,25 @@ func printBackupSet(s service.BackupSet) {
 	if s.CompletionStrategy == "stable" {
 		fmt.Printf("  stable_for: %s\n", s.StableFor)
 	}
-	fmt.Printf("  stale_after: %s\n", s.StaleAfter)
+	// stale_after is the one field that survives a direct write and not a
+	// routed one, and the difference is the API's rather than this
+	// command's: BackupSetSpec accepts stale_after_seconds on the way in,
+	// UpdateBackupSetRequest can change it, and the BackupSet the engine
+	// answers with carries no such property at all, so a routed create or
+	// patch gets back a set the engine cannot say this about
+	// (engineroute.go's staleAfterFromWire).
+	//
+	// Zero is therefore not a value here, it is the absence of one:
+	// config.Validate refuses a configuration whose stale_after is not
+	// positive, so nothing that came out of a validated configuration can
+	// reach this branch. Printing "0s" would be a specific claim about
+	// FR-24's freshness budget made from a field nothing looked at, which
+	// is the class of quiet wrongness this whole EPIC is about.
+	if s.StaleAfter > 0 {
+		fmt.Printf("  stale_after: %s\n", s.StaleAfter)
+	} else {
+		fmt.Printf("  stale_after: not reported (the engine's API carries no stale_after field; `backup-manager sources` reads it from the configuration)\n")
+	}
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
 	fmt.Printf("  read_only: %v\n", s.ReadOnly)

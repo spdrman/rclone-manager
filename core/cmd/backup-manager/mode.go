@@ -57,17 +57,21 @@ import (
 // a property of the world: nothing else can finish starting between the
 // question and the write.
 //
-// # The failed attach is the whole point
+// # The attach that fails is still the whole point
 //
-// Engine-attached mode cannot presently be carried out: #541 is the HTTP
-// client that would reach the running process and #543 is what routes a
-// mutation through it, and neither exists yet. So every attach fails
-// today, and what this file guarantees is what happens next. It refuses.
+// Engine-attached mode can now be carried out for the three mutating
+// backup-set verbs (#543, route.go), and only when this command has been
+// told where the engine is. Everything else still refuses, and so does a
+// route that was named and cannot be built.
+//
+// What this file guarantees is what happens on that refusal. It refuses.
 // It does not write the file directly and report success, which is
 // exactly the shape #535 recorded: a change one process believes in and
 // the serving process will never see. A fallback that happens quietly is
 // that bug wearing a different hat, so there is no fallback here at all,
-// quiet or otherwise.
+// quiet or otherwise, and there is no path through settleConfigWriteMode
+// on which an engine-attached command with no route returns a usable
+// claim.
 //
 // # And there is no third mode
 //
@@ -100,9 +104,11 @@ const (
 	directMode executionMode = "direct"
 
 	// engineAttachedMode: another process is serving this deployment, so
-	// the change belongs to it. Nothing in this build can hand it over
-	// yet (#541, #543), which makes every engine-attached configuration
-	// write a refusal today.
+	// the change belongs to it. Whether this build can hand it over
+	// depends on the verb and on whether an address was given: the three
+	// mutating backup-set verbs route (#543) when $BACKUP_MANAGER_API_URL
+	// names an engine, and everything else, including a `daemon` that
+	// serves no HTTP at all, is still a refusal.
 	engineAttachedMode executionMode = "engine-attached"
 )
 
@@ -157,6 +163,20 @@ type modeDecision struct {
 	// two callers only because one of them can name the file the engine
 	// read and the other, by construction, cannot.
 	because string
+
+	// route is how this invocation hands the change to that process, and
+	// is nil whenever it cannot: in direct mode, on a write no verb
+	// routes, and beside a serving process this command was told nothing
+	// about. Nil is what refusal() reads, so "engine-attached" and
+	// "engine-attached and carryable" can never be confused for each
+	// other by a later reader.
+	route backupSetRoute
+
+	// routeAddress is where that route goes, already redacted, for the
+	// announcement. #542's rule is that the mode is reported rather than
+	// inferred, and "through the engine" without saying which engine is
+	// half a report.
+	routeAddress string
 }
 
 // heldBy names the state database the serving process announced, or the
@@ -223,11 +243,14 @@ func (d modeDecision) announce(announceTo, refuseTo io.Writer) {
 	// prints: a terminal that went away cannot change what mode this
 	// invocation is in, and swallowing the command because the
 	// announcement could not be delivered would be the worse answer.
-	switch d.mode {
-	case engineAttachedMode:
+	switch {
+	case d.mode == engineAttachedMode && d.route != nil:
+		_, _ = fmt.Fprintf(announceTo, "%s%s. Another process is serving this deployment (state database %s), so this command hands the change to it at %s rather than writing %s itself.\n",
+			modeLinePrefix, d.mode, d.heldBy(), d.routeAddress, d.configFile)
+	case d.mode == engineAttachedMode:
 		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is serving this deployment (state database %s) and this build has no route to it, so the change is refused here rather than downgraded to a direct write it would never see.\n",
 			modeLinePrefix, d.mode, d.heldBy())
-	case directMode:
+	case d.mode == directMode:
 		_, _ = fmt.Fprintf(announceTo, "%s%s. No process has announced itself as serving this deployment, so this command changes %s itself.\n",
 			modeLinePrefix, d.mode, d.configFile)
 	default:
@@ -242,11 +265,18 @@ func (d modeDecision) announce(announceTo, refuseTo io.Writer) {
 	}
 }
 
-// refusal is what engine-attached mode means in this build: nothing can
-// hand the change over, so the command stops. Direct mode returns nil,
-// which is the only mode this binary can carry out today.
+// refusal is what engine-attached mode means when nothing can hand the
+// change over: the command stops. Direct mode returns nil because this
+// process is the only authority there is, and engine-attached mode with a
+// route returns nil because the change is about to go to the process that
+// IS the authority.
+//
+// The condition is the route rather than the mode, which is the whole of
+// what #543 changed here. A reader adding a fourth case should keep it that
+// way: "an engine is serving this" and "and this command can reach it" are
+// two facts, and the refusal is about the second one.
 func (d modeDecision) refusal() error {
-	if d.mode != engineAttachedMode {
+	if d.mode != engineAttachedMode || d.route != nil {
 		return nil
 	}
 	return engineRefusal(d.engine, d.because)
@@ -275,7 +305,7 @@ func (d modeDecision) refusal() error {
 // granted, an engine that got there first is already visible to the
 // question below, and one that arrives later cannot finish starting until
 // the claim is released.
-func enterConfigWriteMode(configPath string, announceTo, refuseTo io.Writer) (*service.ConfigWriteGuard, error) {
+func enterConfigWriteMode(configPath string, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
 	guard, err := service.BeginConfigWrite(configPath)
 	if err != nil {
 		return nil, err
@@ -294,7 +324,7 @@ func enterConfigWriteMode(configPath string, announceTo, refuseTo io.Writer) (*s
 		engine:     engine,
 		configFile: resolved,
 		because:    fmt.Sprintf("that process read %s when it started and nothing re-reads that file", resolved),
-	}, announceTo, refuseTo)
+	}, attach, announceTo, refuseTo)
 }
 
 // enterFirstConfigWriteMode is enterConfigWriteMode for the one
@@ -324,30 +354,81 @@ func enterFirstConfigWriteMode(configFile, stateDatabase string, announceTo, ref
 		_ = guard.Release()
 		return nil, cannotTellError(err)
 	}
-	return settleConfigWriteMode(guard, modeDecision{
+	// No attach, and that is a decision rather than an omission. This
+	// path writes a whole FIRST configuration, and finding a process
+	// serving the journal it names means that deployment is already
+	// configured; POST /system/first-run is the wrong operation to send an
+	// already-configured engine, and there is no other. So engine-attached
+	// here is still exactly what it was: a refusal.
+	write, err := settleConfigWriteMode(guard, modeDecision{
 		engine:     engine,
 		configFile: config.ResolvePath(configFile),
 		because:    "that process read its configuration when it started and nothing re-reads it",
-	}, announceTo, refuseTo)
+	}, nil, announceTo, refuseTo)
+	if err != nil {
+		return nil, err
+	}
+	return write.guard, nil
 }
 
 // settleConfigWriteMode is the tail both enter functions share: name the
-// mode from the one answer, say it out loud, and either hand the claim on
-// or give it back with the refusal.
+// mode from the one answer, settle how (or whether) it can be carried out,
+// say it out loud, and either hand the claim on or give it back with the
+// refusal.
 //
 // The mode is derived here and nowhere else, from the engine field alone,
 // so the two can never be set from different answers. A caller that built
 // a modeDecision and set the mode itself would be a second place that
-// could decide, which is what this issue exists to remove.
-func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, announceTo, refuseTo io.Writer) (*service.ConfigWriteGuard, error) {
+// could decide, which is what this issue exists to remove. The route is
+// settled in the same place and for the same reason: a command that asked
+// separately could ask after the announcement, and print one thing while
+// doing another.
+//
+// A route is looked for only in engine-attached mode. Building one in
+// direct mode would be reaching for an engine this command has just
+// established is not there, and would turn a stray environment variable
+// into a change aimed at somebody else's deployment.
+func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
 	d.mode = directMode
 	if d.engine != nil {
 		d.mode = engineAttachedMode
 	}
+
+	var attachErr error
+	if d.mode == engineAttachedMode && attach != nil {
+		d.route, d.routeAddress, attachErr = attach()
+	}
+
 	d.announce(announceTo, refuseTo)
+
+	// The named-and-unusable case, announced first so the mode is on the
+	// terminal before the complaint about it, and refused rather than
+	// downgraded: an operator who set an address meant it.
+	if attachErr != nil {
+		_ = guard.Release()
+		return nil, attachErr
+	}
 	if err := d.refusal(); err != nil {
 		_ = guard.Release()
 		return nil, err
 	}
-	return guard, nil
+	return &configWrite{guard: guard, route: d.route}, nil
+}
+
+// attachFunc is how a caller says whether the write it is about to make
+// can be routed, and builds the route when it can.
+//
+// A nil attachFunc is "this write has no route", which is the honest
+// answer for every configuration write except the three backup-set verbs
+// #543 covers. Saying it by passing nil rather than by omitting a step is
+// what makes the unrouted writes visible: they are call sites that
+// deliberately hand over nothing, not call sites that forgot.
+type attachFunc func() (backupSetRoute, string, error)
+
+// configWrite is one settled configuration write: the claim that keeps the
+// decision true, and the route it decided on, which is nil for a write
+// this process performs itself.
+type configWrite struct {
+	guard *service.ConfigWriteGuard
+	route backupSetRoute
 }

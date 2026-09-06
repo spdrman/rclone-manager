@@ -18,11 +18,19 @@ import (
 // regeneration rather than by somebody noticing.
 //
 // The set below is the surface the commands issue #543 and #544 route need
-// - the mutating backup-set verbs, and the reads `sources` and `status`
-// are built on - plus the session verbs. It is deliberately not all
-// forty-six operations: an untested wrapper around an endpoint no command
-// calls is a claim that this client works against it, and nothing here has
-// watched that claim fail. Adding one is three lines and a contract id.
+// - the mutating backup-set verbs and the two steps a create takes before
+// them, and the reads `sources` and `status` are built on - plus the
+// session verbs. It is deliberately not all forty-six operations: an
+// untested wrapper around an endpoint no command calls is a claim that
+// this client works against it, and nothing here has watched that claim
+// fail. Adding one is three lines and a contract id.
+//
+// setBackupSetEnabled and setBackupSetReadOnly used to be here and are
+// gone, under that same rule rather than in spite of it. No command calls
+// either: this CLI has no enable/disable verb at all, and --read-only is a
+// field of a create rather than a verb of its own, so both were wrappers
+// nothing had ever driven against the routes they name. #543 is where they
+// would have acquired a caller and did not.
 
 // ListBackupSets is GET /backup-sets: the configuration the ENGINE holds,
 // which is the whole reason a CLI would ask over HTTP rather than read the
@@ -55,6 +63,39 @@ func (c *Client) CreateBackupSet(ctx context.Context, req apicontract.CreateBack
 	return out, err
 }
 
+// ImportSSHKey is POST /ssh-keys: the private key this deployment will
+// use to reach a source, handed over once so the engine can keep its own
+// copy.
+//
+// It is here because `backup-set create --ssh-key-file` has to import
+// before it can name a key id, and importing into whatever filesystem the
+// CLI happens to be running on is importing into the wrong place when the
+// key store belongs to the process being routed to. The request carries
+// key material, which is the only body in this package that does; it is
+// built by the caller from a file it read, sent once, and held nowhere
+// else. Nothing here logs it, and the response deliberately carries a
+// reference and a fingerprint rather than the key.
+func (c *Client) ImportSSHKey(ctx context.Context, req apicontract.ImportSSHKeyRequest) (apicontract.ImportSSHKeyResponse, error) {
+	var out apicontract.ImportSSHKeyResponse
+	err := c.call(ctx, "importSSHKey", nil, req, &out)
+	return out, err
+}
+
+// ProbeHostKey is POST /ssh/host-key-probe: open a connection to a source
+// from where the ENGINE is, and report the host key that answered.
+//
+// Which end probes is the whole point. `--trust-host-key` is trust on
+// first use, and the machine that has to be able to reach the source is
+// the one that will be pulling backups off it. A CLI that probed from its
+// own host would trust a key seen from somewhere the backups never travel,
+// and would fail outright wherever the source is only reachable from the
+// engine's network.
+func (c *Client) ProbeHostKey(ctx context.Context, req apicontract.HostKeyProbeRequest) (apicontract.HostKeyProbeResponse, error) {
+	var out apicontract.HostKeyProbeResponse
+	err := c.call(ctx, "probeHostKey", nil, req, &out)
+	return out, err
+}
+
 // UpdateBackupSet is PATCH /backup-sets/{source}/{set}.
 func (c *Client) UpdateBackupSet(ctx context.Context, source, set string, req apicontract.UpdateBackupSetRequest) (apicontract.BackupSet, error) {
 	var out apicontract.BackupSet
@@ -65,20 +106,6 @@ func (c *Client) UpdateBackupSet(ctx context.Context, source, set string, req ap
 // RemoveBackupSet is DELETE /backup-sets/{source}/{set}.
 func (c *Client) RemoveBackupSet(ctx context.Context, source, set string) error {
 	return c.call(ctx, "removeBackupSet", []string{source, set}, nil, nil)
-}
-
-// SetBackupSetEnabled is POST /backup-sets/{source}/{set}/enabled.
-func (c *Client) SetBackupSetEnabled(ctx context.Context, source, set string, req apicontract.SetEnabledRequest) (apicontract.BackupSet, error) {
-	var out apicontract.BackupSet
-	err := c.call(ctx, "setBackupSetEnabled", []string{source, set}, req, &out)
-	return out, err
-}
-
-// SetBackupSetReadOnly is POST /backup-sets/{source}/{set}/read-only.
-func (c *Client) SetBackupSetReadOnly(ctx context.Context, source, set string, req apicontract.SetReadOnlyRequest) (apicontract.BackupSet, error) {
-	var out apicontract.BackupSet
-	err := c.call(ctx, "setBackupSetReadOnly", []string{source, set}, req, &out)
-	return out, err
 }
 
 // GetBackupSetRetention is GET /backup-sets/{source}/{set}/retention.
