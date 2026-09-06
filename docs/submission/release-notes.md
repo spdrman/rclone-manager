@@ -57,8 +57,11 @@ worth saying here rather than leaving to be found.
 Listed because a store review reads them and an administrator deserves them before
 installing, not after.
 
-- There is no restore command. Recovery is a documented procedure; see the support
-  materials for where it lives.
+- Putting a backup set's contents back is a documented procedure rather than something
+  this release performs for you; see the support materials for where it lives. There is a
+  `restore` command, and it is a different thing worth not confusing with recovery: it asks
+  a storage provider to make one archived copy readable again, which is what an administrator
+  does before recovering from a copy that has gone cold, not the recovery itself.
 - Native platform notifications are delivered only where the platform offers a local
   notification capability the app can adapt. On the targets in this release the
   administrator's path to an alert is the app's own dashboard.
