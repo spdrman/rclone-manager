@@ -150,13 +150,23 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // the meantime.
 //
 // intent is issue #538, and it is why this function has an argument
-// openService does not need. Every route that rewrites config.yaml is a
-// *BackupService method, so this is the one door in this binary a
-// configuration write can come through, and a write aimed at a
-// configuration a running engine holds is refused here before anything is
-// opened rather than performed and reported as a success (#535). See
-// liveengine.go for why the check cannot live further in, beside the
+// openService does not need. Every route that rewrites an EXISTING
+// config.yaml is a *BackupService method, so for those this is the one
+// door, and a write aimed at a configuration a running engine holds is
+// refused here rather than performed and reported as a success (#535).
+// See liveengine.go for why the check cannot live further in, beside the
 // write itself, and why a read beside a live engine must keep working.
+//
+// "Existing" is load bearing and it used not to be said. There is exactly
+// one configuration write in this binary that does not come through here:
+// `backup-set create` against a path where no config.yaml exists writes a
+// FIRST configuration through core/service.FirstRun, whose
+// writeConfigExclusively says in as many words that it is deliberately
+// not writeConfigBytesAtomically. That route asks the same question about
+// the journal --state-database names, in backupset.go's createFirstConfig,
+// because the claim this doc used to make ("every route that rewrites
+// config.yaml is a *BackupService method, so this is the one door") was
+// phrased over exactly the predicate that excluded the escape.
 //
 // openService has no such argument because it structurally cannot write a
 // configuration: it hands back an internal/app.Service built from an
@@ -165,15 +175,30 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // *BackupService. That is a property to re-check rather than assume if
 // internal/app.Service ever grows a configuration path of its own.
 //
-// The returned cleanup func closes the journal (via BackupService.Close);
-// callers should always `defer cleanup()` immediately.
+// # Why the claim is taken AFTER the open, and held
+//
+// The check used to run first and alone, and that made it a sample rather
+// than an exclusion: after it came the startup sequence, an SSH host-key
+// probe over the network, a key import and, on one route, a blocking read
+// of standard input, all with nothing re-checked and no lock held. An
+// engine that started during any of that was written straight over.
+//
+// So the order here is service.Open, then claim, then ask. The claim is
+// core/service's ConfigWriteGuard, which is the same `.startup-lock`
+// every engine start has to take, and it is held until cleanup, which
+// callers defer, so it spans the write itself. An engine that got there
+// first is already announced by the time the claim is granted and is
+// found by the question; an engine that arrives later cannot finish
+// starting until this command is done, and reads the new file when its
+// supervisor brings it back. What that costs, and why it is worth it, is
+// spelled out on ConfigWriteGuard itself.
+//
+// The returned cleanup func closes the journal (via BackupService.Close)
+// and gives the claim back; callers should always `defer cleanup()`
+// immediately.
 func openBackupService(ctx context.Context, configPath string, intent configIntent) (*service.BackupService, func(), error) {
 	switch intent {
-	case readsConfig:
-	case writesConfig:
-		if err := refuseIfAnEngineHoldsTheConfiguration(configPath); err != nil {
-			return nil, func() {}, err
-		}
+	case readsConfig, writesConfig:
 	default:
 		// Not reachable from any call site in this package, and it stays
 		// that way by being loud rather than by being permissive: an
@@ -191,7 +216,31 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
 		}
 	}
-	return svc, cleanup, nil
+	if intent == readsConfig {
+		return svc, cleanup, nil
+	}
+
+	guard, err := service.BeginConfigWrite(configPath)
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	if err := refuseIfAnEngineHoldsTheConfiguration(configPath); err != nil {
+		_ = guard.Release()
+		cleanup()
+		return nil, func() {}, err
+	}
+	return svc, func() {
+		cleanup()
+		// After the journal, so the claim outlives everything this
+		// command did with it. Its failure is reported and not fatal:
+		// the write has already happened by the time this runs, and
+		// turning a successful change into a non-zero exit over a lock
+		// file that could not be closed would be the wrong trade.
+		if err := guard.Release(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+		}
+	}, nil
 }
 
 // logger builds the FR-23 structured-observability sink every Service

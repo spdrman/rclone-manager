@@ -66,6 +66,18 @@ func cmdSettings(args []string) int {
 		}
 	}
 
+	// A patch that names nothing is a usage mistake, and it has to be
+	// caught here rather than left to UpdateSettings to refuse. Beside a
+	// running engine everything downstream of this point answers with the
+	// engine refusal, so an operator who forgot a flag was sent off to go
+	// and stop a daemon over a missing --timezone. `backup-set patch`
+	// has always refused its empty patch before it opens anything, and
+	// this is the same rule: complain about the command line while the
+	// command line is still the thing that is wrong.
+	if patching && len(visitedSettingsPatchFlags(fs)) == 0 {
+		return usageError("settings patch: name at least one setting to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
+	}
+
 	ctx := context.Background()
 	// The intent is decided from the operand, before anything opens, and
 	// it has to be: `settings` reads and `settings patch` writes, and

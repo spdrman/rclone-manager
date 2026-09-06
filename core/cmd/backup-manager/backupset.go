@@ -527,6 +527,34 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `backup-manager run`")
 	}
 
+	// This path writes a configuration without ever going through
+	// openBackupService, so it has to ask openBackupService's question
+	// itself, and it has to ask it about the journal rather than about
+	// the configuration: there is no configuration here to read a journal
+	// path out of, which is the entire reason this branch was taken.
+	//
+	// Two ordinary mistakes land here against a LIVE deployment, and both
+	// used to exit 0 after writing a configuration nothing would ever
+	// read: a mistyped --config, and a config.yaml renamed out from under
+	// a running engine. --state-database is what still identifies the
+	// deployment in both, because it carries the same packaged default
+	// the first-run wizard writes, so a create that does not name one is
+	// still asking about the right journal.
+	//
+	// A genuine first run is untouched by this, and that is the half that
+	// had to stay true: a bare host has no journal, a host serving the
+	// setup wizard has not opened one yet, and neither announces itself
+	// as serving anything. Both still write their first configuration
+	// from here.
+	guard, err := service.BeginConfigWriteForJournal(stateDatabase)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = guard.Release() }()
+	if err := refuseIfAnEngineServesThisJournal(stateDatabase); err != nil {
+		return fail(err)
+	}
+
 	firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
 		ConfigPath:    configFile,
 		StateDatabase: stateDatabase,
