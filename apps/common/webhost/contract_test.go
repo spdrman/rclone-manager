@@ -20,7 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/apicontract"
+	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 

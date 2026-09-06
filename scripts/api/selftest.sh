@@ -102,8 +102,8 @@ echo "==> generated output is generated, not edited"
 d=$(mutant go-binding-hand-edited)
 # A plausible hand edit rather than a syntax error: someone "fixing" a
 # field name in the generated Go instead of in the contract.
-sed -i.bak 's/json:"config_revision"/json:"configRevision"/' "$d/apps/common/webhost/apicontract/contract.gen.go"
-rm -f "$d/apps/common/webhost/apicontract/contract.gen.go.bak"
+sed -i.bak 's/json:"config_revision"/json:"configRevision"/' "$d/core/apicontract/contract.gen.go"
+rm -f "$d/core/apicontract/contract.gen.go.bak"
 expect_check_fails "a hand edit to the generated Go binding" "$d" \
   "the checked-in Go binding does not match" bash scripts/api/check-contract-drift.sh
 

@@ -7116,7 +7116,7 @@
   },
   "x-go-package": "apicontract",
   "x-generated": {
-    "go": "apps/common/webhost/apicontract/contract.gen.go",
+    "go": "core/apicontract/contract.gen.go",
     "typescript": "ui/shared/src/api/generated/contract.ts"
   }
 }

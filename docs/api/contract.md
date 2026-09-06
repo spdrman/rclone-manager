@@ -81,7 +81,7 @@ Edit `api/v1/openapi.json`, run that, commit both generated files:
 
 | generated file | consumed by |
 |---|---|
-| `apps/common/webhost/apicontract/contract.gen.go` | the Go conformance tests today; the handlers themselves in a later issue |
+| `core/apicontract/contract.gen.go` | the Go conformance tests, and `core/internal/apiclient`, the CLI's own client (issue #541) |
 | `ui/shared/src/api/generated/contract.ts` | `ui/shared/src/api/contracts.ts` and `client.ts`, directly |
 
 Both carry a `DO NOT EDIT` banner. Editing either one by hand fails CI.
