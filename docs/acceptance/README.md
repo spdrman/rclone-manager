@@ -111,6 +111,29 @@ Generic Docker has no procedure here on purpose: `apps/generic/tests/dockercli`
 drives the real `docker` CLI against the real image (§67), so there is no
 hardware step left to write down.
 
+## Resource certification, which is a different question
+
+The table above is about whether a platform accepts the package. §73 Work
+Package 5.3 asks something else about the same hardware: whether the app is
+light enough to sit on a NAS alongside the NAS's own job, per architecture,
+with real numbers rather than an assumption. That is
+[ugos-resource-certification.md](ugos-resource-certification.md), and it is
+the one procedure here whose thresholds are machine-readable, because
+`distribution/hwcert` parses them out of it rather than carrying a copy.
+
+Two rules make it different from everything above:
+
+- Its thresholds were written before any hardware ran, with the reasoning
+  for each number, so none of them could be picked to fit a result.
+  `scripts/hwcert/selftest.sh` proves the comparison can still fail.
+- Certification is per architecture and an amd64 pass never implies an
+  arm64 one. Each evidence record carries three independent witnesses to
+  its architecture and the harness refuses a record where any two
+  disagree, so this is structural rather than a convention. Read the
+  current state with `go run ./cmd/hwcert status` from `distribution/`;
+  an architecture with no record is build-supported and uncertified, which
+  is the same §68 rule the rest of this directory runs on.
+
 ## Recording evidence
 
 Every procedure ends with the same evidence table, whose rows are section 68's own

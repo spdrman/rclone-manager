@@ -70,9 +70,9 @@ func fixtureManifest() *ReleaseManifest {
 // stand in for an arm64 one.
 func TestARecordCannotClaimAnArchitectureItsWitnessesDisagreeWith(t *testing.T) {
 	cases := []struct {
-		name  string
+		name   string
 		break_ func(r *Record)
-		want  string
+		want   string
 	}{
 		{
 			name:   "probe built for the other architecture",

@@ -71,12 +71,20 @@ const (
 	// LivenessTooFewSamples is a window with nothing to compute a rate
 	// from.
 	LivenessTooFewSamples Liveness = "too-few-samples"
+	// LivenessSampled is a window that carries a measurement, without
+	// saying whether it was a quiet one. Verify reports this: a window
+	// sampled DURING a transfer is valid and is not supposed to be idle,
+	// and calling it idle would be the report telling a small lie on
+	// every run.
+	LivenessSampled Liveness = "sampled"
 )
 
 // Measurable reports whether a window in this state carries a usable
 // number. Only the first two do; the rest are refusals, and treating any
 // of them as "0% CPU" is the mistake this type exists to prevent.
-func (l Liveness) Measurable() bool { return l == LivenessIdle || l == LivenessBusy }
+func (l Liveness) Measurable() bool {
+	return l == LivenessIdle || l == LivenessBusy || l == LivenessSampled
+}
 
 // Window is one process sampled over time.
 type Window struct {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -131,7 +132,7 @@ func Verify(p *Procedure, rec *Record, arch string, manifest *ReleaseManifest) (
 			fail()
 		} else {
 			cpu, _ := w.CPUPercent()
-			wr.Liveness = LivenessIdle
+			wr.Liveness = LivenessSampled
 			wr.Detail = fmt.Sprintf("one process throughout %.0fs, %.3f%% of one core", w.Seconds(), cpu)
 		}
 		res.Windows = append(res.Windows, wr)
@@ -245,9 +246,14 @@ func CheckShape(rec *Record, manifest *ReleaseManifest) []ShapeResult {
 			foreign = append(foreign, c.Name+": "+c.Command)
 		}
 	}
-	add("every command is the canonical binary", len(foreign) == 0,
-		detailOr(fmt.Sprintf("commands not running %s: %s", CanonicalBinary, strings.Join(foreign, "; ")),
-			"every container runs "+CanonicalBinary))
+	if len(foreign) == 0 {
+		add("every command is the canonical binary", true,
+			fmt.Sprintf("all %d container(s) run %s", len(cs), CanonicalBinary))
+	} else {
+		add("every command is the canonical binary", false,
+			fmt.Sprintf("commands not running %s: %s. Anything else in the data path is a second application server",
+				CanonicalBinary, strings.Join(foreign, "; ")))
+	}
 
 	var publishing []string
 	for _, c := range cs {
@@ -413,11 +419,17 @@ func comparator(d Direction) string {
 	return "<="
 }
 
+// formatValue keeps a report readable. A ratio printed to seventeen
+// significant figures is a number nobody checks by eye, which defeats the
+// point of printing every rule.
 func formatValue(v float64, unit string) string {
-	if unit == "bytes" {
+	switch unit {
+	case "bytes":
 		return fmt.Sprintf("%.0f", v)
+	case "ratio":
+		return fmt.Sprintf("%.4f", v)
 	}
-	return fmt.Sprintf("%g", v)
+	return fmt.Sprintf("%g", math.Round(v*1000)/1000)
 }
 
 func containerNames(cs []Container) []string {

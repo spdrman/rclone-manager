@@ -338,6 +338,14 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/docs/$docs.sh"
   done
 
+  # D2.1's hardware-certification harness self-test (#89), for the twelfth
+  # time for the same reason. The real one copies the tree four times and
+  # plants a defect in distribution/hwcert in each copy; this fixture
+  # measures which steps the gate chooses to run, and a step pointed at a
+  # path it does not have exits 127 under `set -e`.
+  mkdir -p "$tree/scripts/hwcert"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/hwcert/selftest.sh"
+
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
   # measures which steps the gate chooses to run, not what those steps do,

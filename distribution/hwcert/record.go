@@ -202,19 +202,36 @@ func (r *Record) WriteFile(path string) error {
 // happens, which is why the aggregation is unit-tested and the driver is
 // not.
 type Capture struct {
-	Architecture string
-	Provider     string
-	Probe        Probe
-	Device       Device
-	Release      Release
-	Deployment   Deployment
-	Method       map[string]float64
-	Windows      map[string]Window
-	Series       map[string]Series
-	Scalars      map[string]float64
-	CapturedAt   time.Time
-	Operator     string
-	Notes        string
+	Architecture string             `json:"architecture"`
+	Provider     string             `json:"provider"`
+	Probe        Probe              `json:"probe"`
+	Device       Device             `json:"device"`
+	Release      Release            `json:"release"`
+	Deployment   Deployment         `json:"deployment"`
+	Method       map[string]float64 `json:"method"`
+	Windows      map[string]Window  `json:"windows"`
+	Series       map[string]Series  `json:"series"`
+	Scalars      map[string]float64 `json:"scalars"`
+	CapturedAt   time.Time          `json:"captured_at"`
+	Operator     string             `json:"operator"`
+	Notes        string             `json:"notes,omitempty"`
+}
+
+// ReadCapture loads what the on-device driver wrote. It is raw samples
+// and identity, never a verdict: nothing in this file decides anything,
+// which is why the shell that produces it needs no tests of its own.
+func ReadCapture(path string) (*Capture, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c Capture
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &c, nil
 }
 
 // seriesAggregates maps a captured series to the metric it produces and
