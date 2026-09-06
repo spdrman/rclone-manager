@@ -212,14 +212,23 @@ describe("every request the shared client makes is a declared operation", () => 
         host: "h", port: 22, user: "u", sshKeyId: "k", knownHostsLine: "l"
       })],
       ["listArtifacts", () => httpApi.listArtifacts()],
-      ["getArtifact", () => httpApi.getArtifact("artifact-1")],
+      // The five below take a backup's id, which is three parts
+      // (source/set/name, model.NewArtifactID) and is spelled that way in
+      // the route the contract publishes. They were driven with a
+      // single-segment "artifact-1" while the contract still spelled the
+      // path as one {id} that spans segments, and nothing noticed,
+      // because a one-part id and a three-part one both pasted into one
+      // placeholder. A fixture that feeds this file a shape production
+      // never produces cannot check what production does, so they take
+      // the same id restoreCopy above already takes.
+      ["getArtifact", () => httpApi.getArtifact("src/set-1/a.tar.gz")],
       ["listOperations", () => httpApi.listOperations()],
       ["listActivity", () => httpApi.listActivity()],
       ["listQuarantine", () => httpApi.listQuarantine()],
-      ["revalidate", () => httpApi.revalidate("artifact-1")],
-      ["retryIngestion", () => httpApi.retryIngestion("artifact-1")],
-      ["retryFailedIngestion", () => httpApi.retryFailedIngestion("artifact-1", "the NAS came back")],
-      ["reinstate", () => httpApi.reinstate("artifact-1")],
+      ["revalidate", () => httpApi.revalidate("src/set-1/a.tar.gz")],
+      ["retryIngestion", () => httpApi.retryIngestion("src/set-1/a.tar.gz")],
+      ["retryFailedIngestion", () => httpApi.retryFailedIngestion("src/set-1/a.tar.gz", "the NAS came back")],
+      ["reinstate", () => httpApi.reinstate("src/set-1/a.tar.gz")],
       ["previewRetention", () => httpApi.previewRetention("src", "set-1")],
       ["applyRetention", () => httpApi.applyRetention("src", "set-1", "plan-1")],
       ["getBackupSetRetention", () => httpApi.getBackupSetRetention("src", "set-1")],

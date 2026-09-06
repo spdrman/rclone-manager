@@ -1248,6 +1248,14 @@ function perSetHealth(): Promise<Map<string, WireBackupSetHealth>> {
 const backupSetPath = (source: string, set: string) =>
   "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set);
 
+/** The half of the refusals below that is the same whichever rule was
+ *  broken: why an id that cannot fill a path is refused here rather than
+ *  sent. */
+const MALFORMED_ID =
+  " Building it anyway would request a path this API does not declare, and be answered 404," +
+  " which reads as a deployment missing an endpoint rather than as an id that could never" +
+  " have named anything.";
+
 /** One segment of a composite id, URL-encoded on its own.
  *
  *  A backup set is "source/set" and a backup is "source/set/name", so both
@@ -1257,20 +1265,53 @@ const backupSetPath = (source: string, set: string) =>
  *  the id is made of rather than pasting the whole id in as one. The
  *  contract used to publish these as a single `{id}`, and that was the
  *  defect: the second client to be written from the document escaped its
- *  parameter, as it should, and asked for `production%2Fpostgres`. */
-const idSegment = (id: string, n: number) => encodeURIComponent(id.split("/")[n] ?? "");
+ *  parameter, as it should, and asked for `production%2Fpostgres`.
+ *
+ *  A segment that is not there is a refusal, not an empty string. An id
+ *  with the wrong number of parts is a caller error, and the only question
+ *  is who gets blamed for it: core/internal/apiclient's fillPath refuses
+ *  an empty path parameter for the same reason, and these are the same
+ *  paths. `of` is how many parts the route needs, so the check is about
+ *  the id rather than about the one segment being read.
+ *
+ *  "." and ".." are refused for the same reason fillPath refuses them:
+ *  encodeURIComponent returns both unchanged, because they are legal path
+ *  characters, so a part that is one of them would assemble a path that
+ *  climbs out of the route the contract declares. As values, never as
+ *  substrings, since a dot is an ordinary character in a backup's name. */
+const idSegment = (id: string, n: number, of: number) => {
+  const parts = id.split("/");
+  if (parts.length !== of) {
+    throw new Error(
+      `this route is built from an id of ${of} parts, and "${id}" has ${parts.length}.` + MALFORMED_ID
+    );
+  }
+  const segment = parts[n];
+  if (!segment) {
+    throw new Error(
+      `this route is built from an id of ${of} parts, and part ${n + 1} of "${id}" is empty.` + MALFORMED_ID
+    );
+  }
+  if (segment === "." || segment === "..") {
+    throw new Error(
+      `this route is built from an id of ${of} parts, and part ${n + 1} of "${id}" is "${segment}",` +
+        ` a relative path segment rather than a name.` + MALFORMED_ID
+    );
+  }
+  return encodeURIComponent(segment);
+};
 
 /** GET /backup-sets/{source}/{set}, from the composite id a caller holds. */
-const backupSetIdPath = (id: string) => "/backup-sets/" + idSegment(id, 0) + "/" + idSegment(id, 1);
+const backupSetIdPath = (id: string) => "/backup-sets/" + idSegment(id, 0, 2) + "/" + idSegment(id, 1, 2);
 
 /** /backups/{source}/{set}/{name}, from the composite id a caller holds. */
 const artifactPath = (id: string) =>
-  "/backups/" + idSegment(id, 0) + "/" + idSegment(id, 1) + "/" + idSegment(id, 2);
+  "/backups/" + idSegment(id, 0, 3) + "/" + idSegment(id, 1, 3) + "/" + idSegment(id, 2, 3);
 
 /** /quarantine/{source}/{set}/{name}: the same backup, under the three
  *  operator actions a quarantined one has. */
 const quarantinedArtifactPath = (id: string) =>
-  "/quarantine/" + idSegment(id, 0) + "/" + idSegment(id, 1) + "/" + idSegment(id, 2);
+  "/quarantine/" + idSegment(id, 0, 3) + "/" + idSegment(id, 1, 3) + "/" + idSegment(id, 2, 3);
 
 const retentionPath = (source: string, set: string) => backupSetPath(source, set) + "/retention";
 
@@ -1319,7 +1360,7 @@ export const httpApi: BackupManagerApi = {
     Promise.all([request<WireListBackupSetsResponse>("/backup-sets"), perSetHealth()]).then(
       ([r, health]) => r.backup_sets.map((bs) => fromWireBackupSet(bs, health.get(bs.id)))
     ),
-  getSet: (id) =>
+  getSet: async (id) =>
     Promise.all([request<WireBackupSet>(backupSetIdPath(id)), perSetHealth()]).then(([bs, health]) =>
       fromWireBackupSet(bs, health.get(bs.id))
     ),
@@ -1446,7 +1487,7 @@ export const httpApi: BackupManagerApi = {
     request<WireListArtifactsResponse>(
       "/backups" + (setId ? "?setId=" + encodeURIComponent(setId) : "")
     ).then((r) => r.artifacts.map(fromWireArtifact)),
-  getArtifact: (id) => request<WireArtifact>(artifactPath(id)).then(fromWireArtifact),
+  getArtifact: async (id) => request<WireArtifact>(artifactPath(id)).then(fromWireArtifact),
 
   listOperations: () =>
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
@@ -1454,12 +1495,12 @@ export const httpApi: BackupManagerApi = {
     request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
   listQuarantine: () =>
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
-  revalidate: (id) => post(quarantinedArtifactPath(id) + "/revalidate"),
-  retryIngestion: (id) => post(quarantinedArtifactPath(id) + "/retry"),
+  revalidate: async (id) => post(quarantinedArtifactPath(id) + "/revalidate"),
+  retryIngestion: async (id) => post(quarantinedArtifactPath(id) + "/retry"),
   // Issue #419. A different path and a different refusal from the one
   // above, because FAILED and QUARANTINED are different facts about a
   // backup: one is not finished, the other is not trusted.
-  retryFailedIngestion: (id, note) =>
+  retryFailedIngestion: async (id, note) =>
     request<void>(artifactPath(id) + "/retry", {
       method: "POST",
       body: JSON.stringify(note ? { note } : {})
@@ -1468,7 +1509,7 @@ export const httpApi: BackupManagerApi = {
   // reaches the backend and comes back saying the copy is bad is a 200,
   // not a rejection, so a caller that ignored the body could not tell that
   // from a success.
-  reinstate: (id) =>
+  reinstate: async (id) =>
     request<WireArtifactReinstateResponse>(quarantinedArtifactPath(id) + "/reinstate", { method: "POST" }).then((r) => ({
       reinstated: r.reinstated,
       checked: r.checked,

@@ -379,6 +379,21 @@ func (c *Client) csrfToken() string {
 // fillPath substitutes an operation's path parameters, escaping each one.
 // A count mismatch is a failure rather than a best effort: a path built
 // with a parameter left as "{id}" is a path the engine has no route for.
+//
+// Escaping per parameter is the point rather than a detail. A value is
+// data, so a separator inside one becomes %2F and cannot invent a segment
+// the contract did not declare; an identity that really does span segments
+// is spelled as the segments it is, one parameter each, which is what
+// api/v1/openapi.json now publishes.
+//
+// The two values that survive that escape untouched are refused here
+// instead. "." and ".." are legal path characters, so url.PathEscape
+// returns them unchanged and a caller could otherwise talk this client
+// into building "/backup-sets/../settings": a path the contract never
+// declared, assembled by the very function whose job is that only the
+// contract decides. They are refused as VALUES, not as substrings, because
+// a dot is an ordinary character in a backup's name and "..2026-08-30.dump"
+// is a file somebody has.
 func fillPath(ep apicontract.Endpoint, args []string) (string, error) {
 	var b strings.Builder
 	rest := ep.Path
@@ -399,6 +414,9 @@ func fillPath(ep apicontract.Endpoint, args []string) (string, error) {
 		}
 		if args[used] == "" {
 			return "", fmt.Errorf("the contract's path %q takes a value for %s and was given an empty one", ep.Path, rest[open:open+closeIdx+1])
+		}
+		if args[used] == "." || args[used] == ".." {
+			return "", fmt.Errorf("the contract's path %q takes a value for %s and was given %q, which is a relative path segment rather than a name; it would build a path this contract does not declare", ep.Path, rest[open:open+closeIdx+1], args[used])
 		}
 		b.WriteString(url.PathEscape(args[used]))
 		used++
