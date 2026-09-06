@@ -39,7 +39,9 @@ worth saying here rather than leaving to be found.
   a set with the same source and name again takes those backups back, along with their
   retention history. Nothing this operation can reach deletes a byte of backup data.
 - The same operation is on the API (`DELETE /api/v1/backup-sets/{source}/{set}`) and on the
-  command line (`backup-manager backup-set remove <source/backup-set>`).
+  command line (`backup-manager backup-set remove <source/backup-set>`). Against a server that
+  is already running the command line uses that route; with nothing running it reaches the
+  same code directly. See "The command line and a running server" below.
 - The Backups list now includes the backups of sets whose configuration has been removed.
   Narrowing that list to one set is over configured sets only, so a removed set is refused
   there like an unknown name. The Quarantine screen lists quarantined backups under
@@ -50,18 +52,78 @@ worth saying here rather than leaving to be found.
   source's last set leaves the source in place, with its read-only posture. A hand-written
   configuration with an empty source used to be refused at startup and is now accepted.
 
+### The command line and a running server
+
+An administrator with a terminal on the machine can change the configuration while the server
+is up, and the change takes effect at once rather than at the next restart. Creating, changing
+and removing a backup set, and changing the deployment's retention or capacity settings, are
+sent to the running server over the same API the web interface uses, with the same
+administrator account, the same validation and the same audit trail, once the command has been
+told where that server is. Nothing is written behind the server's back and there is nothing to
+restart afterwards.
+
+The command has to be told where the server is, and it is told through the environment.
+`BACKUP_MANAGER_API_URL` is the server's address, which is `http://127.0.0.1:8080` from inside
+its own container or the published web port from a shell on the machine, and
+`BACKUP_MANAGER_API_USERNAME` and `BACKUP_MANAGER_API_PASSWORD` are the local administrator
+account the web interface already uses. The password is held in memory for the one command and
+written nowhere. These are environment variables rather than options because a password typed
+as an option is visible in every process listing on the machine.
+
+Each command that changes the configuration announces which world it found, on a `mode:` line.
+`engine-attached` with an address means the change was handed to the running server.
+`engine-attached` without one means the change was refused and nothing at all was written, so
+there is no half-made change waiting for a restart. `direct` means nothing was running and the
+file was changed here.
+
+The commands that only read say the same kind of thing about their answers. `status`, the
+source and backup set listing, the backup catalog and the retention preview report the running
+server's world when they can reach it, say `unconfirmed` and answer from the configuration file
+when they cannot, and refuse outright, printing nothing at all, when the running server turns
+out to be holding a different configuration or to disagree about what it holds. That last one
+is the failure this release exists to catch, and it is now caught before an administrator is
+shown a number about a deployment nobody is running.
+
 ### Known limitations in this release
 
 Listed because a store review reads them and an administrator deserves them before
 installing, not after.
 
-- There is no restore command. Recovery is a documented procedure; see the support
-  materials for where it lives.
+- Putting a backup set's contents back is a documented procedure rather than something
+  this release performs for you; see the support materials for where it lives. There is a
+  `restore` command, and it is a different thing worth not confusing with recovery: it asks
+  a storage provider to make one archived copy readable again, which is what an administrator
+  does before recovering from a copy that has gone cold, not the recovery itself.
 - Native platform notifications are delivered only where the platform offers a local
   notification capability the app can adapt. On the targets in this release the
   administrator's path to an alert is the app's own dashboard.
 - Native platform sign-on is not wired up on these targets; the app uses its own local
   account.
+- Two configuration changes are never sent to a running server: replacing a backup set's whole
+  retention policy, and writing the very first configuration on an installation that does not
+  have one yet. Where a server is found serving that installation, both are refused with
+  nothing written and the command says what it found, so there is nothing to restart into.
+  Make the change in the web interface, where it takes effect at once, or stop the server, run
+  the command, and start it again.
+- An installation that has been unpacked but not set up is the one place a running process
+  cannot be found at all. Until setup has written a configuration there is no catalog for the
+  web host to announce itself against, so a `backup-set create` typed at a terminal writes the
+  first configuration underneath the setup wizard, and the wizard goes on offering setup until
+  it is restarted. Restarting it picks that configuration up.
+- Two of the command line's readings are answered from the configuration file on the machine
+  it runs on and are not checked against a running server: the deployment's retention and
+  capacity settings, and which retention policy one backup set is retained under. On an
+  installation whose configuration file was hand-edited under a running server, those two
+  answers can differ from what the web interface shows.
+- A change sent to a running server goes to the address it was given, and nothing checks that
+  the address belongs to this deployment. Where two of them run on one machine, an address
+  with one character wrong lands the change in the other one and both report success. The
+  packaged installation is a single deployment, so reaching this needs a second one stood up
+  by hand.
+- One engine per deployment. Starting a second `backup-manager daemon`, or a second web host,
+  against a state database another one is already serving is refused rather than started. Two
+  of them would run two schedules over one set of backups and hold two independent copies of
+  one configuration, which is the divergence everything above exists to prevent.
 
 ### Upgrading
 

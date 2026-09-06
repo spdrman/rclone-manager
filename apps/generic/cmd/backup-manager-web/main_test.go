@@ -270,3 +270,49 @@ func TestCmdHealthcheck_FailsWhenNothingIsListening(t *testing.T) {
 		t.Error("run([\"healthcheck\"]) against a closed port = 0, want non-zero")
 	}
 }
+
+// TestCmdServe_RefusesWithItsOwnExitCodeWhenSomethingElseIsAlreadyServing
+// is issue #551 at the binary the shipped container actually runs.
+//
+// container/compose.yaml runs `/backup-manager-web serve`, so the
+// deployment shape the exit code was justified by (a supervisor replacing
+// a container while the outgoing process still holds the serving lock,
+// where waiting and trying again is the right answer) is this binary's
+// shape and not `backup-manager daemon`'s. A code that only the CLI
+// returns would be a contract a container operator cannot use.
+//
+// The lock is taken here, in the test process, and it is a real one:
+// core/service takes it with flock on its own file descriptor, so a
+// second acquisition inside this process is refused exactly the way a
+// second process would be.
+func TestCmdServe_RefusesWithItsOwnExitCodeWhenSomethingElseIsAlreadyServing(t *testing.T) {
+	cfg := writeServeTestConfig(t)
+	release, err := service.AnnounceServing(cfg)
+	if err != nil {
+		t.Fatalf("AnnounceServing (the engine this test stands in for): %v", err)
+	}
+	defer func() { _ = release() }()
+
+	got := cmdServe([]string{
+		"--config", cfg,
+		"--auth-store", filepath.Join(t.TempDir(), "local-auth.json"),
+		"--listen", "127.0.0.1:0",
+	})
+	if got != exitEngineHoldsDeployment {
+		t.Fatalf("serve beside a process that already holds this deployment = %d, want %d: a supervisor cannot tell 'wait and retry' from 'this deployment is broken'",
+			got, exitEngineHoldsDeployment)
+	}
+}
+
+// TestCmdServe_KeepsAnOrdinaryFailureOnTheOrdinaryCode is the control for
+// the test above. Without it, "serve returned 3" would pass just as well
+// against a binary that had started returning 3 for everything, which is
+// the failure mode a new exit code invites.
+func TestCmdServe_KeepsAnOrdinaryFailureOnTheOrdinaryCode(t *testing.T) {
+	if got := run(invalidConfigArgs(t)); got != exitUsage && got != exitFailure {
+		t.Fatalf("serve against a configuration that does not validate = %d, want the usage or ordinary-failure code; it is not the engine holding this deployment", got)
+	}
+	if got := run(invalidConfigArgs(t)); got == exitEngineHoldsDeployment {
+		t.Fatalf("serve against a configuration that does not validate = %d, which is the code reserved for another process already serving it", got)
+	}
+}

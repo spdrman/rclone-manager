@@ -228,6 +228,15 @@ func TestRun_UnconfiguredClear_RefusesASetTheConfigurationStillHas(t *testing.T)
 // reads them out of, so a command absent from it is one nobody can find
 // and nothing can check.
 func TestUsage_NamesEveryTopLevelCommand(t *testing.T) {
+	// A floor under the loop below, which walks a map and would pass over
+	// an empty one without asserting anything. Issue #545 leans on this
+	// test: apps/generic/tests/cliapi enumerates this binary's verbs out of
+	// the usage text, because it cannot import an unexported map out of
+	// package main, and that enumeration is only as complete as this is.
+	if len(commands) < 15 {
+		t.Fatalf("the dispatch map has %d entries, which is fewer than this binary has ever had; this test is reading the wrong thing", len(commands))
+	}
+
 	out := captureStderr(t, usage)
 	var missing []string
 	for name := range commands {

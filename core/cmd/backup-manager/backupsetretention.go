@@ -105,8 +105,41 @@ func cmdBackupSetRetention(args []string) int {
 		return usageError("backup-set retention: --acknowledge-medium-disclosure acknowledges a policy write, and this command line writes no policy; pass it alongside --policy-file or the policy flags")
 	}
 
+	// The whole policy is assembled BEFORE anything is opened, and that
+	// ordering is the point rather than tidiness. --policy-file "-" reads
+	// standard input, which finishes whenever whatever is on the other
+	// end finishes: on a fifo, or in a pipeline, that is whenever the
+	// operator says. Doing it after the open put an operator-controlled
+	// pause between the engine check and the write, and an engine that
+	// started during that pause was written straight over (#535, through
+	// the guard meant to stop it). Read first, then claim the deployment,
+	// then write, with nothing that can block in between.
+	var override service.RetentionOverride
+	if len(named) > 0 {
+		var code int
+		override, code = buildRetentionOverride(fs, *policyFile, timezone, weekStartsOn, dailyDays, weeklyMonths, monthlyMonths, protect)
+		if code != 0 {
+			return code
+		}
+		// A consent, not a policy field, so it rides beside the policy
+		// rather than inside the file: a policy file that could carry its
+		// own acknowledgment would be a file that consents on the
+		// operator's behalf every time it is applied.
+		override.AcknowledgeMediumDisclosure = *acknowledge
+	}
+
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *cfgPath)
+	// Which of the three branches below this command lands in is already
+	// decided by here, so the intent is too: --inherit clears a policy
+	// and the policy flags write one, both of which rewrite config.yaml,
+	// while naming neither only prints the policy in force. The switch
+	// below reads the same two values, so the two cannot drift apart
+	// without this line being touched.
+	intent := readsConfig
+	if *inherit || len(named) > 0 {
+		intent = writesConfig
+	}
+	svc, cleanup, err := openBackupService(ctx, *cfgPath, intent)
 	if err != nil {
 		return fail(err)
 	}
@@ -123,15 +156,6 @@ func cmdBackupSetRetention(args []string) int {
 		return 0
 
 	case len(named) > 0:
-		override, code := buildRetentionOverride(fs, *policyFile, timezone, weekStartsOn, dailyDays, weeklyMonths, monthlyMonths, protect)
-		if code != 0 {
-			return code
-		}
-		// A consent, not a policy field, so it rides beside the policy
-		// rather than inside the file: a policy file that could carry its
-		// own acknowledgment would be a file that consents on the
-		// operator's behalf every time it is applied.
-		override.AcknowledgeMediumDisclosure = *acknowledge
 		logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 		got, err := svc.SetBackupSetRetention(ctx, id, override)
 		if err != nil {

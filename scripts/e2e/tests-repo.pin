@@ -51,5 +51,44 @@
 # repository, and a spec landed ahead of its feature cannot go green over there
 # until somebody moves it. Both of those commits are in that position right
 # now: they need that file moved to #465's own merge commit.
+#
+# Moved to b3fe0f8, which is rclone-manager-tests#36, and read off that
+# repository's merged main rather than off the branch, for the reason the
+# paragraph about a794c38 above already gives. EPIC #536 gave every
+# configuration read and write a "mode:" line on stderr saying which world
+# its answer came from, and seventeen cases over there asserted stderr was
+# empty. They now pin the sentence instead, with an absent matcher for the
+# engine-attached form and a count so the case still promises nothing else
+# is on that stream, which `empty` used to promise on its own. One more,
+# g3, had a `daemon` description that now wraps onto three lines.
+#
+# The product half is in this same branch, because either one alone leaves a
+# gate red: theirs was red against this pin until this line moved, and ours
+# would go red the moment it did.
+#
+# That bump also carries one expectation that is not #536's. e57d26b landed
+# retention/plain-retention-is-a-preview's stdout changes ahead of the pin
+# and they have been waiting there since, so that case has two generations
+# of ahead-of-pin expectation in it and both land together here.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names 3a489d2 of this repository and has to move to
+# whatever commit this branch merges as, or #536's specs cannot go green
+# over there.
+#
+# Moved to 0673850, rclone-manager-tests#40, off their merged main again. #555
+# gives a read a third way to refuse, the engine at the address this host was
+# given turning out to serve a different deployment, so the banner says three
+# cases and g5 still pinned the sentence that said two. That is the pin
+# noticing a product change rather than drift, which is the whole point of it.
+#
+# g3 needed nothing this time even though the same batch appended four lines to
+# the banner's exit-code table, because g3 pins one line per command and a table
+# row is not a command.
+#
+# Verified before the bump rather than after: a stamped build of this branch
+# through RM_MODE=local runs the whole of Suite A green, 72 of 72. Their
+# build-under-test.json names 1bed795 and still has to move to this branch's
+# merge commit by hand, which is the half of the lockstep with no automation.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=6520d0ae3c284c7e4d266de2d5c5567ba3c1f233
+TESTS_REPO_SHA=067385086246c907dfb02a57aaf332061fca726e

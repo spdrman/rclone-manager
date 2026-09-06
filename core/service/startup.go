@@ -38,6 +38,35 @@ const startupLockSuffix = ".startup-lock"
 // rather than one.
 const journalLockSuffix = ".journal-lock"
 
+// servingLockSuffix names the third lock file, and the only one that
+// means "an engine is running here". A process that is going to SERVE
+// this deployment takes it EXCLUSIVE before it reads anything and holds
+// it for as long as it serves (AnnounceServing, liveengine.go). Nothing
+// else ever holds it: a process asking the question only ever tries for
+// it SHARED and gives it straight back, so a shared attempt that fails
+// is the proof that somebody is serving.
+//
+// That polarity is the point rather than an implementation detail. Two
+// askers take compatible locks, so they cannot see each other, which is
+// what a probe taking the exclusive side got wrong: it manufactured its
+// own positives whenever two of them landed together.
+//
+// It is a separate file from the journal lock because the journal lock
+// answers a different question and cannot be made to answer this one:
+// every `backup-manager status`, every `sources`, every cron `run` holds
+// the journal lock too, which is exactly what openUnderSharedLock's own
+// doc says is ordinary use of this CLI. Asking the journal lock "is an
+// engine running" gets "somebody has this journal open", and issue #537
+// is explicit that reporting an engine that is not there strands the CLI
+// on the host the direct path exists for.
+//
+// Like the other two it lives beside the journal rather than in a shared
+// location, so "same deployment" and "same lock" are the identical
+// question with no configuration to get wrong. That is also what lets a
+// CLI that cannot read config.yaml at all still ask about the journal
+// --state-database names.
+const servingLockSuffix = ".serving-lock"
+
 // runStartupSequence performs §46.1's ordered startup steps against
 // dbPath and returns the opened, fully migrated journal together with the
 // release func for the shared journal lock the caller must hold for as
@@ -84,6 +113,19 @@ const journalLockSuffix = ".journal-lock"
 // armed on every `backup-manager status` bought nothing (there was no
 // migration to undo) and risked everything, so it is now reached only on a
 // start that genuinely is about to change the schema.
+//
+// # What this does NOT do: name the deployment
+//
+// This sequence used to mint the deployment identity here, under the
+// startup lock, on the reasoning that every process opening the journal
+// passes through it exactly once. That is true and it is the wrong set of
+// processes. `backup-manager status`, `sources` and every routed write
+// come through here too, and none of them is serving anything, so a
+// deployment whose identity file was missing got a brand new name from
+// whichever CLI command happened to run next, while the engine went on
+// serving the old one. Minting now belongs to AnnounceServing
+// (liveengine.go), which exactly one kind of process calls: one that is
+// about to serve. deploymentidentity.go argues it at length.
 //
 // # Two locks, shared and exclusive
 //

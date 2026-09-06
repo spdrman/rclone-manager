@@ -32,6 +32,19 @@
 # the gate where it would look like success. Anything that merges on this
 # gate's word must require 0.
 #
+# What makes tolerating it safe is that 3 means exactly one thing by the
+# time it arrives here, and that stopped being free while this hook stood
+# still. Two other things in this repository now speak that number: the
+# CLI returns it for a refusal of its own (#551, another process is
+# already serving this deployment), and gotestwatch's test binary returns
+# it for a control it could not measure. Neither reaches this hook wearing
+# it. The two-machine proof keeps its own verdict on a status nothing else
+# produces and translates once at its exit
+# (scripts/tests/two-machine-exit-status.test.sh pins that), and the gate
+# reads gotestwatch's 3 into its skip ledger rather than passing it up. If
+# a third thing starts speaking 3, it belongs in that list before this
+# hook's tolerance can stay as it is.
+#
 # Playwright e2e IS here now, and that is the change #197 was about. It used
 # to run only when somebody remembered to run it, which is how a
 # deterministically red spec sat on main through four merges and was

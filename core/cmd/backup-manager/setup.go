@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -89,7 +90,7 @@ func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error)
 }
 
 // openService loads and validates configPath, opens its state journal
-// (both via core/service.OpenConfigAndJournal — see that function's own
+// (both via core/service.OpenConfigAndJournal, see that function's own
 // doc for why this no longer reimplements that sequence itself), and
 // builds an internal/app.Service ready for whichever use case the calling
 // subcommand needs. withTransport controls whether the service is given a
@@ -127,20 +128,126 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 	return svc, cfg, cleanup, nil
 }
 
-// openBackupService is openService's counterpart for the handful of
-// subcommands (today, just `settings`) whose use case lives on
-// core/service.BackupService rather than internal/app.Service: anything
-// that needs a file-backed configPath to persist a change to (see
-// BackupService.configPath's own doc), which internal/app.Service, built
-// directly from an already-loaded *config.Config, has no notion of at
-// all. service.Open is the identical production constructor
-// apps/common/webhost's Open uses, so a CLI-driven settings write goes
-// through the exact same persist-then-hot-reload sequence
-// (BackupService.UpdateSettings's own doc) an HTTP PATCH would.
+// openBackupService is openService's counterpart for the subcommands
+// whose use case lives on core/service.BackupService rather than
+// internal/app.Service: anything that needs a file-backed configPath to
+// persist a change to (see BackupService.configPath's own doc), which
+// internal/app.Service, built directly from an already-loaded
+// *config.Config, has no notion of at all. That is `settings`, every
+// `backup-set` verb, and `restore`.
 //
-// The returned cleanup func closes the journal (via BackupService.Close);
-// callers should always `defer cleanup()` immediately.
-func openBackupService(ctx context.Context, configPath string) (*service.BackupService, func(), error) {
+// It is not the only door any more, and which one a command comes through
+// is the whole of what it can do beside a running engine. #543 gave four
+// configuration writes a route to a serving process, and they come through
+// openConfigWriteRoute below: `backup-set create`, `patch` and `remove`,
+// and `settings patch`. What is left here as a WRITE is `backup-set
+// retention` setting or clearing a policy, which has no route. Not for
+// want of endpoints: the client carries setBackupSetRetention,
+// clearBackupSetRetention and getBackupSetRetention. #543 would not route
+// the write while the report beside it went on reading this host's own
+// file, and #544 did not take that read half, so both halves of the verb
+// stand where #538 left them. Everything else here reads:
+// `settings` on its own, `backup-set retention` reporting the policy in
+// force, and `restore`.
+//
+// So a write through THIS door still has exactly two outcomes. With
+// nothing serving, it happens here, and an engine started afterwards
+// reads the new file when it starts, because there is no config watcher
+// and no SIGHUP reload in this build. With something serving, it is
+// refused: nothing lands in the file for a restart to pick up, config.yaml
+// is byte for byte what it was, and the operator is told what was found
+// and where the change can be made instead. The reading forms are not
+// touched either way, which is what the intent argument below is for.
+// Issue #539 took the API-equivalence claim out, and #538 and #542 made
+// this refuse rather than write: a help text that told an operator to
+// restart into a command-line change was describing a binary that no
+// longer makes one.
+//
+// service.Open is the identical production constructor
+// apps/common/webhost's Open uses, so a CLI-driven write goes through the
+// same service layer, and the same persist-then-hot-reload sequence
+// (BackupService.UpdateSettings's own doc), that an HTTP PATCH does. A
+// write through this door does not go through it BY CALLING that route,
+// and the difference is the whole of issue #535: the hot reload is this
+// process's own view of the file, and this process then exits.
+//
+// intent is issue #538, and it is why this function has an argument
+// openService does not need. Every route that rewrites an EXISTING
+// config.yaml is a *BackupService method, so a write reaches the file
+// through this function or through openConfigWriteRoute and through
+// nothing else, and a write aimed at a configuration a running engine
+// holds is refused here rather than performed and reported as a success
+// (#535). See liveengine.go for why the check cannot live further in,
+// beside the write itself, and why a read beside a live engine must keep
+// working.
+//
+// "Existing" is load bearing and it used not to be said. There is exactly
+// one configuration write in this binary that comes through neither this
+// function nor openConfigWriteRoute: `backup-set create` against a path
+// where no config.yaml exists writes a FIRST configuration through
+// core/service.FirstRun, whose writeConfigExclusively says in as many
+// words that it is deliberately not writeConfigBytesAtomically. That route
+// asks the same question about the journal --state-database names, in
+// backupset.go's createFirstConfig, because the claim this doc used to
+// make ("every route that rewrites config.yaml is a *BackupService method,
+// so this is the one door") was phrased over exactly the predicate that
+// excluded the escape.
+//
+// openService has no such argument because it structurally cannot write a
+// configuration: it hands back an internal/app.Service built from an
+// already-loaded *config.Config, which carries no path to persist to, and
+// every writeConfigBytesAtomically in core/service hangs off
+// *BackupService. That is a property to re-check rather than assume if
+// internal/app.Service ever grows a configuration path of its own.
+//
+// # Why the claim is taken AFTER the open, and held
+//
+// The check used to run first and alone, and that made it a sample rather
+// than an exclusion: after it came the startup sequence, an SSH host-key
+// probe over the network, a key import and, on one route, a blocking read
+// of standard input, all with nothing re-checked and no lock held. An
+// engine that started during any of that was written straight over.
+//
+// So the order here is service.Open, then claim, then ask. The claim is
+// core/service's ConfigWriteGuard, which is the same `.startup-lock`
+// every engine start has to take, and it is held until cleanup, which
+// callers defer, so it spans the write itself. An engine that got there
+// first is already announced by the time the claim is granted and is
+// found by the question; an engine that arrives later cannot finish
+// starting until this command is done, and reads the new file when its
+// supervisor brings it back. What that costs, and why it is worth it, is
+// spelled out on ConfigWriteGuard itself.
+//
+// # And the answer to the question is this invocation's mode
+//
+// Claiming and asking are one call rather than two (#542), because the
+// answer is not only a refusal: it is which world this command ran in,
+// and an operator has to be able to see that in the output. mode.go
+// decides it here, once, prints it, and refuses an engine-attached write
+// with no route to carry it out rather than downgrading it to a direct
+// one, which is every engine-attached write through this door. Nothing
+// downstream asks again, so nothing downstream can get a different
+// answer.
+//
+// The one configuration write that does not come through here,
+// createFirstConfig, announces its own mode for the same reason: a
+// configuration write in this binary that says nothing about which world
+// it believed it was in is the gap this issue exists to close.
+//
+// The returned cleanup func closes the journal (via BackupService.Close)
+// and gives the claim back; callers should always `defer cleanup()`
+// immediately.
+func openBackupService(ctx context.Context, configPath string, intent configIntent) (*service.BackupService, func(), error) {
+	switch intent {
+	case readsConfig, writesConfig:
+	default:
+		// Not reachable from any call site in this package, and it stays
+		// that way by being loud rather than by being permissive: an
+		// unrecognised intent defaulting to "go ahead" is how a new
+		// command would silently reacquire #535.
+		return nil, func() {}, fmt.Errorf("internal: openBackupService was given no intent for %s; a command has to say whether it writes the configuration", configPath)
+	}
+
 	svc, closeFn, err := service.Open(ctx, configPath)
 	if err != nil {
 		return nil, func() {}, err
@@ -150,7 +257,121 @@ func openBackupService(ctx context.Context, configPath string) (*service.BackupS
 			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
 		}
 	}
-	return svc, cleanup, nil
+	if intent == readsConfig {
+		return svc, cleanup, nil
+	}
+
+	// One call, and it is #538's claim and #542's mode decision together,
+	// because they are the same act: the claim is what makes the decision
+	// still true when the write happens, and the decision is what the
+	// claim is for. mode.go holds the reasoning; enterConfigWriteMode
+	// claims, asks, announces and refuses, and gives the claim back
+	// itself when it refuses.
+	// nil rather than attachToEngine, deliberately. `backup-set
+	// retention` is the write that comes through here, and it is not
+	// routed. setBackupSetRetention and clearBackupSetRetention are on the
+	// client, so this is a decision rather than a missing call: routing
+	// the write while the report beside it still read this host's own file
+	// would leave one verb answering out of two worlds, and #544 did not
+	// take that read half. openConfigWriteRoute below is the
+	// door that can hand a change over, and the two are separate
+	// functions precisely so that "this write can be routed" is a
+	// property of the call site rather than of a flag somebody might get
+	// wrong.
+	write, err := enterConfigWriteMode(ctx, configPath, nil, os.Stdout, os.Stderr)
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	guard := write.guard
+	return svc, func() {
+		cleanup()
+		// After the journal, so the claim outlives everything this
+		// command did with it. Its failure is reported and not fatal:
+		// the write has already happened by the time this runs, and
+		// turning a successful change into a non-zero exit over a lock
+		// file that could not be closed would be the wrong trade.
+		if err := guard.Release(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+		}
+	}, nil
+}
+
+// openConfigWriteRoute is openBackupService for the configuration writes
+// that can now be handed to a running engine (#543): it answers "where
+// does this change go", not "which service do I open".
+//
+// # Why it is a separate function rather than an argument
+//
+// The difference between the two doors is which writes may be routed, and
+// that is a fact about the command rather than a value it passes. An
+// argument would be one more thing a new subcommand could get wrong in the
+// permissive direction, which is the failure mode configIntent's own doc
+// spends its length on: `validate` once passed withTransport=false at the
+// neighbouring call and thereby never reached a storage medium. Here the
+// wrong value would be a settings patch quietly aimed at an engine through
+// a route that does not carry it.
+//
+// # The order, and why the local service is opened either way
+//
+// service.Open, then claim, then ask, exactly as openBackupService does,
+// and for a reason that is not a preference: service.Open's own startup
+// sequence takes the same `.startup-lock` the claim is, so claiming first
+// and opening second would wait on this process's own lock. What that
+// costs in engine-attached mode is one journal open that turns out not to
+// be needed, which is what this binary already did before it could route
+// at all, and what every CLI read beside a live engine still does.
+//
+// It buys something too. The configuration has to be readable for the mode
+// to be decided from it at all (that is where the journal path comes from),
+// and a deployment whose config.yaml does not load is told so in the words
+// core/service uses for it rather than through a failure against an engine.
+//
+// In engine-attached mode the local service is closed before the route is
+// handed back, so the change and the process making it never touch this
+// deployment's own files. The claim outlives it, for the same reason it
+// does on the direct path: nothing else may finish starting while this
+// command is deciding and acting on one answer.
+//
+// The returned cleanup func closes whatever was opened and gives the claim
+// back; callers should always `defer cleanup()` immediately.
+func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRoute, func(), error) {
+	svc, closeFn, err := service.Open(ctx, configPath)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeLocal := func() {
+		if err := closeFn(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+	}
+
+	write, err := enterConfigWriteMode(ctx, configPath, attachToEngine, os.Stdout, os.Stderr)
+	if err != nil {
+		closeLocal()
+		return nil, func() {}, err
+	}
+	releaseClaim := func() {
+		// Reported and not fatal, exactly as on the direct path: the
+		// change has already happened by the time this runs.
+		if err := write.guard.Release(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+		}
+	}
+
+	if write.route != nil {
+		// The engine is the authority for this change, so this process's
+		// own service has no part in it and is given back before the first
+		// request goes out. Holding it open would be holding a second
+		// view of a deployment this command has just agreed it does not
+		// own, which is the belief #535 was made of.
+		closeLocal()
+		return write.route, releaseClaim, nil
+	}
+	return svc, func() {
+		closeLocal()
+		releaseClaim()
+	}, nil
 }
 
 // logger builds the FR-23 structured-observability sink every Service
@@ -299,11 +520,140 @@ func moveExit(w io.Writer, report app.CycleReport) int {
 	return code
 }
 
+// The exit statuses this binary promises, in one place, because they are
+// a contract a script branches on rather than an implementation detail
+// (issue #551). The table an operator reads is in main.go's usage block,
+// and exitcodes_test.go holds the two against each other.
+//
+// # Why there is a third failure code at all
+//
+// There were two for a long time and that was enough while every failure
+// meant roughly "something went wrong, read the message". EPIC #536 ended
+// it. The refusal it added, another process is serving this deployment so
+// nothing was written, is the first failure here that is both EXPECTED
+// and RETRYABLE: a provisioning script wants to wait on that one and
+// abort on every other, and with one failure code its only way to tell
+// them apart is to match on the sentence, which is precisely the coupling
+// core/tests/compat exists to stop people relying on.
+//
+// # What deliberately did NOT get its own code
+//
+// Naming these is the point of the list, because each is a refusal
+// somebody could reasonably have expected to be 3 and each is a different
+// piece of news:
+//
+//   - a probe that could not be performed (cannotTellError). "I could not
+//     tell" is a broken host, not a busy one. EACCES on a lock file owned
+//     by another uid does not resolve itself, and a script that waited on
+//     it would wait forever.
+//
+//   - a route that was named and did not answer (route.go). The operator
+//     set an address and it is wrong or the engine is down; that is a
+//     deployment to go and look at.
+//
+//   - a route that was named, answered, and turned out to be serving a
+//     DIFFERENT deployment (#555, deploymentcheck.go). This is the one
+//     that reads most like 3, because something else really is serving
+//     something. It is not the same news: 3 says this deployment is
+//     already held and the change belongs to whoever holds it, and this
+//     says the address was aimed at somebody else's deployment. Retrying
+//     an address that is wrong never stops being wrong, and a script that
+//     treated the two alike would sit in a loop while the write it wanted
+//     was one character away from landing.
+//
+//   - another process on this host starting this deployment or changing
+//     its configuration right now (service.ErrStartupLocked). This one is
+//     genuinely retryable and is the closest call on the list. It stays
+//     at 1 because it is a different fact from the one 3 names, and a
+//     code that meant two things would be the same problem this issue is
+//     fixing, one level down.
+//
+//     What this used to say beside that, and what is not true, is that it
+//     clears itself in the time a startup sequence takes. The lock is
+//     held for as long as the process holding it takes, and a routed
+//     write holds it across its whole API round trip
+//     (openConfigWriteRoute above takes the claim and keeps it until the
+//     command is done). So against an engine that accepts a connection
+//     and never answers, the holder sits on it for apiclient's
+//     defaultTimeout, thirty seconds, while a concurrent service.Open
+//     gives up after startupLockWait, two. It is bounded, and it is
+//     bounded by what the other process is doing rather than by anything
+//     a startup sequence costs.
+const (
+	// exitOK: the command did what it was asked.
+	exitOK = 0
+
+	// exitFailure: an ordinary failure. Everything from a configuration
+	// that will not load to a cycle that backed nothing up, and every
+	// one of the refusals the list above says did not get a code of its
+	// own, which is where a reader who started here should go for the
+	// reasons.
+	exitFailure = 1
+
+	// exitUsage: nothing ran. The command line was wrong (an unknown
+	// command, an unknown flag, a missing or surplus argument), or it
+	// asked for help rather than for work.
+	//
+	// The second half is not an accident somebody should fix quietly.
+	// Every subcommand parses with flag.ContinueOnError and returns this
+	// for whatever fs.Parse hands back, and flag.ErrHelp is one of those,
+	// so `backup-manager check -h` is a correct command line, a request
+	// this binary answered, and a 2. That predates #551 and did not
+	// matter while the codes were an implementation detail; publishing
+	// them as a contract is what made it a promise, so the promise says
+	// what the binary does. Read this way it is coherent rather than
+	// grudging: 2 means no command was carried out, and the two ways to
+	// get there are asking for the wrong thing and asking for the help.
+	//
+	// Returning exitOK from the flag.ErrHelp path instead was the other
+	// way to fix it and is not the one taken. It is twenty-one edits,
+	// one per place that returns 2 for whatever fs.Parse or
+	// parseFlagsAroundOperands handed back, and it would leave
+	// `backup-manager -h` at 2 anyway: at the top level there is no flag
+	// set to parse, so `-h` is a name run() cannot find and it goes out
+	// through the unknown-command branch. Two help requests exiting
+	// differently is a worse contract than one honest row, and this
+	// binary's behaviour is not what #551 set out to change.
+	exitUsage = 2
+
+	// exitEngineHoldsDeployment: another process is serving this
+	// deployment, so nothing was done. A configuration write refused
+	// because it would never reach that process, or a `daemon` refused
+	// rather than started beside one.
+	//
+	// This is the retryable one, and "retryable" is not the same as "wait
+	// and it goes away", which is what the first version of the table
+	// promised. Whether waiting helps depends on which of the two shapes
+	// underneath produced it. A supervisor replacing a container meets it
+	// while the outgoing process still holds the lock, and that clears on
+	// its own in seconds. An engine serving steadily on a host where
+	// $BACKUP_MANAGER_API_URL was never set meets it on every invocation
+	// for as long as that engine runs, because refusal() fires on a nil
+	// route and the sentence beside it says to stop the process. A script
+	// that read the old row and retried on 3 would loop forever on the
+	// second one, which is the commoner of the two.
+	//
+	// So the code stays exactly as narrow as it was, and the row an
+	// operator reads now says to read the sentence beside it before
+	// putting the retry in a loop.
+	exitEngineHoldsDeployment = 3
+)
+
 // fail prints err to stderr in a consistent shape and returns the exit
 // code every subcommand's own failure path returns.
+//
+// The one thing it looks at is whether this failure is the engine holding
+// the deployment, which it asks with errors.Is rather than by reading the
+// message. A string match would work today, because the sentence is
+// pinned, and it would be wrong for the same reason it is pinned: the
+// exit code is what a script is supposed to branch on so that nothing has
+// to parse the prose.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "backup-manager:", err)
-	return 1
+	if errors.Is(err, errEngineHoldsDeployment) {
+		return exitEngineHoldsDeployment
+	}
+	return exitFailure
 }
 
 // usageError prints a usage complaint straight to stderr (flag.Parse
@@ -313,5 +663,5 @@ func fail(err error) int {
 // argument-error exit code.
 func usageError(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "backup-manager: "+format+"\n", args...)
-	return 2
+	return exitUsage
 }

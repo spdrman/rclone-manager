@@ -206,9 +206,16 @@ func (r harnessResult) killMissed() (string, bool) {
 // A harness that livelocked while still reporting progress (a resume loop
 // that never advances a state, say) would reset the window forever. The
 // overall cap catches that, and it is derived the same way, which is what
-// keeps it honest: a livelocked run's steps are fast, so its cap stays at
-// the floor and it dies promptly, while a genuinely slow run's steps are
-// long, so its cap grows with them.
+// keeps it proportionate: a livelocked run's steps are fast, so its cap
+// stays at the floor and it dies promptly, while a run whose individual
+// steps are long gets a cap that grows with them.
+//
+// What it does not do is identify what it caught, and it used to say it
+// did. Fast steps and no completion is also what a run with more quick
+// steps left than the cap allows looks like, and what a run being starved
+// of this machine looks like, so the trip reports its measurements and
+// names no cause. See issue #533, and core/cmd/gotestwatch/doc.go, which
+// is the same reasoning one layer out and carries the worked evidence.
 type harnessBounds struct {
 	stepFloor     time.Duration
 	stepFactor    float64
@@ -249,11 +256,11 @@ func (w watchdogTrip) String() string {
 	switch w.kind {
 	case "overall":
 		return fmt.Sprintf("the harness kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. "+
-			"That is a livelock, not a slow machine: the cap is derived from this run's own slowest step, so a genuinely slow run would have widened it.",
+			"Why it never finished is not something this can say: a harness reporting progress it never completes looks the same from out here whether it is livelocked, whether this machine is being taken away from it, or whether it simply has more steps left than the cap allows, since the cap only widens for a run whose individual STEPS are slow (issue #533).",
 			w.elapsed.Round(time.Millisecond), w.overallCap.Round(time.Millisecond), w.lastEvent, measured)
 	default:
 		return fmt.Sprintf("the harness stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. "+
-			"This is a hang, not a slow machine: the window is 12x this run's own slowest completed step, so being slow widens it and only being stuck trips it.",
+			"The window is 12x the slowest step this run has itself completed, so a consistently slow run widens it and survives, and a silence this much longer than any step this run has managed is most likely a hang. It is not proof of one: load arriving on this machine after that step was measured stalls a healthy harness the same way (issue #533).",
 			w.lastEvent, w.sinceLast.Round(time.Millisecond), w.window.Round(time.Millisecond), w.elapsed.Round(time.Millisecond), measured)
 	}
 }

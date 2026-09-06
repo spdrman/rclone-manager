@@ -44,12 +44,34 @@ func checkExitAndStderr(t *testing.T, args []string, wantExit int, wantStderr st
 	if code != wantExit {
 		t.Errorf("run(%v) = %d, want %d\nstderr: %s", args, code, wantExit, stderr)
 	}
+	// The mode line is not a complaint (issue #544): it says which world
+	// the answer that just printed is about, and every read surface writes
+	// one on every invocation. Setting it aside here keeps "this command
+	// must not complain at all" meaning exactly what it meant before,
+	// rather than being softened to "must not complain much". Which mode
+	// each command announces is asserted in readmode_test.go and
+	// mode_test.go, where it is the subject rather than the noise.
+	complaints := withoutModeLines(stderr)
 	switch {
-	case wantStderr == "" && strings.TrimSpace(stderr) != "":
-		t.Errorf("run(%v) wrote to stderr, want nothing:\n%s", args, stderr)
+	case wantStderr == "" && strings.TrimSpace(complaints) != "":
+		t.Errorf("run(%v) complained on stderr, want nothing:\n%s", args, complaints)
 	case wantStderr != "" && !strings.Contains(stderr, wantStderr):
 		t.Errorf("run(%v) stderr = %q, want it to contain %q", args, stderr, wantStderr)
 	}
+}
+
+// withoutModeLines drops the announcement mode.go and readmode.go make, so
+// the assertion above is about what a command COMPLAINED, which is what it
+// has always been about.
+func withoutModeLines(stderr string) string {
+	var kept []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, modeLinePrefix) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // TestRun_ArtifactsRefusesAnUnconfiguredFilter is issue #187 at the CLI

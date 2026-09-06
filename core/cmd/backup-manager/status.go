@@ -32,15 +32,35 @@ func cmdStatus(args []string) int {
 	}
 
 	ctx := context.Background()
-	svc, _, cleanup, err := openService(ctx, *cfgPath, false)
+	svc, cfg, cleanup, err := openService(ctx, *cfgPath, false)
 	if err != nil {
 		return fail(err)
 	}
 	defer cleanup()
 
+	// Issue #544. A health report is per CONFIGURED backup set, so which
+	// configuration is in force decides which sets appear at all; the
+	// counts underneath come from the journal both processes share and
+	// cannot diverge. So this is the one thing worth checking, and it is
+	// checked before a line is printed, because `status` is the command an
+	// operator runs to decide whether anything is wrong and a green report
+	// about a configuration nobody is serving is worse than no report.
+	mode, err := enterReadMode(ctx, *cfgPath, cfg, os.Stderr)
+	if err != nil {
+		return fail(err)
+	}
+
 	info := app.BuildVersionInfo(version, commit)
 	report, err := svc.BuildHealthReport(ctx, info)
 	if err != nil {
+		return fail(err)
+	}
+
+	var mine []string
+	for _, bs := range report.BackupSets {
+		mine = append(mine, bs.Set.String()+" "+string(bs.State))
+	}
+	if err := mode.agreeOnHealth(ctx, mine); err != nil {
 		return fail(err)
 	}
 

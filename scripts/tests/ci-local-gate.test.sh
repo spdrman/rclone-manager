@@ -222,6 +222,14 @@ make_full_tree() {
   # run, not what gotestwatch itself does with real packages.
   mkdir -p "$tree/core/cmd/gotestwatch"
   printf 'package main\n\nfunc main() {}\n' >"$tree/core/cmd/gotestwatch/main.go"
+  # And a test file, because the gate now COMPILES that package's own test
+  # binary and runs it, to read the three-outcome status `go test` would
+  # flatten (#533). `go test -c` on a package with no test files exits 0
+  # and writes no binary at all, so without this the step would run a path
+  # that is not there, exit 127 under set -e, and take every full-tree case
+  # with it. A passing stub is enough: this fixture measures which steps
+  # the gate runs, not what the real watchdog's own suite proves.
+  printf 'package main\n\nimport "testing"\n\nfunc TestStub(t *testing.T) {}\n' >"$tree/core/cmd/gotestwatch/main_test.go"
   add_go_module "$tree" apps/common stubcommon
   # The distribution layer became its own Go module in #165, and ci-local.sh
   # builds, vets, tests and lints it like every other module. Without it here
@@ -362,6 +370,14 @@ make_full_tree() {
   # one renders the two drivers' help and diffs it against a golden; this
   # fixture carries stub drivers with no help block at all.
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/e2e-help.test.sh"
+
+  # The two-machine proof's exit-status pin (#551), stubbed for the eighth
+  # time and for the same reason: it is another static step, so a tree
+  # without it dies before Group D can measure anything. The real one
+  # drives the real two-machine script with a stand-in `docker` and `git`
+  # on PATH and proves the CLI's own exit 3 can never be mistaken for this
+  # gate's INCOMPLETE.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/two-machine-exit-status.test.sh"
 
   # The installer's unit tests (#262), which the gate runs by `cd`-ing into
   # scripts/install. Same reason as every stub above, and the same failure
@@ -1254,11 +1270,19 @@ echo "==> K. the race detector is on, and on everything"
 # that runs a Go suite without the detector and without saying why.
 #
 # It reads command lines only: `GOWORK=off go test` is how every suite in
-# this gate is actually invoked, and `cmd/gotestwatch` is the one that runs
-# through the progress-bounded wrapper instead. Step headings and comments
-# are prose about those commands and are skipped, which matters because at
-# least one heading says "go test -timeout" while describing the flag it
-# does NOT pass.
+# this gate is actually invoked, and cmd/gotestwatch appears in two other
+# shapes of its own. Step headings and comments are prose about those
+# commands and are skipped, which matters because at least one heading says
+# "go test -timeout" while describing the flag it does NOT pass.
+#
+# The gotestwatch rule matches any `go run` or `go test` that names that
+# package, which is both shapes: `go run ./cmd/gotestwatch` is the
+# progress-bounded wrapper the Docker-backed suites run under, and
+# `go test -race -c ./cmd/gotestwatch` is how the gate builds that
+# package's OWN test binary, since it reads a three-outcome status
+# `go test` would flatten (#533). The line that runs the built binary
+# carries no flag and cannot: the detector is decided when it is compiled,
+# which is the line this catches.
 #
 # A trailing `# no -race: <reason>` on the command line itself is the one
 # way out, and it is not a loophole because it is counted: K4 below asserts
@@ -1271,7 +1295,7 @@ race_flag_problems() {
       if ($0 ~ /# no -race: [^ ]/) { next }
       printf "  a Go suite runs without -race and without a reason, line %d: %s\n", NR, $0
     }
-    /cmd\/gotestwatch/ && !/gotestwatch -race/ {
+    /(go run|go test)[^#]*cmd\/gotestwatch/ && !/-race/ {
       printf "  the gotestwatch suites run without -race, line %d: %s\n", NR, $0
     }
   ' "$1"
@@ -1471,6 +1495,62 @@ else
     pass "L3 the scan notices a config with the formatter removed, so L3 has teeth"
   fi
 fi
+
+# ------------- Group M: the watchdog's own INCOMPLETE reaches the ledger
+
+echo "==> M. gotestwatch's own three-outcome status (#533)"
+
+# core/cmd/gotestwatch keeps a ledger of its own, for this suite's reason
+# one level down: its live proof that a bursty host is killed without being
+# told why skips itself when the host stalls it harder than the 800ms its
+# fixture plants, which is exactly the loaded machine the issue is about.
+# Its TestMain exits 3 when that ledger is not empty.
+#
+# `go test` flattens any non-zero status from a test binary into its own 1
+# and prints FAIL, so that run used to arrive here as a failure and read
+# as a broken watchdog. The gate compiles that package's test binary and
+# runs it instead, which keeps the 3, and these two cases are the wiring:
+# a lost control is ledgered, and a real failure still fails.
+tree="$(make_full_tree)"
+cat >"$tree/core/cmd/gotestwatch/main_test.go" <<'GOSTUB'
+package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	fmt.Fprintln(os.Stderr, "==> gotestwatch self-test: INCOMPLETE (exit 3). a control could not be measured")
+	if code != 0 {
+		os.Exit(code)
+	}
+	os.Exit(3)
+}
+
+func TestStub(t *testing.T) {}
+GOSTUB
+run_gate "$tree"
+assert_eq "M1 a lost watchdog control ends the run INCOMPLETE" "$INCOMPLETE" "$status"
+assert_contains "M1 the summary names the controls that did not run"   "gotestwatch's own controls" "$out"
+assert_not_contains "M1 a lost control cannot report success" 'ci-local: ok' "$out"
+
+# M2: the control for M1. If that route read every non-zero status as a
+# skip, a genuinely broken watchdog would be ledgered and committed.
+tree="$(make_full_tree)"
+cat >"$tree/core/cmd/gotestwatch/main_test.go" <<'GOSTUB'
+package main
+
+import "testing"
+
+func TestStub(t *testing.T) { t.Fatal("a real failure in the watchdog's own suite") }
+GOSTUB
+run_gate "$tree"
+assert_eq "M2 a real failure in that package still fails the run" 1 "$status"
+assert_not_contains "M2 a real failure is not ledgered as a skip"   "gotestwatch's own controls" "$out"
+assert_contains "M2 the verdict names the step that failed" 'cmd/gotestwatch' "$out"
 
 # ------------------------------------------------------------------ result
 

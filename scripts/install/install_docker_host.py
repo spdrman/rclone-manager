@@ -235,7 +235,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 #
 # The digest is what makes `--release` safe to offer at all. A tag is a
 # mutable pointer (scripts/release/publish-image.sh says so in its own
-# words), so "install 0.3.0" is a claim about a name until something
+# words), so "install 0.3.1" is a claim about a name until something
 # compares the name against a recorded identity. One anonymous HEAD does
 # that, with no cosign and no dependency, which is why the digest is here
 # and not derived.
@@ -255,7 +255,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 # It proves exactly one version: this one. A release cut after this
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
-CARRIED_RELEASE = "0.3.0"
+CARRIED_RELEASE = "0.3.1"
 CARRIED_RELEASE_DIGEST = None
 
 # Where that release lives. Split into two halves rather than written as
@@ -999,7 +999,7 @@ class Preflight:
 
         Then the proof, which is what makes naming a release safe to
         offer at all. A tag is a mutable pointer, and this project says so
-        in its own release tooling, so "install 0.3.0" is a claim about a
+        in its own release tooling, so "install 0.3.1" is a claim about a
         name until something compares the name against a recorded
         identity. container/release-manifest.json records that identity at
         push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
@@ -4791,7 +4791,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.0",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.1",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -4948,7 +4948,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.3.0\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.3.1\n"
         ),
     )
     _add_shared_groups(sp_install)
@@ -5107,7 +5107,7 @@ def resolve_release(args) -> None:
             EXIT_USAGE,
             f"--release is {args.release!r}, which is not a version.",
             "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
-            "(0.3.0-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "(0.3.1-rc.1). It deliberately does not take a moving name like `latest`: that "
             "tag orders against nothing, so it would be written into the .env as the "
             "installed version and leave this host un-orderable by every later installer. "
             "Name the version you want.",
