@@ -28,7 +28,7 @@ import (
 // an image rebuilt locally instead of fetched, an image repacked under a
 // different tag, the wrong architecture's image in an architecture's
 // directory, a fetch from somewhere other than the release, and the
-// subtle one — the canonical binary present in a lower layer and replaced
+// subtle one, the canonical binary present in a lower layer and replaced
 // in a higher one, which is a divergent image whose lower layer hashes
 // correctly.
 

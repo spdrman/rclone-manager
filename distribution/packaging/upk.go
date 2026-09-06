@@ -501,7 +501,7 @@ func checkUPKBinaryParity(r *UPKReport, arch string, img *imageArchive, c Canoni
 	}
 	if len(problems) > 0 {
 		r.add(UPKCheckBinaryContentParity, UPKFail,
-			strings.Join(problems, "; ")+" — this package would ship a build the canonical release did not produce")
+			strings.Join(problems, "; ")+". This package would ship a build the canonical release did not produce")
 		return
 	}
 	r.add(UPKCheckBinaryContentParity, UPKPass,

@@ -6,7 +6,7 @@ NAS. It is the same shape as every other acceptance procedure in
 `docs/acceptance/`: numbered steps, each one saying what is done, what is
 observed, and what would make it a failure.
 
-Section 4 records the run. Where a step could not be executed it says so,
+Section 7 records the run. Where a step could not be executed it says so,
 names why, and leaves the claim open rather than describing what would
 probably have happened.
 
@@ -89,7 +89,8 @@ A check that only ever passes on the good package says nothing. Before
 trusting step 1, watch it refuse a bad one.
 
 ```
-docker build -t ghcr.io/spdrman/backup-manager:0.3.0 -            <<'EOF'
+printf 'not the canonical binary\n' > tampered
+DOCKER_BUILDKIT=0 docker build -t ghcr.io/spdrman/backup-manager:0.3.0 - <<'EOF'
 FROM ghcr.io/spdrman/backup-manager:0.3.0
 COPY tampered /backup-manager
 EOF
@@ -104,6 +105,13 @@ hashes, the verdict is `FAIL`, and the command exits non-zero.
 names a different check: this control exists to prove the content rule
 bites specifically, and a stage that is rejected for being malformed
 proves nothing about content.
+
+The tampered image has to carry the canonical tag, because that is what
+makes only the content wrong: `docker save` writes whatever tag the local
+daemon holds, so a control built under a different name would be caught by
+`image-reference` instead and would prove the wrong thing. Point the tag
+back at the real image afterwards and re-stage, or the next `build-upk.sh`
+run saves the tampered one.
 
 ## 3. Pack (on the device)
 
@@ -229,7 +237,7 @@ behaviour, and unproven in App Center lifecycle. Those are different
 claims and this document does not merge them.
 
 **arm64 hardware.** The package stages and verifies for arm64 (section
-4's record includes it), and no arm64 UGREEN device was available to run
+7's record includes it), and no arm64 UGREEN device was available to run
 it on. The architecture claim comes from the release, once; the hardware
 claim is per device, and only amd64 has one.
 
@@ -271,7 +279,7 @@ honest provenance sidecar:
 ```
   PASS     stage-layout / package-version / image-reference / image-architecture
   FAIL     binary-content-parity: /backup-manager hashes to 09eb32f0c0788fe0...
-           and the release recorded af9ab4b4014161eb... — this package would
+           and the release recorded af9ab4b4014161eb.... This package would
            ship a build the canonical release did not produce
 VERDICT: FAIL. This package must not be packed.
 ```
