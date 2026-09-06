@@ -1,0 +1,1160 @@
+package cliapi_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"testing/fstest"
+
+	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
+	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
+// Issue #545, the last of #536: the two routes an operator can change this
+// product through are one route, driven rather than described.
+//
+// # Why the proof lives here and nowhere else
+//
+// The client that carries a routed command is core/internal/apiclient. It
+// is under core/internal, so apps/ can never import it, and core/ may never
+// import apps/ (scripts/architecture/check-core-dependency-rule.sh). So
+// there is no package anywhere that can hold both the client and the real
+// router, the real authentication, the real CSRF middleware and the real
+// UI-host reverse proxy at once. #543 and #544 both ran their proofs
+// against a stand-in engine for exactly that reason, and both said so.
+//
+// A test can still put the two together, as long as it does not import
+// them both: this package runs the real backup-manager BINARY as a
+// subprocess, and stands up the real apps/common/webhost/serve engine and
+// the real UI host in process. Nothing here is a stand-in. The CSRF cookie
+// is minted by apps/common/csrf, the session by apps/common/auth/local, the
+// paths are matched by the real chi router, and a request aimed at the
+// published port goes through the same StripUntrustedIdentity,
+// SecurityHeaders and EnsureCSRFCookie chain a browser's does.
+//
+// The neighbouring file is issue #167's equivalence check and set the
+// pattern: build the CLI, stand up the real HTTP surface, drive both, and
+// compare. This is the same idea one step further on, because since #543
+// and #544 the CLI is not a second implementation of the same decision, it
+// is a caller of the first one.
+//
+// # What these three tests establish, stated no more strongly than it is
+//
+// The issue's words are that a CLI mutation must be "visible over HTTP and
+// in the Web UI without a restart". That is proved below in the only sense
+// available: the change is made BY the engine, so the process serving the
+// Web UI holds it the moment the command exits, and its own config_revision
+// moves. What is not proved, because it is not true, is that the two routes
+// render the same answer to every read. #544 found that all four read
+// surfaces print things api/v1/openapi.json cannot express, and answered
+// the question rather than the rendering. So the honest claim, and the one
+// TestTheTwoRoutesCannotDisagreeAboutTheConfiguration drives, is narrower:
+// the two routes cannot disagree about the CONFIGURATION they answer from,
+// and the fields they still cannot be compared on are enumerated in
+// unreportedOnTheWire below, as an executed list rather than a paragraph.
+//
+// # The Web UI itself
+//
+// A browser is not driven from here. The Web UI's data is these responses:
+// it holds no configuration of its own, and spdrman/rclone-manager-tests
+// Suite B is what drives the rendered thing. What is driven here is the
+// exact HTTP surface the browser talks to, through the published port,
+// which is the half of "visible in the Web UI" that can be wrong.
+
+// The administrator these tests enroll. A fixed pair, generated nowhere
+// near a real deployment, held in this process and in the CLI subprocess's
+// own environment, and written to disk only as apps/common/auth/local's own
+// Argon2id hash, which is what the product does with any password.
+const (
+	testAdmin    = "cliapi-operator"
+	testPassword = "not-a-real-password-either"
+)
+
+// aKnownHostsLine is a syntactically real known_hosts line for a host
+// nothing here ever dials. Every create below carries one because the
+// trust anchor has to be decided before a backup set is persisted, and
+// carrying it is also what keeps a routed create from making an outbound
+// SSH connection from a test.
+const aKnownHostsLine = "[source.example.internal]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7Zq1i0i7Xw3v0m7d3Wl1nZk5Q9tJm2fVYy0m9c8ZqR"
+
+// stack is one deployment with an engine serving it: the announcement a
+// CLI probes for, the real /api/v1, and the real UI host in front of it.
+type stack struct {
+	configPath string
+	engineURL  string
+	uiURL      string
+}
+
+// startStack brings up everything a real deployment has except the
+// container boundary, over the configuration configPath names.
+//
+// The order is the order apps/generic/cmd/backup-manager-web uses and it
+// is load-bearing: AnnounceServing before service.Open, so a CLI that
+// arrives mid-start finds the announcement rather than a half-open
+// journal. core/service's liveengine.go has the whole arrangement.
+func startStack(t *testing.T, configPath string) *stack {
+	t.Helper()
+
+	release, err := service.AnnounceServing(configPath)
+	if err != nil {
+		t.Fatalf("announcing this process as serving %s: %v", configPath, err)
+	}
+	t.Cleanup(func() { _ = release() })
+
+	backend, closeFn, err := service.Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("service.Open(%s): %v", configPath, err)
+	}
+	t.Cleanup(func() { _ = closeFn() })
+
+	// One store path, resolved once. Two calls to t.TempDir() are two
+	// directories, so reading it twice would give this Service a store the
+	// administrator was never written to and every login would fail for a
+	// reason that has nothing to do with what is under test.
+	storePath := filepath.Join(t.TempDir(), "local-auth.json")
+	// The same provisioning path `backup-manager-web auth create-admin`
+	// takes, rather than the bootstrap-token enrolment the neighbouring
+	// file uses: this test needs a username and password to hand the CLI,
+	// and that is the command an operator runs to get one.
+	if _, err := local.CreateAdmin(local.CreateAdminConfig{
+		StorePath: storePath,
+		Username:  testAdmin,
+		Password:  testPassword,
+	}); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	authSvc, err := local.New(local.Config{StorePath: storePath})
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+	adapter, err := profile.Generic.Profile().Adapter(profile.AdapterConfig{LocalAuth: authSvc.Authenticator()})
+	if err != nil {
+		t.Fatalf("Adapter: %v", err)
+	}
+
+	engine := httptest.NewServer(serve.NewEngine(serve.EngineConfig{
+		Platform:   adapter,
+		AuthRoutes: authSvc.Handler(),
+		Backend:    backend,
+	}))
+	t.Cleanup(engine.Close)
+
+	upstream, err := url.Parse(engine.URL)
+	if err != nil {
+		t.Fatalf("parsing the engine's own address: %v", err)
+	}
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: upstream,
+		// The app shell, not the real bundle. What is under test here is
+		// the /api/v1 half of that handler and the middleware around it;
+		// which files the static half serves is apps/generic/tests/uibundle's.
+		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}},
+	}))
+	t.Cleanup(ui.Close)
+
+	return &stack{configPath: configPath, engineURL: engine.URL, uiURL: ui.URL}
+}
+
+// browser is what the Web UI is, from the outside: a cookie jar, a session,
+// and the double-submit token every state-changing request has to echo.
+type browser struct {
+	t      *testing.T
+	client *http.Client
+	base   string
+}
+
+// signIn signs in at base exactly the way the login page does.
+func signIn(t *testing.T, base string) *browser {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	b := &browser{t: t, client: &http.Client{Jar: jar}, base: base}
+
+	// The CSRF cookie has to exist before a POST can echo it, and only a
+	// response from this host can mint one.
+	seed, err := b.client.Get(base + "/health/live")
+	if err != nil {
+		t.Fatalf("seeding the CSRF cookie: %v", err)
+	}
+	seed.Body.Close()
+
+	body, _ := json.Marshal(map[string]string{"username": testAdmin, "password": testPassword})
+	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/auth/login", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(local.CSRFHeaderName, b.csrf())
+	resp, err := b.client.Do(req)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("login at %s returned %d: %s", base, resp.StatusCode, raw)
+	}
+	return b
+}
+
+// csrf reads the double-submit token this host issued.
+func (b *browser) csrf() string {
+	b.t.Helper()
+	u, err := url.Parse(b.base)
+	if err != nil {
+		b.t.Fatalf("parsing %s: %v", b.base, err)
+	}
+	for _, c := range b.client.Jar.Cookies(u) {
+		if c.Name == local.CSRFCookieName {
+			return c.Value
+		}
+	}
+	b.t.Fatalf("no %s cookie from %s, so a state-changing request cannot be made", local.CSRFCookieName, b.base)
+	return ""
+}
+
+// get reads one JSON response into out.
+func (b *browser) get(path string, out any) {
+	b.t.Helper()
+	resp, err := b.client.Get(b.base + path)
+	if err != nil {
+		b.t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		b.t.Fatalf("GET %s returned %d: %s", path, resp.StatusCode, raw)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		b.t.Fatalf("decoding %s: %v\n%s", path, err, raw)
+	}
+}
+
+// backupSets is what the Web UI's own list shows, as ids.
+func (b *browser) backupSets() []string {
+	b.t.Helper()
+	var answer apicontract.ListBackupSetsResponse
+	b.get("/api/v1/backup-sets", &answer)
+	ids := make([]string, 0, len(answer.BackupSets))
+	for _, bs := range answer.BackupSets {
+		ids = append(ids, bs.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// configRevision is the engine's own hash of the configuration it is
+// serving from. It is the one fact both routes can compare across every
+// field, including the four api/v1/openapi.json cannot carry, and it is
+// what moves when the engine adopts a change without being restarted.
+func (b *browser) configRevision() string {
+	b.t.Helper()
+	var answer apicontract.VersionResponse
+	b.get("/api/v1/system/version", &answer)
+	if answer.ConfigRevision == "" {
+		b.t.Fatal("the engine reported an empty config_revision, so nothing below is comparing anything")
+	}
+	return answer.ConfigRevision
+}
+
+// invocation is one run of the real binary.
+type invocation struct {
+	argv   []string
+	code   int
+	stdout string
+	stderr string
+}
+
+func (r invocation) String() string {
+	return fmt.Sprintf("backup-manager %s\nexit %d\nstdout:\n%s\nstderr:\n%s",
+		strings.Join(r.argv, " "), r.code, r.stdout, r.stderr)
+}
+
+// output is both streams, for the assertions that care that an operator
+// saw a line rather than which descriptor carried it.
+func (r invocation) output() string { return r.stdout + r.stderr }
+
+// runCLI runs the real binary with the route settings env carries.
+//
+// The environment is built from scratch rather than inherited, so a
+// developer with $BACKUP_MANAGER_API_URL exported for their own deployment
+// runs the same suite CI does. That is route.go's clearInheritedRouteSettings
+// one process boundary out.
+func runCLI(t *testing.T, bin string, env map[string]string, argv ...string) invocation {
+	t.Helper()
+	cmd := exec.Command(bin, argv...)
+	cmd.Env = append(os.Environ(),
+		"BACKUP_MANAGER_API_URL=",
+		"BACKUP_MANAGER_API_USERNAME=",
+		"BACKUP_MANAGER_API_PASSWORD=",
+	)
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	code := 0
+	var exitErr *exec.ExitError
+	if err != nil {
+		if !asExitError(err, &exitErr) {
+			t.Fatalf("running %v: %v", argv, err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return invocation{argv: argv, code: code, stdout: stdout.String(), stderr: stderr.String()}
+}
+
+func asExitError(err error, target **exec.ExitError) bool {
+	e, ok := err.(*exec.ExitError)
+	if ok {
+		*target = e
+	}
+	return ok
+}
+
+// routeTo is the environment that makes engine-attached mode carryable.
+func routeTo(base string) map[string]string {
+	return map[string]string{
+		"BACKUP_MANAGER_API_URL":      base,
+		"BACKUP_MANAGER_API_USERNAME": testAdmin,
+		"BACKUP_MANAGER_API_PASSWORD": testPassword,
+	}
+}
+
+// writePrivateKey writes a throwaway SSH private key for a create to
+// import. Generated per call and never reused, so nothing here is a
+// credential that outlives one test.
+func writePrivateKey(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+// createArgs is one complete `backup-set create`, so a test that is about
+// where the change LANDS does not restate nine flags that are not the point.
+func createArgs(configPath, keyPath, id string, extra ...string) []string {
+	return append([]string{
+		"backup-set", "--config", configPath, "create", id,
+		"--host", "source.example.internal",
+		"--port", "2222",
+		"--user", "backupuser",
+		"--ssh-key-file", keyPath,
+		"--known-hosts-line", aKnownHostsLine,
+		"--remote-path", "/srv/backups",
+		// A fixed absolute path rather than one derived from the fixture's
+		// own directory, so the same create typed at two deployments
+		// prints the same line and the two can be compared at all
+		// (TestWhatARoutedCommandStillCannotReport). Nothing is ever
+		// written there: no cycle runs for a set created in these tests.
+		"--local-path", "/data/backups/api",
+		"--completion-strategy", "rename",
+	}, extra...)
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	return string(raw)
+}
+
+// newSetID is the backup set every routed create below adds. It is not in
+// writeFixture's configuration, and each test asserts that before it starts.
+const newSetID = "api/postgres"
+
+// TestARoutedMutationIsVisibleOverHTTPWithoutARestart is #545's first
+// proof, and #535's exact scenario run forwards.
+//
+// #535 was a `backup-set create` through `docker exec` against a container
+// that was already serving: the file changed, the engine had read it an
+// hour earlier, and the Web UI went on showing the old world until somebody
+// restarted the container. Here the same command is typed against the same
+// running engine and the set is in the engine's own answer before the
+// command's exit code has been read.
+//
+// Both addresses an operator can plausibly use are driven, because they are
+// different amounts of machinery and only one of them had ever been tried.
+// The engine's own listener is what `docker exec` into the engine container
+// reaches. The published port is the UI host, which is the only container
+// with a published port at all, so it is what a NAS shell reaches; that
+// path adds StripUntrustedIdentity, SecurityHeaders, a reverse proxy and a
+// SECOND EnsureCSRFCookie in front of the engine's own, and a cold request
+// through it carries two Set-Cookie: bm_csrf headers on one response. PR
+// #546's review flagged that as untested and unreachable from where the
+// client lives. It is reachable from here.
+//
+// What this proves, exactly: the change was made by the process that serves
+// the Web UI, so there is no second writer for the Web UI to be out of date
+// with. What it does not prove is that a read renders identically on both
+// routes; that is TestTheTwoRoutesCannotDisagreeAboutTheConfiguration's,
+// and it is a weaker claim on purpose.
+func TestARoutedMutationIsVisibleOverHTTPWithoutARestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against a real engine")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	for _, target := range []struct {
+		name string
+		pick func(*stack) string
+	}{
+		{"through the engine's own address", func(s *stack) string { return s.engineURL }},
+		{"through the published port the Web UI is served on", func(s *stack) string { return s.uiURL }},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			_, configPath := writeFixture(t)
+			live := startStack(t, configPath)
+			view := signIn(t, live.uiURL)
+
+			before := view.backupSets()
+			revisionBefore := view.configRevision()
+			if contains(before, newSetID) {
+				t.Fatalf("the fixture already has %s, so this test cannot show it arriving: %v", newSetID, before)
+			}
+
+			got := runCLI(t, bin, routeTo(target.pick(live)), createArgs(configPath, writePrivateKey(t), newSetID)...)
+			if got.code != 0 {
+				t.Fatalf("a routed create was refused:\n%s", got)
+			}
+			if !strings.Contains(got.output(), "mode: engine-attached") {
+				t.Errorf("the command did not announce engine-attached mode, so it may not have gone anywhere near the engine:\n%s", got)
+			}
+			if !strings.Contains(got.output(), "hands the change to it at") {
+				t.Errorf("the command announced engine-attached mode without saying it handed the change over:\n%s", got)
+			}
+
+			// Nothing was restarted and nothing was reopened: this is the
+			// same handler over the same *service.BackupService the
+			// assertions above already read through.
+			after := view.backupSets()
+			if !contains(after, newSetID) {
+				t.Fatalf("the CLI reported success and the process serving the Web UI does not have %s, which is #535 exactly.\nbefore: %v\nafter:  %v\n%s", newSetID, before, after, got)
+			}
+			if len(after) != len(before)+1 {
+				t.Errorf("the engine's list moved by more than the one set this command created\nbefore: %v\nafter:  %v", before, after)
+			}
+			if revision := view.configRevision(); revision == revisionBefore {
+				t.Errorf("the engine is still serving configuration %s after a create it accepted, so it has adopted the change nowhere an operator can see", revision)
+			}
+		})
+	}
+}
+
+// TestAnUnroutedMutationBesideALiveEngineRefusesAndTheWebUIIsUnchanged is
+// the control the test above needs, and it is #535 prevented rather than
+// #535 fixed.
+//
+// It is the shipped container's own default: nothing sets
+// $BACKUP_MANAGER_API_URL, so a `docker exec ... backup-manager backup-set
+// create` finds a serving engine, has no route to it, and stops. That is
+// worth driving on its own, because the first proof passes on a deployment
+// that has been told where its engine is and most have not been.
+func TestAnUnroutedMutationBesideALiveEngineRefusesAndTheWebUIIsUnchanged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against a real engine")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	_, configPath := writeFixture(t)
+	live := startStack(t, configPath)
+	view := signIn(t, live.uiURL)
+
+	before := view.backupSets()
+	fileBefore := readFile(t, configPath)
+
+	// No route in the environment at all, which is what a container that
+	// nobody has configured looks like.
+	got := runCLI(t, bin, nil, createArgs(configPath, writePrivateKey(t), newSetID)...)
+	if got.code == 0 {
+		t.Fatalf("a create beside a live engine with no route to it exited 0, so it wrote the file behind that engine's back:\n%s", got)
+	}
+	if !strings.Contains(got.output(), "mode: engine-attached") {
+		t.Errorf("the refusal did not say which mode it was in:\n%s", got)
+	}
+	if !strings.Contains(got.output(), "refused here rather than downgraded") {
+		t.Errorf("the refusal did not say that nothing was written:\n%s", got)
+	}
+	if after := readFile(t, configPath); after != fileBefore {
+		t.Error("a refused create changed config.yaml underneath the running engine")
+	}
+	if after := view.backupSets(); !equal(after, before) {
+		t.Errorf("the engine's world changed on a command that refused\nbefore: %v\nafter:  %v", before, after)
+	}
+}
+
+// TestTheTwoRoutesCannotDisagreeAboutTheConfiguration is the honest
+// statement of what #544 built, driven against the real engine rather than
+// against a stand-in for it.
+//
+// The wording of #545 implies that a read is answered over the wire. It is
+// not, and #544 explains at length why not: every one of the four read
+// surfaces prints something api/v1/openapi.json cannot express, so a
+// wire-rendered CLI would print LESS exactly when an engine is up. What is
+// compared instead is the engine's own config_revision against the one this
+// command computed from the file it loaded, and unequal revisions are a
+// refusal before a line is printed.
+//
+// So the claim being driven here is: the two routes cannot disagree about
+// the configuration they answer from. This drives both halves of it, and
+// the second half is #535 from the reading side, arranged deliberately.
+func TestTheTwoRoutesCannotDisagreeAboutTheConfiguration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against a real engine")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	t.Run("agreeing, a read says it is answering about the engine's world", func(t *testing.T) {
+		_, configPath := writeFixture(t)
+		live := startStack(t, configPath)
+
+		got := runCLI(t, bin, routeTo(live.engineURL), "sources", "--config", configPath)
+		if got.code != 0 {
+			t.Fatalf("`sources` beside an engine holding the identical configuration was refused:\n%s", got)
+		}
+		if !strings.Contains(got.stderr, "mode: engine-attached") {
+			t.Errorf("`sources` did not announce that it had checked its answer against the engine:\n%s", got)
+		}
+		if !strings.Contains(got.stdout, "production/pg") {
+			t.Errorf("`sources` announced engine-attached mode and printed no backup sets:\n%s", got)
+		}
+	})
+
+	t.Run("disagreeing, a read refuses rather than describing a world nobody serves", func(t *testing.T) {
+		_, configPath := writeFixture(t)
+		live := startStack(t, configPath)
+
+		// #535 arranged on purpose: the file gains a backup set the
+		// running engine read its configuration too early to know about,
+		// and nothing re-reads that file. Before #544 this printed two
+		// backup sets while the Web UI showed one.
+		behindTheEngine := strings.Replace(readFile(t, configPath),
+			"retention:\n", "  - id: staging\n    backup_sets: []\nretention:\n", 1)
+		if behindTheEngine == readFile(t, configPath) {
+			t.Fatal("the fixture's shape changed and this edit no longer diverges anything, so the case below would pass for the wrong reason")
+		}
+		if err := os.WriteFile(configPath, []byte(behindTheEngine), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		got := runCLI(t, bin, routeTo(live.engineURL), "sources", "--config", configPath)
+		if got.code == 0 {
+			t.Fatalf("`sources` printed a world the serving process does not have, and exited 0:\n%s", got)
+		}
+		if !strings.Contains(got.stderr, "is holding a different configuration") {
+			t.Errorf("the refusal did not name the divergence:\n%s", got)
+		}
+		if strings.Contains(got.stdout, "staging") {
+			t.Errorf("the refusal still printed the diverged world:\n%s", got)
+		}
+	})
+}
+
+// fixture is the one deployment a row is driven against, and the operands
+// that deployment can supply.
+type fixture struct {
+	configPath string
+	setID      string
+	artifactID string
+	keyPath    string
+}
+
+// surface is one invocation of one dispatched verb.
+//
+// Every verb the binary dispatches has at least one row, and the coverage
+// guard below asserts that against the binary's own usage block rather than
+// against a list typed here. A verb that arrives with no row fails, which is
+// the tripwire half of #545's third proof: a command nobody declared cannot
+// be driven, and a command nobody drives cannot be shown to behave the same
+// on both routes.
+type surface struct {
+	// verb is the top-level command this row exercises, spelled the way
+	// the dispatch spells it.
+	verb string
+
+	// name distinguishes rows that share a verb.
+	name string
+
+	// argv is the whole invocation, including the binary's own flags.
+	argv func(f fixture) []string
+
+	// writes says this invocation changes config.yaml when nothing is
+	// serving the deployment. It is what keeps the guard from passing
+	// because an argv turned out to be inert.
+	writes bool
+
+	// routed says a serving engine can carry this write. False on a write
+	// is a gap, and why is recorded in note rather than left to a reader.
+	routed bool
+
+	// mode is the announcement this invocation makes with nothing serving:
+	// "direct" for the commands that name one, and "" for the commands
+	// that still name none.
+	mode string
+
+	// exit is the code this invocation exits with, with nothing serving.
+	exit int
+
+	// needsArtifacts asks for one real cycle before the row runs, so the
+	// operand it names exists.
+	needsArtifacts bool
+
+	// skipDirect is for the one command that does not exit on its own.
+	skipDirect bool
+
+	// note explains a row that does not exit 0, is not routed, or is not
+	// driven. A row with a surprising declaration and no note is a row
+	// somebody should have to justify in review.
+	note string
+}
+
+// surfaces is every dispatched verb, driven.
+//
+// The exit codes are what this deployment actually produces, not what the
+// verb produces in general: five of these name a subject a fixture with two
+// good backups does not have (a quarantined artifact, a FAILED one, a
+// configured storage medium, an archived copy), and what their rows prove
+// is that they refuse for the missing subject and never for a route.
+var surfaces = []surface{
+	{verb: "run", name: "one cycle", mode: "", exit: 0,
+		argv: func(f fixture) []string { return []string{"run", "--config", f.configPath} }},
+	{verb: "daemon", name: "one engine per deployment", skipDirect: true,
+		note: "it does not exit on its own, so the direct arm cannot drive it; beside a live engine it refuses at once, which is the arm that matters here",
+		argv: func(f fixture) []string { return []string{"daemon", "--config", f.configPath} }},
+	{verb: "check", name: "config and journal", mode: "", exit: 0,
+		argv: func(f fixture) []string { return []string{"check", "--config", f.configPath} }},
+	{verb: "status", name: "health", mode: "direct", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string { return []string{"status", "--config", f.configPath} }},
+	{verb: "sources", name: "the configured sets", mode: "direct", exit: 0,
+		argv: func(f fixture) []string { return []string{"sources", "--config", f.configPath} }},
+	{verb: "backup-set", name: "create", mode: "direct", exit: 0, writes: true, routed: true,
+		argv: func(f fixture) []string { return createArgs(f.configPath, f.keyPath, newSetID) }},
+	{verb: "backup-set", name: "patch", mode: "direct", exit: 0, writes: true, routed: true,
+		argv: func(f fixture) []string {
+			return []string{"backup-set", "--config", f.configPath, "patch", f.setID, "--stale-after", "48h"}
+		}},
+	{verb: "backup-set", name: "remove", mode: "direct", exit: 0, writes: true, routed: true,
+		argv: func(f fixture) []string {
+			return []string{"backup-set", "--config", f.configPath, "remove", f.setID}
+		}},
+	{verb: "backup-set", name: "retention, setting a policy", mode: "direct", exit: 0, writes: true, routed: false,
+		note: "#543 left this unrouted on purpose: the policy is a whole chain read from flags or stdin and the preview beside it is #544's, so routing half of it would be worse than routing none",
+		argv: func(f fixture) []string {
+			// A whole chain, because an override replaces the
+			// deployment's whole chain rather than merging with it, and a
+			// partial one is refused at load. Which is the row saying
+			// something true about the verb: this is not a flag edit.
+			return []string{"backup-set", "--config", f.configPath, "retention", f.setID,
+				"--daily-days", "5", "--weekly-months", "3", "--monthly-months", "12"}
+		}},
+	{verb: "artifacts", name: "the whole journal", mode: "direct", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string { return []string{"artifacts", "--config", f.configPath} }},
+	{verb: "fetch", name: "one set on demand", mode: "", exit: 0,
+		argv: func(f fixture) []string {
+			return []string{"fetch", "--config", f.configPath, "--source", "production", "--backup-set", "pg"}
+		}},
+	{verb: "retention", name: "the preview", mode: "direct", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string { return []string{"retention", "--config", f.configPath, "--dry-run"} }},
+	{verb: "reconcile", name: "FR-17", mode: "", exit: 0,
+		argv: func(f fixture) []string { return []string{"reconcile", "--config", f.configPath} }},
+	{verb: "validate", name: "one durable copy", mode: "", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string { return []string{"validate", "--config", f.configPath, f.artifactID} }},
+	{verb: "catalog", name: "rebuild, previewed", mode: "", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string {
+			return []string{"catalog", "--config", f.configPath, "rebuild", "--dry-run"}
+		}},
+	{verb: "quarantine", name: "revalidate", mode: "", exit: 1, needsArtifacts: true,
+		note: "nothing here is quarantined, so this refuses for the missing subject",
+		argv: func(f fixture) []string {
+			return []string{"quarantine", "--config", f.configPath, "revalidate", f.artifactID}
+		}},
+	{verb: "unconfigured", name: "what the journal remembers", mode: "", exit: 0,
+		argv: func(f fixture) []string { return []string{"unconfigured", "--config", f.configPath} }},
+	{verb: "medium", name: "preflight", mode: "", exit: 1,
+		note: "this deployment declares no storage medium, so this refuses for the missing subject",
+		argv: func(f fixture) []string {
+			return []string{"medium", "--config", f.configPath, "preflight", "no-such-medium"}
+		}},
+	{verb: "retry", name: "one failed backup", mode: "", exit: 1, needsArtifacts: true,
+		note: "nothing here is FAILED, so this refuses for the missing subject",
+		argv: func(f fixture) []string { return []string{"retry", "--config", f.configPath, f.artifactID} }},
+	{verb: "restore", name: "one archived copy", mode: "", exit: 1, needsArtifacts: true,
+		note: "nothing here is on a storage medium, so this refuses for the missing subject",
+		argv: func(f fixture) []string {
+			return []string{"restore", "--config", f.configPath, f.artifactID, "--medium", "no-such-medium", "--acknowledge"}
+		}},
+	{verb: "settings", name: "the live policy", mode: "", exit: 0,
+		note: "the settings READ is not routed. #543 routed the write and left the read where it was, so this is one of the reads that still names no mode at all",
+		argv: func(f fixture) []string { return []string{"settings", "--config", f.configPath} }},
+	{verb: "settings", name: "patch", mode: "direct", exit: 0, writes: true, routed: true,
+		argv: func(f fixture) []string {
+			return []string{"settings", "--config", f.configPath, "patch", "--timezone", "Europe/Berlin"}
+		}},
+	{verb: "version", name: "the build stamp", mode: "", exit: 0,
+		argv: func(_ fixture) []string { return []string{"version"} }},
+}
+
+// newFixture lays down one deployment for one row.
+//
+// Every row gets its own, because half of them change the configuration and
+// a shared one would make each row's result depend on the order the rows
+// happened to run in.
+func newFixture(t *testing.T, bin string, s surface) fixture {
+	t.Helper()
+	_, configPath := writeFixture(t)
+	f := fixture{
+		configPath: configPath,
+		setID:      "production/pg",
+		artifactID: "production/pg/db-2026-08-01.dump",
+		keyPath:    writePrivateKey(t),
+	}
+	if s.needsArtifacts {
+		// One real cycle, so the operand this row names is a backup that
+		// exists rather than a string. A row whose subject is missing
+		// refuses for the wrong reason and proves nothing about routes.
+		if got := runCLI(t, bin, nil, "run", "--config", configPath); got.code != 0 {
+			t.Fatalf("the warm-up cycle this row needs did not run:\n%s", got)
+		}
+	}
+	return f
+}
+
+// TestEveryDispatchedVerbHasARow is the tripwire half of #545's third
+// proof: a command that arrives with no row here cannot have been driven
+// on either route.
+//
+// The verbs are read out of the binary's own usage block rather than typed
+// here, so a verb that lands over there fails here without anybody
+// remembering this file exists. What makes that sound is
+// core/cmd/backup-manager's TestUsage_NamesEveryTopLevelCommand, which pins
+// the usage block against the dispatch map itself; without it a verb could be
+// dispatchable and unlisted, and this would be blind to exactly the verb
+// nobody had thought about. The same blindness is why `backup-set remove`
+// shipped undiscoverable (issue #391).
+func TestEveryDispatchedVerbHasARow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the real CLI")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	dispatched := verbsFromUsage(t, bin)
+	if len(dispatched) < 15 {
+		t.Fatalf("read %d verbs out of the usage block, which is too few to be the whole binary; the parser below has stopped matching: %v", len(dispatched), dispatched)
+	}
+
+	declared := map[string]bool{}
+	for _, s := range surfaces {
+		declared[s.verb] = true
+	}
+	for _, verb := range dispatched {
+		if !declared[verb] {
+			t.Errorf("the binary dispatches %q and no row here drives it, so nothing has ever checked what it does beside a running engine", verb)
+		}
+	}
+	for verb := range declared {
+		if !contains(dispatched, verb) {
+			t.Errorf("a row here drives %q and the binary's usage block does not list it, so either the row is stale or the verb is undiscoverable", verb)
+		}
+	}
+}
+
+// verbsFromUsage reads the top-level verbs out of the usage block, which is
+// what the binary prints when it is given nothing.
+func verbsFromUsage(t *testing.T, bin string) []string {
+	t.Helper()
+	got := runCLI(t, bin, nil)
+	if got.code != 2 {
+		t.Fatalf("running the binary with no arguments exited %d, want 2 (a usage error):\n%s", got.code, got)
+	}
+	seen := map[string]bool{}
+	var verbs []string
+	for _, line := range strings.Split(got.output(), "\n") {
+		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		verb := fields[0]
+		if seen[verb] || !isVerbName(verb) {
+			continue
+		}
+		seen[verb] = true
+		verbs = append(verbs, verb)
+	}
+	sort.Strings(verbs)
+	return verbs
+}
+
+// isVerbName keeps the parser above from reading a wrapped continuation
+// line as a verb. Verbs are lower case with hyphens and nothing else.
+func isVerbName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// TestEveryCommandStillWorksWithNothingServingAndNamesItsMode is #545's
+// second proof.
+//
+// Two things per row: the command does what it does on a host with nothing
+// serving, which is the case the direct path exists for; and it says which
+// mode it was in. The second half is where the issue's wording is stronger
+// than the product. "Every command names the mode it used" is not true and
+// is not claimed here: the four read surfaces and the five configuration
+// writes name one, and the other eleven rows name none, which is recorded
+// per row rather than papered over. mode.go's own closing note says the
+// same thing in prose; this is the executed version of it, so a command
+// that starts or stops naming a mode moves a row here.
+func TestEveryCommandStillWorksWithNothingServingAndNamesItsMode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	for _, s := range surfaces {
+		if s.skipDirect {
+			continue
+		}
+		t.Run(s.verb+" "+s.name, func(t *testing.T) {
+			f := newFixture(t, bin, s)
+			before := readFile(t, f.configPath)
+
+			got := runCLI(t, bin, nil, s.argv(f)...)
+			if got.code != s.exit {
+				t.Fatalf("exited %d, want %d\n%s", got.code, s.exit, got)
+			}
+			// Nothing is serving, so nothing may report otherwise. This is
+			// the assertion that would catch a detector that says yes to
+			// everything, which would strand this binary on every host
+			// that has no engine at all.
+			if strings.Contains(got.output(), "mode: engine-attached") {
+				t.Errorf("this command found an engine on a deployment nothing is serving:\n%s", got)
+			}
+			if s.mode == "" {
+				if strings.Contains(got.output(), "mode: ") {
+					t.Errorf("this row is recorded as naming no mode and it named one; move the row rather than the assertion:\n%s", got)
+				}
+			} else if !strings.Contains(got.output(), "mode: "+s.mode) {
+				t.Errorf("this command did not announce %q:\n%s", "mode: "+s.mode, got)
+			}
+
+			after := readFile(t, f.configPath)
+			switch {
+			case s.writes && after == before:
+				t.Errorf("this row is recorded as a configuration write and config.yaml did not move, so the guard beside a live engine would pass for the wrong reason:\n%s", got)
+			case !s.writes && after != before:
+				t.Errorf("this row is not recorded as a configuration write and it changed config.yaml:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestNoCommandChangesTheConfigurationBesideAnEngineItCannotReach is #545's
+// third proof, and it is the one that fails for a command that exists on
+// one route and not the other.
+//
+// The invariant is universal and needs no per-row honesty: while something
+// has announced that it serves this deployment and this command has no
+// route to it, NO verb may change config.yaml. That is #535 stated over the
+// whole command set rather than over the five verbs somebody remembered.
+// A new command that writes the file through core/service directly, with no
+// engine counterpart and no mode, is exactly what breaks it.
+//
+// The two arms have to be read together. This one alone is satisfied by an
+// argv that does nothing at all, which is why every row that writes is also
+// driven with nothing serving in the test above and required to move the
+// file there. Together they say: this invocation can change the file, and
+// beside an engine it does not.
+func TestNoCommandChangesTheConfigurationBesideAnEngineItCannotReach(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	for _, s := range surfaces {
+		t.Run(s.verb+" "+s.name, func(t *testing.T) {
+			f := newFixture(t, bin, s)
+
+			// The announcement alone, with no HTTP surface behind it. That
+			// is what the probe reads, and it is also the honest shape of
+			// the case: a `backup-manager daemon` serves no HTTP at all,
+			// and an engine whose address nobody has configured is
+			// indistinguishable from one for a command with no route.
+			release, err := service.AnnounceServing(f.configPath)
+			if err != nil {
+				t.Fatalf("announcing this process as serving %s: %v", f.configPath, err)
+			}
+			defer func() { _ = release() }()
+
+			before := readFile(t, f.configPath)
+			got := runCLI(t, bin, nil, s.argv(f)...)
+			if after := readFile(t, f.configPath); after != before {
+				t.Fatalf("this command changed config.yaml while another process was serving this deployment and it had no route to hand the change over. That is issue #535.\n%s", got)
+			}
+			if s.writes && got.code == 0 {
+				t.Errorf("a configuration write beside an unreachable engine exited 0, so a script cannot tell it was refused:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestEveryConfigurationWriteEitherReachesTheEngineOrRefuses is the other
+// half of the third proof, and the place the remaining gaps are recorded as
+// something that runs.
+//
+// A write that this build routes has to reach the engine and move the
+// configuration the engine is serving from. A write that this build does
+// not route has to refuse, with nothing written on either side. There is no
+// third outcome, and a row that changed category without its note being
+// rewritten fails here rather than in an operator's deployment.
+func TestEveryConfigurationWriteEitherReachesTheEngineOrRefuses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against a real engine")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	var writes int
+	for _, s := range surfaces {
+		if !s.writes {
+			continue
+		}
+		writes++
+		t.Run(s.verb+" "+s.name, func(t *testing.T) {
+			f := newFixture(t, bin, s)
+			live := startStack(t, f.configPath)
+			view := signIn(t, live.uiURL)
+
+			before := readFile(t, f.configPath)
+			revisionBefore := view.configRevision()
+
+			got := runCLI(t, bin, routeTo(live.engineURL), s.argv(f)...)
+			revisionAfter := view.configRevision()
+
+			if s.routed {
+				if got.code != 0 {
+					t.Fatalf("a write this build routes was refused:\n%s", got)
+				}
+				if !strings.Contains(got.output(), "hands the change to it at") {
+					t.Errorf("the command did not say it had handed the change over:\n%s", got)
+				}
+				if revisionAfter == revisionBefore {
+					t.Errorf("the engine is serving the same configuration %s it was before a write it accepted, so the Web UI still shows the old world:\n%s", revisionAfter, got)
+				}
+				return
+			}
+
+			if s.note == "" {
+				t.Fatal("a write with no route and no note is a gap nobody has justified; write the reason into the row")
+			}
+			if got.code == 0 {
+				t.Fatalf("a write this build does not route exited 0 beside a live engine, so it went into the file the engine will never re-read:\n%s", got)
+			}
+			if !strings.Contains(got.output(), "refused here rather than downgraded") {
+				t.Errorf("the refusal did not say that nothing was written:\n%s", got)
+			}
+			if after := readFile(t, f.configPath); after != before {
+				t.Error("a refused write changed config.yaml anyway")
+			}
+			if revisionAfter != revisionBefore {
+				t.Errorf("the engine's configuration moved on a command that refused: %s then %s", revisionBefore, revisionAfter)
+			}
+		})
+	}
+	if writes < 5 {
+		t.Fatalf("only %d rows are recorded as configuration writes; every one of the five this binary has should be here, and a table that has lost one proves less than it reads as proving", writes)
+	}
+}
+
+// contains reports whether items holds want.
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+// equal compares two id lists as they are printed, sorted by their callers.
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// unreportedOnTheWire is every field the same command prints on the direct
+// route and cannot print through the engine, as a list that runs.
+//
+// It is short on purpose: this is the residue of #543 and #544, not a
+// summary of them. Each entry is a property api/v1/openapi.json's own
+// schema has no room for, so closing one is a contract addition rather than
+// anything the CLI can do.
+//
+//	stale_after  BackupSet carries no stale_after property at all, even
+//	             though BackupSetSpec accepts one on the way in and
+//	             UpdateBackupSetRequest can change it. So the API can
+//	             write a field it cannot read back, and a routed create
+//	             reports it as unreported rather than printing 0s about
+//	             FR-24's freshness budget.
+var unreportedOnTheWire = []string{"stale_after"}
+
+// TestWhatARoutedCommandStillCannotReport drives the list above rather than
+// leaving it as a paragraph, in both directions.
+//
+// The same create is typed at two deployments, one with nothing serving and
+// one with an engine serving it, and the two reports are compared line for
+// line. Every line that differs has to be about something on the list, and
+// every entry on the list has to account for a line that differs. The
+// second half is the one that matters over time: close the gap in the
+// contract and this fails until somebody shortens the list, which is the
+// opposite of how a documented limitation usually ages.
+func TestWhatARoutedCommandStillCannotReport(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against a real engine")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	// The same input, all the way down: the same id, the same window, the
+	// same paths, and the same key file. Two deployments that start out
+	// saying the same thing.
+	//
+	// The same key matters and was found the hard way. Two calls to
+	// writePrivateKey are two keys and two fingerprints, and the create
+	// prints the fingerprint it imported, so the comparison reported a
+	// divergence that was entirely its own.
+	key := writePrivateKey(t)
+	create := func(configPath string) []string {
+		return createArgs(configPath, key, newSetID, "--stale-after", "48h")
+	}
+
+	_, directConfig := writeFixture(t)
+	direct := runCLI(t, bin, nil, create(directConfig)...)
+	if direct.code != 0 {
+		t.Fatalf("the direct create failed, so there is nothing to compare against:\n%s", direct)
+	}
+
+	_, routedConfig := writeFixture(t)
+	live := startStack(t, routedConfig)
+	routed := runCLI(t, bin, routeTo(live.engineURL), create(routedConfig)...)
+	if routed.code != 0 {
+		t.Fatalf("the routed create failed, so there is nothing to compare:\n%s", routed)
+	}
+
+	onlyDirect, onlyRouted := reportDiff(t, direct.stdout, routed.stdout)
+	if len(onlyDirect) == 0 && len(onlyRouted) == 0 {
+		t.Fatal("the two routes printed exactly the same report, which cannot be right while unreportedOnTheWire has entries in it; either the list is stale or this comparison has stopped comparing")
+	}
+
+	accounted := map[string]bool{}
+	for _, line := range append(append([]string{}, onlyDirect...), onlyRouted...) {
+		var matched bool
+		for _, field := range unreportedOnTheWire {
+			if strings.Contains(line, field) {
+				accounted[field] = true
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("the two routes disagree about a line nothing on unreportedOnTheWire accounts for, which is a divergence somebody has to justify or fix:\n  %s", line)
+		}
+	}
+	for _, field := range unreportedOnTheWire {
+		if !accounted[field] {
+			t.Errorf("unreportedOnTheWire still lists %q and the two routes printed the same thing about it; if the contract gained it, take it off the list", field)
+		}
+	}
+}
+
+// reportDiff compares two runs of the same command as sets of lines, having
+// dropped the two kinds of line that legitimately differ.
+//
+// The mode announcement differs by construction: saying which route was
+// taken is the whole point of it. The JSON startup events carry a timestamp
+// per invocation, so comparing them would compare two clocks.
+func reportDiff(t *testing.T, direct, routed string) (onlyDirect, onlyRouted []string) {
+	t.Helper()
+	left, right := reportLines(direct), reportLines(routed)
+	if len(left) == 0 || len(right) == 0 {
+		t.Fatalf("one of the two reports has no comparable lines left after normalising, so this comparison is empty\ndirect:\n%s\nrouted:\n%s", direct, routed)
+	}
+	for _, line := range left {
+		if !contains(right, line) {
+			onlyDirect = append(onlyDirect, line)
+		}
+	}
+	for _, line := range right {
+		if !contains(left, line) {
+			onlyRouted = append(onlyRouted, line)
+		}
+	}
+	return onlyDirect, onlyRouted
+}
+
+func reportLines(out string) []string {
+	var kept []string
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+		case strings.HasPrefix(trimmed, modeLine):
+		case strings.HasPrefix(trimmed, "{"):
+		default:
+			kept = append(kept, trimmed)
+		}
+	}
+	return kept
+}
+
+// modeLine is what mode.go and readmode.go both prefix their announcement
+// with. Spelled out here rather than imported, because package main cannot
+// be imported and because it is an operator-facing string: a rename is
+// something a deployment feels, so this has to notice one rather than
+// follow it.
+const modeLine = "mode: "
