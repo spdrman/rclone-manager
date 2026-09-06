@@ -114,29 +114,6 @@ import (
 // what follows was not confirmed against the process that would be
 // serving it. That is the whole of "the fallback is not silent".
 
-// The three environment variables that tell this binary where its own
-// engine is.
-//
-// Environment rather than flags or a configuration block, for two reasons.
-// A flag would be operator-visible surface on six commands' usage text at
-// once, and usage text is pinned by core/tests/compat and by
-// spdrman/rclone-manager-tests; the address also belongs to the HOST a
-// command is run from rather than to the deployment, so a deployment's own
-// config.yaml is the wrong place for it: the same file is read from inside
-// the container, where the engine is on loopback, and from a NAS shell,
-// where it is a published port.
-//
-// The password is read and handed to apiclient, which holds it in memory
-// for the life of one invocation and writes it nowhere. Nothing in this
-// binary prints it, and apiclient renders every address through
-// url.URL.Redacted precisely so that a base URL carrying userinfo cannot
-// reach a terminal (PR #546).
-const (
-	engineURLEnv      = "BACKUP_MANAGER_API_URL"
-	engineUsernameEnv = "BACKUP_MANAGER_API_USERNAME"
-	enginePasswordEnv = "BACKUP_MANAGER_API_PASSWORD"
-)
-
 // unconfirmedMode is a read that answered from the configuration file
 // without having been able to check it against the process that may be
 // serving this deployment.
@@ -285,14 +262,14 @@ func (d readDecision) unconfirmed(because string, announceTo io.Writer) readDeci
 // write it anywhere either: it is held in memory for the life of one
 // invocation.
 func dialEngine() (*apiclient.Client, error) {
-	base := strings.TrimSpace(os.Getenv(engineURLEnv))
+	base := strings.TrimSpace(os.Getenv(apiURLEnv))
 	if base == "" {
-		return nil, fmt.Errorf("%s is not set, so this command does not know where this deployment's engine is; set it to the engine's own address (http://127.0.0.1:8080 from inside its container) or to the published Web UI port, together with %s and %s", engineURLEnv, engineUsernameEnv, enginePasswordEnv)
+		return nil, fmt.Errorf("%s is not set, so this command does not know where this deployment's engine is; set it to the engine's own address (http://127.0.0.1:8080 from inside its container) or to the published Web UI port, together with %s and %s", apiURLEnv, apiUsernameEnv, apiPasswordEnv)
 	}
 	return apiclient.New(apiclient.Config{
 		BaseURL:   base,
-		Username:  os.Getenv(engineUsernameEnv),
-		Password:  os.Getenv(enginePasswordEnv),
+		Username:  os.Getenv(apiUsernameEnv),
+		Password:  os.Getenv(apiPasswordEnv),
 		UserAgent: "backup-manager-cli/" + version,
 	})
 }

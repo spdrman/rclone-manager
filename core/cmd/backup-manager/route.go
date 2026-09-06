@@ -74,6 +74,20 @@ import (
 // The credentials are the local administrator's, the same pair the Web UI
 // takes. A CLI-only credential would be a second thing deciding who may
 // act on one deployment, which is the defect #536 exists to remove.
+//
+// Environment rather than flags, and rather than a block in config.yaml.
+// A flag would be operator-visible surface on six commands' usage text at
+// once, and that text is pinned both by core/tests/compat and by
+// spdrman/rclone-manager-tests. The address also belongs to the HOST a
+// command is typed on rather than to the deployment: the same config.yaml
+// is read from inside the container, where the engine is on loopback, and
+// from a NAS shell, where it is a published port, so one field could not
+// be right in both places.
+//
+// These three names are declared here and nowhere else. They were briefly
+// declared twice, once for the write path and once for the read path, with
+// nothing comparing the two, which is the drift this package spends a
+// contract test preventing one layer down.
 
 const (
 	// apiURLEnv names the engine's address: the scheme, host and port

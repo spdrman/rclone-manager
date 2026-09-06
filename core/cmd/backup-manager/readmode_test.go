@@ -344,15 +344,15 @@ func TestEveryReadSaysWhichWorldItIsAbout(t *testing.T) {
 				// Deliberately not engine.use: an operator who has never
 				// told this host where its own engine is, which is every
 				// deployment until somebody does.
-				t.Setenv(engineURLEnv, "")
+				t.Setenv(apiURLEnv, "")
 
 				code, out := runReadCapturingBothStreams(t, rc.args(configPath))
 				if code != 0 {
 					t.Fatalf("%s exited %d because it could not reach the engine; a read that cannot ask still has to answer\n%s", rc.name, code, out)
 				}
 				requireOnly(t, rc.name, out, unconfirmedReadLine, directReadLine, engineAttachedReadLine)
-				if !strings.Contains(out, engineURLEnv) {
-					t.Errorf("%s said its answer was unconfirmed without saying what would make it confirmable; want %s named\n%s", rc.name, engineURLEnv, out)
+				if !strings.Contains(out, apiURLEnv) {
+					t.Errorf("%s said its answer was unconfirmed without saying what would make it confirmable; want %s named\n%s", rc.name, apiURLEnv, out)
 				}
 			})
 		}

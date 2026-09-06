@@ -99,9 +99,9 @@ func startReadEngine(t *testing.T, configPath, enginePath string) *readEngine {
 // would before running a command from a host.
 func (e *readEngine) use(t *testing.T) {
 	t.Helper()
-	t.Setenv(engineURLEnv, e.baseURL)
-	t.Setenv(engineUsernameEnv, "operator")
-	t.Setenv(enginePasswordEnv, "correct-horse-battery")
+	t.Setenv(apiURLEnv, e.baseURL)
+	t.Setenv(apiUsernameEnv, "operator")
+	t.Setenv(apiPasswordEnv, "correct-horse-battery")
 }
 
 // asked returns the contract paths this engine was actually asked for, in
