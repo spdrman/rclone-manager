@@ -114,6 +114,19 @@ const servingLockSuffix = ".serving-lock"
 // migration to undo) and risked everything, so it is now reached only on a
 // start that genuinely is about to change the schema.
 //
+// # What this does NOT do: name the deployment
+//
+// This sequence used to mint the deployment identity here, under the
+// startup lock, on the reasoning that every process opening the journal
+// passes through it exactly once. That is true and it is the wrong set of
+// processes. `backup-manager status`, `sources` and every routed write
+// come through here too, and none of them is serving anything, so a
+// deployment whose identity file was missing got a brand new name from
+// whichever CLI command happened to run next, while the engine went on
+// serving the old one. Minting now belongs to AnnounceServing
+// (liveengine.go), which exactly one kind of process calls: one that is
+// about to serve. deploymentidentity.go argues it at length.
+//
 // # Two locks, shared and exclusive
 //
 // The startup lock is held for this function's duration only, released
@@ -162,24 +175,6 @@ func runStartupSequence(ctx context.Context, dbPath string) (*state.Journal, fun
 		return nil, nil, err
 	}
 	defer func() { _ = startupLock.release() }()
-
-	// This deployment's identity, minted on the first start that ever
-	// reaches here and read on every one after (deploymentidentity.go).
-	//
-	// It is done under the startup lock and nowhere else, which is what
-	// makes "one deployment, one identity" a fact rather than a hope: the
-	// read-then-mint below is not a race because every process that opens
-	// this journal is holding this lock while it runs, and a deployment
-	// with two identities would be worse than one with none.
-	//
-	// Before the migration and before the journal is opened, deliberately.
-	// A client asks GET /system/version for this before it sends a
-	// mutation, and an identity that only appeared once a schema upgrade
-	// had gone through would be missing on exactly the starts where the
-	// most is happening.
-	if _, err := ensureDeploymentIdentity(dbPath); err != nil {
-		return nil, nil, err
-	}
 
 	pending, err := state.PendingMigration(ctx, dbPath)
 	if err != nil {

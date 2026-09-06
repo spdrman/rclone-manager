@@ -202,7 +202,16 @@ func attachToEngine(ctx context.Context, engine *service.RunningEngine) (configW
 		UserAgent: fmt.Sprintf("backup-manager/%s (api %s)", version, apicontract.Version),
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("$%s does not name an engine this command can reach, so nothing was written: %w", apiURLEnv, err)
+		// A routeRefusal like every other way this function refuses a
+		// route that was named, and with no address, because there is
+		// none: nothing was dialled. It carries a reason so the mode line
+		// says an address was given and could not be used, rather than
+		// saying this build has no route at all (mode.go's announce).
+		return nil, "", &routeRefusal{
+			reason: fmt.Sprintf("$%s does not name an engine this command can reach", apiURLEnv),
+			detail: fmt.Sprintf("$%s does not name an engine this command can reach, so nothing was written: %v", apiURLEnv, err),
+			cause:  err,
+		}
 	}
 	// Before the route is handed back, never after. A route returned and
 	// then checked would be a route some later caller could use without

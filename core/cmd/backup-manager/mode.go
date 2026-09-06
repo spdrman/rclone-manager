@@ -84,6 +84,15 @@ import (
 // its own rather than borrowing the no-route sentence; deploymentcheck.go
 // holds the reasoning.
 //
+// "In words of its own" is the whole of it, and it is why the
+// announcement reads a reason off the refusal instead of recognising one
+// error type. A route that was named can fail five ways here (it cannot
+// be built, the engine does not answer, this deployment has no identity,
+// the engine names none, or it names a different one) and every one of
+// them is an address somebody set doing something other than what they
+// meant. None of them is "this build has no route to it", which is what
+// all but one of them used to print.
+//
 // # And there is no third mode
 //
 // A probe that cannot be performed does not produce a mode. It produces a
@@ -197,17 +206,24 @@ type modeDecision struct {
 	// half a report.
 	routeAddress string
 
-	// misaimedAt is the address of an engine that answered and turned out
-	// to be serving a DIFFERENT deployment (#555), already redacted, or
-	// "" when that is not what happened.
+	// trouble is what went wrong with a route that WAS named (#555), or
+	// nil when nothing did.
 	//
 	// It is a third refusal shape rather than a variation on the second
 	// because they are different facts about an operator's host. "No
 	// route to the engine serving this deployment" sends somebody to set
-	// $BACKUP_MANAGER_API_URL; "the route goes somewhere else" sends them
-	// to correct one they have already set. Printing the first when the
-	// second is true would send them looking for a setting they made.
-	misaimedAt string
+	// $BACKUP_MANAGER_API_URL; "the route was named and this command will
+	// not send a change through it" sends them to correct one they have
+	// already set. Printing the first when the second is true would send
+	// them looking for a setting they made.
+	//
+	// It carries a reason rather than only an address, and that is what
+	// #559's review found missing: the field used to be filled in from
+	// one error type, so a route that could not be built, an engine that
+	// did not answer, a deployment with no identity and an engine that
+	// named none all announced "this build has no route to it" one line
+	// above a refusal saying something else entirely.
+	trouble *routeRefusal
 }
 
 // heldBy names the state database the serving process announced, or the
@@ -275,9 +291,9 @@ func (d modeDecision) announce(announceTo, refuseTo io.Writer) {
 	// invocation is in, and swallowing the command because the
 	// announcement could not be delivered would be the worse answer.
 	switch {
-	case d.mode == engineAttachedMode && d.misaimedAt != "":
-		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is serving this deployment (state database %s) and the engine at %s serves a different deployment, so the change is refused here rather than sent to a deployment this command was not typed at.\n",
-			modeLinePrefix, d.mode, d.heldBy(), d.misaimedAt)
+	case d.mode == engineAttachedMode && d.trouble != nil:
+		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is serving this deployment (state database %s) and %s, so the change is refused here rather than sent anywhere or written to %s.\n",
+			modeLinePrefix, d.mode, d.heldBy(), d.trouble.reason, d.configFile)
 	case d.mode == engineAttachedMode && d.route != nil:
 		_, _ = fmt.Fprintf(announceTo, "%s%s. Another process is serving this deployment (state database %s), so this command hands the change to it at %s rather than writing %s itself.\n",
 			modeLinePrefix, d.mode, d.heldBy(), d.routeAddress, d.configFile)
@@ -433,11 +449,14 @@ func settleConfigWriteMode(ctx context.Context, guard *service.ConfigWriteGuard,
 		d.route, d.routeAddress, attachErr = attach(ctx, d.engine)
 	}
 	// Read out of the error rather than returned beside it, so a future
-	// attachFunc cannot report a misaimed route without producing an
-	// error, or an error without the announcement matching it.
-	var misaimed *wrongDeploymentError
-	if errors.As(attachErr, &misaimed) {
-		d.misaimedAt = misaimed.address
+	// attachFunc cannot report a route problem without producing an
+	// error, or an error without the announcement matching it. Every way
+	// attachToEngine refuses a route it was given carries one of these,
+	// which is what keeps the mode line and the sentence under it from
+	// describing two different failures.
+	var trouble *routeRefusal
+	if errors.As(attachErr, &trouble) {
+		d.trouble = trouble
 	}
 
 	d.announce(announceTo, refuseTo)

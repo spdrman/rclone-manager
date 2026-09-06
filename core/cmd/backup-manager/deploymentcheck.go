@@ -60,36 +60,71 @@ import (
 // quietly skipped. It matters most for the empty answers, because two
 // processes that both name nothing would compare EQUAL, which is the one
 // way this check could pass while proving nothing.
-
-// wrongDeploymentError is a route that was built, answered, and turned out
-// to lead somewhere else.
 //
-// It is a type rather than a sentence because the mode announcement has to
-// tell this apart from the other refusals: "there is no route to the
-// engine serving this deployment" and "the route goes to a different
-// deployment" are different facts about an operator's host, and a command
-// that printed the first when the second was true would send them looking
-// for a configuration setting they had already made.
-type wrongDeploymentError struct {
+// That sub-rule is load-bearing and it is now driven rather than argued
+// about. deploymentcheck_test.go runs a routed write against an engine
+// that names no deployment, against a deployment that has no identity,
+// and against the pair of them at once, and a build with the two empty
+// refusals deleted reddens all three: the comparison passes, the write is
+// sent, and it lands wherever the address pointed.
+
+// routeRefusal is a route that was named and that this command will not
+// send a change through, with the two things the mode announcement needs
+// to say about it.
+//
+// It is one type carrying a reason rather than a type per shape, and it
+// is wider than the *wrongDeploymentError it replaces on purpose. That
+// one covered only "the route leads to a different deployment", so the
+// mode line printed "this build has no route to it" for the other four
+// ways a named route is refused: the three below, and route.go's address
+// that cannot be made into a client at all. One line above a refusal
+// saying the opposite.
+// "There is no route to the engine serving this deployment" and "the
+// route goes somewhere this command will not write" send an operator to
+// two different places: set an address, or correct one they already set.
+type routeRefusal struct {
 	// address is the engine that answered, already redacted (this is
 	// apiclient's BaseURL, not the raw environment value, which can carry
-	// userinfo credentials).
+	// userinfo credentials). It is empty when no route could be built at
+	// all, which is the one shape here that never reached an engine.
 	address string
 
-	// stateDatabase is the journal of the deployment this command was
-	// typed at, spelled as its configuration spells it, so an operator can
-	// match it against their own container.
-	stateDatabase string
+	// reason is the short clause the mode line carries, written to follow
+	// "Another process is serving this deployment (state database X) and".
+	// It does not repeat the state database, which that line already has.
+	reason string
 
-	// local and served are the two identities. Both, always: see this
-	// file's own doc.
-	local, served string
+	// detail is the whole sentence the refusal prints, which says what to
+	// do about it as well as what happened.
+	detail string
+
+	// cause is whatever this was made from, kept so errors.Is and
+	// errors.As reach it exactly as they did when these were
+	// fmt.Errorf("...%w"). Nothing here reads it; what reads it is
+	// whatever decides an exit status, and a refusal that quietly stopped
+	// carrying a sentinel would change one without saying so.
+	cause error
 }
 
-func (e *wrongDeploymentError) Error() string {
-	return fmt.Sprintf(
-		"the engine at %s serves a different deployment from the one this command was typed at, so nothing was written and nothing was sent: it reports deployment %s, and this deployment (state database %s) is %s. A write sent there would have changed a deployment you are not looking at and left this one exactly as it is, so check $%s",
-		e.address, e.served, e.stateDatabase, e.local, apiURLEnv)
+func (e *routeRefusal) Error() string { return e.detail }
+func (e *routeRefusal) Unwrap() error { return e.cause }
+
+// misaimedRoute is the refusal an operator is most likely to cause: a
+// route that was built, answered, and turned out to lead to a different
+// deployment on the same host.
+//
+// Both identities, always, and the state database beside them: an
+// operator who has just mistyped a URL needs to see the deployment they
+// meant next to the one they reached, and the journal path is what lets
+// them match "this deployment" against a container in front of them.
+func misaimedRoute(address, stateDatabase, local, served string) *routeRefusal {
+	return &routeRefusal{
+		address: address,
+		reason:  fmt.Sprintf("the engine at %s serves a different deployment", address),
+		detail: fmt.Sprintf(
+			"the engine at %s serves a different deployment from the one this command was typed at, so nothing was written and nothing was sent: it reports deployment %s, and this deployment (state database %s) is %s. A write sent there would have changed a deployment you are not looking at and left this one exactly as it is, so check $%s",
+			address, served, stateDatabase, local, apiURLEnv),
+	}
 }
 
 // confirmDeployment asks the engine which deployment it serves and refuses
@@ -99,35 +134,71 @@ func (e *wrongDeploymentError) Error() string {
 // the claim enterConfigWriteMode holds, so nothing can finish starting
 // between the answer and the write it authorises.
 //
-// The near side is read and never minted (service.DeploymentIdentity is
-// the reading half on purpose). A command that is about to hand a change
-// to somebody else's process has no business naming the deployment it is
-// standing in: an identity invented here would be compared against the
-// engine's and would refuse for a reason this command had created.
+// The near side is read and never minted, and that is now a fact about
+// the shape of the code rather than about this function's manners.
+// core/service mints in AnnounceServing and nowhere else, so the only
+// processes that can name a deployment are the ones about to serve it;
+// this command opens the same journal through the same service.Open and
+// reads whatever is there. It used to be a promise this file made and
+// setup.go broke two calls later: openConfigWriteRoute calls service.Open,
+// which ran runStartupSequence, which minted. On a deployment restored
+// from its .db alone, beside an engine still holding the old identity,
+// one `backup-manager status` renamed the deployment and every routed
+// write afterwards refused against its own engine while pointing the
+// operator at $BACKUP_MANAGER_API_URL.
+//
+// The refusal below for a deployment with no identity is reachable
+// because of that change. It could not fire before: anything that got
+// here had already minted one.
 func confirmDeployment(ctx context.Context, client *apiclient.Client, engine *service.RunningEngine) error {
+	address := client.BaseURL()
 	local, err := service.DeploymentIdentity(engine.StateDatabase)
 	if err != nil {
-		return fmt.Errorf("this command could not read which deployment it is standing in (state database %s), so it cannot confirm that the engine at %s is the one serving it and nothing was written: %w", engine.StateDatabase, client.BaseURL(), err)
+		return &routeRefusal{
+			address: address,
+			reason:  "this command could not read which deployment it is standing in",
+			detail:  fmt.Sprintf("this command could not read which deployment it is standing in (state database %s), so it cannot confirm that the engine at %s is the one serving it and nothing was written: %v", engine.StateDatabase, address, err),
+			cause:   err,
+		}
 	}
 
 	served, err := client.SystemVersion(ctx)
 	if err != nil {
-		return fmt.Errorf("$%s names an engine that did not answer when this command asked which deployment it serves, so nothing was written: %w", apiURLEnv, err)
+		return &routeRefusal{
+			address: address,
+			reason:  fmt.Sprintf("the engine at %s did not answer when this command asked which deployment it serves", address),
+			detail:  fmt.Sprintf("$%s names an engine that did not answer when this command asked which deployment it serves, so nothing was written: %v", apiURLEnv, err),
+			cause:   err,
+		}
 	}
 
 	if local == "" {
-		return fmt.Errorf("this deployment (state database %s) has no identity of its own, so this command cannot confirm that the engine at %s is the one serving it and nothing was written: an identity is minted beside the journal the first time a process opens it, so restarting the process that serves this deployment gives it one", engine.StateDatabase, client.BaseURL())
+		return &routeRefusal{
+			address: address,
+			reason:  "this deployment has no identity of its own",
+			detail:  fmt.Sprintf("this deployment (state database %s) has no identity of its own, so this command cannot confirm that the engine at %s is the one serving it and nothing was written: an identity is minted beside the journal by the process that serves the deployment, so restarting that process gives this one a name", engine.StateDatabase, address),
+		}
 	}
 	if served.DeploymentID == "" {
-		return fmt.Errorf("the engine at %s did not say which deployment it serves, so this command cannot confirm it is the one serving this deployment (state database %s) and nothing was written: an engine that names no deployment is one from before this check existed, and a change sent to it could land in a different deployment altogether. Restart that process on this build, or make the change through the Web UI it serves", client.BaseURL(), engine.StateDatabase)
+		// What was observed, and then the likeliest remedy, rather than a
+		// diagnosis this command cannot make. This used to say an engine
+		// naming no deployment "is one from before this check existed",
+		// and it is one of three: apps/common/webhost's
+		// handlers_system.go names the other two on the field itself, a
+		// process holding no deployment and one whose identity file could
+		// not be read, and nothing on the wire tells them apart. Stating
+		// one of three as the cause is the defect #557 takes out of
+		// gotestwatch, and its doc.go states the rule: report what was
+		// observed, offer the likeliest remedy, and do not dress a guess
+		// up as a finding.
+		return &routeRefusal{
+			address: address,
+			reason:  fmt.Sprintf("the engine at %s did not say which deployment it serves", address),
+			detail:  fmt.Sprintf("the engine at %s answered without naming a deployment, so this command cannot confirm it is the one serving this deployment (state database %s) and nothing was written: a change sent there could land in a different deployment altogether. An engine answers this way when it is running a build from before this check existed, when it could not read its own deployment's identity, and when it is holding no deployment at all, and nothing on the wire tells those apart. Restarting the process that serves this deployment on this build is the likeliest of the three to fix it; failing that, make the change through the Web UI it serves", address, engine.StateDatabase),
+		}
 	}
 	if served.DeploymentID != local {
-		return &wrongDeploymentError{
-			address:       client.BaseURL(),
-			stateDatabase: engine.StateDatabase,
-			local:         local,
-			served:        served.DeploymentID,
-		}
+		return misaimedRoute(address, engine.StateDatabase, local, served.DeploymentID)
 	}
 	return nil
 }

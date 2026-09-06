@@ -36,6 +36,13 @@ import (
 // kernel reports whoever asks. What is being arranged here is the world
 // the mode decision reads, and a real daemon would arrange the same world
 // far more slowly.
+//
+// It is for the tests with NO engine behind the announcement: a
+// `backup-manager daemon`, which serves this deployment and no HTTP, and
+// the routes that were named and cannot be used. A test that stands a
+// fake engine up over this deployment does not call it, because
+// startFakeEngine announces for itself, and announcing twice over one
+// journal is refused by the exclusive serving lock, correctly.
 func attachEngineTo(t *testing.T, configPath string) {
 	t.Helper()
 	release, err := service.AnnounceServing(configPath)
@@ -56,7 +63,6 @@ func TestBackupSetCreateReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
 	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	before := readFile(t, cliConfig)
 	keyPath := writeTestPrivateKey(t)
@@ -161,7 +167,6 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 			cliConfig := writeTestConfig(t)
 			engine := startFakeEngineFor(t, cliConfig)
 			engine.attach(t)
-			attachEngineTo(t, cliConfig)
 
 			before := readFile(t, cliConfig)
 			var code int
@@ -192,7 +197,6 @@ func TestSettingsPatchReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
 	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	before := readFile(t, cliConfig)
 	args := []string{"settings", "--config", cliConfig, "patch",
@@ -292,7 +296,6 @@ func TestTheModeIsAnnouncedOnBothRoutes(t *testing.T) {
 		cliConfig := writeTestConfig(t)
 		engine := startFakeEngineFor(t, cliConfig)
 		engine.attach(t)
-		attachEngineTo(t, cliConfig)
 
 		var out string
 		stderr := captureStderr(t, func() {
@@ -465,7 +468,6 @@ func TestAWindowTheWireCannotCarryIsRefusedRatherThanTruncated(t *testing.T) {
 	cliConfig := writeTestConfig(t)
 	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	args := createArgs(cliConfig, writeTestPrivateKey(t), "api/postgres",
 		"--completion-strategy", "stable", "--stable-for", "1500ms")

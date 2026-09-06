@@ -71,13 +71,23 @@ import (
 // and the fields they still cannot be compared on are enumerated in
 // unreportedOnTheWire below, as an executed list rather than a paragraph.
 //
-// Two of the tests here record a gap rather than a property, and both say
-// so in their own name. A read on a deployment that has not been told where
-// its engine is announces `unconfirmed` rather than being prevented, which
-// is the shipped container's own default. And a routed WRITE compares no
-// revision at all, so one wrong character in $BACKUP_MANAGER_API_URL writes
-// into a different deployment's engine, which is driven rather than
-// speculated about.
+// One test here records a gap rather than a property and says so in its
+// own name: a read on a deployment that has not been told where its engine
+// is announces `unconfirmed` rather than being prevented, which is the
+// shipped container's own default.
+//
+// There used to be a second, and #555 closed what it recorded. A routed
+// write compared nothing at all, so one wrong character in
+// $BACKUP_MANAGER_API_URL sent the change into a different deployment's
+// engine and both surfaces reported success. It now asks the engine which
+// deployment it serves before it sends anything and refuses when that is
+// not the deployment the command was typed at, which is what
+// TestARoutedWriteRefusesWhenTheEngineServesADifferentDeployment drives.
+// What it compares is a deployment identity rather than a revision, for
+// the reason that test spells out: a revision is a hash of configuration
+// content, so a staging and a production instance built from one template
+// share one, and those two are exactly the pair an address gets confused
+// between.
 //
 // # The Web UI itself
 //

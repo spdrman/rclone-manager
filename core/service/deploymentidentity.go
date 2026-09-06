@@ -3,8 +3,8 @@ package service
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +55,31 @@ import (
 // applied_at is the only candidate) fails on collisions and costs more to
 // read: two deployments initialised by one script share a timestamp, and
 // getting at it means opening SQLite, which a command holding the startup
-// lock has no business doing. A file is one os.ReadFile.
+// lock has no business doing. A file is one bounded read.
+//
+// # Who mints, and why only them
+//
+// One process mints: the one that has just announced it is about to serve
+// this deployment (AnnounceServing, liveengine.go). Every other process
+// reads, and gets "" when there is nothing to read.
+//
+// That split is structural rather than a convention, and it has to be.
+// The mint used to sit in runStartupSequence, which every `backup-manager`
+// subcommand goes through, so a `backup-manager status` on a deployment
+// whose identity file was missing (restore only the .db, which the
+// restore section below names as supported) MINTED one. On a host where
+// the engine was still up holding the old identity, that one read command
+// renamed the deployment, and every routed write afterwards refused
+// against its own engine while telling the operator to go and check
+// $BACKUP_MANAGER_API_URL. deploymentcheck.go promises the near side is
+// never minted by the command doing the comparing; putting the mint
+// behind the serving announcement is what makes that promise something
+// the code shape holds rather than something a caller remembers.
+//
+// It also makes "this deployment has no identity" a state that exists:
+// a deployment nothing has served on this build reports none, the routed
+// write refuses instead of comparing two nothings, and the remedy is the
+// restart that mints one.
 //
 // # What happens to a deployment that is restored, or cloned
 //
@@ -116,33 +140,70 @@ const deploymentIDBytes = 16
 // here would be compared against the engine's and would refuse for a
 // reason this command created.
 //
-// An empty answer is not an error. It means the journal has never been
-// opened by a build that mints one, which a caller has to be able to tell
+// An empty answer is not an error. It means no process serving this
+// deployment has minted one yet, which a caller has to be able to tell
 // apart from "the identity is X" without unwrapping an error, because the
 // two lead to different sentences.
+//
+// Anything at that path that is not an ordinary file reads as empty
+// rather than as an error, and that covers two things at once. A symlink
+// is not followed: nothing this product ships puts one there, the reader
+// may be running as a different user from the one that owns the state
+// directory, and following a link is how "read the identity beside the
+// journal" turns into "read whatever somebody pointed this at". A
+// DIRECTORY at that path is the shape that used to stop a deployment
+// starting for good, because every read of it failed forever; it is a
+// deployment that cannot name itself, which is a state this whole file is
+// built to carry.
+//
+// The read is bounded. An identity is 33 bytes and this build will not
+// look at more than maxDeploymentIDFileBytes of whatever is there, so a
+// path that has been pointed at something enormous costs a short read
+// rather than that file's size in memory.
 func DeploymentIdentity(dbPath string) (string, error) {
 	if dbPath == "" {
 		return "", nil
 	}
-	raw, err := os.ReadFile(dbPath + deploymentIDSuffix)
-	if errors.Is(err, os.ErrNotExist) {
+	path := dbPath + deploymentIDSuffix
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("service: reading this deployment's identity: %w", err)
 	}
+	if !info.Mode().IsRegular() {
+		return "", nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("service: reading this deployment's identity: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	// One byte more than anything valid, so a longer file is recognised as
+	// junk rather than silently read as its first 32 hex characters.
+	raw, err := io.ReadAll(io.LimitReader(f, maxDeploymentIDFileBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("service: reading this deployment's identity: %w", err)
+	}
+	if len(raw) > maxDeploymentIDFileBytes {
+		return "", nil
+	}
 	return validDeploymentIdentity(string(raw)), nil
 }
 
 // ensureDeploymentIdentity returns dbPath's deployment identity, minting
-// one if that journal has never had one.
+// one if no process serving that journal ever has.
 //
-// It is called from runStartupSequence while the startup lock is held
-// exclusively, and that is what makes the read-then-write below safe
-// rather than a race: every process that opens a journal goes through
-// that sequence, and no two of them are inside it at once. The lock is
-// also why a deployment cannot end up with two identities, which would be
-// worse than having none.
+// It is called from AnnounceServing, and from nowhere else, while that
+// function holds the serving lock EXCLUSIVELY. That is what makes the
+// read-then-write below safe rather than a race: the serving lock admits
+// one process at a time, nothing that is not about to serve gets here at
+// all, and a deployment with two identities would be worse than one with
+// none.
 //
 // A file that exists and holds something this build does not recognise is
 // replaced rather than refused. The only ways to get one are a crash
@@ -150,6 +211,11 @@ func DeploymentIdentity(dbPath string) (string, error) {
 // to start a deployment over a file that carries no information is a
 // bigger outage than re-minting a name nothing has stored a copy of.
 func ensureDeploymentIdentity(dbPath string) (string, error) {
+	if dbPath == "" {
+		return "", nil
+	}
+	sweepMintLeftovers(dbPath)
+
 	existing, err := DeploymentIdentity(dbPath)
 	if err != nil {
 		return "", err
@@ -164,45 +230,57 @@ func ensureDeploymentIdentity(dbPath string) (string, error) {
 	}
 	id := hex.EncodeToString(buf)
 
-	// Written to a temporary name and renamed into place, so a reader
-	// that arrives mid-write finds either the old state (no file) or the
-	// whole identity, and never a half-written one. The temporary lives
-	// in the same directory because a rename across filesystems is not
-	// atomic and, on some, not possible at all.
-	dir := filepath.Dir(dbPath)
-	tmp, err := os.CreateTemp(dir, filepath.Base(dbPath)+deploymentIDSuffix+".*")
-	if err != nil {
-		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.WriteString(id + "\n"); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
-	}
-	// Flushed before the rename, not after: a rename that lands ahead of
-	// the bytes leaves a deployment whose identity file is present and
-	// empty, which is the one state this function treats as "never had
-	// one" and would re-mint on the next start, quietly changing the
-	// deployment's name after a power cut.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
-	}
-	if err := os.Chmod(tmpPath, 0o600); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
-	}
-	if err := os.Rename(tmpPath, dbPath+deploymentIDSuffix); err != nil {
-		_ = os.Remove(tmpPath)
+	// snapshot.go's writeFileAtomically, rather than a second copy of it
+	// here. It writes to a temporary beside the target, syncs the bytes
+	// before the rename (a rename that lands ahead of them leaves an
+	// identity file that is present and empty, which this function reads
+	// as "never had one" and would re-mint, quietly renaming the
+	// deployment after a power cut), and then syncs the DIRECTORY, which
+	// is the half a hand-rolled copy of this dropped: fsyncing the file
+	// promises its content survives a crash and never that the directory
+	// entry pointing at it does.
+	if err := writeFileAtomically(dbPath+deploymentIDSuffix, []byte(id+"\n"), 0o600); err != nil {
 		return "", fmt.Errorf("service: minting this deployment's identity: %w", err)
 	}
 	return id, nil
+}
+
+// maxDeploymentIDFileBytes is the most of an identity file this build
+// will look at: 32 hex characters, the newline the mint writes, and room
+// for whitespace somebody's editor added. Anything longer is not an
+// identity this build wrote, so it reads as absent.
+const maxDeploymentIDFileBytes = 64
+
+// sweepMintLeftovers removes the temporaries an interrupted mint leaves
+// beside the journal.
+//
+// writeFileAtomically removes its own on every failure it can see, but a
+// process killed between creating one and renaming it into place sees
+// nothing, and the file it left is named for a temporary nobody will ever
+// come back to. Without this they accumulate one per hard kill, forever,
+// in the state directory an operator is meant to be able to look at.
+//
+// The directory is walked by prefix rather than matched with a glob,
+// because a state database path is operator-supplied and a `*` or a `[`
+// in it would make a pattern mean something else entirely. The prefix
+// carries the journal's own name, so two journals sharing a directory
+// sweep only their own.
+//
+// Failures are ignored on purpose. This runs on the way to serving a
+// deployment, and a leftover temporary that could not be removed is not a
+// reason to refuse to come up.
+func sweepMintLeftovers(dbPath string) {
+	dir := filepath.Dir(dbPath)
+	prefix := filepath.Base(dbPath) + deploymentIDSuffix + "."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 // validDeploymentIdentity is what this build accepts as an identity: the

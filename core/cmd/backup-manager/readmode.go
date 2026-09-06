@@ -53,8 +53,9 @@ import (
 // writing down rather than discovering later: every one of these four
 // surfaces prints something api/v1/openapi.json cannot express.
 //
-//	sources     BackupSet carries no remote type and no stale_after, and
-//	            the CLI prints both on every line.
+//	sources     BackupSet carries no remote type, and the CLI prints one
+//	            on every line. stale_after used to be here too and is not
+//	            any more: #555 put stale_after_seconds on the wire.
 //	artifacts   the detail view's `reason`/`reason_at` is the literal
 //	            sentence internal/lifecycle recorded on the transition
 //	            that quarantined an artifact (issue #284). The schema has
@@ -244,17 +245,39 @@ func enterReadMode(ctx context.Context, configPath string, cfg *config.Config, a
 	// unconfirmed, for this file's own reason: a write that cannot confirm
 	// something has an alternative, which is not writing, and a read has
 	// none.
+	//
+	// What it must not do is stop the checking. It used to return here,
+	// and #559's review drove what that costs: served.DeploymentID is ""
+	// on every engine older than this build, and mine is "" on every
+	// deployment until the first restart that mints one, so for the whole
+	// of its own rollout this read skipped the revision comparison
+	// underneath it and #535 came back on the four commands an operator
+	// runs when something is already wrong, quietly, at exit 0. An
+	// identity nobody can confirm is a reason to check less confidently
+	// and never a reason to stop checking what still works, so the caveat
+	// is carried and the revision comparison runs anyway.
 	mine, err := service.DeploymentIdentity(engine.StateDatabase)
 	if err != nil {
 		return d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and this command could not read which deployment it is standing in (%v)", engine.StateDatabase, err), announceTo), nil
 	}
-	switch {
-	case mine == "" || served.DeploymentID == "":
-		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and one of the two could not say which deployment it is, so this answer was not checked against it", engine.StateDatabase), announceTo)
-		return d, nil
-	case mine != served.DeploymentID:
+	if mine != "" && served.DeploymentID != "" && mine != served.DeploymentID {
 		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and the engine at %s serves a different deployment", engine.StateDatabase, client.BaseURL()), announceTo)
 		return d, wrongDeploymentRead(engine, client.BaseURL(), mine, served.DeploymentID)
+	}
+	// Split three ways rather than "one of the two could not say", for the
+	// reason mode.go gives about the write path: the remedies differ. This
+	// deployment having no name yet is fixed by restarting the process
+	// that serves it. An engine that names none is a process to restart on
+	// this build. Neither of them is the other, and an operator told only
+	// that "one of the two" could not answer has to work out which.
+	caveat := ""
+	switch {
+	case mine == "" && served.DeploymentID == "":
+		caveat = fmt.Sprintf("another process is serving this deployment (state database %s) and neither end could say which deployment it is: this one has no identity yet and the engine at %s named none either", engine.StateDatabase, client.BaseURL())
+	case mine == "":
+		caveat = fmt.Sprintf("another process is serving this deployment (state database %s) and this deployment has no identity yet, so the engine at %s cannot be shown to be the one serving it (an identity is minted by the process that serves a deployment, so restarting that process gives this one a name)", engine.StateDatabase, client.BaseURL())
+	case served.DeploymentID == "":
+		caveat = fmt.Sprintf("another process is serving this deployment (state database %s) and the engine at %s answered without naming a deployment, which is what a build from before this check looks like and also what an engine that could not read its own identity looks like", engine.StateDatabase, client.BaseURL())
 	}
 
 	local := service.ConfigRevisionOf(cfg)
@@ -263,8 +286,20 @@ func enterReadMode(ctx context.Context, configPath string, cfg *config.Config, a
 		// engine answered, but what it answered is that this command is
 		// holding a different deployment's configuration, so nothing that
 		// follows would have been about the engine's world.
-		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and holds a different configuration", engine.StateDatabase), announceTo)
-		return d, configDivergence(engine, d.configFile, local, served.ConfigRevision)
+		because := fmt.Sprintf("another process is serving this deployment (state database %s) and holds a different configuration", engine.StateDatabase)
+		if caveat != "" {
+			because = caveat + ", and it holds a different configuration as well"
+		}
+		d = d.unconfirmed(because, announceTo)
+		return d, configDivergence(engine, d.configFile, local, served.ConfigRevision, caveat != "")
+	}
+	if caveat != "" {
+		// The revisions match, so the two processes hold content-identical
+		// configurations, and that is worth having. It is not proof this
+		// is the same deployment: two instances built from one template
+		// share a revision, which is the whole reason the identity exists.
+		// So the answer is printed and the mode says it was not confirmed.
+		return d.unconfirmed(caveat, announceTo), nil
 	}
 
 	d.mode = engineAttachedMode
@@ -313,10 +348,20 @@ func dialEngine() (*apiclient.Client, error) {
 // one that points at the two files and stops. What it does say is the
 // thing an operator can act on: which file this command read, and that the
 // serving process read a different one and will not re-read it.
-func configDivergence(engine *service.RunningEngine, configFile, local, served string) error {
+//
+// unconfirmedDeployment says, when it is true, that the two sides could
+// not be shown to be one deployment either. It is appended rather than
+// substituted: the configurations really do differ and that really is
+// worth refusing on, and the second possibility is that they are not the
+// same deployment at all, which has a different remedy.
+func configDivergence(engine *service.RunningEngine, configFile, local, served string, unconfirmedDeployment bool) error {
+	also := ""
+	if unconfirmedDeployment {
+		also = fmt.Sprintf(" This command also could not confirm the two are the same deployment, because one of them could not name itself, so the other possibility is that $%s reaches a different deployment on this host rather than a stale copy of this one.", apiURLEnv)
+	}
 	return fmt.Errorf(
-		"the process serving this deployment (state database %s) is holding a different configuration from %s, so nothing was printed: it is serving configuration %s and this command loaded %s, and nothing re-reads that file, so an answer from here would describe a deployment that process does not have. Restart that process to make it read %s, or make the change through the Web UI or HTTP API it serves",
-		engine.StateDatabase, configFile, served, local, configFile)
+		"the process serving this deployment (state database %s) is holding a different configuration from %s, so nothing was printed: it is serving configuration %s and this command loaded %s, and nothing re-reads that file, so an answer from here would describe a deployment that process does not have.%s Restart that process to make it read %s, or make the change through the Web UI or HTTP API it serves",
+		engine.StateDatabase, configFile, served, local, also, configFile)
 }
 
 // wrongDeploymentRead is #555 on the reading side: the engine this command

@@ -423,13 +423,24 @@ func Open(ctx context.Context, configPath string) (*BackupService, func() error,
 	// runs §46.1's startup sequence, so it is the one constructor that can
 	// truthfully report the sequence completed. See the field's own doc.
 	svc.ready = true
-	// Read rather than minted, because runStartupSequence has just minted
-	// it while holding the startup lock and this is not a second place
-	// that may decide what a deployment is called. A read that fails is
-	// not fatal: the identity is a check a client runs before a mutation,
-	// and a process that refused to start because it could not name
-	// itself would trade a routed write that gets refused for a
-	// deployment that does not come up at all.
+	// Read rather than minted, and now that is true of everything on this
+	// path. Minting belongs to AnnounceServing (liveengine.go), which a
+	// process about to serve calls before it gets here, so this constructor
+	// has no way to name a deployment at all: a CLI opening the same
+	// journal through the same Open reads whatever is there and never
+	// invents one.
+	//
+	// A read that fails is reported and not fatal, and nothing above
+	// contradicts that any more. It used to: runStartupSequence minted
+	// inside this same call and returned the error, so an identity file
+	// that could not be read (chmod 000, or a directory sitting at that
+	// path) stopped the deployment starting several steps before this
+	// comment got to argue that it must not. The rule is the one the three
+	// sibling lock files already follow, and it is stated once: an identity
+	// is a check a client runs before a mutation, and a process that
+	// refused to start because it could not name itself would trade a
+	// routed write that gets refused for a deployment that does not come up
+	// at all.
 	id, err := DeploymentIdentity(cfg.State.Database)
 	if err != nil {
 		logger.Error(ctx, "startup", fmt.Errorf("reading this deployment's identity, so clients cannot confirm which deployment they are writing to: %w", err))
