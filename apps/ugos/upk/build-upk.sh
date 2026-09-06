@@ -121,6 +121,12 @@ docker pull --platform "linux/${arch}" "${source_ref}" >/dev/null
 daemon_digests="$(docker image inspect --format '{{json .RepoDigests}}' "${source_ref}")"
 requested_digest="${source_ref##*@}"
 
+# The archive has to carry the canonical reference, because that reference
+# is what rootfs_common/docker-compose.yaml names and what UGOS brings up
+# after `docker load`. Worth knowing that this leaves the local tag
+# pointing at whichever architecture was staged last: staging amd64 and
+# then arm64 leaves it on arm64, which matters to nothing here and matters
+# to anyone reaching for that tag by hand afterwards.
 echo "==> tagging as the canonical reference ${reference}"
 docker tag "${source_ref}" "${reference}"
 
