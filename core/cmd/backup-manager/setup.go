@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -519,11 +520,140 @@ func moveExit(w io.Writer, report app.CycleReport) int {
 	return code
 }
 
+// The exit statuses this binary promises, in one place, because they are
+// a contract a script branches on rather than an implementation detail
+// (issue #551). The table an operator reads is in main.go's usage block,
+// and exitcodes_test.go holds the two against each other.
+//
+// # Why there is a third failure code at all
+//
+// There were two for a long time and that was enough while every failure
+// meant roughly "something went wrong, read the message". EPIC #536 ended
+// it. The refusal it added, another process is serving this deployment so
+// nothing was written, is the first failure here that is both EXPECTED
+// and RETRYABLE: a provisioning script wants to wait on that one and
+// abort on every other, and with one failure code its only way to tell
+// them apart is to match on the sentence, which is precisely the coupling
+// core/tests/compat exists to stop people relying on.
+//
+// # What deliberately did NOT get its own code
+//
+// Naming these is the point of the list, because each is a refusal
+// somebody could reasonably have expected to be 3 and each is a different
+// piece of news:
+//
+//   - a probe that could not be performed (cannotTellError). "I could not
+//     tell" is a broken host, not a busy one. EACCES on a lock file owned
+//     by another uid does not resolve itself, and a script that waited on
+//     it would wait forever.
+//
+//   - a route that was named and did not answer (route.go). The operator
+//     set an address and it is wrong or the engine is down; that is a
+//     deployment to go and look at.
+//
+//   - a route that was named, answered, and turned out to be serving a
+//     DIFFERENT deployment (#555, deploymentcheck.go). This is the one
+//     that reads most like 3, because something else really is serving
+//     something. It is not the same news: 3 says this deployment is
+//     already held and the change belongs to whoever holds it, and this
+//     says the address was aimed at somebody else's deployment. Retrying
+//     an address that is wrong never stops being wrong, and a script that
+//     treated the two alike would sit in a loop while the write it wanted
+//     was one character away from landing.
+//
+//   - another process on this host starting this deployment or changing
+//     its configuration right now (service.ErrStartupLocked). This one is
+//     genuinely retryable and is the closest call on the list. It stays
+//     at 1 because it is a different fact from the one 3 names, and a
+//     code that meant two things would be the same problem this issue is
+//     fixing, one level down.
+//
+//     What this used to say beside that, and what is not true, is that it
+//     clears itself in the time a startup sequence takes. The lock is
+//     held for as long as the process holding it takes, and a routed
+//     write holds it across its whole API round trip
+//     (openConfigWriteRoute above takes the claim and keeps it until the
+//     command is done). So against an engine that accepts a connection
+//     and never answers, the holder sits on it for apiclient's
+//     defaultTimeout, thirty seconds, while a concurrent service.Open
+//     gives up after startupLockWait, two. It is bounded, and it is
+//     bounded by what the other process is doing rather than by anything
+//     a startup sequence costs.
+const (
+	// exitOK: the command did what it was asked.
+	exitOK = 0
+
+	// exitFailure: an ordinary failure. Everything from a configuration
+	// that will not load to a cycle that backed nothing up, and every
+	// one of the refusals the list above says did not get a code of its
+	// own, which is where a reader who started here should go for the
+	// reasons.
+	exitFailure = 1
+
+	// exitUsage: nothing ran. The command line was wrong (an unknown
+	// command, an unknown flag, a missing or surplus argument), or it
+	// asked for help rather than for work.
+	//
+	// The second half is not an accident somebody should fix quietly.
+	// Every subcommand parses with flag.ContinueOnError and returns this
+	// for whatever fs.Parse hands back, and flag.ErrHelp is one of those,
+	// so `backup-manager check -h` is a correct command line, a request
+	// this binary answered, and a 2. That predates #551 and did not
+	// matter while the codes were an implementation detail; publishing
+	// them as a contract is what made it a promise, so the promise says
+	// what the binary does. Read this way it is coherent rather than
+	// grudging: 2 means no command was carried out, and the two ways to
+	// get there are asking for the wrong thing and asking for the help.
+	//
+	// Returning exitOK from the flag.ErrHelp path instead was the other
+	// way to fix it and is not the one taken. It is twenty-one edits,
+	// one per place that returns 2 for whatever fs.Parse or
+	// parseFlagsAroundOperands handed back, and it would leave
+	// `backup-manager -h` at 2 anyway: at the top level there is no flag
+	// set to parse, so `-h` is a name run() cannot find and it goes out
+	// through the unknown-command branch. Two help requests exiting
+	// differently is a worse contract than one honest row, and this
+	// binary's behaviour is not what #551 set out to change.
+	exitUsage = 2
+
+	// exitEngineHoldsDeployment: another process is serving this
+	// deployment, so nothing was done. A configuration write refused
+	// because it would never reach that process, or a `daemon` refused
+	// rather than started beside one.
+	//
+	// This is the retryable one, and "retryable" is not the same as "wait
+	// and it goes away", which is what the first version of the table
+	// promised. Whether waiting helps depends on which of the two shapes
+	// underneath produced it. A supervisor replacing a container meets it
+	// while the outgoing process still holds the lock, and that clears on
+	// its own in seconds. An engine serving steadily on a host where
+	// $BACKUP_MANAGER_API_URL was never set meets it on every invocation
+	// for as long as that engine runs, because refusal() fires on a nil
+	// route and the sentence beside it says to stop the process. A script
+	// that read the old row and retried on 3 would loop forever on the
+	// second one, which is the commoner of the two.
+	//
+	// So the code stays exactly as narrow as it was, and the row an
+	// operator reads now says to read the sentence beside it before
+	// putting the retry in a loop.
+	exitEngineHoldsDeployment = 3
+)
+
 // fail prints err to stderr in a consistent shape and returns the exit
 // code every subcommand's own failure path returns.
+//
+// The one thing it looks at is whether this failure is the engine holding
+// the deployment, which it asks with errors.Is rather than by reading the
+// message. A string match would work today, because the sentence is
+// pinned, and it would be wrong for the same reason it is pinned: the
+// exit code is what a script is supposed to branch on so that nothing has
+// to parse the prose.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "backup-manager:", err)
-	return 1
+	if errors.Is(err, errEngineHoldsDeployment) {
+		return exitEngineHoldsDeployment
+	}
+	return exitFailure
 }
 
 // usageError prints a usage complaint straight to stderr (flag.Parse
@@ -533,5 +663,5 @@ func fail(err error) int {
 // argument-error exit code.
 func usageError(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "backup-manager: "+format+"\n", args...)
-	return 2
+	return exitUsage
 }

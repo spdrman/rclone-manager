@@ -34,7 +34,7 @@ func main() {
 func run(args []string) int {
 	if len(args) == 0 {
 		usage()
-		return 2
+		return exitUsage
 	}
 
 	name, rest := args[0], args[1:]
@@ -42,7 +42,7 @@ func run(args []string) int {
 	if !ok {
 		fmt.Fprintf(os.Stderr, "backup-manager: unknown command %q\n\n", name)
 		usage()
-		return 2
+		return exitUsage
 	}
 	return cmd(rest)
 }
@@ -104,7 +104,9 @@ var commands = map[string]func([]string) int{
 // actually goes now that it can go two places, and how to tell this
 // binary where the engine is, which is the only place those three
 // environment variables are written down for somebody who is not reading
-// route.go.
+// route.go, and the exit codes, which #551 put here for the same reason:
+// a status a wrapper script branches on is a contract, and a contract read
+// off setup.go by whoever thought to look is not one.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
 
@@ -223,20 +225,46 @@ either its own listener from inside its container (http://127.0.0.1:8080) or the
 Web UI port from a shell on the host; BACKUP_MANAGER_API_USERNAME and
 BACKUP_MANAGER_API_PASSWORD are the administrator credentials the Web UI takes, held in
 memory for the one invocation and written nowhere. Not flags, because a password on a command
-line is in every process listing on the host. One field does not survive the trip: the API
-carries no stale_after, so a routed create or patch prints it as not reported rather than as
-a value
+line is in every process listing on the host. A routed create or patch reports every field it
+wrote, stale_after included: the API carries stale_after_seconds now, so both routes print the
+same set (#555). Only an engine older than that field serves none, and against one of those a
+routed create prints stale_after as not reported rather than inventing a value
 
 status, sources, artifacts and retention read rather than write, so a missing route never
 refuses them; they announce which world the answer is about instead. "mode: engine-attached"
 is a serving process that holds the same configuration and was asked the same question,
 "mode: direct" is nothing serving, and "mode: unconfirmed" is an answer taken from
 config.yaml that could not be checked against the process serving this deployment and can
-disagree with it. A read refuses only when that process holds a DIFFERENT configuration or
-answers its question differently, and then nothing at all is printed (#544)
+disagree with it. A read refuses in three cases, and then nothing at all is printed: that
+process holds a DIFFERENT configuration, the engine at the address it was given turns out to
+be serving a different deployment, or it answers this command's own question differently
+(#544, #555)
 
 everything else is ordinary beside a running engine and announces no mode at all: run, fetch,
 check, validate and the rest, settings and a backup-set retention that only reports included.
 The one command a running engine refuses is daemon, for the reason its entry above gives
+
+exit codes, so a script can branch on what happened rather than on the sentence it happened
+to print:
+
+  0   the command did what it was asked
+  1   an ordinary failure: a configuration that will not load, a state database that will
+      not open, a cycle that backed nothing up, a set or an artifact that is not there, a
+      status short of HEALTHY, a route that was named and did not answer, and a route that
+      answered for a DIFFERENT deployment than the one this command was typed at
+  2   nothing ran: the command line was wrong (an unknown command, an unknown flag, a
+      missing or surplus argument), or it asked for help rather than for work. A -h on a
+      subcommand is here too and it is not a mistake: 2 says no command was carried out,
+      and the reason is on stderr either way
+  3   another process is serving this deployment, so nothing was done: a configuration write
+      refused because it would never reach that process, or a daemon refused rather than
+      started beside one. Read the sentence beside it before retrying in a loop. A
+      supervisor still rolling the outgoing process gets this until it has let go, and
+      waiting is the right answer; an engine this host was never given a route to goes on
+      refusing for as long as it serves, and the answer there is to set the route or stop
+      that process. Everything that only looks like it is 1, including a probe that could
+      not be performed at all, a route that was named and did not answer, and a route that
+      answered for a different deployment, because none of those gets better by waiting
+      (#551, #555)
 `)
 }

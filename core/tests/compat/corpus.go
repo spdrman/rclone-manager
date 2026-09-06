@@ -1,6 +1,7 @@
 package compat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -78,16 +79,44 @@ const corpusNote = "Captured by core/tests/compat. Every line here is something 
 	"whatever drifted in the surfaces your change never touched."
 
 // Save writes the corpus to path with stable formatting.
+//
+// The note is DEFAULTED rather than imposed. A corpus built by a capture
+// run carries none, so it gets the standing one and the file always
+// explains itself; a corpus assembled from a baseline carries that
+// baseline's note, and it keeps it. That distinction is the whole of what a
+// scoped re-capture promises: everything it was not asked about, the note
+// included, comes out the other side as it went in. It used to overwrite
+// the field unconditionally, which left the caller that sets it setting
+// nothing.
+//
+// The cost of defaulting rather than imposing is a note that can go stale
+// against the constant, and compat_test.go's TestTheCheckedInNoteIsTheStandingOne
+// is the control for that rather than a rule nobody enforces.
+//
+// It encodes with escaping off, and that is not cosmetic. encoding/json
+// turns < > and & into \u003c \u003e \u0026 by default, so a note telling
+// somebody to run COMPAT_UPDATE=<cell-name> is written back mangled, every
+// later re-capture carries that one-line diff, and nothing goes red because
+// the comparison happens on the decoded string. A gate whose regeneration
+// produces unrelated churn is a gate people stop reading the diff of, which
+// is the failure #549 is about.
 func (c Corpus) Save(path string) error {
-	c.Note = corpusNote
-	blob, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
+	if c.Note == "" {
+		c.Note = corpusNote
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(c); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(blob, '\n'), 0o644)
+	// Encode already ends the document with a newline, so nothing is
+	// appended here.
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
 // ParseUpdateRequest reads what COMPAT_UPDATE is asking for: the whole
@@ -240,6 +269,21 @@ func Compare(baseline, current Corpus) []string {
 				"cell %q is compared under rule %q now and was captured under %q. Loosening how a cell is compared is a change to the gate, not to the product, and it needs saying out loud.",
 				name, cur.Rule, base.Rule))
 			continue
+		}
+		// The claim, before the lines. Certifies is what gets printed at
+		// whoever meets this cell red, and it is the only thing telling
+		// them whether the lines that moved matter, so a cell that quietly
+		// starts claiming something else is a change to the gate in the
+		// same way a loosened rule is. This one went unwatched until #560
+		// reworded a sentence here and nothing anywhere noticed.
+		//
+		// Reported and not skipped: a wording change and a line change are
+		// different pieces of news, and a reader deciding whether to
+		// re-capture wants both.
+		if base.Certifies != cur.Certifies {
+			findings = append(findings, fmt.Sprintf(
+				"cell %q now certifies something different from what the corpus records, and nothing about that is visible in the lines:\n      - %s\n      + %s",
+				name, base.Certifies, cur.Certifies))
 		}
 
 		switch cur.Rule {

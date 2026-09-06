@@ -63,9 +63,16 @@ func cmdDaemon(args []string) int {
 	// the time a writer is granted its claim on the deployment, an engine
 	// that got there first is already visible. See core/service's
 	// liveengine.go for the whole arrangement.
+	//
+	// asEngineHeld is issue #551: being told that something else already
+	// serves this deployment is the same news a refused configuration
+	// write gets, and it is the more retryable half of it, so it exits the
+	// same way rather than looking like a deployment that is broken. Every
+	// other reason this call can fail is left as the ordinary failure it
+	// is.
 	stopServing, err := service.AnnounceServing(*cfgPath)
 	if err != nil {
-		return fail(err)
+		return fail(asEngineHeld(err))
 	}
 	defer func() { _ = stopServing() }()
 
