@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -53,12 +54,29 @@ func cmdFetch(args []string) int {
 		return 0
 	}
 
-	fmt.Printf("discovered=%d already_known=%d pending=%d rejected=%d conflicts=%d errors=%d\n",
+	fmt.Printf("discovered=%d already_known=%d pending=%d rejected=%d conflicts=%d errors=%d failed=%d\n",
 		len(result.Discovery.Discovered), len(result.Discovery.AlreadyKnown), len(result.Discovery.Pending),
-		len(result.Discovery.Rejected), len(result.Discovery.Conflicts), len(result.Discovery.Errors))
+		len(result.Discovery.Rejected), len(result.Discovery.Conflicts), len(result.Discovery.Errors), result.FailedArtifacts)
 	fmt.Printf("reconciliation: %d finding(s), %d error(s)\n", len(result.Reconcile.Findings), len(result.Reconcile.Errors))
-	if len(result.Discovery.Errors) > 0 || len(result.Reconcile.Errors) > 0 {
-		return 1
-	}
-	return 0
+	// failed counts artifacts that ended this call in FAILED, QUARANTINED
+	// or QUARANTINED_LOST: either a this-cycle transfer/verify/commit
+	// failure, or a previously-durable artifact reconciliation (above)
+	// found rotten on its own and quarantined before this cycle's own
+	// pipeline ever touched it. A reconciliation pass that successfully
+	// finds and records rot returns no error at all, so nothing else
+	// here would see it. Reading the exit status off the same count the
+	// line above just printed is what issue #283 asks for: the exit code
+	// and the reported number cannot drift apart, because they are the
+	// same number.
+	//
+	// The verdict itself is built by internal/app, from the same fields
+	// RunCycle fills in, and handed to the same cycleExit `run` calls
+	// (setup.go). Issue #361 is why that is worth insisting on: the two
+	// commands used to build their own arguments here, and they had
+	// quietly grown two different definitions of a failed cycle. `fetch`
+	// failed a whole cycle over a single per-candidate discovery error
+	// that `run` correctly ignored, and ignored the per-artifact
+	// reconcile errors `run` now shares with it. Neither difference was
+	// deliberate and no test covered either.
+	return cycleExit(os.Stderr, result.Verdict())
 }

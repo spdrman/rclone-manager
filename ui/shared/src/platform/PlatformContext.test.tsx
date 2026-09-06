@@ -1,3 +1,20 @@
+/**
+ * The two races in PlatformContext, driven deliberately rather than waited
+ * for.
+ *
+ * Auth is fetched on mount and again on every refresh, so two answers can
+ * be outstanding at once, and each case here resolves them in the wrong
+ * order on purpose. That is the only way to tell "the last response wins"
+ * from "the last call wins": with promises resolving in the order they
+ * were made, a broken implementation passes.
+ *
+ * The third case counts commits rather than observing state, because the
+ * defect it guards against is invisible in the rendered output. Committing
+ * the bridge on every render would look identical on screen while
+ * cascading a recompute and a re-render through every consumer, and on an
+ * engine that watches its own commit rate it would also feed the statistic
+ * that decides when to swap backends underneath.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";

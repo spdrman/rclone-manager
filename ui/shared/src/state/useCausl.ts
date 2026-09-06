@@ -1,3 +1,13 @@
+/**
+ * The seam between React's rendering model and causl's commit model.
+ *
+ * There is exactly one interesting problem here, and the rest of the file
+ * is its solution: React wants a snapshot function that returns the same
+ * reference whenever nothing has changed, and the graph only promises the
+ * same VALUE at a fixed point on its clock. Bridging that with a cache
+ * keyed on the clock, rather than by comparing two reads, is what keeps a
+ * component reading an object-valued node from re-rendering forever.
+ */
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { Graph, Node } from "@causlts/core";
 

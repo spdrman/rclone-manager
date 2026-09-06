@@ -1,0 +1,9 @@
+#!/bin/sh
+# Nothing to do before install.
+#
+# Written down rather than omitted: an absent preinst and a preinst that
+# deliberately does nothing look identical to DSM but not to a reviewer,
+# and "which stage checks the architecture?" should have a visible answer.
+# The answer is that DSM does, from INFO's arch key, before this script
+# would ever run - there is no second guess worth making here.
+exit 0

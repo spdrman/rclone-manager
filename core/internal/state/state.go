@@ -28,10 +28,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
 // driverName is modernc.org/sqlite's registered database/sql driver name.
@@ -52,6 +55,40 @@ const driverName = "sqlite"
 // space of things this package has to handle at all.
 type Journal struct {
 	db *sql.DB
+
+	// redact, when set, is the filter RecordTransition runs a Transition's
+	// error/detail-shaped string fields through before they are written
+	// down (issue #295). It is an atomic.Pointer, not a plain field,
+	// because this same *Journal is reused, in place, across every
+	// internal/app.New call a config hot-reload makes (see
+	// service/backupsets.go, settings.go, backupsetenabled.go, all of
+	// which call app.New again against the one long-lived Journal a
+	// process opened at startup): a RunCycle already in flight in another
+	// goroutine may be reading this concurrently with a reload calling
+	// SetRedactor, and the *sql.DB single-connection serialization
+	// (SetMaxOpenConns(1)) this type's own doc above describes says
+	// nothing about ordinary Go field access, which happens before any
+	// SQL is even built.
+	redact atomic.Pointer[obs.Redactor]
+}
+
+// SetRedactor installs r as the filter RecordTransition (journal.go) runs
+// a Transition's Detail, and any Deletion.Error it carries, through before
+// either is written to the database, or turns filtering back off when r is
+// nil. See obs.Redactor's own doc: the SAME value is normally handed to
+// the process's obs.Logger too (see internal/app.New), so the log and the
+// journal agree, byte for byte, about what a sensitive endpoint's rendered
+// text is — issue #295's requirement that redacting one and not the other
+// does not count as a fix.
+//
+// SetRedactor is not part of Open's constructor signature on purpose:
+// this package does not import internal/config and has no notion of what
+// config.Remote.Sensitive means, so wiring the two together stays a
+// post-construction step performed by the one place that already holds
+// both a *Journal and a *config.Config (internal/app.New), rather than a
+// dependency this package would otherwise need to grow.
+func (j *Journal) SetRedactor(r *obs.Redactor) {
+	j.redact.Store(r)
 }
 
 // Open opens (creating if necessary) the SQLite database at path, brings its

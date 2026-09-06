@@ -2,6 +2,9 @@ go 1.27.0
 
 use (
 	./apps/common
+	./apps/generic
+	./apps/synology
 	./apps/ugos/backend
 	./core
+	./distribution
 )

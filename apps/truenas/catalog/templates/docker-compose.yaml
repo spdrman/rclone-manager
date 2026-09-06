@@ -1,0 +1,131 @@
+# Rendered by the TrueNAS Apps catalog from questions.yaml/ix_values.yaml.
+#
+# Every template expression is quoted so this file stays parseable YAML
+# with no rendering step, which is what lets distribution/packaging read it
+# on every commit rather than only after a TrueNAS install. It is also a
+# straight-line render on purpose: no conditionals, no loops, nothing that
+# would make the rendered shape depend on an answer. What comes out of
+# here must be the same two-container deployment
+# ../../compose/backup-manager.yaml describes, with the operator's answers
+# substituted and nothing else different.
+services:
+  backup-manager:
+    image: "{{ .Values.image.reference }}"
+    command: ["/backup-manager-web", "serve", "--profile=truenas"]
+
+    user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - "/tmp:size=64m,mode=1777,uid={{ .Values.runtime.puid }},gid={{ .Values.runtime.pgid }}"
+
+    environment:
+      TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: "{{ .Values.runtime.timezone }}"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:{{ .Values.network.webPort }}"
+      TRUST_FORWARDED_HEADERS: "true"
+
+    volumes:
+      - "{{ .Values.storage.state.hostPath }}:/data/state"
+      - "{{ .Values.storage.backups.hostPath }}:/data/backups"
+      - "{{ .Values.storage.configDir.hostPath }}:/etc/backup-manager/config"
+      - "{{ .Values.storage.sshKey.hostPath }}:/etc/backup-manager/id_ed25519:ro"
+      - "{{ .Values.storage.knownHosts.hostPath }}:/etc/backup-manager/known_hosts:ro"
+
+    # The start gate, and a liveness question rather than a health
+    # verdict (issue #206). The Web UI below declares
+    # `depends_on: backup-manager: condition: service_healthy`, so
+    # whatever this asks stands between an operator and the only
+    # container with a published port. `/backup-manager status` is
+    # FR-24's backup-freshness verdict and exits non-zero on any
+    # DEGRADED, STALE or FAILING set, and on a fresh install, which has
+    # backed nothing up yet: gating the Web UI on it means a new install
+    # never gets a page at all.
+    #
+    # Declared here rather than inherited from the image, because the
+    # image's own HEALTHCHECK is deliberately the freshness verdict: it
+    # is the right default for a plain `docker run` and for the headless
+    # `daemon` command, which serves no HTTP and so has no liveness
+    # endpoint to ask. Backup freshness is not lost - read it with
+    # `docker exec backup-manager /backup-manager status`, or let the
+    # alerts block deliver it.
+    #
+    # Derived from container/compose.yaml, never authored here.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    restart: unless-stopped
+    # The grace period the runtime shuts down inside, declared rather
+    # than left at Docker's own 10s default: the engine finishes the
+    # transfer or the delete it is in the middle of, and a default is not
+    # a contract.
+    stop_grace_period: 30s
+    networks:
+      - internal
+
+  backup-manager-ui:
+    image: "{{ .Values.image.reference }}"
+    command: ["/backup-manager-web", "serve-ui", "--profile=truenas"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - "/tmp:size=16m,mode=1777,uid={{ .Values.runtime.puid }},gid={{ .Values.runtime.pgid }}"
+
+    environment:
+      TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: "{{ .Values.runtime.timezone }}"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+      # The per-provider UI bundles the canonical image carries. With
+      # `--profile=truenas` selected above, the bundle served is
+      # /ui/bundles/truenas, so an operator who installed through this
+      # platform's own mechanism sees that platform's bridge rather than
+      # being told this is a generic Docker deployment (issue #180).
+      UI_ROOT: "/ui/bundles"
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "{{ .Values.network.webPort }}:8080"
+
+    restart: unless-stopped
+    # Shorter than the engine's: the Web UI holds no state and has
+    # nothing to finish.
+    stop_grace_period: 15s
+    networks:
+      - internal
+
+networks:
+  internal:

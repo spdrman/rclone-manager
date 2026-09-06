@@ -1,7 +1,28 @@
+// Load: what the parser does, and just as importantly what it refuses and
+// what it deliberately leaves undone.
+//
+// Load and Validate are two steps on purpose, so the tests here assert the
+// seam as much as the parsing. A backup set's ID is still zero after Load,
+// because building it is Validate's job through model.NewBackupSetID, and a
+// test that let Load populate it would be blessing a second place where
+// identities get built.
+//
+// The parsing cases run against the checked-in YAML under testdata rather
+// than against strings written inline. full.yaml is the example an operator
+// copies, so a change that stopped it parsing is a documentation bug as
+// much as a code one, and minimal.yaml is what proves the defaults are
+// reachable without writing every key.
+//
+// An unknown field is a hard error rather than a warning, which is the case
+// worth keeping. A misspelled key that decodes to nothing leaves the
+// deployment running on a default the operator believes they overrode, and
+// silence is exactly what makes that survive to an incident.
+
 package config
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -43,10 +64,16 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if bs.Remote.Type != "sftp" || bs.Remote.Host != "production.example.internal" || bs.Remote.Port != 22 {
 		t.Fatalf("Remote decoded wrong: %#v", bs.Remote)
 	}
+	if !bs.Remote.Sensitive {
+		t.Fatalf("Remote.Sensitive = false, want true (full.yaml sets sensitive_endpoint: true)")
+	}
+	if bs.Remote.MaxConnections != 2 {
+		t.Fatalf("Remote.MaxConnections = %d, want 2 (full.yaml sets max_connections: 2)", bs.Remote.MaxConnections)
+	}
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)
 	}
-	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute {
+	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute || bs.Completion.DeleteSafetyDelay.Duration() != 60*time.Minute {
 		t.Fatalf("Completion decoded wrong: %#v", bs.Completion)
 	}
 	if got, want := bs.StaleAfter.Duration(), 30*time.Hour; got != want {
@@ -143,6 +170,48 @@ func TestLoadAndValidateMinimalExampleAppliesDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadAndValidatePreWP32StableConfigStillLoads is the upgrade proof for
+// WP3.2's delete_safety_delay key.
+//
+// The key did not exist before WP3.2, so every config file on disk in the
+// field omits it. If Validate refused a stable-strategy set without it, the
+// daemon would stop loading a file that was valid the day before the
+// upgrade, OpenConfigAndJournal would return no journal, and nothing would
+// be backed up until an operator hand-edited YAML, all reported as an error
+// naming a key their previous release had never heard of.
+//
+// The first assertion below is the positive control for the second, and it
+// is the assertion that actually protects this test from rotting. A
+// negative claim ("this config still loads") is worthless if the fixture
+// quietly gains the key it is supposed to be missing, which is exactly what
+// happened to all four fixtures in this package's first pass at WP3.2. So
+// read the bytes and fail loudly if minimal.yaml ever grows the key again,
+// rather than trusting it to stay minimal.
+func TestLoadAndValidatePreWP32StableConfigStillLoads(t *testing.T) {
+	raw, err := os.ReadFile("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	if strings.Contains(string(raw), "delete_safety_delay") {
+		t.Fatal("testdata/minimal.yaml sets delete_safety_delay, so it no longer stands in for a config written before WP3.2 and this test proves nothing; keep that key in full.yaml only")
+	}
+	if !strings.Contains(string(raw), "strategy: stable") {
+		t.Fatal("testdata/minimal.yaml no longer uses the stable completion strategy, so it does not exercise the WP3.2 gate at all")
+	}
+
+	cfg, err := LoadAndValidate("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatalf("a config written before WP3.2 no longer loads: %v", err)
+	}
+
+	// And it must come back with the gate armed at the documented default,
+	// not at a literal zero, which would be the same as having no gate.
+	got := cfg.Sources[0].BackupSets[0].Completion.DeleteSafetyDelay.Duration()
+	if got != DefaultDeleteSafetyDelay {
+		t.Fatalf("delete_safety_delay = %s, want the default %s", got, DefaultDeleteSafetyDelay)
+	}
+}
+
 // TestLoadParsesKeyCommand is #74's shape from a real YAML file, not just a
 // Go literal: the command argv, unlike every other string field this
 // package parses, has to survive as a []string, in order.
@@ -163,6 +232,22 @@ func TestLoadParsesKeyCommand(t *testing.T) {
 	}
 	if r.KeyFile != "" {
 		t.Fatalf("KeyFile = %q, want empty: a key.command source has no file to normalize into it", r.KeyFile)
+	}
+}
+
+// TestRemoteSensitiveDefaultsToFalse is issue #295's opt-in regression
+// control: a config written before sensitive_endpoint existed (every real
+// deployment's config file, and every testdata fixture except full.yaml)
+// must parse with Remote.Sensitive false, not merely unset in some way a
+// caller has to special-case. key_resolvers.yaml never mentions the key at
+// all, which is the ordinary case this proves.
+func TestRemoteSensitiveDefaultsToFalse(t *testing.T) {
+	cfg, err := LoadAndValidate("testdata/key_resolvers.yaml")
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	if cfg.Sources[0].BackupSets[0].Remote.Sensitive {
+		t.Fatalf("Remote.Sensitive = true for a config that never sets sensitive_endpoint, want false")
 	}
 }
 
@@ -228,4 +313,49 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	if !strings.Contains(err.Error(), "pol_interval") {
 		t.Fatalf("error %q does not mention the unknown field", err.Error())
 	}
+}
+
+// TestValidation_ResolvedCommand covers all three shapes a Validation can
+// be in, in the one place that decides what they mean. The rule used to
+// be re-implemented per consumer, and internal/app's operator-triggered
+// revalidation path is the consumer that was missed (issue #164's review,
+// finding M4): it read the Command field directly and reported an
+// artifact as passing without ever running the validator its backup set
+// named.
+func TestValidation_ResolvedCommand(t *testing.T) {
+	cmd := &Command{Executable: "/opt/validators/trailer-marker.sh"}
+
+	t.Run("no validator configured", func(t *testing.T) {
+		got, err := Validation{}.ResolvedCommand()
+		if err != nil || got != nil {
+			t.Fatalf("ResolvedCommand() = %v, %v; want nil, nil", got, err)
+		}
+	})
+
+	t.Run("resolved", func(t *testing.T) {
+		got, err := Validation{ValidatorID: "trailer-marker", Command: cmd}.ResolvedCommand()
+		if err != nil || got != cmd {
+			t.Fatalf("ResolvedCommand() = %v, %v; want the command, nil", got, err)
+		}
+	})
+
+	t.Run("a command the trusted config path named directly", func(t *testing.T) {
+		got, err := Validation{Command: cmd}.ResolvedCommand()
+		if err != nil || got != cmd {
+			t.Fatalf("ResolvedCommand() = %v, %v; want the command, nil", got, err)
+		}
+	})
+
+	t.Run("an id nothing resolved", func(t *testing.T) {
+		got, err := Validation{ValidatorID: "trailer-marker"}.ResolvedCommand()
+		if !errors.Is(err, ErrValidatorNotResolved) {
+			t.Fatalf("ResolvedCommand() error = %v, want ErrValidatorNotResolved", err)
+		}
+		if got != nil {
+			t.Errorf("ResolvedCommand() = %v, want nil alongside the error", got)
+		}
+		if !strings.Contains(err.Error(), "trailer-marker") {
+			t.Errorf("error %q does not name the unresolved id", err)
+		}
+	})
 }

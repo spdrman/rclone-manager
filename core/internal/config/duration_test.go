@@ -1,3 +1,16 @@
+// The custom duration scalar, and mostly what it refuses.
+//
+// One test accepts, four reject, and that ratio is the point. Every field
+// using this type gives its zero a specific meaning in validate.go, so the
+// dangerous outcome is not a parse failure, it is a value that decodes
+// quietly to zero: a bare 30 read as nanoseconds, a mapping where a scalar
+// was expected. Each of those would leave a duration field permanently at
+// the value each of those checks reads as "the operator did not say".
+//
+// The round trip matters because the API layer loads a config, changes one
+// setting and writes it back, so a duration that marshalled to something it
+// could not read again would corrupt every other key on the first save.
+
 package config
 
 import (

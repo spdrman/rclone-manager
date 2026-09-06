@@ -1,9 +1,32 @@
 package webhost
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 )
+
+// One error shape for every failure this package can return, so a client
+// writes one parser.
+//
+// The nesting under an "error" key is this package's convention and not
+// apps/common/auth/local's, which uses a flat body. They disagree because
+// they were written against different consumers at different times, and
+// the disagreement is recorded in the contract rather than smoothed over,
+// because quietly changing either one breaks a client that already parses
+// it.
+//
+// The one deviation is CONFIG_REVISION_STALE, which gets its own writer
+// and its own struct so the current revision travels as a real field. It
+// used to be available only inside the human-readable message, which this
+// file's own doc describes as free to change without notice, so a client
+// retrying against it was parsing prose that nobody had promised to keep
+// stable.
+//
+// Correlation IDs are minted per response and carry nothing derived from a
+// session, a credential or a request body, so quoting one in a bug report
+// is safe.
 
 // errorResponse is the one error shape every handler in this package
 // returns, so a client only ever has to parse one thing regardless of
@@ -23,7 +46,25 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	var resp errorResponse
 	resp.Error.Code = code
 	resp.Error.Message = message
+	// ui/shared/src/api/client.ts reads this off every non-2xx response's
+	// X-Correlation-Id header, falling back to "unavailable" if absent -
+	// which, before this, it always was for every route in this package.
+	w.Header().Set("X-Correlation-Id", correlationID())
 	writeJSON(w, status, resp)
+}
+
+// correlationID is a short, opaque, per-response identifier an operator
+// could quote when asking for help; it carries no session or credential
+// material. Mirrors apps/common/auth/local's own correlationID
+// (handler.go) - not shared as a common helper, since generating an
+// opaque diagnostic string has no cross-package consistency requirement
+// the way the CSRF check (apps/common/csrf) does.
+func correlationID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "cid_unavailable"
+	}
+	return "cid_" + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // configRevisionStaleResponse extends errorResponse with the current
@@ -51,6 +92,7 @@ func writeConfigRevisionStale(w http.ResponseWriter, message, current string) {
 	resp.Error.Code = "CONFIG_REVISION_STALE"
 	resp.Error.Message = message
 	resp.ConfigRevision = current
+	w.Header().Set("X-Correlation-Id", correlationID())
 	writeJSON(w, http.StatusConflict, resp)
 }
 

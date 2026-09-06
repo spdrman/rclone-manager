@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+// These are the only tests in the package that touch a real filesystem,
+// which limits what they are allowed to claim. Exact byte counts belong to
+// whatever else happens to be running on the machine, so none is pinned.
+//
+// What is left is still the part Assess trusts: that the three numbers are
+// internally consistent with each other, that a path which cannot be
+// statted comes back as an error, and that the whole StatPath-then-Admit
+// path can be made to admit and made to refuse rather than only ever
+// returning nil.
+//
+// The error case is the one worth being careful about. A zero-valued Stat
+// is a confident reading of a filesystem nobody looked at, and Assess has
+// no way to tell it apart from one it did look at, so the failure has to
+// arrive as an error or it does not arrive at all.
+
 // TestStatPathReportsSaneValues exercises the real OS statfs call this
 // package's admission logic ultimately depends on. It cannot pin exact
 // byte counts (that would make the test flake with every other thing
@@ -48,13 +63,13 @@ func TestStatPathErrorsOnAMissingPath(t *testing.T) {
 func TestCheckBeforeTransferAgainstARealFilesystem(t *testing.T) {
 	dir := t.TempDir()
 
-	a, err := CheckBeforeTransfer(dir, 1024, Thresholds{
+	a, err := CheckBeforeTransfer(dir, Usage{}, 1024, Thresholds{
 		WarningFreeBytes:  1,
 		CriticalFreeBytes: 1,
 		SafetyMarginBytes: 0,
 	})
 	if err != nil {
-		t.Fatalf("CheckBeforeTransfer() error = %v, want nil for a 1KiB artifact against a real filesystem", err)
+		t.Fatalf("CheckBeforeTransfer() error = %v, Usage{}, want nil for a 1KiB artifact against a real filesystem", err)
 	}
 	if !a.Fits {
 		t.Error("Fits = false, want true")
@@ -69,16 +84,16 @@ func TestCheckBeforeTransferRefusesAnImpossibleArtifact(t *testing.T) {
 	dir := t.TempDir()
 
 	const absurd = int64(1) << 62 // 4 exabytes; no test machine has this free
-	_, err := CheckBeforeTransfer(dir, absurd, Thresholds{})
+	_, err := CheckBeforeTransfer(dir, Usage{}, absurd, Thresholds{})
 	if err == nil {
-		t.Fatal("CheckBeforeTransfer() error = nil, want a refusal for an impossibly large artifact")
+		t.Fatal("CheckBeforeTransfer() error = nil, Usage{}, want a refusal for an impossibly large artifact")
 	}
 }
 
 func TestCheckBeforeTransferPropagatesAStatfsError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone")
-	_, err := CheckBeforeTransfer(missing, 1, Thresholds{})
+	_, err := CheckBeforeTransfer(missing, Usage{}, 1, Thresholds{})
 	if err == nil {
-		t.Fatal("CheckBeforeTransfer() error = nil, want a statfs error for a nonexistent directory")
+		t.Fatal("CheckBeforeTransfer() error = nil, Usage{}, want a statfs error for a nonexistent directory")
 	}
 }

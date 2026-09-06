@@ -52,7 +52,9 @@
 //     checked first, before freshness is even considered.
 //
 //   - STALE means the freshness guarantee is broken: no known-good backup
-//     (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE, per FR-19) exists
+//     (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED, per
+//     FR-19, and it is four states rather than three because a read-only
+//     set only ever reaches the fourth) exists
 //     within the configured stale_after window, and nothing has happened
 //     recently enough to suggest a first backup is merely still in flight.
 //
@@ -62,8 +64,11 @@
 //     "stopped" if nothing ever started), a set whose first backup looks to
 //     still be in progress, a set with a fresh known-good backup but a
 //     quarantined newest arrival (something did arrive, but it is not
-//     trustworthy, so this is not HEALTHY either), or a fresh known-good
-//     backup alongside a failure that is still being retried.
+//     trustworthy, so this is not HEALTHY either), a fresh known-good
+//     backup alongside a failure that is still being retried, or a fresh
+//     known-good backup that is not where the operator's retention chain
+//     says it belongs because the relocation meant to move it there keeps
+//     failing (issue #444, see mediums.go).
 //
 //   - HEALTHY requires positive evidence: a known-good backup inside the
 //     stale window, with nothing else needing attention. Silence is never
@@ -141,10 +146,7 @@ type ProcessHealth struct {
 
 // NewProcessHealth builds the process-liveness half of an FR-24 report.
 func NewProcessHealth(in ProcessInputs) ProcessHealth {
-	return ProcessHealth{
-		BinaryVersion: in.BinaryVersion,
-		RcloneVersion: in.RcloneVersion,
-	}
+	return ProcessHealth(in)
 }
 
 // BackupSetInputs is what one backup set's BackupSetHealth needs that
@@ -155,6 +157,12 @@ func NewProcessHealth(in ProcessInputs) ProcessHealth {
 // ComputeBackupSetHealth takes them as explicit input rather than reaching
 // for them, and none of the three is ever passed to decideState: they
 // describe the set, but they never decide its State.
+//
+// PlacementEvidence (mediums.go) is deliberately NOT one of these and is
+// a separate argument. Everything here is a reading that can legitimately
+// be unavailable, where nil means "unknown" and the report says so, and
+// nothing here is allowed to reach a verdict. That is the opposite of
+// what the placement evidence is for on both counts.
 type BackupSetInputs struct {
 	// LastSuccessfulPollAt is when discovery last completed successfully
 	// for this set. It is a liveness signal, not evidence of freshness: a
@@ -171,6 +179,23 @@ type BackupSetInputs struct {
 	// destination. Nil means the caller has not wired a free-space source
 	// yet, not that free space is zero.
 	FreeBytes *uint64
+
+	// HaltReason is why the manager could not connect to this backup set
+	// the last time it tried, or empty when nothing of the kind has been
+	// observed (issue #245). It comes from internal/state's durable
+	// backup_set_halts record, which is written by the cycle that hit the
+	// refusal and removed by a later cycle that connected.
+	//
+	// Empty is "no refusal is on record", never "this set is reachable".
+	// The two are different claims and only the first one is ever
+	// available to make here, which is exactly why this is a reason and
+	// not a boolean: see issue #231 for what a fabricated definite value
+	// cost the last time this concept had one.
+	//
+	// Like the three fields above it, this is carried for a renderer and
+	// never reaches decideState. That is not a convention: decideState's
+	// evidence parameter has no field it could arrive through.
+	HaltReason string
 }
 
 // TransferInProgress names one artifact currently in the TRANSFERRING
@@ -206,10 +231,11 @@ type BackupSetHealth struct {
 	LastCompletedBackupAt *time.Time
 
 	// NewestGoodBackupAt is the newest artifact currently in any
-	// known-good state per FR-19 (COMMITTED, REMOTE_DELETE_PENDING or
-	// COMPLETE): a valid restore point, whether or not its remote source
-	// has been deleted yet. NewestGoodBackupAge is nil exactly when this
-	// is nil.
+	// known-good state per FR-19 (COMMITTED, REMOTE_DELETE_PENDING,
+	// COMPLETE or REMOTE_RETAINED): a valid restore point, whether or not
+	// its remote source has been deleted yet, and whether or not this
+	// manager was ever going to delete it. NewestGoodBackupAge is nil
+	// exactly when this is nil.
 	NewestGoodBackupAt  *time.Time
 	NewestGoodBackupAge *time.Duration
 
@@ -230,9 +256,115 @@ type BackupSetHealth struct {
 	QuarantinedCount     int
 	QuarantinedLostCount int
 
-	// LastRetentionRunAt and FreeBytes are injected; see BackupSetInputs.
+	// ReinstatedRemoteRetainedCount is how many artifacts in this set were
+	// reinstated out of quarantine and still have a remote source this
+	// manager has undertaken never to delete (issue #227).
+	//
+	// # Why this is a standing condition and not a failure
+	//
+	// Reinstating an artifact permanently forfeits its remote delete:
+	// internal/lifecycle's FR-15 gate refuses one outright, before it
+	// records intent and before it touches the transport, reading the fact
+	// out of the append-only transition log (see ADR 0004). That is the
+	// price that makes the reinstatement edges safe, and the direction it
+	// fails in is deliberate: a reinstatement that should not have
+	// happened costs disk on the source, while a delete that should not
+	// have happened costs the backup.
+	//
+	// But it is permanent by design, so this number only ever grows, and
+	// an operator is told about it exactly once, at the moment they
+	// reinstate. remotedelete.go's own package doc already names what that
+	// costs for the other reason a delete gets refused routinely: an
+	// archive that never prunes its remote side fills the source disk
+	// eventually, and that has to be loud rather than discovered when the
+	// volume is full. This is the count that makes it askable a month
+	// later.
+	//
+	// It never reaches decideState, which has no field it could arrive
+	// through (see compute.go's evidence type): the backups themselves are
+	// fine, and a set holding reinstated artifacts is not thereby
+	// DEGRADED. What is accumulating is storage on a machine this manager
+	// does not measure.
+	//
+	// # Which artifacts it counts, and why not the others
+	//
+	// Membership comes from the append-only transition log, via
+	// lifecycle.ReinstatedArtifacts, which derives its edge set from the
+	// same lifecycle.ReinstatementEdges() the delete gate's own refusal
+	// reads. That is the whole reason it is not a counter maintained
+	// alongside the writes: two independently-kept answers to the same
+	// question drift, and the one that drifts silently is this one.
+	//
+	// An artifact whose remote source this manager has already released
+	// (state.Record.RemoteDeletedAt is set) is excluded, because there is
+	// nothing left for it to be holding. That is not a corner case: the
+	// QUARANTINED_LOST -> COMPLETE edge is reachable only from COMPLETE,
+	// which is precisely the state that says the remote object is gone, so
+	// every reinstatement of that kind lands here and counting it would
+	// send an operator looking for storage that does not exist.
+	//
+	// # There is deliberately no byte figure beside it
+	//
+	// How much those preserved remote objects actually occupy is a fact
+	// this manager does not have and must not invent. The only size it
+	// ever recorded is what the remote object measured at discovery, and
+	// FR-8's rule that remote metadata is untrusted applies with full
+	// force here: the object may since have been removed by its producer,
+	// replaced, or grown, and the reason the delete gate refuses in the
+	// first place is that the manager usually cannot re-establish the
+	// remote's identity with confidence. Summing discovery-time sizes
+	// would be a confident number about bytes nobody has looked at, and
+	// re-Stat-ing every artifact on every health pass would put a network
+	// call per artifact behind every status invocation and dashboard load,
+	// against a source that may be unreachable. So this is a count, and
+	// the size is not known: see issue #211 for what this repository does
+	// with a field it cannot compute honestly.
+	ReinstatedRemoteRetainedCount int
+
+	// ReadOnlyRetainedCount is how many artifacts in this set currently
+	// sit at REMOTE_RETAINED: this backup set is declared read-only
+	// (config.BackupSet.ReadOnly, issue #282), and this manager has never
+	// called, and structurally cannot call, transport.Transport.DeleteRemote
+	// for them.
+	//
+	// Unlike ReinstatedRemoteRetainedCount, this is a direct count of the
+	// artifacts' own CURRENT journal state, not a join against transition
+	// history: REMOTE_RETAINED is unambiguous the moment it is read, so
+	// there is no "was this artifact ever retained" question that only the
+	// append-only log could answer. It shares that field's doc's other
+	// reasoning, though: no bytes figure is reported beside it, for the
+	// same reason (this manager's only size reading for these objects is
+	// the one taken at discovery, and it may be stale by an unknown
+	// amount), and it is never omitted, because zero is a real, common
+	// reading here (every backup set with no read_only flag set).
+	ReadOnlyRetainedCount int
+
+	// Placement is FR-24's medium half (issue #444): how many of this
+	// set's artifacts are not on the medium its retention chain says they
+	// belong on, and whether the relocations meant to fix that are
+	// getting anywhere. See mediums.go, which holds both the type and the
+	// argument for why health had to grow a second question.
+	//
+	// Unlike the four injected display-only facts below it, one number in
+	// here DOES reach decideState: a relocation that has been tried and
+	// has not worked turns an otherwise-HEALTHY set DEGRADED. That is the
+	// whole point of the field. It is durable journal evidence, the same
+	// kind as everything else State is decided from, and a week of
+	// failing moves that could not change any verdict was the defect this
+	// field exists to end.
+	Placement PlacementHealth
+
+	// LastRetentionRunAt, FreeBytes and HaltReason are injected; see
+	// BackupSetInputs.
 	LastRetentionRunAt *time.Time
 	FreeBytes          *uint64
+
+	// HaltReason is why this set could not be connected to, empty when no
+	// refusal is on record (issue #245). It sits beside the verdict and
+	// never inside it: a set refused on every cycle still gets its State
+	// from journal evidence alone, and that State is usually STALE, which
+	// is true and incomplete. This is the missing half of the sentence.
+	HaltReason string
 }
 
 // Report bundles one ProcessHealth with every configured backup set's

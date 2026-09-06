@@ -1,0 +1,589 @@
+package webhost
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
+// One route for every administrable setting, and one line about where
+// that generality stops.
+//
+// The temptation with a settings API is a passthrough: accept a config key
+// and a value, and never touch this file again. This is the opposite. Every
+// field is enumerated, so there is no spelling in this type for the state
+// database path, a backup set's remote, or a validator command, and a
+// caller cannot reach them by naming them. Whatever does get through is
+// still handed to the same config.Validate a hand-edited YAML file goes
+// through at boot, and is refused whole rather than applied partially.
+//
+// Every field is a pointer because PATCH means "change what I named". A
+// plain value cannot tell a zero somebody sent from a key they omitted,
+// and on a retention policy those two mean opposite things: one says keep
+// nothing, the other says leave the tier alone.
+//
+// This route is not behind the destructive gate, and that was
+// deliberately re-argued under red-team review. The argument is in
+// router.go on the route itself, along with the tests that hold it,
+// because that is where somebody deciding the tier of the NEXT mutating
+// route will be reading.
+
+// maxSettingsBodyBytes bounds PATCH /api/v1/settings' request body, the
+// same rationale as maxCreateBackupSetBodyBytes
+// (handlers_backupsets.go). A retention chain is a short list of small
+// objects, so 64 KiB is already orders of magnitude more headroom than
+// any legitimate request needs while still bounding how much of a
+// malformed or hostile body this handler reads before giving up. It is
+// deliberately smaller than the backup-set limit: there is no field here
+// that can legitimately carry bulk content (no key material, no include
+// list), so the generous 1 MiB that route needs would only be a larger
+// target.
+const maxSettingsBodyBytes = 64 << 10
+
+// settingsRequest is PATCH /api/v1/settings' body: one optional object
+// per settings section.
+//
+// # Why this is generic, and where the generality stops
+//
+// One route serves every administrable setting, so adding the next one is
+// a field on this struct and a line in the mapping below, never a new
+// route with its own auth, CSRF and error-mapping wiring to get subtly
+// wrong. What it deliberately is NOT is a passthrough: there is no field
+// here that accepts an arbitrary config key or an arbitrary YAML
+// fragment, so nothing a caller can put in this body reaches
+// state.database, a backup set's remote, or a validator command — those
+// have no spelling in this type. Every field is enumerated, and the whole
+// resulting config still goes through core/service's own
+// config.Validate before anything is written (see
+// service.BackupService.UpdateSettings).
+//
+// Every field is a pointer (or, for the chain, a nil-able slice) because
+// a PATCH's whole contract is "change what I named, leave the rest": a
+// plain value could not tell `"keep": 0` apart from an omitted key, and
+// on a retention policy that difference is the difference between a
+// deliberate refusal and a silently widened window.
+type settingsRequest struct {
+	Retention *retentionUpdateRequest `json:"retention"`
+	Capacity  *capacityUpdateRequest  `json:"capacity"`
+
+	// AcknowledgeMediumDisclosure is the operator's acknowledgment of the
+	// storage-medium disclosure (EPIC E, FR-27), required on a write that
+	// first sends a retention tier's artifacts to a non-local medium.
+	//
+	// It is NOT a pointer, unlike everything else on this type, and the
+	// difference is deliberate: absent and false mean the same thing here
+	// (nobody acknowledged anything), so there is no third state for a
+	// pointer to carry. It is also not a setting, which is why
+	// toUpdateSettingsRequest does not count it towards a request naming
+	// something to change.
+	AcknowledgeMediumDisclosure bool `json:"acknowledge_medium_disclosure,omitempty"`
+}
+
+// capacityUpdateRequest is FR-21's block on the write side (issue #286).
+//
+// Every field is bytes, and every field is a pointer. The pointers matter
+// more here than anywhere else in this type: on this block ZERO IS A
+// MEANING, not an absence. `"cap_bytes": 0` is "remove my cap, use the
+// whole volume", and an omitted cap_bytes is "I did not touch the cap".
+// A plain int64 could not tell those two apart, and getting it wrong in
+// either direction silently changes what the product is allowed to do
+// with an operator's disk.
+//
+// There is no units field, on purpose. The Settings page shows an MB/GB
+// picker beside the input and converts before it sends; a wire that
+// carried a number and a unit would be a wire where the two can get out
+// of step, which is a thousand-fold mistake nobody would see in a diff.
+type capacityUpdateRequest struct {
+	CapBytes          *int64 `json:"cap_bytes"`
+	WarningFreeBytes  *int64 `json:"warning_free_bytes"`
+	CriticalFreeBytes *int64 `json:"critical_free_bytes"`
+	SafetyMarginBytes *int64 `json:"safety_margin_bytes"`
+}
+
+// namesNothing reports a capacity object that was sent but carries no
+// field at all, refused for exactly the reason retentionUpdateRequest's
+// own namesNothing gives.
+func (r capacityUpdateRequest) namesNothing() bool {
+	return r.CapBytes == nil &&
+		r.WarningFreeBytes == nil &&
+		r.CriticalFreeBytes == nil &&
+		r.SafetyMarginBytes == nil
+}
+
+type retentionUpdateRequest struct {
+	Timezone     *string `json:"timezone"`
+	WeekStartsOn *string `json:"week_starts_on"`
+	// Tiers replaces FR-18's whole chain. Absent (or null) leaves it
+	// alone; an explicitly empty list is passed through as an empty,
+	// non-nil slice so core/service can refuse it, because in the config
+	// file an empty chain reinstates the default policy rather than
+	// meaning "keep nothing" (service.RetentionUpdate.Tiers' own doc).
+	Tiers []retentionTierBody `json:"tiers"`
+	// ProtectLastKnownGood turns FR-19's protection on or off. Turning it
+	// off is what internal/retention calls "a materially more dangerous
+	// configuration"; the operator-facing confirmation for that lives in
+	// the UI (ui/shared/src/pages/SettingsPage.tsx), in front of the
+	// human, since this layer cannot tell a confirmed request from an
+	// unconfirmed one.
+	ProtectLastKnownGood *bool `json:"protect_last_known_good"`
+}
+
+// namesNothing reports a retention object that was sent but carries no
+// field at all, which this route refuses exactly as it refuses an absent
+// one. The check is structural rather than "is the section present",
+// because `{"retention":{}}` passes the presence test while asking for
+// nothing: honouring it would rewrite the operator's config file, move
+// ConfigRevision (invalidating every outstanding retention preview) and
+// answer 200 for a request with no content. core/service applies the
+// identical guard (service.UpdateSettingsRequest's own doc), so a caller
+// that reached it around this layer is refused too; this one exists so a
+// refused request never reaches the backend at all.
+//
+// `"tiers": []` is deliberately NOT "nothing named": it is a request with
+// a meaning, and core/service refuses it with a message that explains what
+// emptying the chain would actually do.
+func (r retentionUpdateRequest) namesNothing() bool {
+	return r.Timezone == nil &&
+		r.WeekStartsOn == nil &&
+		r.Tiers == nil &&
+		r.ProtectLastKnownGood == nil
+}
+
+// retentionTierBody is one link in the chain, on the wire. Shared by the
+// request and the response so a client round-trips the identical shape it
+// was served, rather than reading one spelling and having to write
+// another.
+type retentionTierBody struct {
+	Name        string `json:"name"`
+	Granularity string `json:"granularity"`
+	PeriodDays  int    `json:"period_days,omitempty"`
+	Keep        int    `json:"keep"`
+	WindowUnit  string `json:"window_unit,omitempty"`
+
+	// Medium names the storage medium this tier's artifacts live on
+	// (FR-27), empty meaning the local backup root.
+	//
+	// It is on the wire for the reason service.RetentionTier.Medium's own
+	// doc gives, which is stronger than symmetry with the config schema:
+	// a chain write REPLACES the operator's whole chain, so a field this
+	// shape cannot hold is a field a save DELETES from their file. Before
+	// this key existed, editing daily's keep through the settings form
+	// would have quietly moved monthly's artifacts back onto local disk.
+	// A lossy boundary between the file and the form is a configuration
+	// change nobody asked for, made by the act of changing something else.
+	Medium string `json:"medium,omitempty"`
+}
+
+// toService projects one tier off the wire. Shared by the settings write
+// and by issue #333's per-set retention write, so the two cannot come to
+// carry different subsets of a tier.
+func (t retentionTierBody) toService() service.RetentionTier {
+	return service.RetentionTier{
+		Name:        t.Name,
+		Granularity: t.Granularity,
+		PeriodDays:  t.PeriodDays,
+		Keep:        t.Keep,
+		WindowUnit:  t.WindowUnit,
+		Medium:      t.Medium,
+	}
+}
+
+// settingsResponse is what both GET and PATCH /api/v1/settings return:
+// the settings now in effect, plus the closed value sets and bounds those
+// settings are validated against.
+//
+// Serving the schema alongside the values is what lets a form build its
+// pickers and enforce its bounds from the rules core/internal/config
+// actually applies, instead of a second copy of them transcribed into a
+// frontend and free to drift the next time a granularity is added.
+// config.RetentionTier's own doc anticipates exactly this.
+type settingsResponse struct {
+	Retention retentionSettingsBody `json:"retention"`
+	Capacity  capacitySettingsBody  `json:"capacity"`
+	// Mediums is every storage medium this configuration declares, in
+	// declaration order, and empty for every configuration written before
+	// they existed. See storageMediumBody for what is deliberately not in
+	// it.
+	Mediums []storageMediumBody `json:"mediums"`
+	Schema  settingsSchemaBody  `json:"schema"`
+}
+
+// storageMediumBody describes one configured storage medium: what it is
+// called, what kind of place it is, which bucket and region, and which
+// class artifacts are written with.
+//
+// There is no field here for key material, and there is not going to be
+// (FR-33). The absence is structural rather than achieved by a filter:
+// core/service.StorageMediumSummary has no credential field either, and
+// config.MediumCredentials is not reachable from this shape at all, so
+// there is nothing for a future edit to accidentally start copying
+// across.
+type storageMediumBody struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	Bucket       string `json:"bucket"`
+	Region       string `json:"region,omitempty"`
+	StorageClass string `json:"storage_class"`
+	// ReadsRequireRestore says this medium's class cannot be read on
+	// demand. It is computed by the engine rather than derived by a
+	// client from storage_class, so one product decides what archive
+	// means.
+	ReadsRequireRestore bool `json:"reads_require_restore"`
+}
+
+// capacitySettingsBody is FR-21's block as it is actually deciding.
+//
+// backup_root and backup_root_configured travel together because a form
+// has to be able to show the path the reading is taken from WITHOUT
+// putting a derived value in an editable box: saving one back would turn
+// today's derivation into an operator's explicit choice and pin it there
+// forever, including on a later release that derives it better.
+type capacitySettingsBody struct {
+	CapBytes             int64  `json:"cap_bytes"`
+	WarningFreeBytes     int64  `json:"warning_free_bytes"`
+	CriticalFreeBytes    int64  `json:"critical_free_bytes"`
+	SafetyMarginBytes    int64  `json:"safety_margin_bytes"`
+	BackupRoot           string `json:"backup_root"`
+	BackupRootConfigured bool   `json:"backup_root_configured"`
+}
+
+type retentionSettingsBody struct {
+	Timezone     string `json:"timezone"`
+	WeekStartsOn string `json:"week_starts_on"`
+	// Tiers is always the RESOLVED chain, so a config file written with
+	// the legacy scalars reports the three tiers those keys stand for.
+	// A client therefore renders one shape for one policy, and never has
+	// to know the sugar exists.
+	Tiers                []retentionTierBody `json:"tiers"`
+	ProtectLastKnownGood bool                `json:"protect_last_known_good"`
+}
+
+// settingsSchemaBody is the validation the server will actually apply,
+// served alongside the settings themselves.
+//
+// It exists so a form does not have to invent its own bounds. A frontend
+// that hardcoded the allowed granularities, the tier-name pattern or the
+// maximum keep count would be a second copy of a rule that lives in
+// core/internal/config, and the day the two disagree the user gets a
+// client-side error for a value the server would have accepted, or,
+// worse, a client-side pass for one it will not.
+type settingsSchemaBody struct {
+	Retention retentionSchemaBody `json:"retention"`
+	Storage   storageSchemaBody   `json:"storage"`
+}
+
+// storageSchemaBody is the vocabulary and the consent text a
+// storage-medium mapping is written against, served for exactly the reason
+// retentionSchemaBody is: a form that keeps its own copy of what
+// "existence" proves eventually tells an operator something the engine
+// does not, and the sentence somebody reads while deciding whether a
+// backup is safe is the worst place in the product for a stale paraphrase.
+type storageSchemaBody struct {
+	VerificationClasses []verificationClassBody `json:"verification_classes"`
+	MediumDisclosure    string                  `json:"medium_disclosure"`
+	RetrievalDisclosure string                  `json:"retrieval_disclosure"`
+}
+
+// verificationClassBody is one rung of the ladder with the engine's own
+// words. downloads_object is the same predicate the engine refuses
+// automatic medium revalidation on, served rather than restated: it is a
+// mechanism, and this is where a surface reads it from. Neither field is
+// called cost, on purpose: see service.VerificationClassInfo.
+type verificationClassBody struct {
+	Class           string `json:"class"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
+	DownloadsObject bool   `json:"downloads_object"`
+}
+
+type retentionSchemaBody struct {
+	Granularities    []string `json:"granularities"`
+	WindowUnits      []string `json:"window_units"`
+	TierNamePattern  string   `json:"tier_name_pattern"`
+	ReservedTierName string   `json:"reserved_tier_name"`
+	KeepMax          int      `json:"keep_max"`
+	PeriodDaysMax    int      `json:"period_days_max"`
+	// DefaultTiers is the chain a config that configures neither
+	// spelling resolves to. Served so the form's "restore the default
+	// chain" affordance fills itself from the product's own default
+	// (core/internal/config.DefaultRetentionTiers) rather than from a
+	// second copy of those numbers living in the frontend, where a
+	// narrowed window could be saved as an explicit chain and
+	// permanently migrate a legacy config onto it.
+	DefaultTiers []retentionTierBody `json:"default_tiers"`
+}
+
+// getSettings is GET /api/v1/settings: read-only (docs/
+// EPIC-B-multi-nas.md §50's "view configuration"), so no CSRF and no
+// destructive gate, exactly like the other GET routes in this package.
+func (h *handlers) getSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.backend.Settings(r.Context())
+	if err != nil {
+		// Deliberately not err.Error(): a read failure here has no
+		// classified vocabulary to map, so an unclassified error could
+		// carry filesystem-internal text (the same default every other
+		// handler in this package applies).
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
+}
+
+// updateSettings is PATCH /api/v1/settings: issue #140 (B3.7)'s generic
+// settings-write endpoint, the write path the Settings page's retention
+// form calls.
+//
+// # PATCH, and only PATCH
+//
+// The verb is the contract: this applies exactly the settings the body
+// names and leaves every other setting as it was. PUT would promise the
+// opposite (the body is the whole resource), which no caller of this
+// endpoint means and which would turn every omitted field into a silent
+// reset — on a retention policy, a data-loss-shaped mistake. POST and PUT
+// are therefore not registered at all, so a client that guesses one gets
+// a 405 rather than a request that looks like it worked.
+//
+// # CSRF yes, destructive gate no
+//
+// State-changing but non-destructive under §50, in the same bucket as
+// "create/edit backup set": this edits configuration and touches no
+// backup data. See router.go's own comment on the route, and
+// destructiveGateExemptRoutes (router_test.go), for the full reasoning
+// including the last-known-good case.
+func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes)
+
+	// DisallowUnknownFields, unlike every other handler in this package,
+	// and for the same reason config.Load uses KnownFields(true): this is
+	// the one route whose body IS a configuration edit, so a misspelled
+	// key ("retenton", "protect_last_know_good") that this layer silently
+	// dropped would answer 200 for a change that never happened, and the
+	// operator would be looking at a settings page reporting the old
+	// value with no error anywhere to explain it. Refusing is the only
+	// honest answer, and it mirrors what a hand-edited YAML file already
+	// gets.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var body settingsRequest
+	if err := dec.Decode(&body); err != nil {
+		writeSettingsDecodeError(w, err)
+		return
+	}
+
+	req, err := toUpdateSettingsRequest(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	settings, err := h.backend.UpdateSettings(r.Context(), req)
+	if err != nil {
+		writeSettingsError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
+}
+
+// toUpdateSettingsRequest translates the wire body into core/service's
+// own request type, and refuses a body that names no setting at all
+// rather than reporting 200 for a write that changed nothing.
+//
+// The nil-versus-empty distinction on Tiers is carried across
+// deliberately and is the reason this is a function rather than a struct
+// tag: `"tiers": []` must stay an empty non-nil slice all the way to
+// core/service, which is the only layer that knows an empty chain
+// reinstates the default policy and therefore has to refuse it.
+func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsRequest, error) {
+	// AcknowledgeMediumDisclosure is deliberately not counted here. It
+	// asks for no change; it consents to one. A body carrying nothing but
+	// the tick still names no setting, and honouring it would rewrite the
+	// operator's file and move ConfigRevision for a request with no
+	// content.
+	namedSomething := (body.Retention != nil && !body.Retention.namesNothing()) ||
+		(body.Capacity != nil && !body.Capacity.namesNothing())
+	if !namedSomething {
+		return service.UpdateSettingsRequest{}, errors.New("a settings write must name at least one setting to change")
+	}
+	// A section that was sent but carries no field is refused even when
+	// ANOTHER section carries a real change. Quietly ignoring half a
+	// request is how a settings page reports success for an edit that
+	// never happened.
+	if (body.Retention != nil && body.Retention.namesNothing()) ||
+		(body.Capacity != nil && body.Capacity.namesNothing()) {
+		return service.UpdateSettingsRequest{}, errors.New("a settings section was sent with no field in it; omit the section instead of sending an empty one")
+	}
+
+	out := service.UpdateSettingsRequest{AcknowledgeMediumDisclosure: body.AcknowledgeMediumDisclosure}
+
+	if body.Retention != nil {
+		update := service.RetentionUpdate{
+			Timezone:             body.Retention.Timezone,
+			WeekStartsOn:         body.Retention.WeekStartsOn,
+			ProtectLastKnownGood: body.Retention.ProtectLastKnownGood,
+		}
+		if body.Retention.Tiers != nil {
+			update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
+			for _, t := range body.Retention.Tiers {
+				update.Tiers = append(update.Tiers, t.toService())
+			}
+		}
+		out.Retention = &update
+	}
+
+	if body.Capacity != nil {
+		out.Capacity = &service.CapacityUpdate{
+			CapBytes:          body.Capacity.CapBytes,
+			WarningFreeBytes:  body.Capacity.WarningFreeBytes,
+			CriticalFreeBytes: body.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes: body.Capacity.SafetyMarginBytes,
+		}
+	}
+
+	return out, nil
+}
+
+func toSettingsResponse(s service.Settings) settingsResponse {
+	schema := service.RetentionSchema()
+	storage := service.StorageSchema()
+	classes := make([]verificationClassBody, 0, len(storage.VerificationClasses))
+	for _, c := range storage.VerificationClasses {
+		classes = append(classes, verificationClassBody{
+			Class:           c.Class,
+			Proves:          c.Proves,
+			Requires:        c.Requires,
+			DownloadsObject: c.DownloadsObject,
+		})
+	}
+	mediums := make([]storageMediumBody, 0, len(s.Mediums))
+	for _, m := range s.Mediums {
+		mediums = append(mediums, storageMediumBody{
+			ID:                  m.ID,
+			Type:                m.Type,
+			Bucket:              m.Bucket,
+			Region:              m.Region,
+			StorageClass:        m.StorageClass,
+			ReadsRequireRestore: m.ReadsRequireRestore,
+		})
+	}
+	return settingsResponse{
+		Mediums:   mediums,
+		Retention: toRetentionSettingsBody(s.Retention),
+		Capacity: capacitySettingsBody{
+			CapBytes:             s.Capacity.CapBytes,
+			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
+			CriticalFreeBytes:    s.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes:    s.Capacity.SafetyMarginBytes,
+			BackupRoot:           s.Capacity.BackupRoot,
+			BackupRootConfigured: s.Capacity.BackupRootConfigured,
+		},
+		Schema: settingsSchemaBody{
+			Storage: storageSchemaBody{
+				VerificationClasses: classes,
+				MediumDisclosure:    storage.MediumDisclosure,
+				RetrievalDisclosure: storage.RetrievalDisclosure,
+			},
+			Retention: retentionSchemaBody{
+				Granularities:    schema.Granularities,
+				WindowUnits:      schema.WindowUnits,
+				TierNamePattern:  schema.TierNamePattern,
+				ReservedTierName: schema.ReservedTierName,
+				KeepMax:          schema.KeepMax,
+				PeriodDaysMax:    schema.PeriodDaysMax,
+				DefaultTiers:     toTierBodies(schema.DefaultTiers),
+			},
+		},
+	}
+}
+
+// toTierBodies projects a chain onto the wire, shared by the policy in
+// effect and by the schema's default chain so the two cannot be spelled
+// differently.
+func toTierBodies(tiers []service.RetentionTier) []retentionTierBody {
+	out := make([]retentionTierBody, 0, len(tiers))
+	for _, t := range tiers {
+		out = append(out, retentionTierBody{
+			Name:        t.Name,
+			Granularity: t.Granularity,
+			PeriodDays:  t.PeriodDays,
+			Keep:        t.Keep,
+			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
+		})
+	}
+	return out
+}
+
+// toRetentionSettingsBody projects a resolved policy onto the wire.
+// Shared by GET/PATCH /settings and by issue #333's per-set retention
+// routes, which report the same resolved shape twice (this set's
+// effective policy, and the deployment's).
+func toRetentionSettingsBody(r service.RetentionSettings) retentionSettingsBody {
+	return retentionSettingsBody{
+		Timezone:             r.Timezone,
+		WeekStartsOn:         r.WeekStartsOn,
+		Tiers:                toTierBodies(r.Tiers),
+		ProtectLastKnownGood: r.ProtectLastKnownGood,
+	}
+}
+
+// writeSettingsDecodeError extends writeDecodeError
+// (handlers_backupsets.go) with the one failure only this route can
+// produce, since it is the only one that decodes with
+// DisallowUnknownFields: encoding/json reports an unknown key as a plain
+// *json.SyntaxError-free error whose message names the field, and
+// collapsing that into "malformed JSON body" would tell an operator who
+// typed "retenton" to go looking for a missing brace.
+func writeSettingsDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("request body exceeds the %d byte limit", maxSettingsBodyBytes))
+		return
+	}
+	// encoding/json has no exported type for this one; the prefix is
+	// stable and documented in its own source, and the fallback below is
+	// still correct if it ever changes.
+	if bytes.HasPrefix([]byte(err.Error()), []byte("json: unknown field ")) {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"unknown setting in request body: "+err.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "malformed JSON body")
+}
+
+// writeSettingsError maps core/service's settings-write error vocabulary
+// onto this package's one error envelope.
+func writeSettingsError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrMediumDisclosureRequired):
+		// Its own code, at the same status as a malformed body, because
+		// what a client does with it is completely different: this is not
+		// a field to fix, it is a paragraph to put in front of a human.
+		// The message IS that paragraph (see
+		// core/service.mediumDisclosureRefusal), so a client that renders
+		// it has shown the operator the product's own words rather than
+		// its own summary of them.
+		//
+		// Safe to echo for writeBackupSetError's reason: the text is
+		// core/service's own, plus tier names and medium ids the caller
+		// itself submitted.
+		writeError(w, http.StatusBadRequest, "MEDIUM_DISCLOSURE_REQUIRED", err.Error())
+	case errors.Is(err, service.ErrInvalidRequest):
+		// Safe to echo, for exactly the reason writeBackupSetError gives
+		// for the identical line: an ErrInvalidRequest from this path is
+		// either core/service's own refusal text or a
+		// config.ValidationError built from internal/config's field
+		// descriptions and the caller's own submitted values, never from
+		// a state or rclone internal.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	case errors.Is(err, service.ErrConfigNotFileBacked):
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+	default:
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update settings")
+	}
+}

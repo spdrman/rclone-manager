@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>Backup Manager</title>
+  <desc>A pull arc closing onto a solid centre: artifacts drawn in from a remote source and held.</desc>
+  <rect width="256" height="256" rx="52" fill="#1f3a5f"/>
+  <g transform="rotate(-52 128 128)">
+    <circle cx="128" cy="128" r="82" fill="none" stroke="#f2f5f8" stroke-width="24" stroke-linecap="round" stroke-dasharray="227 97"/>
+  </g>
+  <circle cx="128" cy="128" r="27" fill="#f2f5f8"/>
+</svg>

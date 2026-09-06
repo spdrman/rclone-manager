@@ -1,0 +1,394 @@
+{
+  "_comment": [
+    "Single source of truth for everything the Tier B/C container packaging",
+    "profiles (apps/truenas, apps/unraid, apps/openmediavault, and any later",
+    "profile that wraps the same image) have to agree on. WP4.3's REFACTOR",
+    "step asks for exactly this: the three platforms' metadata is generated",
+    "from and checked against one file instead of drifting independently.",
+    "distribution/packaging's test suite fails the build if any platform's",
+    "own metadata disagrees with a value in here."
+  ],
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "spdrman/backup-manager",
+    "tag": "0.3.0",
+    "reference": "ghcr.io/spdrman/backup-manager:0.3.0",
+    "published": false,
+    "note": [
+      "published:false. 0.3.0 is cut but not pushed: container/release-manifest.json carries a",
+      "registry_digest of null per architecture and a null index_digest, and this flag says the",
+      "same thing from the other side. That file and this flag move together:",
+      "TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag refuses a published flag",
+      "with no digest and a digest with no flag, because either one alone is a half-truth. The",
+      "release workflow does the push, and the digests are recorded back here afterwards.",
+      "0.2.0 remains published and signed for anyone who wants the previous release.",
+      "This reference is the one string every provider package must carry, so pointing the",
+      "project at a different registry stays a one-line change here rather than an edit in four",
+      "metadata formats. Every acceptance procedure in docs/acceptance/ keeps its step 0 for a",
+      "deployment that cannot reach ghcr.io (push to your own registry, or docker save/load),",
+      "and every profile keeps the reference substitutable."
+    ]
+  },
+  "architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "runtimeContract": "1.2.0",
+  "_derivation_comment": [
+    "Issue #169's derivation contract. Every platform below is a THIN ADAPTER:",
+    "its runtime fields are derived from the authoritative Compose definition",
+    "(distribution/compose/runtime-contract.json's `canonical`) rather than",
+    "authored next to it, and derive.go fails the build naming the field that",
+    "drifted.",
+    "",
+    "runtimeContract is that contract's version, pinned here as well as in",
+    "runtime-contract.json so distribution/compose can hold the two together;",
+    "every platform repeats it in its own derivesFrom block, ON PURPOSE. A",
+    "contract change then fails every adapter until someone has re-derived it and",
+    "said so, which is the difference between a version number and a version",
+    "check."
+  ],
+  "profiles": [
+    "generic",
+    "ugos",
+    "truenas",
+    "unraid",
+    "openmediavault",
+    "proxmox",
+    "synology"
+  ],
+  "_uiBridge_comment": [
+    "Every platform says which frontend bridge it ships, and \"none\" is a real",
+    "answer rather than an omission (issue #170). The five Phase 4 platforms",
+    "each ship apps/<name>/frontend/platform.ts and the storage mount it",
+    "declares is pinned to the one here; the four container managers and app",
+    "stores #170 adds ship no bridge at all, and the check is two-sided so that",
+    "declaring none cannot become a way to dodge the pin: a platform that says",
+    "\"none\" must have no apps/<name>/frontend directory either.",
+    "",
+    "They ship none because a bridge has to be CARRIED somewhere and there are",
+    "exactly three carriers (docs/runtime-contract.md). The canonical image",
+    "already carries five bundles with 347,956 bytes of headroom against its",
+    "gated 5% ceiling, which is less than one more bundle at roughly 352 KB; a",
+    "template, a store compose file and a documented import workflow have no",
+    "payload of their own to carry one in; and a bridge would need its platform",
+    "id in the /api/v1 contract, the capability table, the profile table and the",
+    "bundle list, which is core and shared-UI code in adapters whose own",
+    "contract forbids exactly that. So all four select the generic runtime",
+    "profile and serve the bundle compiled into the binary, and the UI describes",
+    "them as the Docker Compose deployments they are."
+  ],
+  "healthchecks": {
+    "engine": [
+      "CMD",
+      "/backup-manager-web",
+      "healthcheck",
+      "--url",
+      "http://127.0.0.1:8080/health/live"
+    ],
+    "webUI": [
+      "CMD",
+      "/backup-manager-web",
+      "healthcheck"
+    ]
+  },
+  "listenPort": 8080,
+  "authMode": "local-account",
+  "_healthcheck_comment": [
+    "DERIVED, not authored. Both values restate container/compose.yaml's own",
+    "healthcheck tests for the two roles, which is the authoritative runtime",
+    "definition every platform's derivesFrom block already names, and",
+    "distribution/compose's TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided",
+    "fails the build if they stop agreeing. They are restated here because",
+    "derive.go has to hold four metadata formats to them, one of which is an",
+    "Unraid XML template no Compose parser can read.",
+    "",
+    "The engine's is a LIVENESS question and deliberately not `backup-manager",
+    "status` (issue #206). Every adapter's Web UI declares",
+    "`depends_on: <engine>: condition: service_healthy`, so whatever this asks",
+    "stands between an operator and the only LAN-facing container in the",
+    "deployment. `status` is FR-24's backup-freshness verdict and exits non-zero",
+    "on any DEGRADED, STALE or FAILING set - and on a fresh install, which has",
+    "backed nothing up yet and is legitimately not healthy. Gating the Web UI on",
+    "it meant a fresh install never got a Web UI at all.",
+    "",
+    "Backup freshness is not lost and is not weakened. `status` stays the",
+    "operator-facing verdict, it stays container/Dockerfile's own baked-in",
+    "HEALTHCHECK (so a plain `docker run`, and the headless `daemon` command that",
+    "serves no HTTP, still report it), and the alerts block still delivers it.",
+    "What no longer depends on it is container startup ordering.",
+    "",
+    "Because the image's instruction and this value now deliberately differ, an",
+    "adapter that declares NOTHING for the engine no longer derives this one: it",
+    "inherits the freshness verdict instead. derive.go allows that only where",
+    "nothing waits on the engine's health, which is Unraid and only Unraid - its",
+    "template schema has no health-check seam and declares no start-ordering",
+    "dependency either, so the badge it produces is the freshness report it is",
+    "meant to be.",
+    "",
+    "The Web UI's is unchanged: `/backup-manager status` needs a config file and a",
+    "state database that container does not have, so every adapter has to either",
+    "override it with the Web UI test or disable it outright (Unraid, whose only",
+    "seam is `docker run --health-cmd`, which is shell form the distroless image",
+    "cannot run)."
+  ],
+  "commands": {
+    "engine": [
+      "/backup-manager-web",
+      "serve"
+    ],
+    "webUI": [
+      "/backup-manager-web",
+      "serve-ui"
+    ],
+    "headless": [
+      "/backup-manager",
+      "daemon"
+    ],
+    "healthcheck": [
+      "/backup-manager-web",
+      "healthcheck"
+    ],
+    "imageHealthcheck": [
+      "/backup-manager",
+      "status"
+    ]
+  },
+  "binaries": [
+    "/backup-manager",
+    "/backup-manager-web"
+  ],
+  "containerPaths": {
+    "state": "/data/state",
+    "backups": "/data/backups",
+    "config": "/etc/backup-manager/config",
+    "sshKey": "/etc/backup-manager/id_ed25519",
+    "knownHosts": "/etc/backup-manager/known_hosts"
+  },
+  "configFileName": "config.yaml",
+  "_config_role_comment": [
+    "The config role is a WRITABLE DIRECTORY the application owns, with",
+    "config.yaml inside it (issue #196). It used to be a read-only single-file",
+    "mount, and that shape made three merged features inert inside a packaged",
+    "container: CreateBackupSet (#146), the settings write path (#140) and",
+    "first-run setup (#176) all replace config.yaml through one temp-file-plus-",
+    "rename, which needs to create a sibling temp file in the file's own",
+    "directory. On a read-only single-file mount that directory is the image's",
+    "read-only rootfs, so every one of them failed at the write however correct",
+    "the code above it was. ImportSSHKey and the known-hosts store write into",
+    "two more siblings of the same directory (ssh_keys/ and known_hosts.d/) and",
+    "were inert for the same reason.",
+    "",
+    "A directory also lets the mount be EMPTY, which is what an app-store",
+    "install actually starts from. A bind mount cannot express \"not there yet\"",
+    "for a file: Docker creates a directory at a source path that does not",
+    "exist, so the absent-config case was not even representable.",
+    "",
+    "Key material stays a read-only single-file mount. Nothing writes it, the",
+    "engine only ever reads it, and the shapes are different claims."
+  ],
+  "readOnlyContainerPaths": [
+    "/etc/backup-manager/id_ed25519",
+    "/etc/backup-manager/known_hosts"
+  ],
+  "writableContainerPaths": [
+    "/data/state",
+    "/data/backups",
+    "/etc/backup-manager/config"
+  ],
+  "platforms": {
+    "truenas": {
+      "uiBridge": "apps/truenas/frontend/platform.ts",
+      "displayName": "TrueNAS",
+      "tier": "B",
+      "storageMount": "/mnt/tank/backup-manager/backups",
+      "hostPaths": {
+        "state": "/mnt/tank/backup-manager/state",
+        "backups": "/mnt/tank/backup-manager/backups",
+        "config": "/mnt/tank/backup-manager/config",
+        "sshKey": "/mnt/tank/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/tank/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "tank is the pool name the defaults assume; docs/acceptance/truenas-provider-acceptance.md step 0.2 covers substituting a real pool.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The catalog entry and the paste-in compose both declare their own project network, created and destroyed with the deployment, whose only two members are these two containers. The Web UI container is the engine's sole possible direct TCP peer by topology, which is what apps/common/auth/local requires.",
+      "profile": "truenas",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "unraid": {
+      "uiBridge": "apps/unraid/frontend/platform.ts",
+      "displayName": "Unraid",
+      "tier": "B",
+      "storageMount": "/mnt/user/backups/backup-manager",
+      "hostPaths": {
+        "state": "/mnt/user/appdata/backup-manager/state",
+        "backups": "/mnt/user/backups/backup-manager",
+        "config": "/mnt/user/appdata/backup-manager/config",
+        "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; \u00a719.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
+      "trustForwardedHeaders": false,
+      "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
+      "profile": "unraid",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "openmediavault": {
+      "uiBridge": "apps/openmediavault/frontend/platform.ts",
+      "displayName": "OpenMediaVault",
+      "tier": "C",
+      "storageMount": "/srv/dev-disk-by-uuid/backups/backup-manager",
+      "hostPaths": {
+        "state": "/srv/dev-disk-by-uuid/appdata/backup-manager/state",
+        "backups": "/srv/dev-disk-by-uuid/backups/backup-manager",
+        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config",
+        "sshKey": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "dev-disk-by-uuid is a placeholder, deliberately matching what apps/openmediavault/frontend/platform.ts already declares: a real OMV system mounts data filesystems at /srv/dev-disk-by-uuid-<UUID>/, which differs per machine. The profile funnels every host path through the one DISK variable so the UUID is substituted exactly once, and the compose file derives the rest. Retained artifacts land in a dedicated child of the backups directory rather than in the directory itself, so step 0 of the acceptance procedure only ever creates and owns paths it created.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers.",
+      "profile": "openmediavault",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "proxmox": {
+      "uiBridge": "apps/proxmox/frontend/platform.ts",
+      "displayName": "Proxmox VE",
+      "tier": "C",
+      "storageMount": "/mnt/backup-manager/backups",
+      "hostPaths": {
+        "state": "/mnt/backup-manager/state",
+        "backups": "/mnt/backup-manager/backups",
+        "config": "/mnt/backup-manager/config",
+        "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. That share root is not the backup root: storageMount is its backups child, so private state, config and key material are siblings of the retained artifacts rather than parents of them, and step 0.6 of the acceptance procedure only ever recurses over the paths it created. How the sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers. The guest is dedicated to being the container host, so nothing else on the PVE cluster shares that network: the engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention.",
+      "profile": "proxmox",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "synology": {
+      "uiBridge": "apps/synology/frontend/platform.ts",
+      "displayName": "Synology DSM",
+      "tier": "B",
+      "storageMount": "/volume1/backup-manager",
+      "hostPaths": {
+        "state": "/volume1/docker/backup-manager/state",
+        "backups": "/volume1/backup-manager",
+        "config": "/volume1/docker/backup-manager/config",
+        "sshKey": "/volume1/docker/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/volume1/docker/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are the CONTAINER MANAGER project's paths (issue #169), not the .spk's. The .spk keeps its state under the DSM package FHS at /var/packages/BackupManager/{etc,var} and is untouched by this entry; the two are alternative ways to install the same release on the same NAS, and apps/synology/README.md says which to pick. /volume1/docker is Container Manager's own default project location and /volume1/backup-manager is the shared folder the .spk's data-share worker already asks DSM for, so an operator who has run either one recognises both. Substitute your own volume number.",
+      "profile": "synology",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      },
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The Container Manager project declares its own project network, created and destroyed with the project, whose only two members are these two containers. This is the same topology the other compose profiles have, and it is why the Container Manager path can trust forwarded headers where the .spk cannot: the .spk's engine binds loopback on the NAS itself, which any local process can reach."
+    },
+    "portainer": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge. A Portainer App Template has no payload to carry a bundle in, the canonical image has 347,956 bytes of headroom and a bundle costs roughly 352 KB, and a bridge would need this platform's id in the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. The deployment selects the generic profile and the shared UI describes it as the Docker Compose deployment it is.",
+      "displayName": "Portainer CE",
+      "tier": "B",
+      "storageMount": "/opt/backup-manager/backups",
+      "hostPaths": {
+        "state": "/opt/backup-manager/state",
+        "backups": "/opt/backup-manager/backups",
+        "config": "/opt/backup-manager/config",
+        "sshKey": "/opt/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/opt/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "Portainer runs on an ordinary Docker host, so there is no vendor share layout to follow. /opt/backup-manager is the default the App Template puts in front of an operator and is substitutable in one place, the template's env list, which distribution/packaging pins to compose/backup-manager.env. Retained artifacts land in a dedicated child rather than in the app root, so state, config and key material are siblings of the backup root and never parents of it.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The stack declares its own project network, created and destroyed with the stack, whose only two members are these two containers. Portainer itself is not on it. The engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention, which is what apps/common/auth/local requires.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "dockge": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge, and no packaging either: Dockge is supported by compatibility with the canonical Compose stack, so there is nothing in apps/dockge/ that could carry a bundle. The stack it imports is container/compose.yaml, which serves the bundle compiled into the binary.",
+      "displayName": "Dockge",
+      "tier": "C",
+      "storageMount": "/volume1/backups",
+      "hostPaths": {
+        "state": "/volume1/backup-manager/state",
+        "backups": "/volume1/backups",
+        "config": "/volume1/backup-manager/config",
+        "sshKey": "/volume1/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/volume1/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are container/.env.example's own defaults, not a Dockge layout, and that is the point: Dockge deploys the canonical stack unmodified, so its host paths ARE the canonical stack's. TestTheDockgeStackIsTheCanonicalStack pins these five to that file, so the import workflow in apps/dockge/README.md cannot drift from the runtime it imports.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "container/compose.yaml declares its own project network, created and destroyed with the deployment, whose only two members are these two containers, and it sets TRUST_FORWARDED_HEADERS on the engine for exactly that reason. Dockge changes nothing about the topology: it starts and stops the same stack.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "casaos": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge. A store compose file has no payload to carry a bundle in and the canonical image cannot carry a sixth one; a bridge would also need a CasaOS platform id in the /api/v1 contract, the capability table, the profile table and the bundle list, and this adapter's own contract says no CasaOS import may enter the Go core or the shared UI.",
+      "displayName": "CasaOS",
+      "tier": "B",
+      "storageMount": "/DATA/Backups/backup-manager",
+      "hostPaths": {
+        "state": "/DATA/AppData/backup-manager/state",
+        "backups": "/DATA/Backups/backup-manager",
+        "config": "/DATA/AppData/backup-manager/config",
+        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "CasaOS's own layout: private application data under /DATA/AppData, user data under /DATA. The backup root is deliberately outside /DATA/AppData, so an uninstall that offers to delete the app's data cannot reach a retained artifact. Literal, not variables: a CasaOS store install deploys the file as it stands with no .env beside it, so a ${VAR} here would be an unresolved reference at install time rather than a knob.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The store compose file declares its own project network, created and destroyed with the app, whose only two members are these two containers.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    },
+    "zimaos": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge, for the same three reasons CasaOS ships none: no payload, no room in the image, and a bridge would put a ZimaOS platform id into the Go core and the shared UI.",
+      "displayName": "ZimaOS",
+      "tier": "B",
+      "storageMount": "/DATA/Backups/backup-manager",
+      "hostPaths": {
+        "state": "/DATA/AppData/backup-manager/state",
+        "backups": "/DATA/Backups/backup-manager",
+        "config": "/DATA/AppData/backup-manager/config",
+        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "The same five paths CasaOS uses, because ZimaOS is built on CasaOS and lays /DATA out the same way. They are identical on purpose and the two adapters are one runtime under two store registrations; inventing a difference to justify the second directory would be worse than saying so.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The store compose file declares its own project network, created and destroyed with the app, whose only two members are these two containers.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.2.0"
+      }
+    }
+  }
+}

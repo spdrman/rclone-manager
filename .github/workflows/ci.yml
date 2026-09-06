@@ -1,16 +1,21 @@
 name: CI
 
-# Builds, vets, and tests every module on every push and pull request, keeps
-# the two UGREEN cross-compile targets honest with a real compile check, and
-# enforces the core/apps/ui-shared repository-structure boundary
+# Builds, vets, and tests every module, keeps the two UGREEN cross-compile
+# targets honest with a real compile check, and enforces the
+# core/apps/ui-shared repository-structure boundary
 # (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's dependency
 # graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
 # docs/rclone-upgrade.md), so the Go module and build caches are
 # load-bearing here, not a nice-to-have.
+#
+# NOT auto-triggered on push or pull_request. scripts/ci-local.sh mirrors
+# every job below and runs via .husky/pre-commit on every commit instead —
+# see that script's header for why. This workflow is kept for occasional
+# manual runs (workflow_dispatch, from the Actions tab) when a second,
+# independent-environment signal is worth the Actions minutes.
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -32,6 +37,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # TestShippedMigrationsMatchWhatWasPublished (#396) anchors every
+          # shipped migration to the bytes origin/release published, because
+          # a checksum table living beside the files it describes can be
+          # edited in step with them and the whole suite still goes green. A
+          # default single-commit shallow clone carries no remote branches
+          # and no tags, so origin/release is not there to ask, and that test
+          # refuses rather than passing on a check it could not run. Full
+          # history is what gives it something to anchor to.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -53,7 +68,13 @@ jobs:
 
       - name: Test
         working-directory: core
-        run: go test ./...
+        # -race, the same as scripts/ci-local.sh's own step for this
+        # module (#417). This workflow is workflow_dispatch-only and that
+        # script is the gate that actually runs, but the script's whole
+        # claim is that it mirrors this file job for job, and a mirror
+        # that runs a weaker check than the thing it mirrors is worse
+        # than no mirror.
+        run: go test -race ./...
 
   apps-common-build-vet-test:
     name: apps/common build, vet, test
@@ -72,6 +93,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # packaging's release-manifest checks ask git whether the commit
+          # container/release-manifest.json pins is an ancestor of HEAD
+          # (#174). In actions/checkout's default single-commit shallow
+          # clone that commit is not an object at all, so git exits 128 and
+          # the check correctly reports that it could not decide, which is
+          # a red job either way. Full history is what makes the question
+          # answerable.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -90,7 +120,142 @@ jobs:
 
       - name: Test
         working-directory: apps/common
-        run: go test ./...
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
+        run: go test -race ./...
+
+  distribution-build-vet-test:
+    name: distribution build, vet, test
+    runs-on: ubuntu-latest
+    # The distribution layer's own module (issue #165). It used to be
+    # apps/common/packaging, inside the module that also holds the /api/v1
+    # host and the shared authentication service, which meant the layer
+    # boundary between "shared application code" and "packaging metadata"
+    # was a directory name. It is a module now, so the dependency direction
+    # EPIC B #81 requires (core/app never depends on distribution) is
+    # enforced by the module graph rather than only by a scanner.
+    #
+    # This job carries Phase 4's cross-provider conformance suite, including
+    # the per-capability matrix with its completeness and staleness guards,
+    # so it is load-bearing rather than a formality.
+    #
+    # GOWORK=off, matching every other module job: distribution/go.mod
+    # depends on nothing in this repository, and that is a claim worth
+    # holding it to rather than letting go.work paper over.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: distribution/go.mod
+
+      - name: Build
+        working-directory: distribution
+        run: go build ./...
+
+      - name: Vet
+        working-directory: distribution
+        run: go vet ./...
+
+      - name: Test
+        working-directory: distribution
+        # Every package but packaging under -race, and packaging without
+        # it, exactly as scripts/ci-local.sh splits the same module
+        # (#417): packaging is a static-analysis suite with no goroutine
+        # anywhere in it, so the detector has nothing to find there and
+        # multiplies the most CPU-bound package in the repository.
+        run: |
+          go test -race $(go list ./... | grep -v '/packaging$')
+          go test ./packaging/
+
+  apps-generic-build-vet-test:
+    name: apps/generic build, vet, test
+    runs-on: ubuntu-latest
+    # GOWORK=off, matching apps-common-build-vet-test above: apps/generic
+    # is the generic Web host's own binary (issue #82/B4.1), wiring
+    # core/service + apps/common/webhost + apps/common/auth/local
+    # together — its own go.mod's replace directives, not go.work's `use`
+    # list, are what have to resolve correctly here.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/generic/go.mod
+
+      - name: Build
+        working-directory: apps/generic
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/generic
+        run: go vet ./...
+
+      - name: Test
+        working-directory: apps/generic
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
+        run: go test -race ./...
+
+  apps-synology-build-vet-test:
+    name: apps/synology build, vet, test
+    runs-on: ubuntu-latest
+    # GOWORK=off, matching every other module job: apps/synology has no
+    # dependencies at all (see its go.mod's own comment) and must keep
+    # not having any — it ships no Go binary into the package, only the
+    # machinery that wraps the release binaries and checks them, so a
+    # dependency appearing here would mean something Synology-specific
+    # had started linking against core/ or apps/common.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/synology/go.mod
+
+      - name: Build
+        working-directory: apps/synology
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/synology
+        run: go vet ./...
+
+      # This is where the SPK conformance suite runs: the
+      # documented-layout check, the INFO field check, the bundled-secret
+      # scan, the unsafe-delete scan over the shipped lifecycle scripts,
+      # and the binary-hash parity check (§3.7) exercised against
+      # synthetic fixtures.
+      #
+      # Synthetic, and worth being exact about: nothing in this job
+      # cross-compiles the release binaries, builds a .spk, or runs
+      # `spkctl verify` against container/release-manifest.json. Every
+      # test packs binaries it synthesised itself and checks them against
+      # a manifest hashed from those same files, so what is proven here is
+      # that the packer and the verifier agree, not that any package
+      # carries the release digest. Parity against a real artifact is
+      # blocked on #174 and is checked by hand in
+      # docs/acceptance/synology-dsm-package-lifecycle.md step 1.6.
+      - name: Test
+        working-directory: apps/synology
+        # -race, as in scripts/ci-local.sh's step for this module (#417).
+        run: go test -race ./...
 
   apps-ugos-backend-build-vet-test:
     name: apps/ugos/backend build, vet, test
@@ -202,6 +367,17 @@ jobs:
         working-directory: core
         run: go build ./...
 
+      # The canonical runtime's OTHER half (issue #167). core/ alone proves
+      # the engine library cross-compiles; it says nothing about the binary
+      # that actually carries `serve`, `serve-ui` and the runtime-profile
+      # selector, which lives in apps/generic and is a different module with
+      # a different dependency set. "The same source revision produces
+      # linux/amd64 and linux/arm64" is a claim about the whole image, so
+      # both modules have to hold for both architectures.
+      - name: Compile the web host for linux/${{ matrix.goarch }}, CGO_ENABLED=0
+        working-directory: apps/generic
+        run: go build ./...
+
   frontend:
     name: ui/shared typecheck, test, build
     runs-on: ubuntu-latest
@@ -210,7 +386,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -258,7 +434,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -283,8 +459,81 @@ jobs:
         working-directory: apps/common/tests
         run: npm test
 
+  gofmt:
+    name: every tracked Go file is gofmt-clean (#417)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+
+      # Its own job rather than a step inside a module's, because it is not
+      # a module's question. It reads every tracked .go file in the
+      # repository, which is the only thing that reaches the two that live
+      # outside every module and outside go.work
+      # (scripts/api/gen-bindings.go, scripts/architecture/ownership.go).
+      # One of those two was the unformatted one that started #417's
+      # formatting half. Half a second on the whole repository.
+      - name: gofmt sweep
+        run: bash scripts/format/check-gofmt.sh
+
+      # Two things that belong with the sweep are deliberately NOT here,
+      # and both are statements about this workflow rather than about the
+      # checks. scripts/format/selftest.sh and
+      # scripts/architecture/check-unowned-go.sh (which vets and lints the
+      # two Go files that live outside every module) both need
+      # golangci-lint, and this workflow runs no golangci-lint at all, in
+      # any job: linting lives entirely in scripts/ci-local.sh, which is
+      # the gate that actually runs and which runs both on every non-FAST
+      # run. Installing a linter here purely to exercise a config nothing
+      # here uses would be the wrong shape, and pretending the gap is not
+      # there would be worse.
+
+  api-contract:
+    name: /api/v1 contract drift (#166)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # selftest.sh copies the working tree into throwaway git
+          # repositories and runs `go test` in them; it needs real history
+          # no more than the copy does, but the drift check itself resolves
+          # the repository root through git, so a usable clone is required.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: core/go.sum
+
+      - name: git config (the self-test commits into throwaway repositories)
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "CI"
+
+      # The drift gate proper: api/v1/openapi.json is authoritative, and
+      # both checked-in bindings have to be exactly what it generates.
+      # Nothing here builds the JavaScript workspace, deliberately: the
+      # TypeScript binding is generated by the same Go program as the Go
+      # one, so its drift is caught with no npm install at all. What the
+      # frontend job adds on top is whether ui/shared actually CONSUMES the
+      # generated module (contract.conformance.test.ts), which is a
+      # different question.
+      - name: the generated Go and TypeScript bindings match the contract
+        run: bash scripts/api/check-contract-drift.sh
+
+      - name: the contract gates can actually fail (mutation self-test)
+        run: bash scripts/api/selftest.sh
+
   dependency-rules:
-    name: repository-structure dependency rules (§7.1)
+    name: repository-structure dependency rules (§7.1, three layers per #165)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -303,7 +552,7 @@ jobs:
           cache-dependency-path: core/go.sum
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -314,14 +563,46 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
 
-      - name: core/ has zero imports from apps/ (static check)
+      # The three-layer manifest (issue #165) comes first: every check
+      # below reads it to decide which layer a path is in, so a hole in it
+      # would make all of them fail open.
+      - name: every tracked file is classified into a layer
+        run: bash scripts/architecture/check-layer-manifest.sh
+
+      - name: architecture rules can actually fail (mutation self-test)
+        run: bash scripts/architecture/selftest.sh
+
+      - name: the release-manifest generator still refuses what #174 needs it to
+        run: bash scripts/tests/record-release-hashes-guards.test.sh
+
+      - name: core/app imports neither platform, distribution nor a NAS SDK (static check)
         run: bash scripts/architecture/check-core-dependency-rule.sh
+
+      - name: no runtime-platform or distribution package owns a core concept
+        run: bash scripts/architecture/check-layer-ownership.sh
+
+      - name: the shared UI imports no provider SDK (full Phase 6 platform list)
+        run: bash scripts/architecture/check-ui-shared-provider-imports.sh
 
       - name: core/ builds and tests with apps/ deleted entirely
         run: bash scripts/architecture/verify-core-without-apps.sh
+
+      - name: core and the generic application build and test with the distribution adapter tree deleted
+        run: bash scripts/architecture/verify-core-without-distribution.sh
 
       - name: ui/shared builds with every provider SDK directory removed
         run: bash scripts/architecture/verify-ui-shared-without-provider-sdks.sh
 
       - name: apps/ugos/ is removable without breaking core or ui/shared
         run: bash scripts/architecture/verify-ugos-removable.sh
+
+      # The performance gate's presence half only (issue #165). It takes no
+      # measurements, so it is safe on a shared runner; compare mode is
+      # deliberately not here, because EPIC B #81 allows the measurements to
+      # run on a dedicated benchmark environment rather than blocking
+      # ordinary CI on noisy numbers.
+      - name: a complete performance baseline is checked in for the designated host
+        run: bash scripts/perf/check-baseline.sh
+
+      - name: the performance gate can actually fail (mutation self-test)
+        run: bash scripts/perf/selftest.sh

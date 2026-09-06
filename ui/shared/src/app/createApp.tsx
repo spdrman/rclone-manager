@@ -1,3 +1,19 @@
+/**
+ * The composition root: where the provider tree is assembled and every
+ * app-wide choice is made once.
+ *
+ * The nesting order below is load-bearing rather than incidental. The
+ * error boundary is outermost so it can still render when the thing that
+ * threw is a provider itself, the platform provider comes before the API
+ * one because auth is what decides whether anything under it should
+ * render at all, and the router is innermost because it is the only part
+ * that pages read on every navigation.
+ *
+ * The API default is the one place the mock is chosen, keyed on the dev
+ * build. A provider shell that wants something else passes it, which is
+ * how the browser suite drives real screens against fixtures without this
+ * file knowing that is happening.
+ */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";

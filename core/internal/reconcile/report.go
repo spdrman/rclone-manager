@@ -7,6 +7,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// A pass produces two kinds of outcome, and this file's whole job is
+// keeping them from sharing a channel.
+//
+// A Finding is something reconciliation concluded about an artifact,
+// including the conclusion that nothing needed doing. An ArtifactError is
+// reconciliation failing to conclude anything at all. Merged into one list,
+// a run that could not stat half a backup set would be indistinguishable
+// from a run that found half a backup set consistent, and only one of those
+// two is reassuring.
+//
+// One error also never ends the pass. This runs at startup over every
+// artifact in a set, and a single unreadable row must not stop the other
+// ninety-nine from being brought back in line, so Report carries both lists
+// and leaves the caller to decide what a partial pass is worth.
+
 // Finding is what Reconcile decided about one artifact already in the
 // journal. From is the lifecycle state I observed when I examined this
 // artifact; To is the state it ended at, which equals From whenever I took

@@ -10,21 +10,26 @@ package lifecycle
 //
 //	COMMITTED -> REMOTE_DELETE_PENDING -> COMPLETE
 //
-// and, per FR-15, it revalidates four things immediately before issuing the
+// and, per FR-15, it revalidates these immediately before issuing the
 // delete, from scratch, every single time, never trusting that an earlier
 // pass already checked them:
 //
 //  1. the journal artifact is COMMITTED or REMOTE_DELETE_PENDING (the only
 //     two states this transition may legally start from, see machine.go);
-//  2. the expected local final file exists;
-//  3. its local identity/size is consistent with what the journal recorded;
-//  4. the remote object still corresponds to what was captured at
+//  2. the artifact has never been reinstated out of quarantine (issue
+//     #220). This one is not in FR-15's original list; it is the price the
+//     state machine's reinstatement edges pay for existing, and it is
+//     permanent rather than a delay. See the check itself for the full
+//     argument;
+//  3. the expected local final file exists;
+//  4. its local identity/size is consistent with what the journal recorded;
+//  5. the remote object still corresponds to what was captured at
 //     discovery, via model.CompareIdentity (FR-16). This package does not
 //     reimplement that comparison; it only supplies the two RemoteIdentity
 //     values to compare and honours model.IdentityComparison.Preserve().
 //
 // Any one of these failing refuses the delete. Nothing here ever calls
-// transport.Transport.DeleteRemote except after all four hold.
+// transport.Transport.DeleteRemote except after all of them hold.
 //
 // # Why this usually refuses, and why that is not a bug
 //
@@ -78,6 +83,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -110,14 +116,66 @@ type DeleteRemoteRequest struct {
 	// a caller retrying purely because the process restarted reuses the
 	// same one it used before.
 	AttemptKey string
+
+	// CompletionStrategy is the backup set's FR-8 completion strategy,
+	// "rename", "marker" or "stable" (config.Completion.Strategy). It is
+	// REQUIRED, and an empty or unrecognised value is refused, not waved
+	// through: see the "stable completion safety delay" revalidation
+	// below for what this decides.
+	//
+	// It is a plain string, and DeleteSafetyDelay a plain time.Duration,
+	// rather than the config.Completion the two are read out of, because
+	// of the failure mode the first version of this field had. Embedding
+	// the whole struct made the gate's default position "no gate": a
+	// caller that never filled the field in got Strategy == "" and skipped
+	// the check entirely, and three of the four call sites in this
+	// repository, the crash matrix included, did exactly that. Two named
+	// values a caller has to supply on purpose cannot be forgotten
+	// quietly, and refusing the zero value means the worst a forgetful
+	// caller can now do is preserve a remote copy.
+	CompletionStrategy string
+
+	// DeleteSafetyDelay is WP3.2's additional deletion-safety delay
+	// (docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2), read
+	// from config.Completion.DeleteSafetyDelay. It is required, and must
+	// be positive, when CompletionStrategy is "stable", and is ignored
+	// entirely otherwise. config.Validate fills in
+	// config.DefaultDeleteSafetyDelay for any stable backup set that does
+	// not set one, so a validated config always has a positive value here.
+	DeleteSafetyDelay time.Duration
 }
 
+// The three suffixes DeleteRemote appends to a caller's AttemptKey, one per
+// durable write it can make.
+//
+// They exist because the journal replays a repeated key as the same logical
+// attempt, so the three writes of one delete attempt have to be told apart
+// by something. Deriving them from the caller's key rather than generating
+// them means a retry of the same attempt lands on the same three keys and
+// converges, which is what makes a crash anywhere in this sequence safe to
+// resume. They are constants rather than inline strings so a refusal write
+// and the test asserting on it cannot drift.
 const (
 	deleteAttemptTagIntent   = "remote-delete-pending"
 	deleteAttemptTagRefused  = "remote-delete-refused"
 	deleteAttemptTagComplete = "remote-delete-complete"
 )
 
+// stableSafetyDelayCheck is the RemoteDeleteRefusalError.Check value every
+// WP3.2 stable-completion refusal carries, named once so a caller matching
+// on it and the tests asserting it cannot drift apart.
+const stableSafetyDelayCheck = "stable completion safety delay"
+
+// reinstatementCheck is the RemoteDeleteRefusalError.Check value every
+// issue #220 reinstatement refusal carries, named once so a caller matching
+// on it and the tests asserting it cannot drift apart.
+const reinstatementCheck = "quarantine reinstatement"
+
+// key derives one of this attempt's three journal keys from the caller's
+// AttemptKey. It is a method rather than a bare concatenation at each call
+// site so the separator and the ordering are stated once: a key built the
+// other way round, or with a different separator, would not be recognised as
+// a replay of the attempt it belongs to.
 func (r DeleteRemoteRequest) key(tag string) string {
 	return r.AttemptKey + ":" + tag
 }
@@ -134,10 +192,12 @@ func (r DeleteRemoteRequest) key(tag string) string {
 type RemoteDeleteRefusalError struct {
 	Artifact model.ArtifactID
 
-	// Check names which FR-15 revalidation check refused the delete:
-	// "journal state", "local file", "remote identity", or "remote
-	// delete" (the transport call itself failed after every check
-	// upstream of it passed).
+	// Check names which revalidation check refused the delete:
+	// "journal state", "local file", "remote identity" or "remote delete"
+	// (FR-15's own four, the last being the transport call itself failing
+	// after every check upstream of it passed), plus WP3.2's two,
+	// "stable completion safety delay" and "unknown completion strategy",
+	// plus issue #220's "quarantine reinstatement".
 	Check string
 
 	// Reason is a short, human-readable explanation suitable for a log
@@ -158,6 +218,15 @@ type RemoteDeleteRefusalError struct {
 	Confidence    model.Confidence
 }
 
+// Error renders the comparison fields only when there was a comparison.
+//
+// The two forms exist because a verdict and a confidence attached to a
+// refusal that never compared anything would be zero values printed as if
+// they meant something, and this is the one refusal in the product an
+// operator is expected to see routinely rather than during an incident. A
+// line reading verdict= and confidence= with empty values on every cycle
+// against a hardened SFTP account is how a message people should read
+// becomes one they filter out.
 func (e *RemoteDeleteRefusalError) Error() string {
 	if e.HasComparison {
 		return fmt.Sprintf(
@@ -223,6 +292,52 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 		}
 	}
 
+	// --- revalidation (issue #220): this artifact has never been
+	// reinstated out of quarantine.
+	//
+	// COMMITTED is the only state a remote delete can be reached from, so
+	// an edge that returns an artifact from quarantine to COMMITTED is
+	// precisely where re-trusting one could turn into destroying the only
+	// other copy of it. This check is what stops that, and it is what
+	// makes those edges safe to declare at all: an artifact that was ever
+	// re-trusted after being distrusted keeps its remote source forever,
+	// and releasing that source is an operator's decision made outside
+	// this manager, not something this gate will ever authorise.
+	//
+	// It is deliberately permanent rather than a delay, and deliberately
+	// not conditional on how good the evidence was. The whole reason a
+	// reinstatement is allowed is that the evidence available locally was
+	// convincing; that is a different and weaker thing than the FR-13
+	// verification chain the artifact passed on its way to COMMITTED the
+	// first time, and it is not enough to authorise destroying the last
+	// remaining source. Preserving a remote copy costs storage. Deleting
+	// the source of an artifact that should not have been re-trusted costs
+	// the backup.
+	//
+	// The fact is read from the append-only state_transitions log (see
+	// state.Journal.LastTransition), never from a column on the artifacts
+	// row: the row is overwritten by every later write, and this has to
+	// survive every one of them. The edges consulted are derived from the
+	// Transitions table itself (ReinstatementEdges), so a future exit from
+	// quarantine into a durable state is covered here the moment it is
+	// declared.
+	//
+	// Like the checks below it this is pure and side-effect free, and it
+	// runs before any journal write, so a refusal leaves no mark of its
+	// own and the artifact stays exactly where it was.
+	if at, reinstated, err := lastReinstatement(ctx, d, req.Artifact); err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: DeleteRemote: reading the transition log for %s: %w", req.Artifact, err)
+	} else if reinstated {
+		return state.Outcome{}, &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    reinstatementCheck,
+			Reason: fmt.Sprintf(
+				"this artifact was reinstated out of quarantine at %s, so it was distrusted once and re-trusted on a local re-check rather than on the full verification it passed originally; a reinstated artifact never authorises deleting its remote source, and this refusal is permanent",
+				at.UTC().Format(time.RFC3339),
+			),
+		}
+	}
+
 	// --- revalidation 2 & 3: the expected local final file exists and its
 	// size/identity is consistent with what the journal recorded. This is
 	// a pure, side-effect-free filesystem check, so it runs before any
@@ -233,6 +348,49 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 			Artifact: req.Artifact,
 			Check:    "local file",
 			Reason:   err.Error(),
+		}
+	}
+
+	// --- revalidation (WP3.2): a "stable" completion strategy only ever
+	// confirmed a size/mtime heuristic, never a producer completion signal
+	// the way "rename"/"marker" do (see internal/discovery/complete.go),
+	// so it may not be treated as equivalent to them at this gate without
+	// an additional deletion-safety delay having elapsed since this
+	// artifact last reached a confirmed-good journal state.
+	//
+	// An unrecognised strategy, the empty string included, is refused
+	// rather than waved through. This gate decides whether the only other
+	// copy of an artifact may be destroyed, so its default position has to
+	// be "do not delete", not "no gate": a caller that has not said which
+	// completion signal this artifact carries has not given this function
+	// enough to authorise anything.
+	//
+	// Like the local-file check just above, everything here is a pure,
+	// side-effect-free comparison that runs before any journal write, so a
+	// refusal never leaves a mark of its own. The practical effect of one
+	// is exactly what WP3.2's behavioral contract asks for: the remote
+	// source is preserved (nothing here calls the transport), and the
+	// artifact is left exactly where internal/revalidate's own SelectDue
+	// already treats COMMITTED/REMOTE_DELETE_PENDING artifacts as eligible
+	// for a scheduled re-check, so an operator with revalidation configured
+	// for this backup set gets it re-examined without this package having
+	// to teach internal/revalidate anything new about WP3.2 at all.
+	switch req.CompletionStrategy {
+	case "rename", "marker":
+		// A producer completion signal was observed at discovery. FR-15's
+		// four checks above are the whole gate for these.
+	case "stable":
+		if err := checkStableSafetyDelay(ctx, d, req); err != nil {
+			return state.Outcome{}, err
+		}
+	default:
+		return state.Outcome{}, &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    "unknown completion strategy",
+			Reason: fmt.Sprintf(
+				"completion strategy %q is not one this gate knows how to reason about; it must be \"rename\", \"marker\" or \"stable\" (FR-8), and an unrecognised one is refused rather than treated as producer-confirmed",
+				req.CompletionStrategy,
+			),
 		}
 	}
 
@@ -311,6 +469,29 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 	return outcome, nil
 }
 
+// lastReinstatement reports whether artifact has ever been reinstated out
+// of quarantine, and when it most recently was.
+//
+// It asks the journal once per declared reinstatement edge rather than
+// interpreting the artifact's current state, because the current state
+// cannot answer the question: a reinstated artifact and one that was never
+// distrusted are both simply COMMITTED. Only the append-only log still
+// holds which of the two happened.
+func lastReinstatement(ctx context.Context, d Deps, artifact model.ArtifactID) (time.Time, bool, error) {
+	var newest time.Time
+	found := false
+	for _, edge := range reinstatementEdges {
+		at, ok, err := d.Journal.LastTransition(ctx, artifact, string(edge.From), string(edge.To))
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		if ok && (!found || at.After(newest)) {
+			newest, found = at, true
+		}
+	}
+	return newest, found, nil
+}
+
 // refuseRemoteIdentity builds the *RemoteDeleteRefusalError for a
 // remote-identity failure and, since intent to delete has already been
 // durably recorded by the time this runs, persists the refusal into the
@@ -353,6 +534,94 @@ func persistDeleteOutcome(ctx context.Context, d Deps, req DeleteRemoteRequest, 
 	return err
 }
 
+// checkStableSafetyDelay is WP3.2's extra gate for a "stable" backup set:
+// enough time must have passed since the artifact last reached a
+// confirmed-good state for a size/mtime heuristic to stand in for a
+// producer completion signal. It returns a *RemoteDeleteRefusalError when
+// it has not, and never writes anything.
+//
+// # Why the clock is the COMMITTED transition and not rec.UpdatedAt
+//
+// rec.UpdatedAt looks like the obvious answer and is the wrong one. The
+// artifacts row's updated_at is stamped by EVERY transition write
+// (internal/state/journal.go's updateArtifact), including three that happen
+// on a completely routine cadence to an artifact this gate is holding back:
+//
+//   - internal/revalidate's scheduled re-check writes a same-state
+//     COMMITTED -> COMMITTED pass every time it passes, so any backup set
+//     whose revalidation.interval is shorter than its delete_safety_delay
+//     would have the clock reset before the delay could ever elapse;
+//   - this function's own success path is followed immediately by the
+//     COMMITTED -> REMOTE_DELETE_PENDING intent write below, so a transport
+//     failure after that point would restart the clock and buy the retry
+//     another full delay;
+//   - refuseRemoteIdentity records a same-state REMOTE_DELETE_PENDING pass,
+//     and this package's own doc calls an identity refusal the routine
+//     outcome against the hardened SFTP account docs/ssh-setup.md
+//     recommends, not a rare one.
+//
+// All three fail in the safe direction, nothing gets deleted, and that is
+// what makes them dangerous: the gate would simply never open, the remote
+// copy would never be reclaimed, the artifact would stay healthy, and the
+// only signal an operator would get is a refusal that counts down and then
+// silently starts over. A safety delay that can never elapse is not a
+// safety delay.
+//
+// Journal.LastEnteredAt asks the append-only transition log the question
+// this gate actually has, "when did this artifact last BECOME committed",
+// and ignores same-state writes, so none of the three above move it. It
+// needs no schema change: the log already records occurred_at per
+// transition and is idempotency-keyed, so a replayed transition reuses its
+// original row rather than stamping a new time.
+//
+// An artifact with no recorded COMMITTED entry at all is refused, not
+// admitted. That is the same fail-closed reading as the unknown-strategy
+// case: no evidence is not evidence of age.
+func checkStableSafetyDelay(ctx context.Context, d Deps, req DeleteRemoteRequest) error {
+	if req.DeleteSafetyDelay <= 0 {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason: fmt.Sprintf(
+				"completion strategy \"stable\" requires a positive deletion-safety delay and this request carries %s; config.Validate fills in %s for a stable backup set that does not set one, so a non-positive value here means the caller built this request without one",
+				req.DeleteSafetyDelay, config.DefaultDeleteSafetyDelay,
+			),
+		}
+	}
+
+	confirmedAt, ok, err := d.Journal.LastEnteredAt(ctx, req.Artifact, string(Committed))
+	if err != nil {
+		return fmt.Errorf("lifecycle: reading the last COMMITTED transition for %s: %w", req.Artifact, err)
+	}
+	if !ok {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason:   "completion strategy \"stable\" needs a recorded COMMITTED transition to measure its deletion-safety delay from, and this artifact's journal has none",
+		}
+	}
+
+	// Inclusive at the boundary: elapsed == delay admits. "Wait at least
+	// this long" is what the key is documented as meaning, and a delay is
+	// satisfied the instant it has been served, not one tick afterwards.
+	// Pinned by its own subtests either side of the boundary in
+	// remotedelete_test.go, because which side is inclusive on a gate that
+	// authorises destroying data should never be something a reader has to
+	// infer from the operator.
+	elapsed := d.now().Sub(confirmedAt)
+	if elapsed < req.DeleteSafetyDelay {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason: fmt.Sprintf(
+				"completion strategy \"stable\" only confirms size/mtime stability, not producer-confirmed completion; only %s of the required %s deletion-safety delay has elapsed since this artifact last reached a confirmed-good state",
+				elapsed.Round(time.Second), req.DeleteSafetyDelay,
+			),
+		}
+	}
+	return nil
+}
+
 // verifyLocalFinal is FR-15's second and third revalidation: the expected
 // local final file exists, and its size (and, when a local hash was
 // recorded at VERIFIED, its content hash) is consistent with what the
@@ -362,16 +631,44 @@ func persistDeleteOutcome(ctx context.Context, d Deps, req DeleteRemoteRequest, 
 // file was correct at the moment it was durably renamed, not that it still
 // is now.
 func verifyLocalFinal(rec state.Record) error {
-	if rec.LocalPath == "" {
+	// The path comes from the artifact's own ACTIVE local placement (EPIC
+	// E, FR-29), not from rec.LocalPath directly. In Phase 1 the two are
+	// the same value for every artifact that has one, so this changes
+	// nothing; what it changes is where the answer comes from when an
+	// artifact's only copy is on a storage medium, which is a state this
+	// check must refuse rather than misread as a missing file.
+	localPath, ok := rec.ReadableLocalPath()
+	if !ok {
+		// A refusal either way, because this gate authorises destroying
+		// the remote source and FR-15 requires the local copy to be
+		// CONFIRMED, not assumed. What differs is what the refusal says.
+		// An artifact whose copy is on a medium is not an artifact whose
+		// file went missing, and an operator reading "no local final path
+		// is recorded" would go looking for a lost file that was never
+		// lost. FR-30 makes only COMPLETE artifacts move-eligible, so this
+		// shape should not reach a delete at all; if it does, the reason
+		// has to say so rather than misread it.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			ids := make([]string, 0, len(mediums))
+			for _, p := range mediums {
+				ids = append(ids, fmt.Sprintf("%q", p.Medium))
+			}
+			return fmt.Errorf(
+				"this artifact's durable copy is on storage medium %s, not on local disk; FR-15's pre-delete check confirms the LOCAL copy and cannot read a medium, and a source is never deleted against a copy this gate cannot read (FR-30 moves only COMPLETE artifacts, so a %s artifact on a medium needs an operator to look)",
+				strings.Join(ids, ", "), rec.State)
+		}
+		if len(rec.Placements) > 0 {
+			return fmt.Errorf("no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING")
+		}
 		return fmt.Errorf("no local final path is recorded for this artifact")
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("expected local final file %s: %w", rec.LocalPath, err)
+		return fmt.Errorf("expected local final file %s: %w", localPath, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("expected local final file %s is a directory, not a file", rec.LocalPath)
+		return fmt.Errorf("expected local final file %s is a directory, not a file", localPath)
 	}
 
 	expected, source, err := expectedLocalSize(rec)
@@ -379,19 +676,19 @@ func verifyLocalFinal(rec state.Record) error {
 		return err
 	}
 	if info.Size() != expected {
-		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)
+		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", localPath, info.Size(), expected, source)
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return fmt.Errorf("cannot revalidate local identity: unsupported recorded local hash algorithm %q", rec.LocalHashAlg)
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(localPath)
 		if err != nil {
-			return fmt.Errorf("hashing local final file %s: %w", rec.LocalPath, err)
+			return fmt.Errorf("hashing local final file %s: %w", localPath, err)
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)
+			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", localPath, sum, rec.LocalHashAlg, rec.LocalHash)
 		}
 	}
 
@@ -422,6 +719,14 @@ func expectedLocalSize(rec state.Record) (size int64, source string, err error) 
 	}
 }
 
+// sha256File reads path in full and returns its SHA-256, in hex.
+//
+// This is the same ten lines internal/reconcile's sha256File and
+// internal/revalidate's recomputeLocalHash already have, kept as a third
+// copy on the convention this tree already follows: a package that needs to
+// hash a file keeps its own reader rather than growing a dependency on
+// another package for it. See recomputeLocalHash's comment, which is where
+// that convention is written down.
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

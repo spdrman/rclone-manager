@@ -1,0 +1,254 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { ApiProvider } from "@shared/api/ApiContext";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
+import { PlatformProvider } from "@shared/platform/PlatformContext";
+import { genericBridge } from "../../../../apps/generic/frontend/platform";
+import { graph, resetGraphForTests } from "@shared/state/graph";
+import { setsNode, versionNode } from "@shared/state/appNodes";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
+import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
+import { LoginPage } from "@shared/auth/LoginPage";
+import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
+import { SettingsPage } from "@shared/pages/SettingsPage";
+import { ActivityPage } from "@shared/pages/ActivityPage";
+import { BackupsPage } from "@shared/pages/BackupsPage";
+import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
+import { EDIT_FIELDS } from "@shared/pages/backupSetEditFields";
+import { backupSetPath } from "@shared/utilities/routes";
+import type { BackupSet } from "@shared/types/backup";
+import type { VersionInfo } from "@shared/types/operation";
+
+/**
+ * Issue #278: the page wiring, as distinct from the component.
+ *
+ * FieldHelp's own suite proves the pop-up behaves. This proves each field
+ * is actually attached to one, and to the RIGHT one: the failure this
+ * catches is a `help` prop dropped in a refactor, or an aria-describedby
+ * left off a control so the copy is drawn on screen and never announced.
+ * Both leave a page that looks finished, which is why they are asserted
+ * rather than reviewed.
+ *
+ * The assertion goes through the control's own accessible description
+ * rather than through the rendered pop-up, because that is the property
+ * that has to hold: a description a screen reader reads, whether or not
+ * anything is on screen.
+ */
+
+const VERSION: VersionInfo = {
+  api: "v1", service: "1.3.0", buildCommit: "9f4c1ab", goVersion: "go1.27.0",
+  engine: "1.68.2", configRevision: "cfg_9f4c1ab", ready: true, compatible: true
+};
+
+/** The control names its copy, all three parts of it, and nothing that is
+ *  not copy.
+ *
+ *  aria-describedby is an id LIST, and since #344 the password fields use
+ *  it as one: their validation warnings are referenced there rather than
+ *  left inside the field's <label> to be swept into its name. Resolving it
+ *  with a single getElementById worked only for as long as every control
+ *  named exactly one node, and would have started returning null the first
+ *  time a test rendered one of those warnings, which reads as "the help
+ *  copy is gone" rather than as "the helper cannot parse a list". */
+function expectHelp(control: HTMLElement, copy: FieldHelpCopy) {
+  const describedBy = control.getAttribute("aria-describedby");
+  expect(describedBy, "the control carries no aria-describedby").toBeTruthy();
+
+  const ids = (describedBy ?? "").split(/\s+/).filter(Boolean);
+  const described = ids.map((id) => document.getElementById(id));
+  expect(described.every((n) => n !== null), "aria-describedby points at nothing").toBe(true);
+
+  const text = described.map((n) => n?.textContent ?? "").join(" ");
+  expect(text).toContain(copy.what);
+  expect(text).toContain(copy.example);
+  expect(text).toContain(copy.effect);
+}
+
+function seedSets(sets: BackupSet[]) {
+  act(() => {
+    graph.commit("test/seed-sets", (tx) => tx.set(setsNode, { data: sets, error: null, loading: false }));
+  });
+}
+
+describe("every explained field is wired to its own copy", () => {
+  afterEach(() => {
+    resetMockFixtures();
+    cleanup();
+    resetGraphForTests();
+  });
+
+  it("on the sign-in form", () => {
+    render(
+      <MemoryRouter>
+        <ApiProvider api={createMockApi()}>
+          <LoginPage onSignedIn={() => {}} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+
+    expectHelp(screen.getByLabelText("Username"), FIELD_HELP.loginUsername);
+    expectHelp(screen.getByLabelText("Password"), FIELD_HELP.loginPassword);
+  });
+
+  it("on first-run enrolment", () => {
+    render(
+      <MemoryRouter>
+        <ApiProvider api={createMockApi()}>
+          <EnrollmentPage onEnrolled={() => {}} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+
+    expectHelp(screen.getByLabelText("Username"), FIELD_HELP.enrollUsername);
+    expectHelp(screen.getByLabelText("Password"), FIELD_HELP.enrollPassword);
+    expectHelp(screen.getByLabelText("Confirm password"), FIELD_HELP.enrollConfirm);
+  });
+
+  it("on first-run enrolment, with a validation warning showing too", () => {
+    render(
+      <MemoryRouter>
+        <ApiProvider api={createMockApi()}>
+          <EnrollmentPage onEnrolled={() => {}} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+
+    // #344 put the two warnings into aria-describedby, which is the state
+    // this file never rendered: every other case here has empty fields, so
+    // every control named exactly one node and a one-id describedby was
+    // indistinguishable from a correct one. Typing a too-short password is
+    // what makes it a list.
+    const password = screen.getByLabelText("Password");
+    fireEvent.change(password, { target: { value: "short" } });
+
+    expectHelp(password, FIELD_HELP.enrollPassword);
+    const ids = (password.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+    expect(ids.length).toBe(2);
+    const text = ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+    expect(text).toContain("Minimum 12 characters.");
+  });
+
+  it("on the retention policy form, including the tier a chain is built from", async () => {
+    await renderSettings();
+
+    expectHelp(screen.getByLabelText("Timezone"), FIELD_HELP.retentionTimezone);
+    expectHelp(screen.getByLabelText("Week starts on"), FIELD_HELP.weekStartsOn);
+    expectHelp(
+      screen.getByRole("checkbox", { name: /Protect the newest known-good backup/ }),
+      FIELD_HELP.protectLastKnownGood
+    );
+
+    const tier = within(screen.getByRole("group", { name: "Tier 1" }));
+    expectHelp(tier.getByLabelText("Name"), FIELD_HELP.tierName);
+    expectHelp(tier.getByLabelText("Granularity"), FIELD_HELP.tierGranularity);
+    expectHelp(tier.getByLabelText("Keep"), FIELD_HELP.tierKeep);
+    expectHelp(tier.getByLabelText("Window unit"), FIELD_HELP.tierWindowUnit);
+
+    // Period (days) exists only on a custom-period tier, so it has to be
+    // reached the way an operator reaches it rather than asserted absent.
+    fireEvent.change(tier.getByLabelText("Granularity"), { target: { value: "days" } });
+    expectHelp(tier.getByLabelText("Period (days)"), FIELD_HELP.tierPeriodDays);
+  });
+
+  it("on the administrator password rotation form", async () => {
+    await renderSettings();
+
+    expectHelp(screen.getByLabelText("Current password"), FIELD_HELP.currentPassword);
+    expectHelp(screen.getByLabelText("New password"), FIELD_HELP.newPassword);
+    expectHelp(screen.getByLabelText("Confirm new password"), FIELD_HELP.confirmNewPassword);
+  });
+
+  it("on the storage capacity form", async () => {
+    await renderSettings();
+
+    expectHelp(screen.getByLabelText("Storage cap"), FIELD_HELP.storageCap);
+    expectHelp(screen.getByLabelText("Storage warning threshold"), FIELD_HELP.storageWarningThreshold);
+    expectHelp(screen.getByLabelText("Storage critical threshold"), FIELD_HELP.storageCriticalThreshold);
+  });
+
+  it("on the activity filters", async () => {
+    render(
+      <ApiProvider api={createMockApi()}>
+        <ActivityPage />
+      </ApiProvider>
+    );
+    await act(async () => {});
+
+    expectHelp(screen.getByLabelText("Backup set"), FIELD_HELP.activitySetFilter);
+    expectHelp(screen.getByLabelText("Severity"), FIELD_HELP.activitySeverityFilter);
+  });
+
+  it("on the backups filter", async () => {
+    const api = createMockApi();
+    seedSets(await createMockApi().listSets());
+
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <BackupsPage readOnly={false} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    expectHelp(screen.getByLabelText("Filter by backup set"), FIELD_HELP.backupsSetFilter);
+  });
+
+  // Issue #350 replaced the edit DIALOG with an inline mode on the detail
+  // page, so this walks the real page into edit mode rather than
+  // rendering a component that no longer exists. It checks every editable
+  // box, not one, which is what the dialog's single Name field had been
+  // standing in for.
+  it("on every box of the inline edit mode", async () => {
+    const api = createMockApi();
+    const target = (await createMockApi().listSets())[0];
+
+    render(
+      <MemoryRouter initialEntries={[backupSetPath(target.source, target.set)]}>
+        <ApiProvider api={api}>
+          <Routes>
+            <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
+          </Routes>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
+    await screen.findByRole("button", { name: "SAVE ALL & EXIT EDIT" });
+
+    // The stable-size window is a conditional box, shown only while that
+    // completion method is selected. Selecting it here is what makes this
+    // loop cover EVERY field rather than every unconditional one, which
+    // is the difference between a test that grows with the table and one
+    // that quietly stops covering whatever is added conditionally.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+
+    for (const field of EDIT_FIELDS) {
+      expectHelp(screen.getByLabelText(field.label), field.help);
+    }
+  });
+});
+
+async function renderSettings() {
+  act(() => {
+    graph.commit("test/seed-version", (tx) =>
+      tx.set(versionNode, { data: VERSION, error: null, loading: false })
+    );
+  });
+
+  render(
+    <MemoryRouter>
+      <ApiProvider api={createMockApi()}>
+        <PlatformProvider bridge={genericBridge}>
+          <SettingsPage readOnly={false} />
+        </PlatformProvider>
+      </ApiProvider>
+    </MemoryRouter>
+  );
+  // The mock API answers with a deliberate latency, so the retention card
+  // is still on its loading copy after one flush.
+  await screen.findByLabelText("Timezone");
+}

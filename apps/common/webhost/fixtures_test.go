@@ -3,6 +3,7 @@ package webhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -10,6 +11,23 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// The doubles every handler test in this package is built on.
+//
+// They exist because standing up a real BackupService means a state
+// directory, a SQLite journal, migrations and an rclone transport, and a
+// test that checks a JSON field should not need any of that. What they are
+// NOT is a set of stubs shaped to make assertions pass: each one records
+// what it was asked for, so a test can prove a handler actually reached
+// the backend with the arguments it claimed rather than merely returning a
+// plausible status.
+//
+// The authenticator double has two settings and no middle ground, which
+// keeps every test explicit about whether it is exercising an
+// authenticated path. The asynchronous backend is the one with real
+// machinery: it starts work on a goroutine gated by a channel the test
+// controls, which is what turns "the operation outlives the request" from
+// a timing-dependent hope into a deterministic assertion.
 
 // fakeAuthenticator is a minimal, always-succeeding or always-failing
 // capabilities.Authenticator, standing in for whatever real local-auth
@@ -104,20 +122,199 @@ func (alwaysPassGate) Passed() bool { return true }
 // shapes and would otherwise have to poll for an async result that adds
 // nothing to what they are proving. errOnSubmit, when non-nil, is returned
 // by SubmitRunCycle unconditionally, letting a test drive every error
-// branch handlers_operations.go maps to an HTTP status.
+// branch handlers_operations.go maps to an HTTP status. errOnPreview and
+// errOnApply are their retention equivalents, for handlers_retention.go's
+// own error-mapping tests.
 type syncFakeBackend struct {
 	mu             sync.Mutex
 	configRevision string
 	ops            map[string]service.Operation
 	errOnSubmit    error
 	nextID         int
+
+	// errOnRestore is SubmitRestorePlacement's equivalent of
+	// errOnSubmit, and lastRestore is the request it was last handed, so
+	// a handler test can prove which fields actually crossed the boundary
+	// rather than only that a 202 came back.
+	errOnRestore error
+	lastRestore  service.RestorePlacementRequest
+
+	// plans holds every plan PreviewRetention has issued and
+	// ApplyRetentionPlan has not yet consumed, mirroring core/service's
+	// own single-use plan store closely enough for handlers_retention_test.go
+	// to exercise a real preview-then-apply round trip (including the
+	// stale/not-found paths) without needing a real journal.
+	plans        map[string]service.RetentionPlan
+	planNextID   int
+	errOnPreview error
+	errOnApply   error
+
+	// previewPlan, when non-nil, is applied to the fixture plan below
+	// before it is stored and returned. It is how a test gives a preview
+	// EPIC E's placement facts (a per-verdict medium, a planned move, a
+	// placement nothing could confirm) without a second fake backend, and
+	// without every other retention test having to grow them.
+	previewPlan func(service.RetentionPlan) service.RetentionPlan
+
+	// errOnStorage is ListStorageStatus's equivalent, so a test can drive
+	// systemStorage's own 500 branch (handlers_storage.go) rather than
+	// only its success path.
+	errOnStorage error
+
+	// notReady makes Ready report false, standing in for a backend whose
+	// §46.1 startup sequence did not complete. It is a field rather than a
+	// second fake type because readiness is now a fact the backend owns
+	// (BackupServiceClient.Ready), so "not ready" is a state a real
+	// backend can be in, not only a missing one.
+	notReady bool
+
+	// --- issue #211's surfaces: what the fake holds, what it refuses
+	// with, and what the handler asked it for.
+	artifacts     []service.Artifact
+	activity      []service.ActivityEvent
+	operationList []service.Operation
+	health        service.HealthReport
+	catalog       service.CatalogReport
+
+	revalidateResult          service.ArtifactCheck
+	reinstateResult           service.ArtifactReinstatement
+	persistedConnectionResult service.ConnectionTestResult
+
+	errOnArtifacts       error
+	errOnActivity        error
+	errOnListOperations  error
+	errOnHealth          error
+	errOnCatalog         error
+	errOnRevalidate      error
+	errOnRetry           error
+	errOnRetryFailed     error
+	errOnMediumPreflight error
+	mediumPreflight      service.MediumPreflight
+	errOnReinstate       error
+	errOnSetEnabled      error
+	errOnSetReadOnly     error
+	errOnRemove          error
+	errOnSetRetention    error
+	errOnTestPersisted   error
+
+	lastArtifactFilter    service.ArtifactFilter
+	lastActivityLimit     int
+	lastOperationsLimit   int
+	lastRevalidated       string
+	lastRetried           string
+	lastRetriedFailed     string
+	lastRetryFailedNote   string
+	lastPreflightedMedium string
+	lastReinstated        string
+	lastRemoved           string
+	lastSetEnabled        setEnabledCall
+	lastSetReadOnly       setReadOnlyCall
+	lastTestedBackupSetID string
+
+	// retentionOverrides is issue #333's per-set retention state: the
+	// override each backup set currently declares, absent meaning the set
+	// inherits the deployment's policy. A map rather than a flag, because
+	// "which set" is exactly what these routes are keyed by, and a handler
+	// that built the wrong id has to be able to fail.
+	retentionOverrides   map[string]service.RetentionOverride
+	lastSetRetention     *setRetentionCall
+	lastClearedRetention string
 }
 
 func newSyncFakeBackend() *syncFakeBackend {
-	return &syncFakeBackend{configRevision: "rev-1", ops: map[string]service.Operation{}}
+	return &syncFakeBackend{
+		configRevision:            "rev-1",
+		ops:                       map[string]service.Operation{},
+		plans:                     map[string]service.RetentionPlan{},
+		persistedConnectionResult: service.ConnectionTestResult{OK: true},
+	}
 }
 
 func (f *syncFakeBackend) ConfigRevision() string { return f.configRevision }
+
+// PreviewRetention returns a fixed, single-artifact DELETE plan for any
+// source/set, storing it exactly once so a matching ApplyRetentionPlan
+// call can consume it and any other plan_id is correctly reported not
+// found.
+func (f *syncFakeBackend) PreviewRetention(_ context.Context, source, set string) (service.RetentionPlan, error) {
+	if f.errOnPreview != nil {
+		return service.RetentionPlan{}, f.errOnPreview
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.planNextID++
+	plan := service.RetentionPlan{
+		PlanID:            fmt.Sprintf("retplan_test_%d", f.planNextID),
+		BackupSetID:       source + "/" + set,
+		InventoryRevision: "inv-test-1",
+		ConfigRevision:    f.configRevision,
+		ExpiresAt:         time.Now().UTC().Add(10 * time.Minute),
+		KeepCount:         0,
+		DeleteCount:       1,
+		ReclaimBytes:      1024,
+		// Issue #333: the plan says which policy decided it, taken from
+		// the same per-set state the retention sub-resource serves, so a
+		// test that gives this set its own policy sees the preview follow.
+		Retention:           f.backupSetRetentionLocked(source + "/" + set).Effective,
+		RetentionIsOverride: f.backupSetRetentionLocked(source + "/" + set).IsOverride,
+		Verdicts: []service.RetentionArtifactVerdict{
+			// One KEEP whose tiers were selected by DIFFERENT placements
+			// (issue #218), so the wire shape cannot be satisfied by a
+			// single per-verdict attribution, and one DELETE, which
+			// carries no tiers and so no attribution either.
+			//
+			// Both name the implicit local medium, which is what
+			// core/service really reports for every verdict in a
+			// deployment that declares no storage medium (EPIC E FR-30,
+			// #239). Spelling it here rather than leaving it empty is
+			// what lets the medium-free response test in
+			// handlers_retention_test.go prove the wire does not grow a
+			// `"medium": "local"` on every verdict of every deployment
+			// that had nothing to do with EPIC E.
+			{Artifact: "kept.dump", Action: "KEEP", Medium: "local", Reason: "kept by the DAILY and MONTHLY tiers (test fixture)", Tiers: []service.RetentionTierSelection{
+				{Tier: "DAILY", SelectedBy: "DISCOVERY"},
+				{Tier: "MONTHLY", SelectedBy: "PRODUCER"},
+				{Tier: "LAST_KNOWN_GOOD", SelectedBy: "PROTECTION"},
+			}},
+			{Artifact: "backup.dump", Action: "DELETE", Medium: "local", Reason: "no GFS tier selects this artifact (test fixture)"},
+		},
+	}
+	if f.previewPlan != nil {
+		plan = f.previewPlan(plan)
+	}
+	f.plans[plan.PlanID] = plan
+	return plan, nil
+}
+
+// ApplyRetentionPlan consumes a plan PreviewRetention issued (single-use,
+// mirroring core/service.BackupService.ApplyRetentionPlan's own contract),
+// or reports service.ErrRetentionPlanNotFound for any plan_id it does not
+// hold.
+func (f *syncFakeBackend) ApplyRetentionPlan(_ context.Context, req service.ApplyRetentionRequest) (service.RetentionPlan, error) {
+	if f.errOnApply != nil {
+		return service.RetentionPlan{}, f.errOnApply
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	plan, ok := f.plans[req.PlanID]
+	if !ok {
+		return service.RetentionPlan{}, fmt.Errorf("%w: %s", service.ErrRetentionPlanNotFound, req.PlanID)
+	}
+	// The real service cross-checks the {source}/{set} the request was
+	// routed by against the backup set the plan was issued for, and
+	// consumes nothing when they disagree (see
+	// service.ApplyRetentionRequest.Source's own doc). This fake enforces
+	// the same thing, so a handler that dropped the URL parameters on the
+	// floor could not pass handlers_retention_test.go.
+	if plan.BackupSetID != req.Source+"/"+req.Set {
+		return service.RetentionPlan{}, fmt.Errorf("%w: plan %s was not issued for backup set %s/%s", service.ErrInvalidRequest, req.PlanID, req.Source, req.Set)
+	}
+	delete(f.plans, req.PlanID)
+	plan.OperationID = "op_test_retention_apply"
+	return plan, nil
+}
+
+func (f *syncFakeBackend) Ready() bool { return !f.notReady }
 
 func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	if f.errOnSubmit != nil {
@@ -146,6 +343,57 @@ func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycle
 	return op, nil
 }
 
+// SubmitRestorePlacement mirrors the real service's refusal ORDER, not
+// just its refusals.
+//
+// That order is the part a handler test can actually get wrong: the real
+// one checks the configuration revision before it looks anything up,
+// because a caller on a stale screen may be naming a medium id that now
+// points at a different bucket. A fake that checked the artifact first
+// would let a handler that dropped config_revision on the floor pass.
+func (f *syncFakeBackend) SubmitRestorePlacement(_ context.Context, req service.RestorePlacementRequest) (service.RestoreSubmission, error) {
+	if f.errOnRestore != nil {
+		return service.RestoreSubmission{}, f.errOnRestore
+	}
+	if req.ConfigRevision != f.ConfigRevision() {
+		return service.RestoreSubmission{}, fmt.Errorf("%w: request names %q", service.ErrConfigRevisionStale, req.ConfigRevision)
+	}
+	if !req.Acknowledged {
+		return service.RestoreSubmission{}, fmt.Errorf("%w: this request did not say so", service.ErrRestoreRefused)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRestore = req
+	f.nextID++
+	op := service.Operation{
+		ID:             "op_test_restore_" + strconv.Itoa(f.nextID),
+		IdempotencyKey: req.IdempotencyKey,
+		Actor:          req.Actor,
+		ConfigRevision: req.ConfigRevision,
+		Action:         service.ActionRestorePlacement,
+		Status:         "running",
+		CreatedAt:      time.Now().UTC(),
+		Restore: &service.OperationRestore{
+			Artifact:   req.ArtifactID,
+			Medium:     req.Medium,
+			Class:      "DEEP_ARCHIVE",
+			WindowDays: req.WindowDays,
+			Access:     "restoring",
+			Detail:     "a restore of this copy is running; the provider reports whether a restore is finished and nothing else",
+			Wait:       "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours",
+			Billing:    "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list",
+		},
+	}
+	f.ops[op.ID] = op
+	return service.RestoreSubmission{
+		Operation:  op,
+		Created:    true,
+		WindowDays: req.WindowDays,
+		Wait:       op.Restore.Wait,
+		Billing:    op.Restore.Billing,
+	}, nil
+}
+
 func (f *syncFakeBackend) GetOperation(_ context.Context, id string) (service.Operation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -154,6 +402,356 @@ func (f *syncFakeBackend) GetOperation(_ context.Context, id string) (service.Op
 		return service.Operation{}, service.ErrOperationNotFound
 	}
 	return op, nil
+}
+
+// The five methods below satisfy BackupServiceClient's issue #146
+// surface. syncFakeBackend's own tests (handlers_operations_test.go) never
+// call any of these — they exist only so this type still compiles as a
+// BackupServiceClient; handlers_backupsets_test.go and
+// handlers_ssh_test.go use backupSetFakeBackend (below) instead, which
+// actually exercises them.
+func (f *syncFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	return nil, nil
+}
+
+func (f *syncFakeBackend) GetBackupSet(context.Context, string) (service.BackupSet, error) {
+	return service.BackupSet{}, service.ErrBackupSetNotFound
+}
+
+func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
+}
+
+func (f *syncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *syncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *syncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
+func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	return service.BackupSet{}, errors.New("syncFakeBackend: UpdateBackupSet not implemented")
+}
+
+func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *syncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	return service.HostKeyProbe{}, errors.New("syncFakeBackend: ProbeHostKey not implemented")
+}
+
+func (f *syncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{}, errors.New("syncFakeBackend: TestConnection not implemented")
+}
+
+func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	if f.errOnStorage != nil {
+		return nil, f.errOnStorage
+	}
+	return nil, nil
+}
+
+// ManagerStorage's default is an honest unknown rather than a zeroed
+// reading that claims Known. Every test in this package that does not
+// care about capacity therefore gets the shape a fresh install actually
+// produces, which is the one the NaN came from.
+func (f *syncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	if f.errOnStorage != nil {
+		return service.ManagerStorage{}, f.errOnStorage
+	}
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
+}
+
+// --- issue #211's read surface and its two quarantine actions ---
+//
+// Each of these is an in-memory store plus one error-injection field, so
+// handlers_artifacts_test.go, handlers_activity_test.go,
+// handlers_catalog_test.go and handlers_health_test.go can drive both the
+// success shape and every mapped refusal without a real journal. The
+// stores are exported through the fake's own fields rather than through
+// setters: a test arranges the fixture, it does not script it.
+
+func (f *syncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
+	if f.errOnSetEnabled != nil {
+		return service.BackupSet{}, f.errOnSetEnabled
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetEnabled = setEnabledCall{id: id, enabled: enabled}
+	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *syncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	if f.errOnSetReadOnly != nil {
+		return service.BackupSet{}, f.errOnSetReadOnly
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetReadOnly = setReadOnlyCall{id: id, readOnly: readOnly}
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
+}
+
+// RemoveBackupSet is issue #391's removal, on the sync double. It records
+// what it was asked to remove, so a test can prove the handler joined the
+// two path segments back into one id rather than only that it answered
+// 204.
+func (f *syncFakeBackend) RemoveBackupSet(_ context.Context, id string) error {
+	if f.errOnRemove != nil {
+		return f.errOnRemove
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRemoved = id
+	return nil
+}
+
+// --- issue #333's per-set retention sub-resource ---
+//
+// This double models the ONE thing the HTTP layer's own tests are about:
+// inherit and override are different states, and clearing really returns
+// the set to the first. The whole-chain rule is not modelled here on
+// purpose; it lives in config.Validate and is proved against the real
+// service in core/service/backupsetretention_test.go, so a copy of it
+// here would be a second rule that could pass while the real one failed.
+func (f *syncFakeBackend) BackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	if f.errOnSetRetention != nil {
+		return service.BackupSetRetention{}, f.errOnSetRetention
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.backupSetRetentionLocked(id), nil
+}
+
+func (f *syncFakeBackend) SetBackupSetRetention(_ context.Context, id string, o service.RetentionOverride) (service.BackupSetRetention, error) {
+	if f.errOnSetRetention != nil {
+		return service.BackupSetRetention{}, f.errOnSetRetention
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetRetention = &setRetentionCall{id: id, override: o}
+	if f.retentionOverrides == nil {
+		f.retentionOverrides = map[string]service.RetentionOverride{}
+	}
+	f.retentionOverrides[id] = o
+	return f.backupSetRetentionLocked(id), nil
+}
+
+func (f *syncFakeBackend) ClearBackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	if f.errOnSetRetention != nil {
+		return service.BackupSetRetention{}, f.errOnSetRetention
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastClearedRetention = id
+	delete(f.retentionOverrides, id)
+	return f.backupSetRetentionLocked(id), nil
+}
+
+// fakeDeploymentRetention is the deployment policy this double reports,
+// deliberately NOT the product's 7/3/12 default: a handler that dropped
+// the deployment half of the response and echoed the effective chain
+// twice would look right against a fixture where the two agree.
+func fakeDeploymentRetention() service.RetentionSettings {
+	return service.RetentionSettings{
+		Timezone:     "America/Vancouver",
+		WeekStartsOn: "sunday",
+		Tiers: []service.RetentionTier{
+			{Name: "daily", Granularity: service.GranularityDay, Keep: 90},
+			{Name: "monthly", Granularity: service.GranularityMonth, Keep: 60, Medium: "cold"},
+		},
+		ProtectLastKnownGood: true,
+	}
+}
+
+func (f *syncFakeBackend) backupSetRetentionLocked(id string) service.BackupSetRetention {
+	out := service.BackupSetRetention{
+		BackupSetID: id,
+		Effective:   fakeDeploymentRetention(),
+		Deployment:  fakeDeploymentRetention(),
+	}
+	o, ok := f.retentionOverrides[id]
+	if !ok {
+		return out
+	}
+	override := o
+	out.IsOverride = true
+	out.Override = &override
+	if len(o.Tiers) > 0 {
+		out.Effective.Tiers = o.Tiers
+	}
+	if o.Timezone != "" {
+		out.Effective.Timezone = o.Timezone
+	}
+	return out
+}
+
+// setRetentionCall records what crossed the HTTP-to-core seam for a
+// per-set retention write, the same way setEnabledCall does for /enabled.
+type setRetentionCall struct {
+	id       string
+	override service.RetentionOverride
+}
+
+func (f *syncFakeBackend) TestBackupSetConnection(_ context.Context, id string) (service.ConnectionTestResult, error) {
+	if f.errOnTestPersisted != nil {
+		return service.ConnectionTestResult{}, f.errOnTestPersisted
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTestedBackupSetID = id
+	return f.persistedConnectionResult, nil
+}
+
+func (f *syncFakeBackend) ListArtifacts(_ context.Context, filter service.ArtifactFilter) ([]service.Artifact, error) {
+	if f.errOnArtifacts != nil {
+		return nil, f.errOnArtifacts
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastArtifactFilter = filter
+	out := make([]service.Artifact, 0, len(f.artifacts))
+	for _, a := range f.artifacts {
+		if filter.QuarantinedOnly && !a.Quarantined {
+			continue
+		}
+		if filter.BackupSetID != "" && a.BackupSetID != filter.BackupSetID {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (f *syncFakeBackend) GetArtifact(_ context.Context, id string) (service.Artifact, error) {
+	if f.errOnArtifacts != nil {
+		return service.Artifact{}, f.errOnArtifacts
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.artifacts {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return service.Artifact{}, fmt.Errorf("%w: %s", service.ErrArtifactNotFound, id)
+}
+
+func (f *syncFakeBackend) RevalidateArtifact(_ context.Context, id string) (service.ArtifactCheck, error) {
+	if f.errOnRevalidate != nil {
+		return service.ArtifactCheck{}, f.errOnRevalidate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRevalidated = id
+	return f.revalidateResult, nil
+}
+
+func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) error {
+	if f.errOnRetry != nil {
+		return f.errOnRetry
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRetried = id
+	return nil
+}
+
+func (f *syncFakeBackend) RetryFailedArtifact(_ context.Context, id, note string) error {
+	if f.errOnRetryFailed != nil {
+		return f.errOnRetryFailed
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRetriedFailed = id
+	f.lastRetryFailedNote = note
+	return nil
+}
+
+func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (service.MediumPreflight, error) {
+	if f.errOnMediumPreflight != nil {
+		return service.MediumPreflight{}, f.errOnMediumPreflight
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastPreflightedMedium = id
+	return f.mediumPreflight, nil
+}
+
+func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
+	if f.errOnReinstate != nil {
+		return service.ArtifactReinstatement{}, f.errOnReinstate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastReinstated = id
+	return f.reinstateResult, nil
+}
+
+func (f *syncFakeBackend) ListActivity(_ context.Context, limit int) ([]service.ActivityEvent, error) {
+	if f.errOnActivity != nil {
+		return nil, f.errOnActivity
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastActivityLimit = limit
+	return f.activity, nil
+}
+
+func (f *syncFakeBackend) ListOperations(_ context.Context, limit int) ([]service.Operation, error) {
+	if f.errOnListOperations != nil {
+		return nil, f.errOnListOperations
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastOperationsLimit = limit
+	return f.operationList, nil
+}
+
+func (f *syncFakeBackend) Health(context.Context) (service.HealthReport, error) {
+	if f.errOnHealth != nil {
+		return service.HealthReport{}, f.errOnHealth
+	}
+	return f.health, nil
+}
+
+func (f *syncFakeBackend) ScanCatalog(context.Context) (service.CatalogReport, error) {
+	if f.errOnCatalog != nil {
+		return service.CatalogReport{}, f.errOnCatalog
+	}
+	report := f.catalog
+	report.DryRun = true
+	return report, nil
+}
+
+func (f *syncFakeBackend) RebuildCatalog(context.Context) (service.CatalogReport, error) {
+	if f.errOnCatalog != nil {
+		return service.CatalogReport{}, f.errOnCatalog
+	}
+	report := f.catalog
+	report.DryRun = false
+	return report, nil
+}
+
+// setEnabledCall records what crossed the HTTP-to-core seam, so a test can
+// assert on the id and the flag the handler actually built rather than
+// only on what came back out.
+type setEnabledCall struct {
+	id      string
+	enabled bool
+}
+
+// setReadOnlyCall is setEnabledCall's issue #316 counterpart, for
+// SetBackupSetReadOnly.
+type setReadOnlyCall struct {
+	id       string
+	readOnly bool
 }
 
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
@@ -176,6 +774,17 @@ func newAsyncFakeBackend() *asyncFakeBackend {
 }
 
 func (f *asyncFakeBackend) ConfigRevision() string { return "rev-1" }
+
+func (f *asyncFakeBackend) Ready() bool { return true }
+
+// SubmitRestorePlacement is not what this fake is for: it exists to drive
+// the asynchronous run_cycle path. A restore submitted through it is
+// refused as unavailable, which is the honest answer for a backend with no
+// medium boundary, rather than a canned success that would let a test
+// believe something was restored.
+func (f *asyncFakeBackend) SubmitRestorePlacement(context.Context, service.RestorePlacementRequest) (service.RestoreSubmission, error) {
+	return service.RestoreSubmission{}, service.ErrRestoreUnavailable
+}
 
 func (f *asyncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	f.mu.Lock()
@@ -221,8 +830,529 @@ func (f *asyncFakeBackend) GetOperation(_ context.Context, id string) (service.O
 	return op, nil
 }
 
+// PreviewRetention and ApplyRetentionPlan below only exist to satisfy
+// BackupServiceClient: asyncFakeBackend's whole reason to exist is
+// disconnect_test.go's SubmitRunCycle-specific race, and no test in this
+// package needs it to behave like a real retention backend too.
+func (f *asyncFakeBackend) PreviewRetention(_ context.Context, _, _ string) (service.RetentionPlan, error) {
+	return service.RetentionPlan{}, errors.New("asyncFakeBackend: PreviewRetention is not implemented")
+}
+
+func (f *asyncFakeBackend) ApplyRetentionPlan(_ context.Context, _ service.ApplyRetentionRequest) (service.RetentionPlan, error) {
+	return service.RetentionPlan{}, errors.New("asyncFakeBackend: ApplyRetentionPlan is not implemented")
+}
+
 // release lets every SubmitRunCycle call currently blocked on f.gate
 // finish. Safe to call exactly once.
 func (f *asyncFakeBackend) release() { close(f.gate) }
 
+// asyncFakeBackend's own tests (disconnect_test.go) only exercise
+// SubmitRunCycle/GetOperation's async-disconnect behavior; these five
+// stubs exist purely so it still satisfies BackupServiceClient, same
+// reasoning as syncFakeBackend's identical block above.
+func (f *asyncFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetBackupSet(context.Context, string) (service.BackupSet, error) {
+	return service.BackupSet{}, service.ErrBackupSetNotFound
+}
+
+func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
+}
+
+func (f *asyncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *asyncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *asyncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	return service.BackupSet{}, errors.New("asyncFakeBackend: UpdateBackupSet not implemented")
+}
+
+func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	return service.HostKeyProbe{}, errors.New("asyncFakeBackend: ProbeHostKey not implemented")
+}
+
+func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
+// The same honest unknown syncFakeBackend gives: see its own comment.
+func (f *asyncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
+}
+
+func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	return nil, nil
+}
+
+// Issue #211's surfaces, on the async double. This fake exists only to
+// prove operation lifetime survives a disconnected client
+// (disconnect_test.go), so none of these has behaviour worth modelling:
+// each returns the empty answer, which is a real answer for a deployment
+// that has done nothing yet, rather than an error a test would then have
+// to route around.
+func (f *asyncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
+	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *asyncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
+}
+
+func (f *asyncFakeBackend) RemoveBackupSet(context.Context, string) error {
+	return nil
+}
+
+func (f *asyncFakeBackend) BackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{BackupSetID: id}, nil
+}
+
+func (f *asyncFakeBackend) SetBackupSetRetention(_ context.Context, id string, _ service.RetentionOverride) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{BackupSetID: id, IsOverride: true}, nil
+}
+
+func (f *asyncFakeBackend) ClearBackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{BackupSetID: id}, nil
+}
+
+func (f *asyncFakeBackend) TestBackupSetConnection(context.Context, string) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{OK: true}, nil
+}
+
+func (f *asyncFakeBackend) ListArtifacts(context.Context, service.ArtifactFilter) ([]service.Artifact, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetArtifact(_ context.Context, id string) (service.Artifact, error) {
+	return service.Artifact{}, fmt.Errorf("%w: %s", service.ErrArtifactNotFound, id)
+}
+
+func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.ArtifactCheck, error) {
+	return service.ArtifactCheck{}, nil
+}
+
+func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) RetryFailedArtifact(context.Context, string, string) error { return nil }
+
+func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
+
+func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
+	return service.ArtifactReinstatement{}, nil
+}
+
+func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.ActivityEvent, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) ListOperations(context.Context, int) ([]service.Operation, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) Health(context.Context) (service.HealthReport, error) {
+	return service.HealthReport{}, nil
+}
+
+func (f *asyncFakeBackend) ScanCatalog(context.Context) (service.CatalogReport, error) {
+	return service.CatalogReport{DryRun: true}, nil
+}
+
+func (f *asyncFakeBackend) RebuildCatalog(context.Context) (service.CatalogReport, error) {
+	return service.CatalogReport{}, nil
+}
+
 var errBoom = errors.New("boom")
+
+// backupSetFakeBackend is a BackupServiceClient double for
+// handlers_backupsets_test.go and handlers_ssh_test.go: an in-memory
+// store for backup sets and imported SSH keys, so those tests can drive
+// every request/response/error branch the issue #146 handlers add
+// without a real config file, journal or transport. Operations-surface
+// methods (SubmitRunCycle/GetOperation/ConfigRevision) delegate to an
+// embedded syncFakeBackend, since createBackupSet's RunImmediately path
+// calls through to those too.
+type backupSetFakeBackend struct {
+	*syncFakeBackend
+
+	mu   sync.Mutex
+	sets map[string]service.BackupSet
+	keys map[string]service.SSHKeyRef
+
+	// lastCreate records the exact service.CreateBackupSetRequest the
+	// handler built, so a test can assert on what crossed the HTTP-to-core
+	// seam (issue #162's validator_id, in particular) rather than only on
+	// what came back out of it.
+	lastCreate service.CreateBackupSetRequest
+
+	// lastImportPassphrase records the passphrase argument the handler
+	// called ImportSSHKey with (#269), the same way lastCreate does for
+	// CreateBackupSet: a test can assert the JSON "passphrase" field
+	// actually crossed the HTTP-to-core seam, not only that it was
+	// accepted by the JSON decoder.
+	lastImportPassphrase string
+
+	// lastUpdateReq records the exact service.UpdateBackupSetRequest the
+	// PATCH handler built, so a test can assert which fields crossed the
+	// HTTP-to-core seam as SET and which crossed as nil. That distinction
+	// is the whole point of the sparse request (issue #350), and asserting
+	// only on the response would not see it: a handler that filled every
+	// field in from the set it just read would produce an identical 200.
+	lastUpdateReq service.UpdateBackupSetRequest
+
+	// running is what the fake reports a cycle is doing for whichever set
+	// is asked about, or nil for "nothing is running". It is a field
+	// rather than a setter because a test arranges this fixture, it does
+	// not script it.
+	running *service.RunningWork
+
+	// beginCallCount and endCallCount record that the hold routes reached
+	// the backend at all. A handler that answered 200 without holding
+	// anything would otherwise look identical to one that held.
+	beginCallCount int
+	endCallCount   int
+
+	errOnCreate  error
+	errOnList    error
+	errOnGet     error
+	errOnImport  error
+	errOnProbe   error
+	errOnConnect error
+	errOnUpdate  error
+
+	probeResult      service.HostKeyProbe
+	connectionResult service.ConnectionTestResult
+}
+
+func newBackupSetFakeBackend() *backupSetFakeBackend {
+	return &backupSetFakeBackend{
+		syncFakeBackend:  newSyncFakeBackend(),
+		sets:             map[string]service.BackupSet{},
+		keys:             map[string]service.SSHKeyRef{},
+		connectionResult: service.ConnectionTestResult{OK: true},
+	}
+}
+
+// UpdateBackupSet mirrors the real service's sparse semantics rather than
+// replacing the stored set wholesale: a field the request left nil must
+// stay exactly as it was, or a handler that quietly filled in everything
+// would look correct here.
+func (f *backupSetFakeBackend) UpdateBackupSet(_ context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	f.mu.Lock()
+	f.lastUpdateReq = req
+	f.mu.Unlock()
+	if f.errOnUpdate != nil {
+		return service.BackupSet{}, f.errOnUpdate
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	set, ok := f.sets[id]
+	if !ok {
+		return service.BackupSet{}, service.ErrBackupSetNotFound
+	}
+	if req.Host != nil {
+		set.Host = *req.Host
+	}
+	if req.Port != nil {
+		set.Port = *req.Port
+	}
+	if req.User != nil {
+		set.User = *req.User
+	}
+	if req.RemotePath != nil {
+		set.RemotePath = *req.RemotePath
+	}
+	if req.LocalPath != nil {
+		set.LocalPath = *req.LocalPath
+	}
+	if req.Include != nil {
+		set.Include = append([]string(nil), (*req.Include)...)
+	}
+	if req.CompletionStrategy != nil {
+		set.CompletionStrategy = *req.CompletionStrategy
+	}
+	if req.ValidatorID != nil {
+		set.ValidatorID = *req.ValidatorID
+	}
+	f.sets[id] = set
+	return set, nil
+}
+
+func (f *backupSetFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetEditState{}, service.ErrBackupSetNotFound
+	}
+	return service.BackupSetEditState{BackupSetID: id, Running: f.running}, nil
+}
+
+func (f *backupSetFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.EditHold{}, service.ErrBackupSetNotFound
+	}
+	f.beginCallCount++
+	return service.EditHold{
+		BackupSetID: id,
+		ExpiresAt:   time.Now().UTC().Add(90 * time.Second),
+		Stopped:     f.running,
+	}, nil
+}
+
+func (f *backupSetFakeBackend) EndBackupSetEdit(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.ErrBackupSetNotFound
+	}
+	f.endCallCount++
+	return nil
+}
+
+func (f *backupSetFakeBackend) beginCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.beginCallCount
+}
+
+func (f *backupSetFakeBackend) endCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endCallCount
+}
+
+// lastUpdate reads back the request UpdateBackupSet was last called with,
+// under the same lock the handler goroutine writes it with.
+func (f *backupSetFakeBackend) lastUpdate() service.UpdateBackupSetRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastUpdateReq
+}
+
+func (f *backupSetFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	if f.errOnList != nil {
+		return nil, f.errOnList
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]service.BackupSet, 0, len(f.sets))
+	for _, s := range f.sets {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (f *backupSetFakeBackend) GetBackupSet(_ context.Context, id string) (service.BackupSet, error) {
+	if f.errOnGet != nil {
+		return service.BackupSet{}, f.errOnGet
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sets[id]
+	if !ok {
+		return service.BackupSet{}, service.ErrBackupSetNotFound
+	}
+	return s, nil
+}
+
+func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	if f.errOnCreate != nil {
+		return service.CreateBackupSetResult{}, f.errOnCreate
+	}
+	sourceName := req.SourceName
+	if sourceName == "" {
+		sourceName = "api"
+	}
+	set := service.BackupSet{
+		ID:                 sourceName + "/" + req.Name,
+		SourceName:         sourceName,
+		Name:               req.Name,
+		Host:               req.Host,
+		Port:               req.Port,
+		User:               req.User,
+		RemotePath:         req.RemotePath,
+		LocalPath:          req.LocalPath,
+		Include:            req.Include,
+		CompletionStrategy: req.CompletionStrategy,
+		ValidatorID:        req.ValidatorID,
+		Disabled:           req.Disabled,
+		ReadOnly:           req.ReadOnly,
+	}
+	f.mu.Lock()
+	f.lastCreate = req
+	f.sets[set.ID] = set
+	f.mu.Unlock()
+
+	result := service.CreateBackupSetResult{Set: set}
+	if req.RunImmediately && !req.Disabled {
+		op, err := f.SubmitRunCycle(ctx, service.RunCycleRequest{
+			IdempotencyKey: "create:" + set.ID,
+			Actor:          req.Actor,
+			ConfigRevision: f.ConfigRevision(),
+		})
+		if err != nil {
+			return result, err
+		}
+		result.Operation = &op
+	}
+	return result, nil
+}
+
+func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error) {
+	f.mu.Lock()
+	f.lastImportPassphrase = passphrase
+	f.mu.Unlock()
+	if f.errOnImport != nil {
+		return service.SSHKeyRef{}, f.errOnImport
+	}
+	if len(raw) == 0 {
+		return service.SSHKeyRef{}, service.ErrInvalidRequest
+	}
+	ref := service.SSHKeyRef{ID: "key_test_1", KeyFile: "/fake/ssh_keys/key_test_1", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:faketestfingerprint"}
+	f.mu.Lock()
+	f.keys[ref.ID] = ref
+	f.mu.Unlock()
+	return ref, nil
+}
+
+func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	if f.errOnProbe != nil {
+		return service.HostKeyProbe{}, f.errOnProbe
+	}
+	if f.probeResult.Algorithm == "" {
+		return service.HostKeyProbe{
+			Algorithm:      "ssh-ed25519",
+			Fingerprint:    "SHA256:faketesthostfingerprint",
+			KnownHostsLine: "example.internal ssh-ed25519 AAAAfaketest",
+		}, nil
+	}
+	return f.probeResult, nil
+}
+
+func (f *backupSetFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	if f.errOnConnect != nil {
+		return service.ConnectionTestResult{}, f.errOnConnect
+	}
+	return f.connectionResult, nil
+}
+
+// defaultRetentionSettings is the resolved FR-18 default chain plus
+// FR-19's default protection, spelled exactly the way core/service's own
+// Settings reports it for a config file that names neither the tiers list
+// nor the three legacy scalars. The fakes below start here so a handler
+// test asserts against the real default policy rather than a fixture
+// invented to make an assertion pass.
+func defaultRetentionSettings() service.RetentionSettings {
+	return service.RetentionSettings{
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []service.RetentionTier{
+			{Name: "daily", Granularity: service.GranularityDay, Keep: 7},
+			{Name: "weekly", Granularity: service.GranularityWeek, Keep: 3, WindowUnit: service.GranularityMonth},
+			{Name: "monthly", Granularity: service.GranularityMonth, Keep: 12},
+		},
+		ProtectLastKnownGood: true,
+	}
+}
+
+// Settings and UpdateSettings on syncFakeBackend keep the seam satisfied
+// for every test double built on it (backupSetFakeBackend,
+// storageFakeBackend). They are deliberately inert: the tests that
+// actually exercise issue #140's settings surface use
+// settingsFakeBackend below, which records what crossed the seam.
+func (f *syncFakeBackend) Settings(context.Context) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *syncFakeBackend) UpdateSettings(context.Context, service.UpdateSettingsRequest) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *asyncFakeBackend) Settings(context.Context) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *asyncFakeBackend) UpdateSettings(context.Context, service.UpdateSettingsRequest) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+// settingsFakeBackend is a BackupServiceClient double for
+// handlers_settings_test.go: an in-memory settings store that applies a
+// partial update the same way core/service.UpdateSettings does (only the
+// named fields move), and records the exact service.UpdateSettingsRequest
+// the handler built so a test can assert on what crossed the HTTP-to-core
+// seam rather than only on what came back out of it.
+//
+// It deliberately does NOT re-implement config.Validate: refusals are
+// driven through errOnUpdate, because what these tests prove is the HTTP
+// layer's request parsing, error mapping and middleware wiring. That the
+// validator actually refuses each shape is core/service's own
+// settings_test.go, and that the two agree end to end is the CLI boundary
+// test (settings_boundary_test.go).
+type settingsFakeBackend struct {
+	*syncFakeBackend
+
+	settings service.Settings
+
+	lastUpdate  service.UpdateSettingsRequest
+	updateCalls int
+
+	errOnRead   error
+	errOnUpdate error
+}
+
+func newSettingsFakeBackend() *settingsFakeBackend {
+	return &settingsFakeBackend{
+		syncFakeBackend: newSyncFakeBackend(),
+		settings:        service.Settings{Retention: defaultRetentionSettings()},
+	}
+}
+
+func (f *settingsFakeBackend) Settings(context.Context) (service.Settings, error) {
+	if f.errOnRead != nil {
+		return service.Settings{}, f.errOnRead
+	}
+	return f.settings, nil
+}
+
+func (f *settingsFakeBackend) UpdateSettings(_ context.Context, req service.UpdateSettingsRequest) (service.Settings, error) {
+	f.updateCalls++
+	f.lastUpdate = req
+	if f.errOnUpdate != nil {
+		return service.Settings{}, f.errOnUpdate
+	}
+	if req.Retention != nil {
+		if req.Retention.Timezone != nil {
+			f.settings.Retention.Timezone = *req.Retention.Timezone
+		}
+		if req.Retention.WeekStartsOn != nil {
+			f.settings.Retention.WeekStartsOn = *req.Retention.WeekStartsOn
+		}
+		if len(req.Retention.Tiers) > 0 {
+			f.settings.Retention.Tiers = append([]service.RetentionTier(nil), req.Retention.Tiers...)
+		}
+		if req.Retention.ProtectLastKnownGood != nil {
+			f.settings.Retention.ProtectLastKnownGood = *req.Retention.ProtectLastKnownGood
+		}
+	}
+	return f.settings, nil
+}

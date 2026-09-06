@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+// The dispatch smoke tests, and the fixture most of this package's other
+// suites are built on.
+//
+// Everything here calls run() with an argv rather than calling a cmd
+// function, because the thing being checked is what an operator's shell
+// gets back: an unknown command, a missing operand and a working config all
+// have exit statuses this binary promises, and only the top of the dispatch
+// decides them.
+//
+// writeTestConfig is the shared fixture and it earns its place by being
+// real. A local directory standing in as the remote, wired through the local
+// transport backend, means a `run` in these tests performs an actual
+// discover, transfer, verify, commit and delete against actual files, with
+// no network and no Docker. That is what makes the exit-status cells in the
+// files around this one worth anything: they are reading the status of a
+// cycle that happened.
+
 func TestRun_NoArgsPrintsUsageAndFails(t *testing.T) {
 	if got := run(nil); got != 2 {
 		t.Errorf("run(nil) = %d, want 2", got)
@@ -106,6 +123,41 @@ func TestRun_RunCommandProcessesAnArtifactEndToEnd(t *testing.T) {
 		{"sources", "--config", configPath},
 		{"artifacts", "--config", configPath},
 		{"retention", "--config", configPath, "--dry-run"},
+	} {
+		if got := run(args); got != 0 {
+			t.Errorf("run(%v) = %d, want 0", args, got)
+		}
+	}
+}
+
+// TestRun_CatalogRequiresRebuildSubcommand proves `catalog` with no
+// subcommand, and `catalog` with an unknown one, both fail with a usage
+// error rather than a panic or a silent no-op.
+func TestRun_CatalogRequiresRebuildSubcommand(t *testing.T) {
+	if got := run([]string{"catalog"}); got != 2 {
+		t.Errorf("run([\"catalog\"]) = %d, want 2", got)
+	}
+	if got := run([]string{"catalog", "frobnicate"}); got != 2 {
+		t.Errorf("run([\"catalog\", \"frobnicate\"]) = %d, want 2", got)
+	}
+}
+
+// TestRun_CatalogRebuildAgainstAWorkingConfig is this binary's own
+// end-to-end smoke test for `catalog rebuild`: run a real cycle so a
+// committed artifact and its sidecar recovery manifest both exist, then
+// confirm `catalog rebuild --dry-run` (against the still-intact journal,
+// so every artifact is already present) and the real `catalog rebuild`
+// both succeed.
+func TestRun_CatalogRebuildAgainstAWorkingConfig(t *testing.T) {
+	configPath := writeTestConfig(t)
+
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf("run([\"run\", \"--config\", %q]) = %d, want 0", configPath, got)
+	}
+
+	for _, args := range [][]string{
+		{"catalog", "rebuild", "--dry-run", "--config", configPath},
+		{"catalog", "rebuild", "--config", configPath},
 	} {
 		if got := run(args); got != 0 {
 			t.Errorf("run(%v) = %d, want 0", args, got)

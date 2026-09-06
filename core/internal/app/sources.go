@@ -6,6 +6,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// The thinnest use case in the package, kept anyway.
+//
+// Nothing here reads a journal, opens a socket or consults a clock: Sources
+// is a pure projection of the configuration a Service was built with, which
+// makes it the one use case a Service with a nil Journal and a nil Transport
+// serves completely. That is worth knowing when wiring changes, because it
+// means a `sources` that breaks is a configuration or construction problem
+// and never a dependency problem.
+//
+// The projection is the reason the file exists at all. cmd/backup-manager
+// could read config.Source directly and print it in ten fewer lines; it
+// would then be the second place that decides which fields of a backup set
+// an operator is shown, and the CLI and a future HTTP handler would drift
+// apart one field at a time. The summary structs are that decision, made
+// once.
+
 // SourceSummary is `backup-manager sources`' one line of business logic: a
 // read-only, presentation-ready view of one configured source and its
 // backup sets. It carries nothing config.Source/config.BackupSet don't
@@ -26,6 +42,10 @@ type BackupSetSummary struct {
 	RemotePath string
 	LocalPath  string
 	StaleAfter time.Duration
+	Disabled   bool
+	// ReadOnly is issue #282's resolved answer (config.BackupSet.ReadOnly)
+	// for whether this set's remote source may ever be deleted.
+	ReadOnly bool
 }
 
 // Sources lists every configured source and its backup sets. This never
@@ -42,6 +62,8 @@ func (s *Service) Sources() []SourceSummary {
 				RemotePath: bs.RemotePath,
 				LocalPath:  bs.LocalPath,
 				StaleAfter: bs.StaleAfter.Duration(),
+				Disabled:   bs.Disabled,
+				ReadOnly:   bs.ReadOnly,
 			})
 		}
 		out = append(out, sum)

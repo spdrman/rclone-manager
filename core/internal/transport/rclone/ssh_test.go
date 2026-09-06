@@ -2,23 +2,19 @@ package rclone
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
-	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
@@ -39,6 +35,11 @@ func touchFile(t *testing.T, dir, name string) string {
 	return p
 }
 
+// validSource is a Source that sftpConfig accepts, so every case below can
+// be about exactly one thing being wrong with it. The two file paths are
+// real files because sftpConfig stats both and refuses a path it cannot
+// reach, which would otherwise mask whichever refusal a case is actually
+// checking for.
 func validSource(t *testing.T, dir string) transport.Source {
 	t.Helper()
 	return transport.Source{
@@ -92,6 +93,213 @@ func TestSftpConfig_KeyFileMustExist(t *testing.T) {
 	src.KeyFile = filepath.Join(dir, "does-not-exist")
 	if _, err := sftpConfig(src); err == nil {
 		t.Fatal("expected an error for a key_file that does not exist, got nil")
+	}
+}
+
+// TestSftpConfig_KeyFileModeMustMatchExactlyWhatWasWritten is issue #293's
+// RED case. importSSHKeyInto (service/backupsets.go) writes an imported key
+// with os.WriteFile(path, raw, 0o600), but that mode argument only ever
+// applies at creation: an operator's own chmod, a bind mount shared over
+// SMB/AFP, or unrelated troubleshooting on the host can widen it afterward,
+// and nothing used to look again before the key was next used.
+//
+// Before this check existed, drift was not merely reported opaquely, it
+// was not reported at all: rclone's own embedded sftp backend
+// (backend/sftp/sftp.go, vendored v1.75.0) os.ReadFile's key_file directly
+// and hands the bytes to golang.org/x/crypto/ssh.ParsePrivateKey, and
+// neither of those looks at the file's mode, unlike a real OpenSSH client
+// or ssh-agent, which refuse a too-open key outright. A key widened to
+// 0777 authenticated exactly as well as one still at 0600 through this
+// project's own code path, silently.
+//
+// wantErr is exact-match, not "any group/other bit set": the check exists
+// to notice when the mode is no longer what importSSHKeyInto wrote, so a
+// mode that is merely narrower than 0600 (say, an operator's own
+// well-meaning 0400) is drift too, not a stricter-and-therefore-fine case.
+func TestSftpConfig_KeyFileModeMustMatchExactlyWhatWasWritten(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    os.FileMode
+		wantErr bool
+	}{
+		{"exactly what importSSHKeyInto writes", 0o600, false},
+		{"world-writable drift, the production incident (#293)", 0o777, true},
+		{"group-readable drift", 0o640, true},
+		{"narrower than written is still drift", 0o400, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := validSource(t, dir)
+			if err := os.Chmod(src.KeyFile, tc.mode); err != nil {
+				t.Fatalf("chmod key file to %04o: %v", tc.mode, err)
+			}
+
+			_, err := sftpConfig(src)
+			if tc.wantErr && err == nil {
+				t.Fatalf("mode %04o: sftpConfig accepted it, want a refusal", tc.mode)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("mode %04o: sftpConfig refused an untouched key file: %v", tc.mode, err)
+			}
+		})
+	}
+}
+
+// TestSftpConfig_DriftedKeyFileModeIsClassifiedAndActionable is the other
+// half of issue #293's ask: refuse LOUDLY, with a specific diagnostic,
+// rather than letting the transport's own opaque rejection (or, as the
+// test above shows, its silent acceptance) be the only signal. The
+// category is what lets internal/app/halt.go tell this apart from a
+// rejected login (state.HaltAuthenticationFailed) in the operator-facing
+// halt reason; the message is what a human reads if they go looking.
+func TestSftpConfig_DriftedKeyFileModeIsClassifiedAndActionable(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	if err := os.Chmod(src.KeyFile, 0o777); err != nil {
+		t.Fatalf("chmod key file to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted a key_file with drifted (0777) permissions, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions", category, ok)
+	}
+	for _, want := range []string{"0777", "0600"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %s, so the operator sees both the actual and the expected mode", err, want)
+		}
+	}
+}
+
+// TestSftpConfig_RefusesWorldWritableAncestorDirectory is the other half of
+// issue #293 the PR #311 review flagged as unaddressed: checkKeyFileMode
+// only ever looks at the key file's OWN mode. The production incident
+// this whole file exists for drifted the key AND the directory chain down
+// to the backup root to world-writable, and a world-writable directory
+// lets any local actor unlink/replace/rename the entry inside it
+// regardless of what mode the file itself carries — Unix directory-write
+// permission governs entry changes independent of the target's own mode
+// bits. Before checkKeyDirChainMode existed, a key file left at a
+// pristine 0600 sailed through unnoticed even while its own directory (or,
+// as here, a directory two levels further up, well past its immediate
+// parent) was wide open, which is exactly the "more dangerous half" the
+// review named: the file-mode check gives false confidence while the real
+// exposure, swapping the key out entirely, still stands.
+func TestSftpConfig_RefusesWorldWritableAncestorDirectory(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+
+	// Positive control: an untouched chain (every directory 0700, the key
+	// file itself 0600) must be accepted, otherwise the refusal below
+	// would prove nothing.
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused a key_file with an untouched directory chain: %v", err)
+	}
+
+	// Widen "level1", two levels above the key file and one above its own
+	// immediate parent ("level2"), which stays at 0700 throughout. The key
+	// file itself is never touched: this is the drift the finding says
+	// checkKeyFileMode alone cannot see.
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777); err != nil {
+		t.Fatalf("chmod level1 to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted a key_file whose directory chain contains a world-writable component, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions (the same halt-reason path checkKeyFileMode uses)", category, ok)
+	}
+	if !strings.Contains(err.Error(), level1) {
+		t.Errorf("error %q should name the drifted directory %q", err, level1)
+	}
+}
+
+// TestSftpConfig_AllowsStickyWorldWritableAncestorDirectory locks in the
+// one deliberate exception to the check above: a directory with the
+// sticky bit set (mode 1777, /tmp's standard permissions on every
+// mainstream Unix) is not refused for being world-writable. That is not a
+// gap in the check, it is the same fact that makes a world-writable /tmp
+// safe to have on every real system: POSIX restricts unlink/rename inside
+// a sticky directory to the entry's own owner, the directory's owner, or
+// root, regardless of who else can write there, which is exactly the
+// attack checkKeyDirChainMode exists to close. Without this exception the
+// check would refuse a perfectly ordinary, correctly configured system
+// any time a key file's path happened to share an ancestor with the
+// system's shared temp directory.
+func TestSftpConfig_AllowsStickyWorldWritableAncestorDirectory(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777|os.ModeSticky); err != nil {
+		t.Fatalf("chmod level1 to 1777: %v", err)
+	}
+
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused a key_file under a world-writable-but-sticky ancestor directory: %v", err)
+	}
+}
+
+// TestSftpConfig_DirChainCheckAppliesToAnEncryptedKeyToo composes #311's
+// directory-chain check with #298's at-rest encryption: a world-writable
+// ancestor directory must still be refused when key_encryption is
+// configured, exactly as it is on the plaintext path. #298's own
+// ciphertext is authenticated (AES-GCM), which already defeats a silent
+// CONTENT forgery, but a world-writable directory still lets any local
+// actor unlink/replace/rename the encrypted key file wholesale, so the
+// permission-drift risk this check exists for is identical either way.
+// Before ssh.go's key_file case was restructured to run these checks
+// unconditionally, resolveKeyFileForSFTP's own os.ReadFile ran first
+// whenever key_encryption was configured, leaving this exact gap.
+func TestSftpConfig_DirChainCheckAppliesToAnEncryptedKeyToo(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+	if err := os.WriteFile(src.KeyFile, mustUnencryptedKeyPEM(t), 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_DIRCHAIN_KEYENC_ENV"
+	t.Setenv(envName, "dirchain-encrypted-key-dek")
+	src.KeyEncryptionEnv = envName
+
+	// Positive control: an untouched chain must still resolve through the
+	// encrypted path, otherwise the refusal below proves nothing.
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused an encrypted key_file with an untouched directory chain: %v", err)
+	}
+
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777); err != nil {
+		t.Fatalf("chmod level1 to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted an encrypted key_file whose directory chain contains a world-writable component, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions (the same halt-reason path checkKeyFileMode uses)", category, ok)
 	}
 }
 
@@ -177,43 +385,99 @@ func TestSftpConfig_PortOmittedWhenZero(t *testing.T) {
 // TestSftpConfig_KeyFileNeverProducesKeyPem and the key_env/key_command
 // cases below for the other half of that claim: key_pem appears ONLY when
 // the source actually chose one of those two resolvers.
+//
+// It runs over several sources rather than one, and that is load-bearing
+// rather than thoroughness for its own sake. A key sftpConfig only sets
+// inside an `if` is invisible to a fixture that never takes that branch,
+// so a single-source version of this test claims to pin the whole
+// producible set while actually pinning whichever subset one source
+// happens to reach. #355 found exactly that: `connections` had been a
+// producible key for a while and this test had never once seen it,
+// because the source it used left the ceiling at zero.
 func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
-	dir := t.TempDir()
-	src := validSource(t, dir)
-	cfg, err := sftpConfig(src)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
 	allowed := map[string]bool{
 		"host":             true,
 		"port":             true,
 		"user":             true,
 		"key_file":         true,
 		"key_pem":          true,
+		"key_file_pass":    true,
 		"known_hosts_file": true,
-		// Not part of the FR-6 security posture: these three exist because
+		// Not part of the FR-6 security posture: these four exist because
 		// fsFor calls info.NewFs directly and so gets none of rclone's own
-		// option defaults (see the comment in sftpConfig). Without them
-		// every sftp operation fails before it does anything, security
-		// posture aside.
-		"subsystem":   true,
-		"chunk_size":  true,
-		"concurrency": true,
-	}
-	for k := range cfg {
-		if !allowed[k] {
-			t.Errorf("sftpConfig set unexpected key %q; every key this function can set must be reviewed for FR-6 impact", k)
-		}
+		// option defaults (see the comment in sftpConfig). Without the
+		// first three every sftp operation fails before it does anything,
+		// security posture aside; the fourth restores rclone's own pool
+		// drainer, which without it never exists at all.
+		"subsystem":    true,
+		"chunk_size":   true,
+		"concurrency":  true,
+		"idle_timeout": true,
+		// #264/#355: the operator's connection ceiling, set only when one
+		// was actually asked for.
+		"connections": true,
 	}
 
-	// And the values that matter for FR-6 are exactly what was configured,
-	// not silently substituted or defaulted to something looser.
-	if v, _ := cfg.Get("key_file"); v != src.KeyFile {
-		t.Errorf("key_file = %q, want %q", v, src.KeyFile)
-	}
-	if v, _ := cfg.Get("known_hosts_file"); v != src.KnownHosts {
-		t.Errorf("known_hosts_file = %q, want %q", v, src.KnownHosts)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(t *testing.T, src *transport.Source)
+		mustSet []string
+	}{
+		{
+			name:    "plain",
+			mutate:  func(*testing.T, *transport.Source) {},
+			mustSet: []string{"key_file", "known_hosts_file", "subsystem", "chunk_size", "concurrency", "idle_timeout"},
+		},
+		{
+			name: "with a connection ceiling",
+			mutate: func(_ *testing.T, src *transport.Source) {
+				src.MaxConnections = 2
+			},
+			mustSet: []string{"connections"},
+		},
+		{
+			name: "with a key passphrase",
+			mutate: func(t *testing.T, src *transport.Source) {
+				t.Setenv("TEST_SFTP_KEY_PASSPHRASE", "not-a-real-passphrase")
+				src.PassphraseEnv = "TEST_SFTP_KEY_PASSPHRASE"
+			},
+			mustSet: []string{"key_file_pass"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := validSource(t, dir)
+			tc.mutate(t, &src)
+			cfg, err := sftpConfig(src)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			for k := range cfg {
+				if !allowed[k] {
+					t.Errorf("sftpConfig set unexpected key %q; every key this function can set must be reviewed for FR-6 impact", k)
+				}
+			}
+
+			// The branch this case exists to reach really was reached, so
+			// "no unexpected key" above is a statement about a config
+			// that actually contains the key in question.
+			for _, k := range tc.mustSet {
+				if _, ok := cfg.Get(k); !ok {
+					t.Errorf("this case is supposed to make sftpConfig set %q and it did not, so it pins nothing", k)
+				}
+			}
+
+			// And the values that matter for FR-6 are exactly what was
+			// configured, not silently substituted or defaulted to
+			// something looser.
+			if v, _ := cfg.Get("key_file"); v != src.KeyFile {
+				t.Errorf("key_file = %q, want %q", v, src.KeyFile)
+			}
+			if v, _ := cfg.Get("known_hosts_file"); v != src.KnownHosts {
+				t.Errorf("known_hosts_file = %q, want %q", v, src.KnownHosts)
+			}
+		})
 	}
 }
 
@@ -370,96 +634,131 @@ func TestSftpConfig_KeyResolverFailureNeverLeaksIntoTheError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Integration test: a real Docker SFTP server, attacked.
-//
-// A happy-path test only proves that a correct known_hosts entry is accepted.
-// It says nothing about whether verification is actually load-bearing, since
-// a backend that never checks anything would pass it too. The tests below
-// stand up a disposable OpenSSH/SFTP server in Docker, record its host key
-// the way an operator would (connect once, capture the key it presented),
-// and then prove two attacks are refused:
-//
-//   - a server at an address this adapter has never seen before (unknown
-//     host key);
-//   - the same server address now answering with a different host key
-//     (changed host key, i.e. a MITM or an unnoticed server replacement).
-//
-// Every "docker run" of the fixture image generates its own fresh SSH host
-// keys at container start (nothing is baked into the image, nothing is
-// persisted), so two separate containers from the same image reliably
-// present two different host keys. That is what makes the "changed key" case
-// reproducible without hand-crafting key material.
-// ---------------------------------------------------------------------------
+// --- #298: key_file at rest encryption, exercised through sftpConfig itself ---
 
-// sftpFixtureDockerfile builds a minimal Alpine sshd configured as a
-// restricted, key-only SFTP endpoint: no password/keyboard-interactive
-// login, chrooted to the backup user's home directory, sftp-only via
-// ForceCommand. This mirrors the restricted-account posture docs/ssh-setup.md
-// asks a real deployment for, though it exists here purely as a test
-// fixture, not as guidance.
-const sftpFixtureDockerfile = `FROM alpine:3.20
-
-RUN apk add --no-cache openssh-server openssh-sftp-server \
- && mkdir -p /var/run/sshd \
- && addgroup -S backup \
- && adduser -S -G backup -h /home/backup -s /sbin/nologin backup \
- && mkdir -p /home/backup/.ssh /home/backup/upload \
- && chown root:root /home/backup \
- && chmod 755 /home/backup \
- && chown backup:backup /home/backup/upload \
- && chown backup:backup /home/backup/.ssh \
- && chmod 700 /home/backup/.ssh \
- && passwd -u backup
-
-COPY authorized_keys /home/backup/.ssh/authorized_keys
-RUN chown backup:backup /home/backup/.ssh/authorized_keys && chmod 600 /home/backup/.ssh/authorized_keys
-
-COPY sshd_config /etc/ssh/sshd_config
-
-EXPOSE 22
-
-# No host key is baked into the image and none is persisted across restarts,
-# so every container start gets a brand new identity.
-CMD ["sh", "-c", "ssh-keygen -A && exec /usr/sbin/sshd -D -e"]
-`
-
-const sftpFixtureSSHDConfig = `Port 22
-HostKey /etc/ssh/ssh_host_ed25519_key
-
-PubkeyAuthentication yes
-PasswordAuthentication no
-ChallengeResponseAuthentication no
-KbdInteractiveAuthentication no
-UsePAM no
-PermitRootLogin no
-AuthorizedKeysFile /home/backup/.ssh/authorized_keys
-
-Subsystem sftp internal-sftp
-
-Match User backup
-    ChrootDirectory /home/backup
-    ForceCommand internal-sftp
-    AllowTcpForwarding no
-    X11Forwarding no
-`
-
-const sftpFixtureImageTag = "rclone-manager-sftp-fixture:test"
-
-// requireDocker skips the test when Docker is not available, so this file
-// stays runnable in environments without it. Where Docker is present, this
-// test runs for real: it is the whole point of this file.
-func requireDocker(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not found in PATH, skipping SFTP host-key integration test")
+// TestSftpConfig_KeyFileWithNoKeyEncryptionStaysOffTheHeap is #298's
+// regression guarantee proven at the sftpConfig level rather than
+// resolveKeyFileForSFTP's own unit level: with no key_encryption source
+// configured, a key_file source behaves EXACTLY as TestSftpConfig_
+// KeyFileNeverProducesKeyPem already proves it always has, key_pem is
+// never set and key_file is forwarded untouched, even though this
+// specific source's file happens to hold a real key on disk (validSource's
+// touchFile only ever writes a placeholder; this test uses a real one so a
+// regression that started reading key_file's content unconditionally would
+// still only be caught here, not by the placeholder-based test).
+func TestSftpConfig_KeyFileWithNoKeyEncryptionStaysOffTheHeap(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	if err := os.WriteFile(src.KeyFile, mustUnencryptedKeyPEM(t), 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, "docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("docker daemon not reachable, skipping SFTP host-key integration test: %v: %s", err, out)
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	if _, ok := cfg.Get("key_pem"); ok {
+		t.Fatal("key_pem was set with no key_encryption source configured")
+	}
+	if v, _ := cfg.Get("key_file"); v != src.KeyFile {
+		t.Errorf("key_file = %q, want %q", v, src.KeyFile)
 	}
 }
+
+// TestSftpConfig_KeyFileEncryptedAtRestResolvesToKeyPem is #298's
+// migration path exercised through the real production entry point: a
+// plaintext key_file plus a configured key_encryption source is migrated
+// to at-rest encryption AND authenticates this one connection attempt, in
+// a single sftpConfig call, exactly the way an upgraded installation's
+// first real connection after configuring key_encryption behaves.
+func TestSftpConfig_KeyFileEncryptedAtRestResolvesToKeyPem(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	plaintext := mustUnencryptedKeyPEM(t)
+	if err := os.WriteFile(src.KeyFile, plaintext, 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEYENC_ENV"
+	t.Setenv(envName, "sftpconfig-level-migration-dek")
+	src.KeyEncryptionEnv = envName
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	if _, ok := cfg.Get("key_file"); ok {
+		t.Error("an at-rest-encrypted key source also set key_file")
+	}
+	got, ok := cfg.Get("key_pem")
+	if !ok {
+		t.Fatal("an at-rest-encrypted key source did not set key_pem")
+	}
+	roundTripped, err := strconv.Unquote(`"` + got + `"`)
+	if err != nil {
+		t.Fatalf("key_pem value is not valid rclone escaping: %v", err)
+	}
+	if roundTripped != string(plaintext) {
+		t.Fatal("key_pem, once unescaped, does not match the original key")
+	}
+
+	onDisk, err := os.ReadFile(src.KeyFile)
+	if err != nil {
+		t.Fatalf("reading key_file after sftpConfig: %v", err)
+	}
+	if !isEncryptedKeyMaterial(onDisk) {
+		t.Fatal("sftpConfig did not migrate the plaintext key_file to at-rest encryption")
+	}
+}
+
+// TestSftpConfig_KeyFileEncryptionWrongDEKFails proves a misconfigured
+// key_encryption source fails the whole connection attempt loudly, the
+// same way a bad key.env/key.command resolver already does, rather than
+// silently falling back to key_file or authenticating with garbage.
+func TestSftpConfig_KeyFileEncryptionWrongDEKFails(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+
+	ciphertext, err := encryptKeyMaterial(obs.NewSecret("the-real-dek"), mustUnencryptedKeyPEM(t))
+	if err != nil {
+		t.Fatalf("encryptKeyMaterial: %v", err)
+	}
+	if err := os.WriteFile(src.KeyFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("writing a pre-encrypted key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEYENC_WRONG"
+	t.Setenv(envName, "not-the-right-dek")
+	src.KeyEncryptionEnv = envName
+
+	if _, err := sftpConfig(src); err == nil {
+		t.Fatal("sftpConfig succeeded with a key_encryption source that does not decrypt key_file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The Docker half of this file has moved.
+// ---------------------------------------------------------------------------
+//
+// Everything between here and TestWithSHA256 below used to be an SFTP
+// fixture of this file's own: an alpine image with a client key baked into
+// authorized_keys, rebuilt inside six separate test functions, plus the
+// container lifecycle, the readiness probe and the host-key attack cases
+// that drove it.
+//
+// It is core/tests/machinegate and core/tests/machines now (#448, #450).
+// The attack cases needed a server whose host key could be substituted and
+// whose authorized_keys could be added to, which is a machine rather than a
+// per-test `docker build`, and running them from this package meant
+// `go test ./internal/...` needed a Docker daemon in order to say anything
+// about sftpConfig, which is pure.
+//
+// What stays here is the pure half, and it is most of the file: every
+// TestSftpConfig_ case above, and the three withSHA256 cases below.
+//
+// Three helpers came back with it, because the pure half uses them and
+// none of them touches Docker: two ed25519 key generators and a free-port
+// finder.
 
 // generateClientSSHKeyPair creates a throwaway ed25519 key pair for the test
 // client identity. It is generated fresh for each test run, lives only under
@@ -491,287 +790,11 @@ func generateClientSSHKeyPair(t *testing.T) (privateKeyPath string, authorizedKe
 	return privateKeyPath, authorizedKeyLine
 }
 
-// buildSFTPFixtureImage builds the disposable sshd image used by every
-// subtest below, baking in the given client's authorized_keys entry.
-func buildSFTPFixtureImage(t *testing.T, authorizedKeyLine string) string {
-	t.Helper()
-	dir := t.TempDir()
-	writeMust := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatalf("writing %s: %v", name, err)
-		}
-	}
-	writeMust("Dockerfile", sftpFixtureDockerfile)
-	writeMust("sshd_config", sftpFixtureSSHDConfig)
-	writeMust("authorized_keys", authorizedKeyLine+"\n")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", sftpFixtureImageTag, dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("docker build failed: %v\n%s", err, out)
-	}
-	return sftpFixtureImageTag
-}
-
-// containerNameFor derives a Docker-safe container name from the running
-// test's name, so parallel or repeated runs do not collide.
-func containerNameFor(t *testing.T, label string) string {
-	t.Helper()
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
-			return r
-		default:
-			return '-'
-		}
-	}, t.Name())
-	return fmt.Sprintf("rclone-manager-sftp-test-%s-%s-%d", safe, label, time.Now().UnixNano())
-}
-
-// startFixtureContainer starts a fresh instance of the fixture image
-// publishing container port 22 on 127.0.0.1:hostPort, and returns once its
-// sshd is confirmed listening and its host key confirmed generated. It
-// retries the docker-run itself briefly on a port-in-use error, since a
-// container stopped moments earlier by this same test can take a beat to
-// fully release its port.
-func startFixtureContainer(t *testing.T, image string, hostPort int, label string) (containerID, hostKeyLine string) {
-	t.Helper()
-	name := containerNameFor(t, label)
-
-	var out []byte
-	var err error
-	for attempt := 0; attempt < 10; attempt++ {
-		cmd := exec.Command("docker", "run", "-d", "--name", name,
-			"-p", fmt.Sprintf("127.0.0.1:%d:22", hostPort), image)
-		out, err = cmd.CombinedOutput()
-		if err == nil {
-			break
-		}
-		msg := string(out)
-		if !strings.Contains(msg, "port is already allocated") && !strings.Contains(msg, "address already in use") {
-			t.Fatalf("docker run failed: %v\n%s", err, out)
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("docker run failed after retries: %v\n%s", err, out)
-	}
-	containerID = strings.TrimSpace(string(out))
-	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", containerID).Run()
-	})
-
-	hostKeyLine = waitForFixtureReady(t, containerID, hostPort)
-	return containerID, hostKeyLine
-}
-
-// stopFixtureContainer removes a container immediately, so its host port is
-// free for the next container in the same test to reuse. (The container's
-// own t.Cleanup still runs at test end; removing an already-removed
-// container there is a harmless no-op.)
-func stopFixtureContainer(containerID string) {
-	_ = exec.Command("docker", "rm", "-f", containerID).Run()
-}
-
-// waitForFixtureReady polls until the container has generated its host key
-// and sshd is accepting TCP connections, then returns the ed25519 host
-// public key line (as produced by ssh-keygen, e.g. "ssh-ed25519 AAAA... comment").
-func waitForFixtureReady(t *testing.T, containerID string, hostPort int) string {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		out, err := exec.Command("docker", "exec", containerID, "cat", "/etc/ssh/ssh_host_ed25519_key.pub").CombinedOutput()
-		if err != nil {
-			lastErr = fmt.Errorf("reading host key: %w: %s", err, out)
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		line := strings.TrimSpace(string(out))
-		if line == "" {
-			lastErr = fmt.Errorf("host key file was empty")
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		conn, dialErr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", hostPort), 500*time.Millisecond)
-		if dialErr != nil {
-			lastErr = dialErr
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		_ = conn.Close()
-		return line
-	}
-	logs, _ := exec.Command("docker", "logs", containerID).CombinedOutput()
-	t.Fatalf("sftp fixture container %s never became ready: %v\ncontainer logs:\n%s", containerID, lastErr, logs)
-	return ""
-}
-
-// writeKnownHosts writes a single known_hosts entry, in the exact format
-// rclone's sftp backend parses (via golang.org/x/crypto/ssh/knownhosts, the
-// same library that produces the "key mismatch" / "key is unknown" errors
-// this test asserts on), for host:port -> the given ssh-keygen public key
-// line.
-func writeKnownHosts(t *testing.T, path, host string, port int, hostKeyLine string) {
-	t.Helper()
-	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostKeyLine))
-	if err != nil {
-		t.Fatalf("parsing host key line %q: %v", hostKeyLine, err)
-	}
-	addr := knownhosts.Normalize(fmt.Sprintf("%s:%d", host, port))
-	line := knownhosts.Line([]string{addr}, pubKey)
-	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
-		t.Fatalf("writing known_hosts: %v", err)
-	}
-}
-
-func TestSFTPHostKeyVerification(t *testing.T) {
-	requireDocker(t)
-
-	clientKeyPath, authorizedKeyLine := generateClientSSHKeyPair(t)
-	image := buildSFTPFixtureImage(t, authorizedKeyLine)
-
-	host := "127.0.0.1"
-	port := freeTCPPort(t)
-	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
-
-	contA, hostKeyA := startFixtureContainer(t, image, port, "server-a")
-	writeKnownHosts(t, knownHostsPath, host, port, hostKeyA)
-
-	src := transport.Source{
-		ID:         "sftp-fixture",
-		Type:       "sftp",
-		Host:       host,
-		Port:       port,
-		User:       "backup",
-		KeyFile:    clientKeyPath,
-		KnownHosts: knownHostsPath,
-	}
-
-	adapter := New()
-	ctx := context.Background()
-
-	// Positive control: prove the harness itself is sound before trusting
-	// any refusal below. If this fails, the "attacks" prove nothing, since
-	// they could just as well be failing for an unrelated reason (wrong
-	// port, wrong user, key mismatch, sshd misconfigured).
-	t.Run("recorded host key with the configured SSH key succeeds", func(t *testing.T) {
-		if _, err := adapter.List(ctx, src); err != nil {
-			logs, _ := exec.Command("docker", "logs", contA).CombinedOutput()
-			t.Fatalf("List against the recorded host key should have succeeded, got: %v\nserver logs:\n%s", err, logs)
-		}
-	})
-
-	stopFixtureContainer(contA)
-
-	t.Run("unknown host key is refused", func(t *testing.T) {
-		unknownPort := freeTCPPort(t)
-		contU, _ := startFixtureContainer(t, image, unknownPort, "server-unknown")
-		defer stopFixtureContainer(contU)
-
-		unknownSrc := src
-		unknownSrc.Port = unknownPort // known_hosts has no entry for this host:port at all
-
-		_, err := adapter.List(ctx, unknownSrc)
-		if err == nil {
-			t.Fatal("List against a host with no known_hosts entry should have been refused, it succeeded")
-		}
-		if !strings.Contains(err.Error(), "knownhosts: key is unknown") {
-			t.Fatalf("expected an unknown-host-key error, got: %v", err)
-		}
-	})
-
-	t.Run("changed host key is refused (MITM)", func(t *testing.T) {
-		// Same host:port as the one recorded in known_hosts, but a freshly
-		// started container, so a freshly generated, different host key:
-		// exactly the shape of a MITM, or a server quietly replaced.
-		contB, hostKeyB := startFixtureContainer(t, image, port, "server-b")
-		defer stopFixtureContainer(contB)
-
-		if hostKeyB == hostKeyA {
-			t.Fatal("test setup bug: server B generated the same host key as server A, so this proves nothing")
-		}
-
-		_, err := adapter.List(ctx, src) // src is unchanged: same host:port, known_hosts still pinned to A's key
-		if err == nil {
-			t.Fatal("List against a changed host key should have been refused, it succeeded")
-		}
-		if !strings.Contains(err.Error(), "knownhosts: key mismatch") {
-			t.Fatalf("expected a host-key-mismatch error, got: %v", err)
-		}
-	})
-}
-
-// TestSFTPKeyResolvers is #74's positive control: an end-to-end SFTP
-// connection through each of the three key resolvers against the real
-// Docker fixture, proving they actually authenticate a real session rather
-// than merely producing bytes that look plausible in a unit test. Without
-// this, code that refused every resolver would still pass every other test
-// in this file.
-//
-// All three subtests reuse one fixture container and one client key pair:
-// the fixture's authorized_keys trusts exactly one key regardless of which
-// resolver names it, so the same container proves all three.
-func TestSFTPKeyResolvers(t *testing.T) {
-	requireDocker(t)
-
-	clientKeyPath, authorizedKeyLine := generateClientSSHKeyPair(t)
-	pem, err := os.ReadFile(clientKeyPath)
-	if err != nil {
-		t.Fatalf("reading generated client key: %v", err)
-	}
-	image := buildSFTPFixtureImage(t, authorizedKeyLine)
-
-	host := "127.0.0.1"
-	port := freeTCPPort(t)
-	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
-
-	cont, hostKeyLine := startFixtureContainer(t, image, port, "key-resolvers")
-	t.Cleanup(func() { stopFixtureContainer(cont) })
-	writeKnownHosts(t, knownHostsPath, host, port, hostKeyLine)
-
-	base := transport.Source{
-		ID:         "sftp-key-resolvers",
-		Type:       "sftp",
-		Host:       host,
-		Port:       port,
-		User:       "backup",
-		KnownHosts: knownHostsPath,
-	}
-	adapter := New()
-	ctx := context.Background()
-
-	t.Run("file", func(t *testing.T) {
-		src := base
-		src.KeyFile = clientKeyPath
-		if _, err := adapter.List(ctx, src); err != nil {
-			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
-			t.Fatalf("List via the key_file resolver: %v\nserver logs:\n%s", err, logs)
-		}
-	})
-
-	t.Run("env", func(t *testing.T) {
-		const envName = "RCLONE_MANAGER_TEST_SFTP_KEY_ENV"
-		t.Setenv(envName, string(pem))
-		src := base
-		src.KeyEnv = envName
-		if _, err := adapter.List(ctx, src); err != nil {
-			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
-			t.Fatalf("List via the key_env resolver: %v\nserver logs:\n%s", err, logs)
-		}
-	})
-
-	t.Run("command", func(t *testing.T) {
-		src := base
-		src.KeyCommand = []string{"/bin/cat", clientKeyPath}
-		if _, err := adapter.List(ctx, src); err != nil {
-			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
-			t.Fatalf("List via the key_command resolver: %v\nserver logs:\n%s", err, logs)
-		}
-	})
-}
-
+// freeTCPPort asks the kernel for a port and hands back the number after
+// closing the listener. It is inherently racy, and that is acceptable
+// here for the reason it usually is not: the callers want an address
+// nothing is listening on, so losing the race means something bound the
+// port in between, which is the condition they were looking for anyway.
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -780,4 +803,107 @@ func freeTCPPort(t *testing.T) int {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+func TestWithSHA256_AsksRcloneForTheHashThisProjectVerifiesWith(t *testing.T) {
+	dir := t.TempDir()
+	base, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cfg := withSHA256(base)
+
+	got, ok := cfg.Get("hashes")
+	if !ok {
+		t.Fatal("withSHA256 did not set \"hashes\"; rclone then defaults to MD5+SHA1 and can never answer a sha256 request, so validation.hash: sha256 fails every artifact")
+	}
+	if !strings.Contains(got, "sha256") {
+		t.Errorf("hashes = %q, want it to include \"sha256\"; config.Validation.Hash accepts no other non-empty value", got)
+	}
+
+	// Naming the hash is necessary and not sufficient. rclone will not
+	// trust a hash command until it has probed it, and its v1.75.0
+	// SHA-256 probe list pairs the sha256 commands with the SHA-1 ones
+	// for the empty-input check ({"sha256sum", "sha1sum"} and
+	// {"sha256 -r", "sha1 -r"}), so the probe runs sha1sum, gets SHA-1's
+	// digest of empty input, compares it against SHA-256's, and rejects
+	// a working sha256sum. Only its third candidate can be accepted, and
+	// that one needs rclone installed on the SOURCE host. Measured
+	// against a real sshd with coreutils sha256sum on PATH: with
+	// "hashes" alone, RemoteHash still answered `backend "sftp" cannot
+	// compute sha256`; with the pin below it returned the digest, equal
+	// to the one sha256sum produced over a plain ssh session.
+	if v, _ := cfg.Get("sha256sum_command"); v != "sha256sum" {
+		t.Errorf("sha256sum_command = %q, want %q; without it rclone probes sha256 with sha1sum and rejects a working sha256sum", v, "sha256sum")
+	}
+}
+
+// TestWithSHA256_NeverReachesTheFsThatCopies is the other half of the fix,
+// and the half a gate run had to teach me.
+//
+// rclone's copy picks its integrity hash from Common(src.Hashes(),
+// dst.Hashes()). Setting these options on the Fs that copies makes a
+// hardened, shell-less account advertise SHA-256, fail to compute it at
+// copy time, and rclone then compares the empty string against the local
+// digest and reports `corrupted on transfer: sha256 hashes differ`.
+// Measured in core/tests/sftpintegration: it turned the recommended
+// deployment from "backs up, cannot hash-verify" into "cannot back up at
+// all", broke the backup sets that never asked for a hash as well as the
+// ones that did, and blamed corruption for a missing capability.
+//
+// So sftpConfig, which is what fsFor builds every list, copy and delete
+// from, must come back without either key.
+func TestWithSHA256_NeverReachesTheFsThatCopies(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, k := range []string{"hashes", "sha256sum_command"} {
+		if v, ok := cfg.Get(k); ok {
+			t.Errorf("sftpConfig set %q = %q; on the copy path that turns a missing hash capability into `corrupted on transfer` and stops the backup entirely", k, v)
+		}
+	}
+}
+
+// TestWithSHA256_IsNotAClaimTheServerCanHashIt guards the remaining risk:
+// the pin must not turn a source that genuinely cannot hash into one that
+// appears to pass.
+//
+// It does not, and the reason is structural rather than a value in this
+// map. Pinning the command makes rclone RUN it instead of probing for it;
+// where the account has no shell, the run fails, RemoteHash returns that
+// error, and Verify fails the artifact exactly as it did when the
+// capability came back absent. Measured both ways against real sshd
+// containers: a shell account returns the digest, a forced internal-sftp
+// account returns `failed to run "sha256sum ...": Process exited with
+// status 1`. Neither hands back a hash the manager did not earn.
+//
+// What this test can pin is the narrower, checkable claim: nothing here
+// reaches for one of rclone's own ways of making a hash check pass without
+// performing one, or pays for digests this project never requests.
+func TestWithSHA256_IsNotAClaimTheServerCanHashIt(t *testing.T) {
+	dir := t.TempDir()
+	base, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cfg := withSHA256(base)
+
+	if v, ok := cfg.Get("disable_hashcheck"); ok && v != "false" {
+		t.Errorf("disable_hashcheck = %q; nothing may switch off the check internal/lifecycle is being asked to enforce", v)
+	}
+	for _, k := range []string{"md5sum_command", "sha1sum_command"} {
+		if v, ok := cfg.Get(k); ok {
+			t.Errorf("%s = %q; nothing in this project asks for that digest, so pinning it only buys a wasted round trip", k, v)
+		}
+	}
+
+	// And it leaves the FR-6 posture alone: every key sftpConfig set is
+	// still set, to the same value.
+	for k, want := range base {
+		if got, _ := cfg.Get(k); got != want {
+			t.Errorf("withSHA256 changed %q from %q to %q; it may only add", k, want, got)
+		}
+	}
 }

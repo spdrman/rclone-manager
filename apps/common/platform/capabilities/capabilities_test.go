@@ -8,6 +8,24 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
 
+// These tests are the contract's only executable specification: nothing
+// else in this repository can tell a provider author that returning a bare
+// nil from Authenticator() is legal but discouraged, or that embedding
+// BasePlatformAdapter is enough on its own.
+//
+// So two adapters live here side by side and neither is redundant.
+// fakeAdapter returns nil for a capability it does not have, which is the
+// original convention and still a valid PlatformAdapter; minimalAdapter
+// embeds BasePlatformAdapter and returns the null object instead. Both
+// conventions are in the wild, and a change that quietly broke either one
+// would be a source-compatible change that panics in somebody's provider,
+// which is the shape of breakage this file exists to make loud.
+//
+// The package is capabilities_test rather than capabilities: the contract
+// is what a provider outside this package sees, so the tests are written
+// from outside it too, and cannot accidentally lean on an unexported
+// helper a provider would not have.
+
 // fakeAdapter is a minimal PlatformAdapter used only to prove the contract
 // is implementable without pulling in any real provider or core code. Every
 // provider app under apps/<provider>/ implements this same interface (EPIC

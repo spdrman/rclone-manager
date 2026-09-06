@@ -1,16 +1,48 @@
+/**
+ * Everything an operator can configure from the UI, plus what this build
+ * and this platform are.
+ *
+ * Most of the page's history is subtraction. Several cards here used to be
+ * controls that rendered a value and saved nowhere: a polling interval in
+ * the wrong unit, a log level with no config key behind it, storage
+ * thresholds with no handler. Each was either removed or replaced with the
+ * real thing, and the notes in the JSX say which, because a decorative
+ * control is worse than a missing one. It teaches an operator that they
+ * have configured something.
+ *
+ * What is left splits three ways: cards that own a real config block and
+ * write it, capability copy that reports what this platform can do without
+ * ever claiming more, and build information. The version reads the shared
+ * node rather than fetching again, so this page and the compatibility
+ * banner above it cannot name two different versions.
+ */
+import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
+import { useCausl } from "@shared/state/graph";
+import { configuredNode, versionNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
+import { ErrorState } from "@shared/components/EmptyState";
+import { apiErrorOf, describeFailure } from "@shared/api/failure";
+import type { OperatorFailure } from "@shared/api/failure";
+import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
+import { CapacityCard } from "@shared/pages/CapacityCard";
+import { HelpField } from "@shared/components/FieldHelp";
+import { PasswordInput } from "@shared/components/PasswordInput";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
-  const api = useApi();
   const navigate = useNavigate();
   const { bridge, capabilityCopy } = usePlatform();
-  const version = useAsync(() => api.getVersion(), [api]);
+  // Reads the same shared node App.tsx already fetches once for its own
+  // readOnly derivation (#103), instead of running a second independent
+  // getVersion() here — the two could otherwise briefly disagree about
+  // which version is current.
+  const version = useCausl(versionNode);
+  const configured = useCausl(configuredNode);
 
   return (
     <>
@@ -21,49 +53,33 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <section className="card">
-            <div className="card__header"><h2 className="eyebrow">Service</h2></div>
-            <div
-              className="card__body"
-              style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(196px, 1fr))", gap: "15px 18px" }}
-            >
-              <label className="field">
-                <span className="field__label">Polling interval</span>
-                <select className="select" defaultValue="30" disabled={readOnly}>
-                  <option value="15">15 seconds</option>
-                  <option value="30">30 seconds</option>
-                  <option value="60">60 seconds</option>
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Log level</span>
-                <select className="select" defaultValue="info" disabled={readOnly}>
-                  <option>error</option><option>warn</option><option>info</option><option>debug</option>
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Storage warning threshold</span>
-                <input className="input input--mono" defaultValue="80%" disabled={readOnly} />
-              </label>
-              <label className="field">
-                <span className="field__label">Storage critical threshold</span>
-                <input className="input input--mono" defaultValue="92%" disabled={readOnly} />
-              </label>
-              <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 7 }}>
-                <span className="field__label">Default retention for new sets</span>
-                <div className="mono" style={{ display: "flex", gap: 9, flexWrap: "wrap", fontSize: "var(--text-sm)" }}>
-                  {["7 daily", "13 weekly", "12 monthly"].map((t) => (
-                    <span key={t} style={{ padding: "5px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "var(--surface-2)" }}>
-                      {t}
-                    </span>
-                  ))}
-                  <span style={{ padding: "5px 10px", border: "1px solid var(--ok)", borderRadius: "var(--radius-md)", background: "var(--ok-quiet)" }}>
-                    protect known-good
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
+          {/* Issue #299: this used to be a "Service" card holding two
+              decorative controls, "Polling interval" (15/30/60 SECONDS)
+              and "Log level" — both `defaultValue`, no `onChange`, nothing
+              saved. Removed rather than wired: the real `poll_interval`
+              config key is a duration (minutes, defaults to 15m) so this
+              control was even answering the wrong unit, and there is no
+              log-level concept anywhere in config.Config to wire the
+              second one to. `poll_interval` is still real and still
+              editable — just directly in config.yaml, not here. */}
+
+          {/* Issue #286: the storage cap and its two FR-21 thresholds
+              used to sit here as three decorative controls that saved
+              nowhere ("Storage warning threshold"/"Storage critical
+              threshold" carried defaultValue="80%"/"92%" and no handler
+              at all). They are now the real thing, reading from and
+              writing to internal/config's capacity block, same as
+              RetentionPolicyCard below did for retention under #140. */}
+          <CapacityCard readOnly={readOnly} />
+
+          {/* B3.7 (#140). This used to be a static row of badges reading
+              "7 daily / 13 weekly / 12 monthly / protect known-good": a
+              picture of a policy, wired to nothing, and wrong twice over
+              once #156 generalized the chain (13 weekly was never a
+              default, and the chain is not three fixed tiers). It is now
+              the real thing, read from and written to the running
+              config. */}
+          <RetentionPolicyCard readOnly={readOnly} />
 
           <section className="card">
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>
@@ -73,32 +89,42 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                 <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
                 <span>{notificationCopy(bridge.capabilities(), bridge.name)}</span>
               </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 13px", border: "1px solid var(--border)", borderRadius: 7, fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" defaultChecked disabled={readOnly} style={{ accentColor: "var(--accent)" }} />
-                <span style={{ flex: 1 }}>Webhook notifications</span>
-                <span className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                  https://hooks.internal/bm
-                </span>
-              </label>
+              {/* Issue #299: this row used to present
+                  "https://hooks.internal/bm" as a live webhook delivery
+                  target. config.Alerts' own doc comment says where an
+                  alert goes is deliberately not configurable in this
+                  product — there was never a URL for this row to
+                  validate, save, or actually deliver to. Removed rather
+                  than wired, since wiring it would mean reversing that
+                  design decision, which this issue does not do. This was
+                  the most urgent item in #299: not a control that merely
+                  failed to save, a specific fake fact stated as true. */}
             </div>
           </section>
 
-          <section className="card" style={{ borderColor: "var(--warn)" }}>
-            <div className="card__header"><h2 className="eyebrow">Catalog recovery</h2></div>
-            <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>Existing backup data detected</div>
-              <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
-                Backup files were found in the configured storage location, but they are
-                not currently present in the Backup Manager catalog. Scanning is
-                read-only — no files will be deleted.
-              </p>
-              <div>
-                <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/catalog-recovery")}>
-                  Scan backup storage
-                </button>
+          <ChangePasswordCard readOnly={readOnly} />
+
+          {/* #275: on an instance with no configuration there is no
+              storage location, so there is nothing this card could
+              truthfully claim was found in one. */}
+          {configured === false ? null : (
+            <section className="card" style={{ borderColor: "var(--warn)" }}>
+              <div className="card__header"><h2 className="eyebrow">Catalog recovery</h2></div>
+              <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>Existing backup data detected</div>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
+                  Backup files were found in the configured storage location, but they are
+                  not currently present in the Backup Manager catalog. Scanning is
+                  read-only — no files will be deleted.
+                </p>
+                <div>
+                  <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/catalog-recovery")}>
+                    Scan backup storage
+                  </button>
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -131,16 +157,24 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
             <div className="card__body">
               {version.data ? (
                 <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "1fr auto", gap: "10px 14px", fontSize: "var(--text-sm)" }}>
-                  <Row label="Backup Manager version" value={version.data.ui} />
                   <Row label="Service version" value={version.data.service} />
-                  <Row label="Core version" value={version.data.core} />
-                  <Row label="Embedded rclone" value={version.data.rclone} />
-                  <Row label="Database schema" value={String(version.data.schema)} />
+                  <Row label="API contract" value={version.data.api} />
+                  <Row label="Backup engine" value={version.data.engine} />
+                  <Row label="Go toolchain" value={version.data.goVersion} />
+                  <Row label="Configuration revision" value={version.data.configRevision} />
                   <Row label="Platform adapter" value={bridge.deployment.adapterVersion} />
-                  <Row label="Architecture" value={version.data.architecture} />
                   <Row label="Build commit" value={version.data.buildCommit} />
                 </dl>
-              ) : null}
+              ) : version.error ? (
+                // versionNode's one fetch is owned by App.tsx, not this page,
+                // so there is nothing here to retry (mirrors BackupSetsPage's
+                // operations.error inline notice, same reasoning).
+                <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                  {"Version information is unavailable (" + version.error.message + ") — details below may be out of date."}
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Loading version information…</p>
+              )}
             </div>
           </section>
         </div>
@@ -155,5 +189,159 @@ function Row({ label, value }: { label: string; value: string }) {
       <dt style={{ color: "var(--text-2)" }}>{label}</dt>
       <dd className="mono" style={{ margin: 0 }}>{value}</dd>
     </>
+  );
+}
+
+const MIN_PASSWORD_LENGTH = 12;
+
+/** §13A password rotation (issue #128) - reuses EnrollmentPage.tsx's own
+ *  validation shape (minimum length, confirm-match) since it is the same
+ *  "pick a new password" moment, just for an existing account instead of
+ *  a first-run one. A successful rotation signs out every OTHER session
+ *  for this administrator (apps/common/auth/local's handleRotatePassword);
+ *  this tab's own session is reissued, so no redirect/sign-out happens
+ *  here.
+ *
+ *  #274: a rejected rotation used to read as a wrong current password
+ *  whatever the service said, under the literal `cid_rotate_password`. A
+ *  rate-limited address and a session that expired while this tab sat open
+ *  are both reachable here and neither is a wrong password. */
+function describeRotationFailure(e: unknown): OperatorFailure {
+  const api = apiErrorOf(e);
+  if (api?.code === "UNAUTHENTICATED") {
+    // handleRotatePassword answers UNAUTHENTICATED both for a wrong current
+    // password and for a session that is no longer valid, and does not say
+    // which. Naming both beats naming the wrong one.
+    return {
+      message: "That current password was not accepted.",
+      remediation: "If it is definitely right, this tab's session may have expired: reload the page, sign in again and retry.",
+      correlationId: api.correlationId
+    };
+  }
+  return describeFailure(e, "The password was not changed.");
+}
+
+function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
+  const api = useApi();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<OperatorFailure | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LENGTH;
+  const mismatch = confirm.length > 0 && confirm !== next;
+  // Referenced rather than left inside the field's <label> to be swept into
+  // its name; see the matching note on EnrollmentPage and PasswordInput's
+  // doc for why the name no longer picks them up.
+  const tooShortId = useId();
+  const mismatchId = useId();
+  const valid = current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && confirm === next;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid || readOnly) return;
+    setBusy(true);
+    setFailure(null);
+    setSuccess(false);
+    api
+      .rotatePassword(current, next)
+      .then(() => {
+        setSuccess(true);
+        setCurrent("");
+        setNext("");
+        setConfirm("");
+      })
+      .catch((e: unknown) => setFailure(describeRotationFailure(e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="card">
+      <div className="card__header"><h2 className="eyebrow">Administrator password</h2></div>
+      <div className="card__body">
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <HelpField label="Current password" help={FIELD_HELP.currentPassword}>
+            {(helpId, field) => (
+              <PasswordInput
+                label={field.label}
+                labelledBy={field.id}
+                autoComplete="current-password"
+                describedBy={helpId}
+                value={current}
+                onChange={setCurrent}
+                disabled={readOnly}
+                required
+              />
+            )}
+          </HelpField>
+          <HelpField label="New password" help={FIELD_HELP.newPassword}>
+            {(helpId, field) => (
+              <>
+                <PasswordInput
+                  label={field.label}
+                  labelledBy={field.id}
+                  autoComplete="new-password"
+                  describedBy={tooShort ? helpId + " " + tooShortId : helpId}
+                  value={next}
+                  onChange={setNext}
+                  disabled={readOnly}
+                  required
+                />
+                {tooShort ? (
+                  <span id={tooShortId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                    {"Minimum " + MIN_PASSWORD_LENGTH + " characters."}
+                  </span>
+                ) : null}
+              </>
+            )}
+          </HelpField>
+          <HelpField label="Confirm new password" help={FIELD_HELP.confirmNewPassword}>
+            {(helpId, field) => (
+              <>
+                <PasswordInput
+                  label={field.label}
+                  labelledBy={field.id}
+                  autoComplete="new-password"
+                  describedBy={mismatch ? helpId + " " + mismatchId : helpId}
+                  value={confirm}
+                  onChange={setConfirm}
+                  disabled={readOnly}
+                  required
+                />
+                {mismatch ? (
+                  <span id={mismatchId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                    Passwords do not match.
+                  </span>
+                ) : null}
+              </>
+            )}
+          </HelpField>
+          {success ? (
+            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+              Password changed. Other signed-in sessions have been signed out.
+            </div>
+          ) : null}
+          {failure ? (
+            <ErrorState
+              message={failure.message}
+              remediation={failure.remediation}
+              correlationId={failure.correlationId}
+            />
+          ) : null}
+          <div>
+            <button
+              className="btn btn--primary"
+              type="submit"
+              disabled={!valid || busy || readOnly}
+              style={{ height: 40 }}
+            >
+              {busy ? "Changing…" : "Change password"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
   );
 }

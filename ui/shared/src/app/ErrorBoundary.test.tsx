@@ -1,3 +1,12 @@
+/**
+ * Proof that the boundary does its two jobs, which are easy to get half
+ * right: it must be invisible when nothing throws, and it must produce
+ * something an operator can act on when something does.
+ *
+ * The second case asserts on the reload control as well as the message,
+ * because a message with no way forward is the blank screen with extra
+ * steps.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ErrorBoundary } from "./ErrorBoundary";

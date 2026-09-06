@@ -10,39 +10,42 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
-// TestReconcile_RealAdapter_CannotConvergeRemoteDeletePendingToComplete_KnownDefect
-// is the end-to-end proof behind the "adapter never classifies its own
-// errors" defect this PR reports (see
-// internal/transport/rclone/error_classification_gap_a213_test.go for the
-// narrower proof, and the PR description for the full writeup and the
-// recommended fix).
+// This file exists because every other test in this package answers the
+// remote through a fake, and a fake is where a whole class of defect
+// hides.
 //
-// This is the exact fixture TestReconcile_DeletePending_RemoteAbsent_ValidLocal_ReconcilesComplete
-// (in reconcile_test.go) already proves converges correctly: an artifact at
-// REMOTE_DELETE_PENDING whose remote object is genuinely, confirmably gone
-// must reconcile straight to COMPLETE (FR-17's own row for exactly this
-// case, and the row crash_safety.go's REMOTE_DELETE_PENDING -> COMPLETE
-// walkthrough depends on for "the remote delete had actually already
-// succeeded before the crash"). That test uses statTransportFor(artifact,
-// statNotFound), a fake transport whose Stat method hands back an
-// already-classified transport.NotFound error, which is what
-// reconcileDeletePending's statRemote helper needs to see to conclude
-// "confirmed absent".
+// reconcileDeletePending concludes "the remote is confirmed absent" from
+// transport.CategoryOf reporting NotFound, and nowhere else. Every fixture
+// in reconcile_test.go hands it a transport whose Stat already returns an
+// error carrying that category, so those tests prove the reconciliation
+// logic and say nothing at all about whether a real adapter ever produces
+// the category they depend on. It did not, once, and this file is what
+// caught that.
 //
-// This test swaps that fake for the real rclone.Adapter's local backend,
-// pointed at a source where the remote object is genuinely absent from
-// disk, and nothing else changes. It proves that against the real adapter,
-// Reconcile cannot reach the same, already-proven-correct verdict: the raw
-// error the real adapter returns is never classified, so statRemote's
-// transport.CategoryOf check never sees NotFound, and the row that must
-// converge to COMPLETE instead surfaces as a per-artifact Errors entry,
-// leaving the journal stuck at REMOTE_DELETE_PENDING. That is a real
-// "artifact stuck with no way forward" (docs/EPIC.md's crash matrix
-// exactly names this as a failure the crash matrix must prove does not
-// happen), even though it can never cause an unauthorized deletion:
-// reconcileDeletePending only ever moves a row toward COMPLETE or
-// QUARANTINED, or leaves it exactly where it is; it never calls
-// DeleteRemote itself.
+// The whole test stays here now that the adapter has been fixed, because a
+// gap between what a fake promises and what the real thing delivers is not
+// a one-off. This is the one test in the package that will notice if the
+// adapter stops classifying its errors again.
+
+// TestReconcile_RealAdapter_ConvergesRemoteDeletePendingToComplete runs the
+// exact scenario TestReconcile_DeletePending_RemoteAbsent_ValidLocal_ReconcilesComplete
+// covers in reconcile_test.go, with the fake transport swapped for the real
+// rclone adapter's local backend and nothing else changed.
+//
+// An artifact at REMOTE_DELETE_PENDING whose remote object is genuinely
+// gone has to reconcile straight to COMPLETE. That is FR-17's own "absent /
+// final / REMOTE_DELETE_PENDING" row, and it is the row crash_safety.go's
+// walkthrough leans on for the crash that happened just after a real delete
+// succeeded and just before COMPLETE was journaled.
+//
+// It used to assert the opposite, as a known defect: the adapter returned
+// its errors raw, transport.CategoryOf could not tell a NotFound from
+// anything else, and the row that had to converge surfaced as a
+// per-artifact error with the journal left at REMOTE_DELETE_PENDING
+// forever. That is docs/EPIC.md's "artifact stuck with no way forward",
+// though never an unauthorized deletion: this path only ever moves a row
+// toward COMPLETE or QUARANTINED or leaves it alone, and never calls
+// DeleteRemote at all.
 func TestReconcile_RealAdapter_ConvergesRemoteDeletePendingToComplete(t *testing.T) {
 	j := openTestJournal(t)
 	artifact := testArtifact(t, "known-defect-stuck.dump")

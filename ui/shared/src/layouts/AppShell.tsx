@@ -1,3 +1,18 @@
+/**
+ * The frame every signed-in page renders inside: header, section nav, and
+ * the content column.
+ *
+ * The shell is deliberately thin on decisions and carries only two. The
+ * titlebar strip appears for embedded providers alone, because drawing
+ * host chrome on a platform that does not have any would be inventing an
+ * affordance the operator's window manager will not honour. And the nav
+ * counts arrive as props rather than being read from the graph here, so
+ * this file stays renderable in a test with no graph behind it, which is
+ * what several of the page suites rely on.
+ *
+ * Everything else is layout. If a change here needs a comment about what
+ * it does, it probably belongs in a page instead.
+ */
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Logo, Wordmark } from "@shared/components/Logo";
@@ -72,7 +87,7 @@ export function AppShell({
         {health ? (
           <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} glyph={health.serviceRunning ? "\u25cf" : "\u2715"}>
             {(health.serviceRunning ? "Service running" : "Service stopped") +
-              (version ? " \u00b7 v" + version.ui : "")}
+              (version ? " \u00b7 v" + version.service : "")}
           </StatusBadge>
         ) : null}
 

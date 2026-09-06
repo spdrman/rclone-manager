@@ -15,6 +15,38 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// The per-artifact walk, and the one boundary the whole shutdown-safety
+// argument rests on.
+//
+// The case to read first is the shutdown after commit. A commit makes the
+// local copy durable and the very next step deletes the source, so a
+// cancellation between those two must stop, and it must stop without having
+// issued the delete. The assertion is that DeleteRemote was never called at
+// all, counted on the fake, because an assertion about the artifact's final
+// state would pass against an implementation that deleted the source and
+// then failed to record it. Its neighbour, the same walk with no shutdown,
+// is the control that proves the delete does happen when nothing interrupts
+// it, so the first test cannot be satisfied by a pipeline that has stopped
+// deleting anything.
+//
+// The capacity case is the other refusal that has to be counted rather than
+// inferred: FR-21 says a transfer known not to fit must not BEGIN, which is
+// a claim about a call that was never made.
+//
+// The two regression cases are here because both bugs were invisible in a
+// happy path. A missing local directory failed only on a first run into a
+// fresh path, and a delete left half-done by a previous cycle needed a
+// second cycle to resume it, which no single-pass test would ever reach.
+
+// testBackupSet is the backup set almost every test in this package starts
+// from: one include pattern, the rename completion strategy, and a caller-
+// supplied local directory.
+//
+// The local directory is a parameter rather than a t.TempDir() call inside,
+// because a test with two backup sets needs two roots and sharing one is how
+// a fixture quietly proves that two sets can write over each other. Callers
+// that need a different shape mutate the returned value rather than growing
+// this signature, so the default stays readable.
 func testBackupSet(t *testing.T, localDir string) config.BackupSet {
 	t.Helper()
 	return config.BackupSet{
@@ -27,6 +59,18 @@ func testBackupSet(t *testing.T, localDir string) config.BackupSet {
 	}
 }
 
+// discoverOneRecord runs the real discovery pass and returns the single
+// record it produced, failing the test if it produced any other number.
+//
+// Going through internal/discovery rather than writing a DISCOVERED row by
+// hand is what makes the tests built on it mean anything: the row carries
+// whatever discovery actually records today, so a change to that shape shows
+// up as a pipeline test failing rather than as a fixture that has quietly
+// stopped resembling production.
+//
+// Insisting on exactly one is the guard that keeps the return value honest.
+// A fixture that discovered two artifacts would otherwise hand back whichever
+// came first out of a map.
 func discoverOneRecord(t *testing.T, ctx context.Context, journal Journal, tr transport.Transport, source transport.Source, bs config.BackupSet) state.Record {
 	t.Helper()
 	res, err := discovery.Discover(ctx, discovery.Deps{Transport: tr, Journal: journal, Now: fixedNow(epoch)}, source, bs)
@@ -39,6 +83,14 @@ func discoverOneRecord(t *testing.T, ctx context.Context, journal Journal, tr tr
 	return res.Discovered[0]
 }
 
+// epoch is the instant almost every test in this package pins its clock to,
+// through fixedNow. A fixed instant rather than time.Now is what makes
+// retention verdicts reproducible: GFS tiers are anchored on the civil date
+// an instant falls in, so a suite reading the real clock would decide
+// differently either side of midnight and either side of a DST change.
+//
+// It is deliberately in UTC and deliberately midday, so no arithmetic a test
+// does to it lands on a day boundary by accident.
 var epoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
 // TestProcessArtifact_ShutdownAfterCommit_NeverCallsDeleteRemote is this
@@ -284,5 +336,88 @@ func TestProcessArtifact_ResumesDeleteFromAPreviousCycle(t *testing.T) {
 	}
 	if _, stillThere := tr.objects["backup.dump"]; stillThere {
 		t.Error("the remote object was never deleted on the retried attempt")
+	}
+}
+
+// stableBackupSet is testBackupSet's WP3.2 twin: a "stable"-strategy
+// backup set instead of "rename", with both the discovery-time stability
+// window (StableFor) and WP3.2's own additional deletion-safety delay
+// (DeleteSafetyDelay) configured.
+func stableBackupSet(t *testing.T, localDir string, safetyDelay time.Duration) config.BackupSet {
+	t.Helper()
+	bs := testBackupSet(t, localDir)
+	bs.Completion = config.Completion{
+		Strategy:          "stable",
+		StableFor:         config.Duration(5 * time.Minute),
+		DeleteSafetyDelay: config.Duration(safetyDelay),
+	}
+	return bs
+}
+
+// TestProcessArtifact_StableStrategy_DeleteGateWaitsForSafetyDelay is
+// WP3.2's own boundary/INTEGRATION proof (docs/EPIC-B-multi-nas.md §71
+// Work Package 3.2): a full transfer -> verify -> commit -> (WP3.2's
+// stable-mode gate) -> delete-gate pass for a "stable"-strategy backup
+// set, run twice against the identical fake transport and journal like
+// TestProcessArtifact_TransientDeleteFailure_RetriedOnNextCycle above.
+//
+// The first call reaches COMMITTED and then finds the configured
+// delete_safety_delay has not elapsed yet: remote deletion must not fire
+// early, so the remote object must still be present and the journal must
+// still read COMMITTED afterward. The second call, with svc.Now moved far
+// enough past that same COMMITTED write, finds the delay satisfied and
+// completes the delete exactly as a "rename"/"marker" backup set already
+// does in TestProcessArtifact_NoShutdown_CompletesAndDeletesRemote.
+func TestProcessArtifact_StableStrategy_DeleteGateWaitsForSafetyDelay(t *testing.T) {
+	localDir := t.TempDir()
+	safetyDelay := 10 * time.Minute
+	bs := stableBackupSet(t, localDir, safetyDelay)
+	source := transport.Source{ID: "stable-gate-test"}
+
+	tr := newFakeTransport()
+	// Well before epoch - StableFor, so discovery's own "stable"
+	// completion check (internal/discovery/complete.go) already treats
+	// this candidate as complete as of epoch, exactly like every other
+	// fixture in this file that discovers at a fixed `epoch`.
+	tr.put("backup.dump", "payload bytes", epoch.Add(-time.Hour).Unix())
+
+	journal := openJournal(t)
+	rec := discoverOneRecord(t, context.Background(), journal, tr, source, bs)
+
+	svc := New(&config.Config{}, journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.processArtifact(context.Background(), source, bs, rec)
+
+	afterFirstCall, err := journal.Get(context.Background(), rec.Artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if afterFirstCall.State != string(lifecycle.Committed) {
+		t.Fatalf("after the first call: journal state = %q, want %q: the stable-mode safety delay has not elapsed, so the pipeline must stop at COMMITTED, not advance toward a delete", afterFirstCall.State, lifecycle.Committed)
+	}
+	if got := tr.deleteCallCount(); got != 0 {
+		t.Fatalf("after the first call: DeleteRemote was called %d time(s), want 0: remote deletion must not fire before the safety delay elapses", got)
+	}
+	if _, stillThere := tr.objects["backup.dump"]; !stillThere {
+		t.Fatal("after the first call: the remote object should still be present, remote deletion must not fire early")
+	}
+
+	// A later cycle, run far enough past the first COMMITTED write that
+	// the configured delete_safety_delay has genuinely elapsed.
+	svc.Now = fixedNow(epoch.Add(safetyDelay + time.Minute))
+	svc.processArtifact(context.Background(), source, bs, afterFirstCall)
+
+	final, err := journal.Get(context.Background(), rec.Artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != string(lifecycle.Complete) {
+		t.Fatalf("after the second call: journal state = %q, want %q: once the safety delay has elapsed, a stable-strategy artifact must be able to complete exactly like a rename/marker one", final.State, lifecycle.Complete)
+	}
+	if got := tr.deleteCallCount(); got != 1 {
+		t.Fatalf("after the second call: DeleteRemote was called %d time(s), want exactly 1", got)
+	}
+	if _, stillThere := tr.objects["backup.dump"]; stillThere {
+		t.Error("after the second call: the remote object was never deleted")
 	}
 }

@@ -1,11 +1,35 @@
-package lifecycle
-
+// These cover FR-13's verification step, which is the largest suite in this
+// package because verification is three layers rather than one.
+//
+// Transfer verification always runs: the local file exists and its size
+// matches what was recorded. The hash tier runs when the backup set
+// configures one, and it has more branches than it looks like because a
+// backend that can hash and a backend that cannot are two different
+// situations. The application validator runs when one is configured, as an
+// untrusted subprocess.
+//
+// There used to be a third situation in that tier, a copy that had already
+// compared a checksum of its own, and #492 removed it: nothing ever
+// recorded one, and the hash a copy compares is not the one a policy asks
+// for. What survives is the negative,
+// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum.
+//
+// Two distinctions organise almost every test here. The first is the one
+// verification exists to make: a check that RAN and disagreed is a verdict
+// about the artifact and quarantines it, while a check that could not run at
+// all is a fact about the endpoint and must not. Issue #419's stall tests
+// live next door in stall_test.go for that reason. The second is which
+// requests are made: several tests assert on remoteHashCalls rather than on
+// the verdict, because "asks the backend exactly when a policy is
+// configured, and never otherwise" is not observable from the outcome.
+//
 // Fakes in this file are named verifyJournal/verifyTransport, deliberately
 // distinct from engine_test.go's fakeJournal (whose Get is unused there,
 // since Advance never calls it) and from transfer_test.go's
 // fakeTransferJournal/fakeTransport (owned by Transfer's own tests, and not
 // configurable the way Verify's RemoteHash-heavy tests need). testArtifact
 // is reused as-is from transfer_test.go rather than redeclared.
+package lifecycle
 
 import (
 	"context"
@@ -41,12 +65,44 @@ type verifyJournal struct {
 	recordErr error
 	seen      map[string]state.Outcome
 	recorded  []state.Transition
+
+	// enteredAt mirrors what state.Journal.LastEnteredAt reads out of the
+	// real transition log: the time of the newest transition INTO a state
+	// from a different one. A same-state pass does not touch it, which is
+	// the whole property remotedelete.go's WP3.2 gate depends on, so a
+	// fake that simply stamped every write here would quietly hide the bug
+	// that check exists to prevent.
+	enteredAt map[string]time.Time
 }
 
+// newVerifyJournal starts from a caller-supplied record, because these
+// tests vary the row far more than the transitions: what is recorded on it,
+// which hash baseline it carries, which state it claims to be in.
 func newVerifyJournal(rec state.Record) *verifyJournal {
-	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome)}
+	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome), enteredAt: make(map[string]time.Time)}
 }
 
+// LastEnteredAt reads the map the fake maintains by hand rather than
+// deriving it from recorded writes. See the field comment: deriving it from
+// every write is exactly the mistake that would make the WP3.2 safety gate
+// untestable, because a same-state pass would appear to restart its
+// clock.
+func (j *verifyJournal) LastEnteredAt(_ context.Context, _ model.ArtifactID, st string) (time.Time, bool, error) {
+	at, ok := j.enteredAt[st]
+	return at, ok, nil
+}
+
+// LastTransition is unused by the step under test, and the safety property
+// it exists for (issue #220's reinstatement forfeiture) is proved against a
+// real journal in remotedelete_reinstate_test.go, not here. Reporting "no
+// such edge" is the honest answer for a fake that records no log at all.
+func (j *verifyJournal) LastTransition(context.Context, model.ArtifactID, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
+// Get returns the current row, or the configured failure. Verify reads the
+// record itself, unlike Advance, so this has to work and the getErr hook has
+// somewhere to be exercised.
 func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, error) {
 	if j.getErr != nil {
 		return state.Record{}, j.getErr
@@ -54,6 +110,9 @@ func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, er
 	return j.rec, nil
 }
 
+// RecordTransition reproduces key replay and the From check, and maintains
+// enteredAt only for a genuine state CHANGE, which is the behaviour the real
+// journal has and the one the stall and safety-gate tests depend on.
 func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
 	j.recorded = append(j.recorded, t)
 
@@ -67,6 +126,9 @@ func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) 
 		return state.Outcome{}, fmt.Errorf("verifyJournal: state mismatch: have %q, want from %q", j.rec.State, t.From)
 	}
 
+	if t.To != t.From {
+		j.enteredAt[t.To] = t.OccurredAt
+	}
 	j.rec.State = t.To
 	if t.Hashes != nil {
 		j.rec.LocalHash = t.Hashes.Hash
@@ -77,14 +139,25 @@ func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) 
 		j.rec.ValidationPassed = &passed
 		j.rec.ValidationDetail = t.Validation.Detail
 	}
+	if t.Retry != nil {
+		j.rec.RetryCount = t.Retry.Count
+		j.rec.LastError = t.Retry.LastError
+		j.rec.NextRetryAt = t.Retry.NextAttempt
+	}
 
 	out := state.Outcome{Applied: true, Record: j.rec}
 	j.seen[t.Key] = out
 	return out, nil
 }
 
+// currentState is where the artifact ended up, for tests asserting a
+// verdict routed somewhere specific.
 func (j *verifyJournal) currentState() string { return j.rec.State }
 
+// transitionsTo returns every write into one state, so a test can assert
+// there was exactly one and read the detail that was recorded with it. The
+// detail is often the real subject: it is what an operator sees when they
+// ask why an artifact was quarantined.
 func (j *verifyJournal) transitionsTo(to State) []state.Transition {
 	var out []state.Transition
 	for _, t := range j.recorded {
@@ -103,18 +176,27 @@ type verifyTransport struct {
 	remoteHashCalls int
 }
 
+// List fails: verification never enumerates.
 func (t *verifyTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
 	return nil, errors.New("verifyTransport: List not used")
 }
 
+// Stat fails: the expected size comes from the journal's recorded transfer
+// result, not from asking the remote again. A Stat here would be trusting
+// the remote to describe what was already copied.
 func (t *verifyTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 	return transport.RemoteArtifact{}, errors.New("verifyTransport: Stat not used")
 }
 
+// CopyToLocal fails: the bytes are already local by the time this runs.
 func (t *verifyTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
 	return transport.TransferResult{}, errors.New("verifyTransport: CopyToLocal not used")
 }
 
+// RemoteHash counts before it checks whether it is configured, which is
+// deliberate: several tests assert the count is ZERO, and a counter that
+// only incremented on the configured path would let an unexpected call slip
+// through as an error rather than as the extra request it is.
 func (t *verifyTransport) RemoteHash(ctx context.Context, source transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
 	t.remoteHashCalls++
 	if t.remoteHashFunc == nil {
@@ -123,12 +205,17 @@ func (t *verifyTransport) RemoteHash(ctx context.Context, source transport.Sourc
 	return t.remoteHashFunc(ctx, source, remotePath, alg)
 }
 
+// DeleteRemote fails. Nothing about verification touches the remote copy,
+// and a quiet success here would hide a serious ordering bug.
 func (t *verifyTransport) DeleteRemote(context.Context, transport.Source, string) error {
 	return errors.New("verifyTransport: DeleteRemote not used")
 }
 
 // --- helpers ---
 
+// verifyWriteLocalFile writes the artifact's local file for a test to
+// verify. A real file rather than a stub, because the checks under test read
+// it: they stat it for size and hash its contents.
 func verifyWriteLocalFile(t *testing.T, content []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "artifact.dump")
@@ -164,6 +251,10 @@ func mustScript(t *testing.T, body string) string {
 	return path
 }
 
+// sha256Hex computes what the code should compute, so a test can stage a
+// matching or a deliberately mismatching baseline. The mismatching cases
+// mutate the string rather than the content, which keeps the file and the
+// expectation independent.
 func sha256Hex(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
@@ -171,6 +262,10 @@ func sha256Hex(content []byte) string {
 
 // --- layer 1: transfer verification, always ---
 
+// TestVerify_TransferOnly_NoHashNoValidator_Verifies is the floor: with
+// nothing configured, transfer verification still runs and still has to
+// pass. There is no configuration in which an artifact reaches VERIFIED
+// without the local file existing at the recorded size.
 func TestVerify_TransferOnly_NoHashNoValidator_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -196,6 +291,9 @@ func TestVerify_TransferOnly_NoHashNoValidator_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_MissingLocalFile_Fails covers the file
+// having gone between the transfer and the check, which is a full disk being
+// cleaned up underneath the process or an operator tidying a directory.
 func TestVerify_TransferVerification_MissingLocalFile_Fails(t *testing.T) {
 	rec := verifyingRecord(t, filepath.Join(t.TempDir(), "does-not-exist"), 10)
 	j := newVerifyJournal(rec)
@@ -212,6 +310,9 @@ func TestVerify_TransferVerification_MissingLocalFile_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_SizeMismatch_Fails is the truncated-copy
+// case, and it is the cheapest check in the product: it needs no hash and no
+// remote request, and it catches the most common way a copy goes wrong.
 func TestVerify_TransferVerification_SizeMismatch_Fails(t *testing.T) {
 	path := verifyWriteLocalFile(t, []byte("short"))
 	rec := verifyingRecord(t, path, 999) // does not match what's actually on disk
@@ -233,6 +334,13 @@ func TestVerify_TransferVerification_SizeMismatch_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_TransferVerification_NoExpectedSize_Fails refuses rather than
+// skipping when there is nothing to compare against.
+//
+// Skipping would be the tempting reading, and it is the dangerous one: with
+// no recorded size the size check silently stops being a check, so an
+// artifact with no configured hash and no validator would reach VERIFIED
+// having had nothing verified at all.
 func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
 	path := verifyWriteLocalFile(t, []byte("x"))
 	rec := verifyingRecord(t, path, 0)
@@ -254,15 +362,39 @@ func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
 
 // --- layer 2: hash verification ---
 
-func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T) {
+// TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum
+// is #492's replacement for a test that pinned the opposite.
+//
+// Until #492 this switch had a shortcut: a record carrying
+// state.TransferResult.Checksummed skipped RemoteHash entirely, on the
+// reading that the copy had already compared a hash. That shortcut was
+// dead, because no production copy ever set the field, and it was the
+// unsafe branch to leave lying around, because the comparison it would
+// have trusted is not the one the operator configured. rclone picks the
+// copy-time hash with operations.CommonHash, which is the first type both
+// sides share, and MD5 registers first in rclone's hash package, so on
+// local and on sftp alike the answer is MD5. A `hash: sha256` policy
+// satisfied by an MD5 comparison is exactly the silent downgrade of
+// configured verification FR-13 forbids.
+//
+// So the field is gone from transport.TransferResult and the branch is
+// gone from decide. The journal column survives (it is in shipped,
+// immutable migrations), and this test sets it TRUE on purpose: the point
+// is that a row still claiming a copy-time checksum buys no shortcut. It
+// is watched against the old behaviour, where the disagreeing remote hash
+// below was never requested and the artifact verified clean.
+func TestVerify_Hash_AsksTheBackendEvenWhenTheJournalClaimsACopyTimeChecksum(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
 	rec := verifyingRecord(t, path, int64(len(content)))
 	rec.Transfer.Checksummed = true
 	j := newVerifyJournal(rec)
+	// A remote that disagrees. The verdict, not just the request count, is
+	// what makes this test fail against the shortcut: under the old code
+	// this artifact reached VERIFIED with the mismatch never observed.
+	const remote = "0000000000000000000000000000000000000000000000000000000000000000"
 	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
-		t.Fatal("RemoteHash must not be called once the transfer step already recorded a trustworthy checksum")
-		return "", nil
+		return remote, nil
 	}}
 
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
@@ -272,14 +404,18 @@ func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if out.Record.State != string(Verified) {
-		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q: the remote disagreed with the local file and nothing on the record may excuse the manager from noticing", out.Record.State, Quarantined)
 	}
-	if tr.remoteHashCalls != 0 {
-		t.Fatalf("RemoteHash called %d times, want 0", tr.remoteHashCalls)
+	if tr.remoteHashCalls != 1 {
+		t.Fatalf("RemoteHash called %d times, want 1: a configured sha256 policy is answered by asking the backend, never by a flag saying some other hash was compared during the copy", tr.remoteHashCalls)
 	}
 }
 
+// TestVerify_Hash_MatchesRemoteHash_Verifies is the other branch: no
+// producer checksum, so the backend is asked. Together with the test above
+// it pins that the remote is consulted exactly when there is no cheaper
+// answer available.
 func TestVerify_Hash_MatchesRemoteHash_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -309,6 +445,13 @@ func TestVerify_Hash_MatchesRemoteHash_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_Hash_MismatchQuarantines is the verdict half of the file's
+// central distinction: a hash that was computed and disagrees is a statement
+// about the bytes, so the artifact is quarantined rather than failed.
+//
+// FAILED would be the wrong home. It is for a pipeline that could not
+// produce a backup; this is a backup that was produced and is wrong, which
+// needs a human rather than another attempt.
 func TestVerify_Hash_MismatchQuarantines(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -372,6 +515,13 @@ func TestVerify_Hash_RequiredButCapabilityAbsent_FailsExplicitly_NeverSilentlyVe
 	}
 }
 
+// TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksum
+// pins that an unconfigured hash tier costs nothing.
+//
+// Without it, an implementation that asked the backend for a hash and then
+// ignored the answer would pass every verdict test in this file while adding
+// a request per artifact per cycle against a backend that may be charged per
+// request or may not support hashing at all.
 func TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksum(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -395,6 +545,9 @@ func TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksu
 	}
 }
 
+// TestVerify_Hash_RetriesTransientFailureThenSucceeds pins that a
+// classified transient failure is retried within the call, so a blip while
+// asking for a hash does not become a verdict about the artifact.
 func TestVerify_Hash_RetriesTransientFailureThenSucceeds(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -426,6 +579,12 @@ func TestVerify_Hash_RetriesTransientFailureThenSucceeds(t *testing.T) {
 	}
 }
 
+// TestVerify_Hash_DoesNotRetryUnsupportedCapability is the companion, and
+// the case it covers is the recommended posture rather than a fault: the
+// hardened, shell-less SFTP account FR-6 suggests genuinely cannot compute a
+// hash, and retrying that on a schedule would spend the whole retry budget
+// every cycle, for every artifact, to learn what the first answer already
+// said.
 func TestVerify_Hash_DoesNotRetryUnsupportedCapability(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -451,6 +610,10 @@ func TestVerify_Hash_DoesNotRetryUnsupportedCapability(t *testing.T) {
 
 // --- hash lookup cancellation: a stop request, not a verdict ---
 
+// TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal
+// covers a shutdown reaching Verify before it starts. During a shutdown this
+// happens once per remaining artifact, so a journal write here would fill
+// the log with transitions recording nothing that happened.
 func TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -476,6 +639,12 @@ func TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal(t *test
 	}
 }
 
+// TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying
+// covers a shutdown landing in the sleep between hash attempts.
+//
+// VERIFYING is the honest answer: verification was underway and was
+// interrupted. Anything else would turn stopping the daemon into a verdict,
+// and a quarantine reached that way would need an operator to undo.
 func TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying(t *testing.T) {
 	orig := remoteHashRetryPolicy
 	remoteHashRetryPolicy = retry.Policy{BaseDelay: 200 * time.Millisecond, MaxDelay: 200 * time.Millisecond, Multiplier: 2}
@@ -521,6 +690,10 @@ func TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying(t
 
 // --- layer 3: application validation ---
 
+// TestVerify_Validator_Passes_Verifies is the positive control for the
+// validator tier. Every other validator test here expects a refusal, so
+// without one success they would all be satisfied by a Verify that never ran
+// the script.
 func TestVerify_Validator_Passes_Verifies(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -545,6 +718,12 @@ func TestVerify_Validator_Passes_Verifies(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_Fails_Quarantines pins that a validator which ran
+// and rejected the artifact is a verdict, so it quarantines.
+//
+// This is the case QuarantineReason has to be able to describe later, which
+// is why the recorded detail carries the validator's own output rather than
+// just the fact of the rejection.
 func TestVerify_Validator_Fails_Quarantines(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -572,6 +751,13 @@ func TestVerify_Validator_Fails_Quarantines(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_CannotStart_Fails is one character from the test
+// above it and lands somewhere different, which is the whole point.
+//
+// A validator that cannot be executed, a wrong path or a lost execute bit,
+// has said nothing about the artifact. Quarantining on it would mean one
+// typo in a config file quarantines every artifact in the backup set, each
+// of them needing an operator to release.
 func TestVerify_Validator_CannotStart_Fails(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -593,6 +779,12 @@ func TestVerify_Validator_CannotStart_Fails(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_DoesNotInheritAmbientEnvironment is the containment
+// property, and it matters here more than in restorecheck_test.go's twin:
+// this validator runs inside the process that holds the remote credentials,
+// during the pipeline rather than during a scheduled pass, so an inherited
+// environment would hand an operator-supplied executable everything the
+// daemon knows.
 func TestVerify_Validator_DoesNotInheritAmbientEnvironment(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -622,6 +814,10 @@ func TestVerify_Validator_DoesNotInheritAmbientEnvironment(t *testing.T) {
 	}
 }
 
+// TestVerify_Validator_OutputIsBounded covers a validator that dumps a log
+// or a diff. The bound protects two things at once: this process's memory
+// while capturing, and the journal row the detail is written into, which an
+// operator later has to read.
 func TestVerify_Validator_OutputIsBounded(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -659,19 +855,19 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n", shQuote(pidFile), int(hookNeverAnswers.Seconds()), shQuote(markerFile)))
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
 		Artifact: rec.Artifact, AttemptKey: "a1",
-		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(hookTimeoutBudget)}},
 	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > hookReturnBudget {
+		t.Fatalf("Verify took %s to return; the validator should have been killed well before its %s sleep finished", elapsed, hookNeverAnswers)
 	}
 	if out.Record.State != string(Quarantined) {
 		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
@@ -680,14 +876,7 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 		t.Fatalf("ValidationDetail = %q, want it to mention the timeout", out.Record.ValidationDetail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the validator should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
+	pid := timedOutHookPID(t, pidFile)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -703,6 +892,104 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker file exists: the validator ran to completion despite its timeout, so it was not actually killed")
+	}
+}
+
+// hookTimeoutBudget is the timeout the two "a hook that never answers is
+// killed" tests give their script, and it is deliberately not tight.
+//
+// Both tests prove the same contract: the process really is killed, not
+// abandoned. Proving "really killed" needs the script's own pid, which
+// means the script has to be forked, scheduled and get one line written
+// before the timeout fires. At 200ms it did not, on a machine running
+// several full gate runs at once: the fork lost the race, the pid file
+// never appeared, and the test failed on a missing file rather than on
+// anything about the behaviour it exists to prove (issue #377).
+//
+// Nothing about the contract needs the budget to be small. It has to be
+// short enough that the test is quick and long enough that a fork cannot
+// lose, and every assertion downstream is what actually carries the
+// meaning: the call has to return far sooner than the script's own sleep
+// would allow, the script's process has to be gone afterwards, and its
+// completion marker must not exist. Those hold at any budget with a
+// margin under hookNeverAnswers.
+const hookTimeoutBudget = 2 * time.Second
+
+// hookNeverAnswers is how long the test script sleeps for. It is an order
+// of magnitude above hookTimeoutBudget so that "returned before the sleep
+// finished" cannot be true by accident on a slow machine.
+const hookNeverAnswers = 30 * time.Second
+
+// hookReapBackstop mirrors the c.WaitDelay both implementations set
+// (restorecheck.go and verify.go, "c.WaitDelay = 5 * time.Second"). It is
+// Go's own backstop, not this project's: os/exec kills the child that long
+// after the context is done regardless of what c.Cancel did. Nothing reads
+// it from the production code, so if that value ever changes this constant
+// has to change with it, which is what TestHookTimeoutBudgets_CanStillFail
+// below is for.
+const hookReapBackstop = 5 * time.Second
+
+// hookReturnBudget bounds how long the call under test may take, and it is
+// the only assertion in either of these two tests that can separate a hook
+// that was killed from one that was merely abandoned. That is not obvious,
+// and it is worth writing down because a reasonable-looking number here
+// makes both tests vacuous.
+//
+// The pid read below looks like the proof that the process was killed. It
+// is not. Wait does not return until hookReapBackstop has done its own
+// killing, so by the time any check runs the process really is gone and
+// the marker really was never written, whether or not c.Cancel killed
+// anything. Those assertions pass either way.
+//
+// The elapsed time is what tells them apart, and the two regimes are far
+// apart and both insensitive to load, because each is set by a deadline
+// rather than by the scheduler. A killed hook returns at about
+// hookTimeoutBudget. An abandoned one returns at hookTimeoutBudget plus
+// hookReapBackstop. So the bound goes strictly between them, and it is
+// derived from the budget rather than written out, so the two cannot drift
+// apart: three seconds above a correct run, two below the backstop.
+//
+// I checked both directions rather than reasoning about them. With the
+// SIGKILL taken out of c.Cancel in both implementations and nothing else
+// changed, both tests return in 7.00s: at the old 10s budget they passed,
+// and at this one they fail on this line. With the real implementation
+// they return in 2.00s.
+//
+// Found by the author of #382, who reached these two tests from the other
+// direction (issue #371, a cold exec on macOS costing more than the old
+// 200ms budget) and checked it against this branch.
+const hookReturnBudget = hookTimeoutBudget + 3*time.Second
+
+// pidFileWait is how long timedOutHookPID waits for the killed script's
+// pid to become readable. It starts after the call under test has already
+// returned, so the script has had its whole hookTimeoutBudget to run
+// before this wait even begins; this is only for the write becoming
+// visible, not for the script starting.
+const pidFileWait = 2 * time.Second
+
+// timedOutHookPID reads the pid the killed script wrote. It polls rather
+// than reading once: the write happens on the child's own schedule, and a
+// filesystem that has not made it visible yet is not the same thing as a
+// script that never started. The failure message names the difference,
+// because that is what took the longest to work out the first time.
+func timedOutHookPID(t *testing.T, pidFile string) int {
+	t.Helper()
+	deadline := time.Now().Add(pidFileWait)
+	for {
+		pidBytes, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+			if convErr == nil {
+				return pid
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("pid file holds %q, which is not a pid: %v", string(pidBytes), convErr)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("no pid file %s after the call returned, and the script had %s to write one before that: it never got far enough, which means it was killed before it started rather than while it was hanging. On a loaded machine that is a fork losing a race with the timeout, not a defect in the code under test (issue #377): %v",
+				pidFileWait, hookTimeoutBudget, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -728,7 +1015,7 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	artifact := testArtifact(t)
 	content := []byte("dump-bytes")
@@ -769,18 +1056,19 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
 	}
 
-	// Structural proof #1: Quarantined's only legal successor at all is
-	// Discovered. There is no direct edge to anything closer to deletion.
-	successors := Successors(Quarantined)
-	if len(successors) != 1 || successors[0] != Discovered {
-		t.Fatalf("Successors(Quarantined) = %v, want exactly [Discovered]", successors)
-	}
+	// Structural proof #1: Quarantined reaches exactly three states, and
+	// none is REMOTE_DELETE_PENDING or COMPLETE. DISCOVERED re-ingests from
+	// scratch; COMMITTED and REMOTE_RETAINED (issue #315) are the two
+	// operator-only reinstatement targets issue #220 and #315 add, which
+	// proofs #2 and #3 below show cannot help this artifact reach a delete
+	// either.
+	assertStateSet(t, "Successors(Quarantined)", Successors(Quarantined), Discovered, Committed, RemoteRetained)
 
 	// Structural proof #2: Advance itself, backed by the real journal,
 	// refuses every attempt to move straight from Quarantined to a
 	// delete-eligible or later state, and leaves the journal untouched
 	// when it does.
-	for _, illegal := range []State{Verified, Committing, Committed, RemoteDeletePending, Complete} {
+	for _, illegal := range []State{Verified, Committing, RemoteDeletePending, Complete} {
 		if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
 			Artifact: artifact,
 			Key:      "attempt-1:illegal:" + string(illegal),
@@ -791,6 +1079,19 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 		}
 	}
 
+	// Structural proof #3: the one edge that does exist refuses this
+	// artifact by name. It was quarantined out of VERIFYING, so it never
+	// durably committed at all, and the transition log is what says so.
+	if _, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "attempt-1:reinstate",
+		Evidence:   ReinstatementEvidence{ValidatorPassed: true, Summary: "a second validator run passed"},
+	}); err == nil {
+		t.Fatal("ReinstateFromQuarantine promoted an artifact the validator rejected before it ever committed")
+	} else if _, ok := AsNeverHeldTargetState(err); !ok {
+		t.Fatalf("err = %v, want a *NeverHeldTargetStateError", err)
+	}
+
 	rec, err := j.Get(ctx, artifact)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -798,15 +1099,49 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 	if rec.State != string(Quarantined) {
 		t.Fatalf("journal state = %q after the refused Advance attempts, want it to still be %q", rec.State, Quarantined)
 	}
+
+	// Structural proof #4, and the one that makes FR-13's guarantee
+	// survive the new edge no matter what any caller does: force the
+	// artifact onto COMMITTED with a bare Advance, bypassing
+	// ReinstateFromQuarantine and every rule it enforces, and the remote
+	// delete is STILL refused. The refusal comes from the transition log,
+	// which now records a QUARANTINED -> COMMITTED edge, so it does not
+	// depend on the writer having gone through the sanctioned entry point.
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact,
+		Key:      "attempt-1:forced-committed",
+		From:     string(Quarantined),
+		To:       string(Committed),
+	}); err != nil {
+		t.Fatalf("forcing QUARANTINED -> COMMITTED: %v", err)
+	}
+	tp := &deleteTransport{}
+	_, err = DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1:delete",
+		CompletionStrategy: "rename",
+	})
+	_ = requireRefusal(t, err, reinstatementCheck)
+	if tp.deleteCalls != 0 {
+		t.Fatalf("transport.DeleteRemote called %d times, want 0: a required validator failure must prevent source deletion (FR-13)", tp.deleteCalls)
+	}
 }
 
+// TestVerify_SameAttemptKey_IsIdempotent is the one test in this file that
+// uses a REAL journal, because idempotency-key replay is the real journal's
+// behaviour and asserting it against the fake would be asserting the fake.
+//
+// It matters because the crash matrix kills the process after every state:
+// a retried Verify has to be recognised as the same attempt rather than
+// recorded as a second one, or the transition log would gain a row for every
+// crash and the stall counter would count attempts nobody made.
 func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	j, err := state.Open(ctx, filepath.Join(t.TempDir(), "journal.db"))
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	artifact := testArtifact(t)
 	content := []byte("dump-bytes")
@@ -857,6 +1192,12 @@ func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
 
 // --- input validation ---
 
+// TestVerify_RejectsMissingRequiredParams covers the three preconditions.
+//
+// The Transport one is worth noting: Verify requires it even when the
+// configuration enables no hash tier, so a caller cannot end up in a state
+// where enabling a hash in config silently produces a nil dereference at the
+// first artifact that needs one.
 func TestVerify_RejectsMissingRequiredParams(t *testing.T) {
 	content := []byte("dump-bytes")
 	path := verifyWriteLocalFile(t, content)
@@ -879,5 +1220,135 @@ func TestVerify_RejectsMissingRequiredParams(t *testing.T) {
 				t.Fatalf("Verify accepted %s", c.name)
 			}
 		})
+	}
+}
+
+// TestVerify_ValidatorIDWithoutAResolvedCommand_FailsClosed is issue
+// #162's fail-closed guard on the seam it introduces. A backup set names
+// its validator by id in config.yaml, and core/service resolves that id
+// into Validation.Command at load time. If some path ever reaches Verify
+// with the id still set and the Command still nil -- a constructor that
+// skipped resolution, a hot reload that forgot it -- the honest answer is
+// a refusal, not "no validator was configured, carry on": the operator
+// asked for one, and silently transferring and deleting the remote
+// source without it is the exact outcome FR-13 exists to prevent.
+func TestVerify_ValidatorIDWithoutAResolvedCommand_FailsClosed(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{ValidatorID: "trailer-marker"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q: a configured validator that was never resolved must never read as \"no validator configured\"", out.Record.State, Failed)
+	}
+	if len(j.recorded) == 0 {
+		t.Fatal("no transition was recorded")
+	}
+	detail := j.recorded[len(j.recorded)-1].Detail
+	if !strings.Contains(detail, "trailer-marker") {
+		t.Fatalf("transition detail = %q, want it to name the unresolved validator id", detail)
+	}
+}
+
+// TestVerify_NoValidatorIDAndNoCommand_StillVerifies is that guard's
+// positive control: the ordinary "this backup set has no application
+// validator" case must be untouched by it, or the test above would pass
+// for a version of decide that refused every artifact.
+func TestVerify_NoValidatorIDAndNoCommand_StillVerifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+}
+
+// TestHookTimeoutBudgets_CanStillFail is a guard on the constants above
+// rather than on any behaviour, because the way these two tests stop
+// working is not a broken assertion, it is a budget quietly widened past
+// the point where it can fail. At hookTimeoutBudget + hookReapBackstop or
+// beyond, a hook that c.Cancel never killed returns inside the budget and
+// every other assertion in both tests passes, so both go green against
+// exactly the defect they are named for. This is the check that says so
+// out loud instead of leaving it to whoever next finds one of them flaky.
+func TestHookTimeoutBudgets_CanStillFail(t *testing.T) {
+	abandoned := hookTimeoutBudget + hookReapBackstop
+	if hookReturnBudget >= abandoned {
+		t.Fatalf("hookReturnBudget is %s, but a hook that was abandoned rather than killed returns at %s (hookTimeoutBudget %s + hookReapBackstop %s). At this budget both timeout tests pass against an implementation whose c.Cancel kills nothing, which is the one thing they exist to prove. Lower it back under %s.",
+			hookReturnBudget, abandoned, hookTimeoutBudget, hookReapBackstop, abandoned)
+	}
+	if hookReturnBudget <= hookTimeoutBudget {
+		t.Fatalf("hookReturnBudget is %s, which is not above hookTimeoutBudget %s: a correct kill returns at about the budget, so this would fail on every run", hookReturnBudget, hookTimeoutBudget)
+	}
+	if hookNeverAnswers <= abandoned {
+		t.Fatalf("hookNeverAnswers is %s, which is not clear of %s: the script has to still be sleeping when both the kill and the backstop would have fired, or \"returned before the sleep finished\" is true by accident", hookNeverAnswers, abandoned)
+	}
+}
+
+// TestVerify_RemoteHashConnectTimeout_IsNeverReadAsACancellation is #388's
+// half of the story, kept as its own control now that #419 changed what
+// happens NEXT. The classification is the thing under test here: a connect
+// timeout rclone imposed on itself must not read as a stop request just
+// because context.DeadlineExceeded is still reachable underneath it. What
+// the step then DOES with that transient failure is stall_test.go's
+// subject, so this one asserts only that Verify neither returned it as a
+// cancellation nor left the journal untouched and silent.
+func TestVerify_RemoteHashConnectTimeout_IsNeverReadAsACancellation(t *testing.T) {
+	orig := remoteHashRetryPolicy
+	remoteHashRetryPolicy = retry.Policy{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}
+	t.Cleanup(func() { remoteHashRetryPolicy = orig })
+
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+
+	connectTimeout := transport.NewError(transport.Transient, "remote_hash",
+		fmt.Errorf(`source "prod": NewFs: couldn't connect SSH: dial tcp 192.0.2.1:22: %w`, context.DeadlineExceeded))
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		return "", connectTimeout
+	}}
+
+	// The precondition that makes this test necessary rather than
+	// hypothetical: the cause survives classification, so a raw errors.Is
+	// still finds it.
+	if !errors.Is(connectTimeout, context.DeadlineExceeded) {
+		t.Fatal("this error no longer carries context.DeadlineExceeded, so it cannot exercise the confusion this test exists for")
+	}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify returned an error, which is how it reports a cancellation, for a connect timeout nobody asked for: %v", err)
+	}
+	if out.Record.State == string(Verifying) {
+		t.Fatal("the journal was left at VERIFYING with nothing recorded, which is how a cancellation is handled")
+	}
+	recorded := j.transitionsTo(State(out.Record.State))
+	if len(recorded) != 1 {
+		t.Fatalf("recorded %d transitions to %s, want 1", len(recorded), out.Record.State)
+	}
+	if !strings.Contains(recorded[0].Detail, "transient") {
+		t.Fatalf("detail = %q, want it to name the transient category it actually got", recorded[0].Detail)
 	}
 }

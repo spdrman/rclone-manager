@@ -29,14 +29,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
@@ -46,8 +44,9 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
-	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
+	"github.com/spdrman/rclone-manager/core/tests/machines"
 )
 
 func openJournal(t *testing.T) *state.Journal {
@@ -56,7 +55,7 @@ func openJournal(t *testing.T) *state.Journal {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 
@@ -88,9 +87,9 @@ func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 // unexported test functions make, and covers hash capability separately
 // and honestly in TestSFTPHashCapability below.
 func TestSFTPContractSuite(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 
 	newSource := func(t *testing.T, root string) transport.Source {
 		t.Helper()
@@ -98,7 +97,7 @@ func TestSFTPContractSuite(t *testing.T) {
 		if err := os.MkdirAll(full, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", full, err)
 		}
-		return f.Source("sftp-contract-"+root, root)
+		return f.TransportSource("sftp-contract-"+root, root)
 	}
 	put := func(t *testing.T, root, remotePath string, content []byte) {
 		t.Helper()
@@ -296,13 +295,13 @@ func TestSFTPContractSuite(t *testing.T) {
 // explicitly rather than silently downgrading, exactly the two honest
 // postures verify.go documents.
 func TestSFTPHashCapability(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 	if err := os.MkdirAll(filepath.Join(f.UploadDir, "hash-capability-probe"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	source := f.Source("hash-capability", "hash-capability-probe")
+	source := f.TransportSource("hash-capability", "hash-capability-probe")
 
 	content := []byte("hash target content")
 	if err := os.WriteFile(filepath.Join(f.UploadDir, "hash-capability-probe", "hash-me.bin"), content, 0o644); err != nil {
@@ -332,7 +331,7 @@ func TestSFTPHashCapability(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(f.UploadDir, remoteDir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
-		source := f.Source("hash-capability-"+name, remoteDir)
+		source := f.TransportSource("hash-capability-"+name, remoteDir)
 		if err := os.WriteFile(filepath.Join(f.UploadDir, remoteDir, name+".bin"), content, 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -403,9 +402,9 @@ func TestSFTPHashCapability(t *testing.T) {
 // cross-contaminate: discovering, transferring and deleting one never
 // touches the other's remote object or journal row.
 func TestSFTPMultipleSources(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 	journal := openJournal(t)
 
 	type site struct {
@@ -427,7 +426,7 @@ func TestSFTPMultipleSources(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(s.remoteDir, "backup.dump"), []byte("content for "+s.name), 0o644); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		s.source = f.Source("multi-"+s.name, s.name)
+		s.source = f.TransportSource("multi-"+s.name, s.name)
 	}
 
 	var artifacts []model.ArtifactID
@@ -504,13 +503,13 @@ func TestSFTPMultipleSources(t *testing.T) {
 // implementation tolerated BeginTx on an already-done context. Wrapping
 // with Wrap here tests the real, intended code path instead.
 func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := classifytransport.Wrap(rclone.New())
-	source := f.Source("cancel-lifecycle", "")
+	source := f.TransportSource("cancel-lifecycle", "")
 	journal := openJournal(t)
 	localDir := t.TempDir()
 
-	const size = 2 * 1024 * 1024
+	const size = 4 * 1024 * 1024
 	content := make([]byte, size)
 	if _, err := rand.Read(content); err != nil {
 		t.Fatalf("rand.Read: %v", err)
@@ -521,7 +520,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 
 	set := mustSetID(t, "cancel-lifecycle-source", "set")
 	bs := config.BackupSet{Name: "set", ID: set, Completion: config.Completion{Strategy: "rename"}}
-	res, err := discovery.Discover(context.Background(), discovery.Deps{Transport: adapter, Journal: journal}, source, bs)
+	res, err := discovery.Discover(f.Context(), discovery.Deps{Transport: adapter, Journal: journal}, source, bs)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -530,32 +529,65 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	}
 	artifact := res.Discovered[0].Artifact
 
-	// Throttle bandwidth so a real, mid-copy cancellation has a wide,
-	// reliable window to land in, the same technique
-	// gate_test.go's MidTransferCancellation already established for this
-	// exact fixture.
-	const bwLimit = 128 * 1024
-	bwCtx, ci := fs.AddConfig(context.Background())
-	if err := (&ci.BwLimit).Set(fmt.Sprintf("%d", bwLimit)); err != nil {
-		t.Fatalf("set bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	t.Cleanup(func() {
-		unthrottled, _ := fs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	})
+	// Throttle so the copy lasts long enough to be interrupted part way
+	// through, then fire the cancel from the copy's OWN progress rather
+	// than from a timer.
+	//
+	// Both halves are issue #414's. The limit used to be built with
+	// fmt.Sprintf("%d", 128*1024) and rclone reads a bare 131072 as 128Mi
+	// rather than 128Ki, so there was no throttle at all; and a 150ms timer
+	// against this fixture reliably fires during the SSH connect, well
+	// before the copy has read a byte, so what it was really cancelling was
+	// the setup. What made it pass was that Transfer fails either way.
+	//
+	// The unit says what it means now, and the cancel cannot fire until the
+	// progress reporter has watched a real part of the payload move. Note
+	// that this row's subject is what the JOURNAL is left at, not how
+	// quickly the copy stops: the interruption itself is proved against the
+	// adapter, over a slow link rather than a bandwidth limit, by
+	// transport/rclone's TestPhase1Gate/ContextCancellation.
+	const bwLimit = "1Mi"
+	bwCtx := bwlimit.Throttle(t, f.Context(), bwLimit)
 
+	// A quarter of the payload: far enough in that the copy is
+	// unambiguously under way, far enough from the end that finishing
+	// anyway would be a visible failure rather than a rounding error.
+	const cancelAfterBytes = size / 4
 	cancelCtx, cancel := context.WithCancel(bwCtx)
-	time.AfterFunc(150*time.Millisecond, cancel)
+	defer cancel()
+	var (
+		progressMu sync.Mutex
+		movedAt    int64
+	)
+	progressCtx := transport.WithProgressReporter(cancelCtx, transport.ProgressReporterFunc(func(p transport.ByteProgress) {
+		progressMu.Lock()
+		fire := p.BytesTransferred >= cancelAfterBytes && movedAt == 0
+		if fire {
+			movedAt = p.BytesTransferred
+		}
+		progressMu.Unlock()
+		if fire {
+			cancel()
+		}
+	}))
 
 	deps := lifecycle.Deps{Journal: journal, Transport: adapter}
-	_, transferErr := lifecycle.Transfer(cancelCtx, deps, lifecycle.TransferParams{
+	_, transferErr := lifecycle.Transfer(progressCtx, deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	})
-	if transferErr == nil {
-		t.Fatal("Transfer succeeded despite being cancelled mid-copy; the throttle should have made this reliably interruptible")
+	progressMu.Lock()
+	cancelledWith := movedAt
+	progressMu.Unlock()
+
+	if cancelledWith == 0 {
+		t.Fatalf("the copy never reported %d of its %d bytes moved, so nothing here cancelled a transfer that was "+
+			"under way; the throttle (%s/s) or the progress reporting is not doing what this test assumes (Transfer returned %v)",
+			int64(cancelAfterBytes), int64(size), bwLimit, transferErr)
 	}
-	t.Logf("Transfer correctly failed on cancellation: %v", transferErr)
+	if transferErr == nil {
+		t.Fatalf("Transfer succeeded despite being cancelled after %d of %d bytes had moved", cancelledWith, int64(size))
+	}
+	t.Logf("Transfer correctly failed on a cancellation fired after %d of %d bytes had moved: %v", cancelledWith, int64(size), transferErr)
 
 	rec, err := journal.Get(context.Background(), artifact)
 	if err != nil {
@@ -566,8 +598,12 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	}
 
 	// Resume with the same AttemptKey, unthrottled: must converge to a
-	// correct, complete TRANSFERRED.
-	if _, err := lifecycle.Transfer(context.Background(), deps, lifecycle.TransferParams{
+	// correct, complete TRANSFERRED. The throttle is lifted here rather
+	// than only in the Cleanup, because "unthrottled" was not true of the
+	// resume while the Cleanup was the only thing lifting it, and because
+	// the way it used to be lifted did not lift it at all: the resume ran
+	// at 1MiB/s and so did every test after this one in the package.
+	if _, err := lifecycle.Transfer(f.Context(), deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	}); err != nil {
 		t.Fatalf("resumed Transfer: %v", err)
@@ -597,10 +633,10 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 // same-size case this account shape cannot distinguish from an untouched
 // file), must refuse the pending delete and leave the replacement intact.
 func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
-	f := sftpfixture.Start(t)
+	f := machines.Start(t).Source(t)
 	adapter := rclone.New()
-	ctx := context.Background()
-	source := f.Source("replacement", "")
+	ctx := f.Context()
+	source := f.TransportSource("replacement", "")
 	journal := openJournal(t)
 	localDir := t.TempDir()
 
@@ -652,7 +688,8 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	}
 
 	_, deleteErr := lifecycle.DeleteRemote(ctx, deps, lifecycle.DeleteRemoteRequest{
-		Source: source, Artifact: artifact, AttemptKey: "delete:attempt-1",
+		CompletionStrategy: bs.Completion.Strategy,
+		Source:             source, Artifact: artifact, AttemptKey: "delete:attempt-1",
 	})
 	refusal, ok := lifecycle.AsRemoteDeleteRefusal(deleteErr)
 	if !ok {
@@ -684,4 +721,89 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	if rec.RemoteDeleteError == "" {
 		t.Fatal("the refusal was not persisted into remote_delete_error, so an operator inspecting the journal directly would not see it")
 	}
+}
+
+// --- a fixture container that dies mid-test -------------------------------
+
+// TestSFTPOperationFailsFastWhenTheFixtureContainerDies is issue #161's
+// contract at the level that costs the time: a test whose fixture container
+// vanishes underneath it must find out within a second, and must be able to
+// say that the container's death is what happened, rather than leaving a
+// reader to guess between that and a deadlock in the transport.
+//
+// The bar on the fixture is a second; the bar on the operation is only that
+// it comes back at all, and that is deliberate. Measured here while writing
+// this: rclone's sftp backend ignores context cancellation completely on its
+// connect path. An adapter.List against a removed container takes 11.1s to
+// give up with a bare "connection refused", and it takes exactly the same
+// 11.1s when handed a context that was ALREADY cancelled before the call.
+// So cancellation is not a lever on that path, and pretending otherwise
+// would be a test that passes on a coincidence. What the fixture can
+// honestly promise is the diagnosis: the cause on Context() is a
+// *ContainerDiedError, carrying docker's own account of how it ended
+// (status, exit code, OOM-killed or not), which is the thing nobody could
+// see before.
+//
+// It kills the container by the exact id this fixture created. Several
+// worktrees on this machine share one docker daemon, so anything matched by
+// name pattern or counted out of `docker ps` could be another agent's
+// container and would prove nothing about this one.
+func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
+	f := machines.Start(t).Source(t)
+	adapter := rclone.New()
+	source := f.TransportSource("container-death", "")
+	if err := os.WriteFile(filepath.Join(f.UploadDir, "present.txt"), []byte("present"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Two positive controls, because both assertions below are about
+	// something NOT being the case until it is. First: the same call,
+	// through the same context, works while the container is alive.
+	if _, err := adapter.List(f.Context(), source); err != nil {
+		t.Fatalf("List against a healthy fixture failed (%v), so a failure after the kill would prove nothing about the kill", err)
+	}
+	// Second: the context is open while the container is healthy. Without
+	// this, a watchdog that simply cancelled on a timer would satisfy
+	// everything that follows.
+	select {
+	case <-f.Context().Done():
+		t.Fatalf("the fixture context was already cancelled while its container was running and serving: %v", context.Cause(f.Context()))
+	case <-time.After(2 * time.Second):
+	}
+
+	killedAt := time.Now()
+	// Through the harness, not through exec.Command. Kill does the same
+	// `docker rm -f` on the same container id and tells the watchdog the
+	// death is deliberate, and going through it is what lets the testtier
+	// guard's "nothing under core/tests execs docker outside the harness"
+	// rule hold with no exceptions at all (#450).
+	f.Kill(t)
+
+	select {
+	case <-f.Context().Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fixture still had not noticed its container was gone 5s after it was removed; nothing running against it can fail for the right reason if the fixture itself does not know")
+	}
+	t.Logf("the fixture noticed its container was gone %s after the kill", time.Since(killedAt))
+
+	var died *machines.ContainerDiedError
+	if !errors.As(context.Cause(f.Context()), &died) {
+		t.Fatalf("the cause on the fixture context is %v, not a *ContainerDiedError; without it a reader cannot tell a dead fixture container from a genuine deadlock in the transport, and both used to cost 25 minutes", context.Cause(f.Context()))
+	}
+	if !strings.Contains(died.Error(), "died") {
+		t.Fatalf("the cause does not say the container died: %q", died.Error())
+	}
+
+	// And the operation itself still comes back, bounded by the client's
+	// own retry budget rather than running until the package timeout.
+	start := time.Now()
+	_, err := adapter.List(f.Context(), source)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("List succeeded against a container that no longer exists")
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("List took %s to give up after its container died, which is no longer a bounded failure", elapsed)
+	}
+	t.Logf("List gave up after %s (%v), with the fixture already naming the real cause: %v", elapsed, err, died)
 }

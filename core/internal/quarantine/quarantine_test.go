@@ -9,6 +9,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The tests below follow the three questions the package doc says an
+// operator has, and each one is written to fail in the direction that would
+// hurt the operator rather than in whichever direction was convenient.
+//
+// The exclusion test is the one that is easy to write weakly. Summarize is
+// handed a whole backup set rather than a pre-filtered list, so it has to
+// ignore every state that is not one of the two quarantine states, and a
+// test naming three or four of them by hand would keep passing on the day a
+// new state is added to the lifecycle. It walks lifecycle.AllStates
+// instead, so a state added upstream is covered here as soon as it exists.
+//
+// Ordering gets two tests rather than one because the sort has two separate
+// jobs. Lost entries have to come first, so an irrecoverable loss cannot be
+// scrolled past, and equal timestamps have to resolve the same way twice,
+// so a report does not reshuffle itself between two runs over identical
+// input.
+
 func mustArtifact(t *testing.T, name string) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")
@@ -100,21 +117,21 @@ func TestSummarize_RepeatedQuarantineIsVisible(t *testing.T) {
 	}
 
 	report := Summarize(records, now)
-	if report.RepeatOffenders != 1 {
-		t.Fatalf("RepeatOffenders = %d, want 1", report.RepeatOffenders)
+	if report.PreviouslyAttempted != 1 {
+		t.Fatalf("PreviouslyAttempted = %d, want 1", report.PreviouslyAttempted)
 	}
 	byName := map[string]Entry{}
 	for _, e := range report.Entries {
 		byName[e.Artifact.Name] = e
 	}
-	if byName["first-timer.dump"].Repeated {
-		t.Fatal("a RetryCount=0 artifact was reported as Repeated")
+	if byName["first-timer.dump"].Retried {
+		t.Fatal("a RetryCount=0 artifact was reported as having been attempted before")
 	}
-	if !byName["repeat-offender.dump"].Repeated {
-		t.Fatal("a RetryCount=3 artifact was not reported as Repeated")
+	if !byName["repeat-offender.dump"].Retried {
+		t.Fatal("a RetryCount=3 artifact was not reported as having been attempted before")
 	}
-	if got := byName["repeat-offender.dump"].TimesReturned; got != 3 {
-		t.Fatalf("TimesReturned = %d, want 3", got)
+	if got := byName["repeat-offender.dump"].AttemptsSpent; got != 3 {
+		t.Fatalf("AttemptsSpent = %d, want 3", got)
 	}
 }
 

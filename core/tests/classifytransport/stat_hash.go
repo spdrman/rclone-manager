@@ -6,6 +6,17 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// A Transport decorator that attaches a best-effort hash to whatever Stat
+// returns, and the reasoning for why it is still here after the defect it
+// worked around was fixed.
+//
+// It is kept deliberately rather than left behind. WithStatHash's own doc
+// carries the full history, and the part worth knowing before reading the
+// code is that its existence is not evidence of a live bug: the rclone
+// adapter's Stat now carries enough identity for FR-16 on its own, and this
+// only still earns its place against a Transport that genuinely does not
+// hash in Stat.
+
 // WithStatHash decorates tr so its Stat method also attaches a best-effort
 // sha256 hash to whatever it returns, exactly mirroring the pattern
 // internal/discovery.go's captureRemoteIdentity already uses at discovery

@@ -1,3 +1,19 @@
+// This file covers Open, the one entry point that turns a path on disk
+// into a working service, and it holds the config fixtures the rest of
+// this package builds on.
+//
+// Those fixtures are the reason to read it first. They write a real
+// config.yaml against real temp directories over the "local" transport,
+// so every test in this package that says "a real cycle" means a cycle
+// that actually lists, copies and journals files, with no network and no
+// Docker. A boundary tested through a mocked engine would prove the mock.
+//
+// The sweep case is the one that is easy to get wrong. An operation left
+// at queued or running by a process that died is not going to be picked
+// up by anybody, so Open fails it; and readiness is proved to be Open's
+// own answer rather than something re-derived from the configuration,
+// because a service that reports ready by reading a file is a service
+// that reports ready before it has opened anything.
 package service
 
 import (
@@ -19,6 +35,15 @@ import (
 // equivalent "load a real file off disk" entry point and had no direct
 // test of its own otherwise.
 func writeTestConfigFile(t *testing.T) string {
+	t.Helper()
+	return writeTestConfigFileWithRetention(t, "retention:\n  timezone: UTC\n  week_starts_on: monday\n")
+}
+
+// writeTestConfigFileWithRetention is writeTestConfigFile with the
+// retention block spelled by the caller, so a test can start from a
+// tiers-based policy (FR-18's chain) rather than only from the legacy
+// scalars. retention is the whole block, "retention:" line included.
+func writeTestConfigFileWithRetention(t *testing.T, retention string) string {
 	t.Helper()
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote")
@@ -48,9 +73,7 @@ func writeTestConfigFile(t *testing.T) string {
 		"        completion:\n" +
 		"          strategy: rename\n" +
 		"        stale_after: 24h\n" +
-		"retention:\n" +
-		"  timezone: UTC\n" +
-		"  week_starts_on: monday\n"
+		retention
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -72,7 +95,7 @@ func TestOpen_WiresARealServiceAgainstARealConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 
 	if svc.ConfigRevision() == "" {
 		t.Fatal("ConfigRevision is empty for a successfully opened service")
@@ -99,7 +122,7 @@ func TestOpen_InvalidConfigPathFails(t *testing.T) {
 	_, cleanup, err := Open(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
 		if cleanup != nil {
-			cleanup()
+			_ = cleanup()
 		}
 		t.Fatal("Open with a nonexistent config path: error = nil, want an error")
 	}
@@ -155,7 +178,7 @@ func TestOpen_SweepsInterruptedOperationsFromAPreviousProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 
 	op, err := svc.GetOperation(context.Background(), "op_interrupted")
 	if err != nil {
@@ -166,5 +189,37 @@ func TestOpen_SweepsInterruptedOperationsFromAPreviousProcess(t *testing.T) {
 	}
 	if op.Error == "" {
 		t.Error("Error is empty on a swept operation, want a reason")
+	}
+}
+
+// TestReady_IsOwnedByOpen_NotDerivedFromTheConfiguration is the review's
+// M4 fix. Readiness is §36's precondition for a destructive operation, and
+// it used to be re-derived at the HTTP layer as "the backend reports a
+// non-empty config revision" — true of every BackupService that can exist,
+// since the revision is a hash of a *config.Config the constructor
+// required. A precondition that cannot be false is worse than none.
+//
+// The two halves here are each other's control: Open runs §46.1's startup
+// sequence and reports ready, New does not run it and says so, and the
+// config revision (the value the old definition was derived from) is
+// non-empty in both.
+func TestReady_IsOwnedByOpen_NotDerivedFromTheConfiguration(t *testing.T) {
+	svc, cleanup, err := Open(context.Background(), writeTestConfigFile(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	if !svc.Ready() {
+		t.Error("Ready() = false after a successful Open, which is exactly the sequence readiness reports on")
+	}
+
+	built := New(testConfig(), openTestJournal(t), nil, nil)
+	defer func() { _ = built.Close() }()
+	if built.Ready() {
+		t.Error("Ready() = true for a BackupService built with New, which never ran the startup sequence at all")
+	}
+	if built.ConfigRevision() == "" {
+		t.Error("ConfigRevision() = \"\" for a New-built service: without this the check above would pass under the OLD definition of readiness too, and prove nothing about the new one")
 	}
 }

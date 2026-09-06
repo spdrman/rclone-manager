@@ -46,6 +46,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/alert"
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -75,6 +76,50 @@ type Journal interface {
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 	ListByState(ctx context.Context, st string) ([]state.Record, error)
+
+	// ListBackupSetIDs is every backup set this journal holds history
+	// for, which stopped being the same list as "every backup set the
+	// configuration names" the moment a set's configuration could be
+	// removed (issue #391). ListArtifacts needs it so an unfiltered
+	// backups list still carries the artifacts of a removed set, which is
+	// what the removal confirmation promises; see that method's own doc
+	// for why this is the only read that widens.
+	ListBackupSetIDs(ctx context.Context) ([]model.BackupSetID, error)
+	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
+	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
+
+	// LastEnteredDetail is LastEnteredAt plus the free-text detail that
+	// exact transition recorded (issue #284): GetArtifactDetail's whole
+	// reason for existing is that state_transitions.detail is otherwise
+	// unreachable outside internal/state (see that method's own doc).
+	LastEnteredDetail(ctx context.Context, id model.ArtifactID, st string) (detail string, occurredAt time.Time, found bool, err error)
+
+	// ArtifactsWithAnyTransition is the set-wide form of LastTransition:
+	// which artifacts in one backup set have any of a given set of edges
+	// in the append-only log. BuildHealthReport needs it to report how
+	// many artifacts were reinstated out of quarantine and are therefore
+	// holding a remote source this manager will never delete (issue #227),
+	// once per backup set rather than once per artifact per edge on every
+	// status call and dashboard load.
+	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
+
+	// LocalBytesInUse is FR-21's other input, added with the storage cap
+	// (issue #286): how much space this manager itself is occupying,
+	// summed from the sizes this journal already records. admitCapacity
+	// needs it before every transfer, because a cap cannot be enforced
+	// from a statfs reading alone; see internal/capacity's "Two different
+	// questions" section. The state vocabulary travels as an argument
+	// because internal/lifecycle owns it, not internal/state.
+	LocalBytesInUse(ctx context.Context, states []string) (uint64, error)
+
+	// The durable per-backup-set connection refusal (issue #245).
+	// RunCycle writes through the first two at the end of every pass and
+	// BuildHealthReport reads the whole population once per report; see
+	// halt.go for which cycle outcomes are allowed to move them, and
+	// internal/state/halts.go for what a row's presence claims.
+	RecordBackupSetHalt(ctx context.Context, set model.BackupSetID, reason string, observedAt time.Time) error
+	ClearBackupSetHalt(ctx context.Context, set model.BackupSetID) error
+	ListBackupSetHalts(ctx context.Context) ([]state.BackupSetHalt, error)
 }
 
 var _ Journal = (*state.Journal)(nil)
@@ -91,12 +136,59 @@ var _ Journal = (*state.Journal)(nil)
 // sequentially (see cycle.go and daemon.go). An unbounded retry against one
 // unreachable source would starve every other configured backup set for as
 // long as the outage lasts, which is exactly the failure this bound exists
-// to prevent. Six attempts with this schedule spans a little over two
-// minutes worst case (1s, 2s, 4s, 8s, 16s, capped at 30s), long enough to
-// ride out a genuine blip without holding a whole cycle hostage to a
-// genuinely down source; a source still unreachable after that is picked up
-// again next cycle, which for `daemon` is a bounded wait of its own
-// (poll_interval), not a lost recovery opportunity.
+// to prevent.
+//
+// # The budget, counting the attempts and not only the gaps
+//
+// A source that is DOWN, in the sense an operator means when they say a NAS
+// is off, costs a little over two minutes before the set reports FAILED,
+// and both halves of that are real:
+//
+//   - the waiting BETWEEN attempts, at most 31 seconds, since full jitter
+//     never exceeds the cap for its step (1s, 2s, 4s, 8s, 16s, and the
+//     30s ceiling is never reached with only five gaps);
+//   - the attempts THEMSELVES, at most six times
+//     transport/rclone.ConnectTimeout, because an attempt against a source
+//     that never answers ends at the connect deadline.
+//
+// The second half used to be worth nothing, because a connect timeout
+// classified as a cancellation and retry.DefaultIsTransient would not
+// retry it: the loop gave up after the first dial. Issue #388 corrected
+// the classification, which made those six dials real, and #415 is what
+// that cost at rclone's own 60s default: about six and a half minutes,
+// against the two this doc claimed. transport/rclone.ConnectTimeout is
+// the ceiling that puts it back; TestUnreachableSourceBudgetIsPinned holds
+// the arithmetic so neither number can move without this sentence moving
+// too.
+//
+// Two minutes is long enough to ride out a genuine blip without holding a
+// whole cycle hostage to a genuinely down source; a source still
+// unreachable after that is picked up again next cycle, which for `daemon`
+// is a bounded wait of its own (poll_interval), not a lost recovery
+// opportunity.
+//
+// # What two minutes is NOT
+//
+// It is not a bound on every way an attempt can fail, and saying so plainly
+// is the whole point of #415: the doc this replaced claimed a number the
+// code had stopped keeping, and a replacement that overreached in a
+// different direction would be the same defect wearing a newer date.
+//
+// ConnectTimeout bounds a DIAL. An attempt that gets past the dial and then
+// stalls is bounded by rclone's --timeout instead, an idle timeout on the
+// transfer itself, which nothing here overrides and which defaults to five
+// minutes. Six of those is half an hour, and that is the real worst case
+// for a source that answers, accepts the session, and then goes quiet
+// partway through a read.
+//
+// That number is deliberately left alone. --timeout is a bound on a
+// transfer that is making no progress, and shortening it to make this
+// paragraph tidier would start failing slow-but-live links, which is a
+// behaviour change about transfers rather than about reachability. The two
+// numbers bound two different failures and only the first one is what an
+// operator means by "the source is down".
+// TestAStalledSourceIsBoundedByADifferentNumber pins the distinction so it
+// cannot quietly become one number again.
 var DefaultRetryPolicy = retry.Policy{
 	BaseDelay:   time.Second,
 	MaxDelay:    30 * time.Second,
@@ -135,24 +227,64 @@ type Service struct {
 	Now func() time.Time
 
 	// Capacity is FR-21's thresholds, consulted before every transfer
-	// begins (see pipeline.go's admitCapacity). Its zero value
-	// (WarningFreeBytes, CriticalFreeBytes and SafetyMarginBytes all 0) is
-	// valid (internal/capacity.Thresholds.Validate requires only that
-	// Warning >= Critical) and still enforces FR-21's hard rule, "do not
-	// begin a transfer known not to fit at all", because
-	// internal/capacity.Assess reports Critical whenever the artifact
-	// simply does not fit, regardless of what the thresholds are. What the
-	// zero value cannot do is warn before the disk is actually full, since
-	// there is no configured margin to warn against. See this package's
-	// introducing PR description for why: internal/config.BackupSet has no
-	// warning_free_bytes / critical_free_bytes / safety_margin_bytes
-	// fields yet, and extending it is out of this package's file scope.
+	// begins (see pipeline.go's admitCapacity).
+	//
+	// New fills it in from Config.Capacity, which is where an operator's
+	// cap and threshold numbers live since issue #286. Before that block
+	// existed nothing outside a test ever assigned this field, so every
+	// running deployment ran on the zero value: still a real FR-21 guard
+	// ("do not begin a transfer known not to fit at all", which Assess
+	// reports as Critical regardless of thresholds), but with no warning
+	// level ahead of it and no ceiling of its own.
+	//
+	// The zero value remains valid and remains the default: a cap of zero
+	// is no cap, and thresholds of zero are no warning and no critical
+	// line. See internal/config.Capacity for what each number means and
+	// which combinations config.Validate refuses outright.
 	Capacity capacity.Thresholds
 
 	// RetryPolicy bounds this package's own network-facing retries (see
 	// DefaultRetryPolicy). The zero value uses DefaultRetryPolicy.
 	RetryPolicy retry.Policy
 
+	// Alerts is Work Package 3.5's proactive-alert dispatcher
+	// (docs/EPIC-B-multi-nas.md §71). Nil, the zero value, means
+	// alerting is off, which is the default and what every caller that
+	// never calls EnableAlerts gets. Set it through EnableAlerts
+	// (alerts.go) rather than directly: that is where the configured
+	// opt-in is honoured.
+	Alerts *alert.Dispatcher
+
+	// MediumStore is EPIC E's FR-28 storage-medium boundary: how this
+	// manager reaches an object on a configured medium. Nil means no
+	// medium can be reached, which every caller treats as a refusal
+	// rather than as a reason to skip a check.
+	//
+	// New fills it in from Transport when the transport adapter is also a
+	// MediumStore, which the embedded rclone one is. That is not a
+	// coincidence to be tidied away: FR-28 says outright that the s3
+	// medium IS the embedded rclone registered inside internal/transport/
+	// rclone, behind the same FR-3 boundary, with no second SDK entering
+	// the tree. One adapter serving both is the decision, so reading it
+	// off the transport this Service was built with is what keeps a
+	// deployment from having to wire the same object twice and get it
+	// wrong once.
+	MediumStore transport.MediumStore
+
+	// The only mutable state on a Service, and the only reason it needs a
+	// lock at all.
+	//
+	// A cycle is sequential and every field above is written once at
+	// construction, so nothing else here is contended. These two are,
+	// because Daemon runs its alerting pass on a goroutine beside the
+	// cycle loop (daemon.go): that pass builds a health report, which
+	// reads lastPollAt and lastRetentionAt for every backup set, while the
+	// cycle is writing them for the set it is on.
+	//
+	// Both are in memory and nothing persists them, which is why a
+	// short-lived `status` process reports them as unknown rather than
+	// inventing a value; BuildHealthReport's doc carries the consequence
+	// and the follow-up it needs.
 	mu            sync.Mutex
 	lastPoll      map[model.BackupSetID]time.Time
 	lastRetention map[model.BackupSetID]time.Time
@@ -163,15 +295,115 @@ type Service struct {
 // that do not need them; New itself never rejects a nil value here, since
 // which fields a given CLI command actually needs is that command's own
 // business (see cmd/backup-manager).
+//
+// # Issue #295's redaction wiring
+//
+// New is the one place a *config.Config, a Journal and an *obs.Logger are
+// all in hand together, for every caller this package has: cmd/backup-
+// manager's own openService and service.Open both call this directly, and
+// service.New wraps it, so a config hot-reload (service/backupsets.go,
+// settings.go, backupsetenabled.go all call app.New again against the
+// SAME long-lived journal and a fresh cfg) rewires redaction exactly as a
+// fresh process start does. That makes this the correct, single seam to
+// read cfg.Sources for every config.Remote.Sensitive opt-in and build the
+// obs.Redactor both the returned Service's Logger and journal (when it is
+// a concrete *state.Journal) filter their rendered output through, rather
+// than something every one of those callers would otherwise have to
+// remember to do itself.
+//
+// journal is only ever a *state.Journal in production (see the
+// var _ Journal = (*state.Journal)(nil) assertion above); the type
+// assertion below is what lets this stay a plain function call instead of
+// growing Journal a SetRedactor method every fake implementing that
+// interface across this repository's tests would then have to satisfy
+// just to keep compiling, for a capability only the real journal needs.
 func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *obs.Logger) *Service {
-	return &Service{
+	redactor := obs.NewRedactor(sensitiveEndpoints(cfg)...)
+	logger = logger.WithRedaction(redactor)
+	if sj, ok := journal.(*state.Journal); ok {
+		sj.SetRedactor(redactor)
+	}
+	s := &Service{
 		Config:    cfg,
 		Journal:   journal,
 		Transport: tr,
 		Logger:    logger,
+		Capacity:  thresholdsFrom(cfg),
+	}
+	// FR-28's medium boundary, off the transport adapter that already
+	// carries it. See MediumStore's own doc for why the two are the same
+	// object by design rather than by accident. A transport that is not
+	// one (every test double, and the nil Transport the read-only use
+	// cases are built with) leaves this nil, which every caller reads as
+	// "no medium can be reached".
+	if ms, ok := tr.(transport.MediumStore); ok {
+		s.MediumStore = ms
+	}
+	return s
+}
+
+// sensitiveEndpoints collects the obs.Endpoint for every configured Remote
+// that opted into issue #295's redaction (config.Remote.Sensitive), across
+// every Source and BackupSet cfg carries. This is the one place that
+// translation happens, mirroring sourceFor just below: internal/obs must
+// not import internal/config (see redact.go's own containment argument),
+// so this package, which already imports both, is where the two
+// vocabularies meet.
+func sensitiveEndpoints(cfg *config.Config) []obs.Endpoint {
+	if cfg == nil {
+		return nil
+	}
+	var out []obs.Endpoint
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			r := bs.Remote
+			if !r.Sensitive {
+				continue
+			}
+			out = append(out, obs.Endpoint{Host: r.Host, Port: r.Port, User: r.User})
+		}
+	}
+	return out
+}
+
+// thresholdsFrom translates internal/config's capacity block into the plain
+// struct internal/capacity takes. It is the one place the two shapes meet,
+// which is exactly why internal/capacity does not import internal/config
+// (see that package's doc).
+//
+// Every conversion here is from a validated int64 to a uint64.
+// config.Validate refuses a negative value in any of these fields, so a
+// Config that reached this function cannot produce a wrapped byte count;
+// the guards are here anyway, because "cannot happen" plus an unsigned
+// conversion is how eighteen exabytes of imaginary headroom gets invented.
+func thresholdsFrom(cfg *config.Config) capacity.Thresholds {
+	if cfg == nil {
+		return capacity.Thresholds{}
+	}
+	return capacity.Thresholds{
+		CapBytes:          nonNegative(cfg.Capacity.CapBytes),
+		WarningFreeBytes:  nonNegative(cfg.Capacity.WarningFreeBytes),
+		CriticalFreeBytes: nonNegative(cfg.Capacity.CriticalFreeBytes),
+		SafetyMarginBytes: nonNegative(cfg.Capacity.SafetyMarginBytes),
 	}
 }
 
+func nonNegative(n int64) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+// now is every clock reading this package makes, normalised to UTC even
+// when a caller injected its own Now.
+//
+// The normalisation is not cosmetic. Retention anchors its tiers on the
+// civil date an instant falls in, in the chain's own configured timezone,
+// so an instant carrying a location is a second, silent answer to "which
+// day is this". Converting here means the conversion happens once, in the
+// one place a clock is read, rather than at each of the several places
+// that go on to compare or format the result.
 func (s *Service) now() time.Time {
 	if s.Now == nil {
 		return time.Now().UTC()
@@ -181,6 +413,14 @@ func (s *Service) now() time.Time {
 
 func (s *Service) logger() *obs.Logger { return s.Logger }
 
+// retryPolicy is the caller's policy when they set one and
+// DefaultRetryPolicy otherwise.
+//
+// The test is against the whole zero struct rather than against any one
+// field, so a caller who deliberately wants a single attempt has to say so
+// with a policy that is non-zero somewhere. A per-field fallback would
+// merge a caller's partial policy with the default's other half and
+// produce a schedule nobody wrote down.
 func (s *Service) retryPolicy() retry.Policy {
 	if s.RetryPolicy != (retry.Policy{}) {
 		return s.RetryPolicy
@@ -198,7 +438,7 @@ func (s *Service) lifecycleDeps() lifecycle.Deps {
 // describes. This is the one place config.Remote's fields are translated
 // into transport.Source's, so every use case in this package (the cycle,
 // fetch, reconcile) agrees on exactly how that translation works.
-func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
+func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) transport.Source {
 	r := bs.Remote
 	return transport.Source{
 		ID:   bs.ID.String(),
@@ -206,6 +446,10 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		Host: r.Host,
 		Port: r.Port,
 		User: r.User,
+		// #264: a host that caps concurrent connections rejects the
+		// surplus, so this has to reach the adapter or the cap is only
+		// enforced by the remote refusing us.
+		MaxConnections: r.MaxConnections,
 		// All three key sources have to travel, not just the file one.
 		// config.Validate has already refused anything but exactly one of
 		// them, and normalized the deprecated key_file into Key.File, so
@@ -214,8 +458,23 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		KeyFile:    r.Key.File,
 		KeyEnv:     r.Key.Env,
 		KeyCommand: r.Key.Command,
-		KnownHosts: r.KnownHosts,
-		Root:       bs.RemotePath,
+		// The passphrase's own three sources (#269) travel the same way,
+		// for the same reason: config.Validate has already refused
+		// anything but at most one of them, and forwarding all three here
+		// is what makes key.passphrase.env and key.passphrase.command work
+		// in a real run rather than only in the adapter's own tests.
+		PassphraseFile:    r.Key.Passphrase.File,
+		PassphraseEnv:     r.Key.Passphrase.Env,
+		PassphraseCommand: r.Key.Passphrase.Command,
+		// KeyEncryption is config-wide (#298), not per-Remote, so it comes
+		// from cfg rather than r; see transport.Source's own doc for why
+		// it still travels on every Source built here rather than through
+		// a separate parameter.
+		KeyEncryptionFile:    cfg.KeyEncryption.File,
+		KeyEncryptionEnv:     cfg.KeyEncryption.Env,
+		KeyEncryptionCommand: cfg.KeyEncryption.Command,
+		KnownHosts:           r.KnownHosts,
+		Root:                 bs.RemotePath,
 	}
 }
 

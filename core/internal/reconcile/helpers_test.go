@@ -16,6 +16,18 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// Every fixture this package's tests run on is built here, and sharing them
+// is not just about repetition. Reconciliation's inputs are expensive to
+// state honestly: an artifact at REMOTE_DELETE_PENDING is not a struct
+// literal, it is a journal row that arrived there through every transition
+// the state machine required, and driveTo walks it rather than writing the
+// destination state in directly.
+//
+// That distinction is load-bearing. A record assembled by hand can hold a
+// combination the machine would have refused, and a test built on one is
+// proving something about a journal this project cannot actually produce,
+// while looking exactly like a test that is not.
+
 // --- journal and identity fixtures ---
 
 func openTestJournal(t *testing.T) *state.Journal {
@@ -25,7 +37,7 @@ func openTestJournal(t *testing.T) *state.Journal {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 
@@ -174,6 +186,17 @@ func driveTo(t *testing.T, j *state.Journal, p driveParams) state.Record {
 		})
 		if err != nil {
 			t.Fatalf("-> QUARANTINED: %v", err)
+		}
+		return out.Record
+	}
+
+	if p.stopAt == lifecycle.RemoteRetained {
+		out, err = j.RecordTransition(ctx, state.Transition{
+			Artifact: p.artifact, Key: nextKey(), From: string(lifecycle.Committed), To: string(lifecycle.RemoteRetained),
+			OccurredAt: now(),
+		})
+		if err != nil {
+			t.Fatalf("-> REMOTE_RETAINED: %v", err)
 		}
 		return out.Record
 	}

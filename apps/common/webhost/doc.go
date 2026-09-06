@@ -7,10 +7,16 @@
 // /api/v1 that does nothing but call into core/service.BackupService, but
 // does it in a way a browser disconnecting cannot cancel, a retried
 // idempotency key cannot duplicate, and a stale configuration revision
-// cannot silently apply against. It is deliberately a skeleton — full
-// backup-set CRUD, retention routes and artifact routes are later phases
-// (docs/EPIC-B-multi-nas.md §15.2, §15.5, §15.6); see this package's
-// introducing PR description for exactly what was left out and why.
+// cannot silently apply against. It was deliberately a skeleton at first —
+// full backup-set CRUD and artifact routes are still later phases
+// (docs/EPIC-B-multi-nas.md §15.2, §15.5); see this package's introducing
+// PR description for exactly what was left out and why. Issue #96 (B3.1)
+// is what added §15.6's retention routes specifically
+// (handlers_retention.go): a preview and an apply, both thin envelopes
+// around core/service.BackupService.PreviewRetention/ApplyRetentionPlan,
+// which are themselves thin envelopes around internal/retention's own
+// PruneDecide/PruneApply (see core/service/retention.go's own doc for that
+// whole chain).
 //
 // # Layering
 //

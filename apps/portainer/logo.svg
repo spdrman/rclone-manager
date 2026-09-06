@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Backup Manager">
+  <rect width="64" height="64" rx="12" fill="#1f2933"/>
+  <path d="M32 14a18 18 0 1 0 18 18h-6a12 12 0 1 1-12-12z" fill="#5eead4"/>
+  <circle cx="32" cy="32" r="5" fill="#5eead4"/>
+</svg>

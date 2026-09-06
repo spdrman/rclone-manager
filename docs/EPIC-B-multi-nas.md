@@ -2128,12 +2128,22 @@ Actions:
 
 ```text
 Open
-Run now
+Run all due sets
 Test connection
 Edit
 Disable
 Retention preview
 ```
+
+`Run all due sets` is the page's action, not a card's, and it is named for the
+scope it actually has. There is no per-set run: one run cycle walks every
+enabled backup set in a single pass, and core exposes no operation that runs one
+set on its own. This line read `Run now` and sat among the per-set actions
+around it, which is how the shipped page came to render one such button per
+card, each starting the whole deployment (#231). A control rendered inside a
+backup set's card SHALL NOT submit a deployment-wide action, whatever its label
+says, and any control that does SHALL carry a tooltip stating how far it
+reaches.
 
 Destructive configuration removal SHALL be separated from deleting stored files.
 
@@ -2576,7 +2586,7 @@ docker run --rm \
   -v /path/to/config:/etc/backup-manager:ro \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:1.0.0 \
+  <registry>/iasbuilt/backup-manager:0.1.0 \
   backup-manager check
 ```
 
@@ -2589,7 +2599,7 @@ docker run -d \
   -v /path/to/config:/etc/backup-manager:ro \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:1.0.0 \
+  <registry>/iasbuilt/backup-manager:0.1.0 \
   backup-manager daemon
 ```
 
@@ -2604,7 +2614,7 @@ Provide a supported example:
 ```yaml
 services:
   backup-manager:
-    image: <registry>/iasbuilt/backup-manager:1.0.0
+    image: <registry>/iasbuilt/backup-manager:0.1.0
     restart: unless-stopped
 
     command:
@@ -4078,6 +4088,10 @@ Implement:
 
 ## Work Package 4.2 — UGOS Provider App / UPK
 
+> Re-homed. This work package left EPIC B in the UGOS split and is EPIC D's #83
+> (D1.2). It is not a Phase 4 deliverable and the Phase 4 Exit Gate below is not
+> computed over it. The requirements here still stand; they are answered there.
+
 Implement only under:
 
 ```text
@@ -4104,6 +4118,15 @@ Include:
 - [ ] install/update/disable/uninstall/reinstall are safe.
 
 ## Work Package 4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages
+
+> If a packaging profile here runs `/backup-manager-web serve-ui` as its own
+> container (the same two-container split B4.1 shipped for the generic Docker
+> app), remember to override the canonical image's own baked-in `HEALTHCHECK`
+> independently for that container: it runs `backup-manager status`, which
+> needs a config file and a state database `serve-ui` never has. See
+> `container/compose.yaml`'s `web-ui` service and docs/deployment.md's
+> "Healthchecks differ per container" for the working example
+> (`/backup-manager-web healthcheck` instead).
 
 ### TrueNAS
 
@@ -4217,7 +4240,6 @@ The same core behavior is deployable through:
 
 ```text
 Generic Docker
-UGOS
 TrueNAS
 Unraid
 OpenMediaVault
@@ -4226,6 +4248,14 @@ Proxmox VE
 ```
 
 at the support tier defined by this EPIC.
+
+Six targets, and UGOS is deliberately not one of them. UGOS deployability is EPIC
+D's gate against the shipped `.UPK` in #83 (D1.2), which is where work package 4.2
+went. Nothing was dropped: the cross-provider conformance matrix still carries a
+UGOS column, checked on the same terms as every other one and reported with its
+blockers in `docs/conformance/phase-4-matrix.md`. It is read here as information,
+and this gate closes with EPIC C and EPIC D untouched. #86 and #81 both state the
+same six.
 
 ---
 

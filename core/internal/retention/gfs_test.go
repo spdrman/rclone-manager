@@ -14,6 +14,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// GFS is calendar arithmetic, and calendar arithmetic goes wrong on the
+// days nobody pictures while writing it. So most of this file's weight is
+// in the table in TestGFSDecideCalendarCases, and its cases are chosen for
+// boundaries rather than for breadth: the edge of each tier's window, two
+// artifacts sharing a bucket, a bucket with nothing in it, and the week
+// boundary under a configured week start.
+//
+// Determinism then gets three tests rather than one, because it has three
+// independent ways of breaking. The same records in a different order have
+// to give the same answer, two artifacts that tie have to resolve the same
+// way twice, and two artifacts on one calendar day at different times of
+// day have to count as the same day. Any one of those passing says nothing
+// whatever about the other two.
+//
+// The future-dated case is its own test and not an assertion inside
+// another. A record dated past the clock reading falls outside every
+// window, so it can never be a representative, and yet it still has to
+// appear in the output because it is eligible. Those two halves are what
+// tell "correctly not kept" apart from "quietly dropped", which look
+// identical from any assertion that only counts what was kept.
+
 // --- test helpers (prefixed gfs* so a sibling FR-19/FR-20 test file in
 // this same package can declare its own without colliding with these) ---
 
@@ -319,6 +340,7 @@ func TestGFSDecideOnlyConsidersManagedCompleteStates(t *testing.T) {
 		strings.ToLower(string(lifecycle.Committed)):           true,
 		strings.ToLower(string(lifecycle.RemoteDeletePending)): true,
 		strings.ToLower(string(lifecycle.Complete)):            true,
+		strings.ToLower(string(lifecycle.RemoteRetained)):      true,
 	}
 	if len(got) != len(wantEligible) {
 		t.Fatalf("got %d verdicts, want %d (one per managed-complete state); got=%+v", len(got), len(wantEligible), got)
@@ -329,13 +351,13 @@ func TestGFSDecideOnlyConsidersManagedCompleteStates(t *testing.T) {
 		}
 	}
 
-	// Complete is discovered latest of the three (see AllStates order), so
-	// within the shared daily bucket it wins; Committed and
-	// RemoteDeletePending are eligible (they appear above) but lose that
-	// bucket and are correctly not kept.
-	completeName := strings.ToLower(string(lifecycle.Complete))
+	// RemoteRetained is discovered latest of the four eligible states (see
+	// AllStates order), so within the shared daily bucket it wins;
+	// Committed, RemoteDeletePending and Complete are eligible (they
+	// appear above) but lose that bucket and are correctly not kept.
+	winnerName := strings.ToLower(string(lifecycle.RemoteRetained))
 	for _, v := range got {
-		want := v.Artifact.Name == completeName
+		want := v.Artifact.Name == winnerName
 		if v.Keep != want {
 			t.Errorf("artifact %q: Keep = %v, want %v", v.Artifact.Name, v.Keep, want)
 		}
@@ -463,6 +485,16 @@ func TestGFSDecideFutureDatedRecordIsNeverARepresentative(t *testing.T) {
 	}
 }
 
+// TestGFSDecideDisabledTiersSelectNothing pins the per-tier reading of a
+// non-positive window: the tier is off, it contributes nothing to KEEP,
+// and it is not an error.
+//
+// The fixture leaves one tier live, because the whole chain being off is
+// a different question with a different answer (gfsResolveChain refuses
+// it: see TestGFSDecideRefusesAChainWithNoEnabledTier). "a" falls in the
+// live monthly tier's window and is kept by it alone; if the two zeroed
+// tiers were being read as live, "a" would come back badged DAILY and
+// WEEKLY as well.
 func TestGFSDecideDisabledTiersSelectNothing(t *testing.T) {
 	set := gfsMustSet(t, "disabled", "set")
 	specs := []gfsRecSpec{
@@ -470,16 +502,18 @@ func TestGFSDecideDisabledTiersSelectNothing(t *testing.T) {
 		{"b", lifecycle.Committed, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
 	}
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday"} // all tiers zero
+	// daily and weekly off, monthly live over August alone.
+	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", MonthlyMonths: 1}
 
 	records := gfsBuildRecords(t, set, specs)
 	got, err := GFSDecide(now, cfg, set, records)
 	if err != nil {
 		t.Fatalf("GFSDecide: %v", err)
 	}
-	gfsAssertKeptNames(t, got, nil)
+	gfsAssertTiers(t, got, "a", []GFSTier{GFSMonthly})
+	gfsAssertKeptNames(t, got, []string{"a"})
 	if len(got) != 2 {
-		t.Fatalf("expected both eligible records to still appear (unkept), got %+v", got)
+		t.Fatalf("expected both eligible records to still appear, got %+v", got)
 	}
 }
 
@@ -506,7 +540,7 @@ func TestGFSVerdictListsTiersInFixedOrder(t *testing.T) {
 		t.Fatalf("expected Keep == true, got %+v", v)
 	}
 	want := []GFSTier{GFSDaily, GFSWeekly, GFSMonthly}
-	if !reflect.DeepEqual(v.Tiers, want) {
+	if !reflect.DeepEqual(v.tierNames(), want) {
 		t.Errorf("Tiers = %v, want %v (fixed Daily, Weekly, Monthly order)", v.Tiers, want)
 	}
 }

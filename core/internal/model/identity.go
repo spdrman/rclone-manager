@@ -1,3 +1,23 @@
+// FR-16's TOCTOU defence: the shape of what the manager remembers about a
+// remote object, and the one function that decides whether the object
+// sitting at that path now is still the object it decided to delete.
+//
+// It lives in model rather than beside the delete because two packages far
+// apart have to agree on it. Discovery captures an identity and the journal
+// stores it, hours or days before internal/lifecycle recaptures one and
+// compares. A comparison written at the delete site would be reasoning
+// about a value produced by code that never saw the rules.
+//
+// The whole file is built around one admission: this product cannot always
+// prove identity. Its own recommended deployment is a shell-less SFTP
+// account, and rclone's sftp backend computes remote hashes by running
+// sha1sum over the SSH session, so on exactly the posture we tell operators
+// to use there is no hash to compare. A design that assumed one would be
+// wrong for its own documentation. So the answer is three-valued and
+// carries the strength of its own evidence, and "I could not tell" is a
+// first-class result that preserves the remote object rather than a
+// degraded "unchanged" that deletes it.
+
 package model
 
 import "fmt"
@@ -70,6 +90,19 @@ type RemoteIdentity struct {
 	StableID string
 }
 
+// The three "did the backend actually report this" tests, written once
+// because CompareIdentity has to ask about both sides of every comparison
+// and an inline r.Hash != "" is one negation away from treating a missing
+// attribute as a mismatch.
+//
+// hasHash insists on the algorithm as well as the digest, because a digest
+// whose algorithm is unknown cannot be compared with anything and is
+// therefore not a hash for this purpose.
+//
+// hasModTime reads 0 as absent, which does conflate "not reported" with the
+// unix epoch. That is deliberate and safe in the direction that matters: an
+// object genuinely stamped 1970 is treated as having no modification time,
+// which loses a weak signal and never gains a false one.
 func (r RemoteIdentity) hasHash() bool     { return r.Hash != "" && r.HashAlg != "" }
 func (r RemoteIdentity) hasModTime() bool  { return r.ModTime != 0 }
 func (r RemoteIdentity) hasStableID() bool { return r.StableID != "" }
@@ -109,6 +142,14 @@ const (
 	ConfidenceStrong
 )
 
+// String renders a Confidence for the audit line that explains why a
+// deletion went ahead or was refused, which is the only place these values
+// are read by a person.
+//
+// The default branch prints the number rather than falling back to
+// "none": a Confidence nobody taught this method about is a bug, and the
+// safe-looking word would hide it inside a log line an operator is
+// supposed to be able to trust.
 func (c Confidence) String() string {
 	switch c {
 	case ConfidenceNone:
@@ -153,6 +194,10 @@ const (
 	VerdictChanged
 )
 
+// String renders a Verdict for the same audit line, with the same refusal
+// to guess in the default branch. "unconfirmed" is the zero value here, so
+// an unrecognised verdict falling back to it would read as the cautious
+// answer while actually being an unhandled one.
 func (v Verdict) String() string {
 	switch v {
 	case VerdictUnconfirmed:
@@ -235,6 +280,14 @@ func CompareIdentity(discovered, current RemoteIdentity) IdentityComparison {
 		algNote = fmt.Sprintf(" (a %s hash and a %s hash were both present but not comparable)", discovered.HashAlg, current.HashAlg)
 	}
 
+	// Deliberately ahead of the size check below, so a matching stable
+	// identifier settles the question even against a size that moved. That
+	// is only sound because of the contract on the StableID field: a
+	// backend whose identifier can survive a content overwrite must leave
+	// it empty rather than populate it. Where that contract holds, an
+	// identifier match means the same stored object, and a size read that
+	// disagrees is the listing being wrong rather than the object being
+	// replaced.
 	if discovered.hasStableID() && current.hasStableID() {
 		if discovered.StableID != current.StableID {
 			return IdentityComparison{

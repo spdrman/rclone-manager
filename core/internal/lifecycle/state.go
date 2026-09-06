@@ -17,6 +17,7 @@
 //	COMMITTED
 //	REMOTE_DELETE_PENDING
 //	COMPLETE
+//	REMOTE_RETAINED    (a second terminal state, issue #282: see below)
 //	FAILED             (exceptional)
 //	QUARANTINED        (exceptional, recoverable)
 //	QUARANTINED_LOST   (exceptional, terminal)
@@ -45,14 +46,37 @@
 // right back around: a livelock, and one that also mislabels an
 // irrecoverable loss as an ordinary retryable failure. QUARANTINED_LOST is
 // the state that loss is recorded in instead, reachable only from COMPLETE
-// and terminal by design (see TestOnlyCompletePrecedesQuarantinedLost and
-// TestCompleteCannotLivelockThroughQuarantine). Leaving it requires an
-// operator to act, not another automatic retry.
+// (see TestOnlyCompletePrecedesQuarantinedLost), and it has no path back
+// into the pipeline at all. Leaving it requires an operator to act, not
+// another automatic retry: its one exit is back to the COMPLETE it came
+// from, and only when the operator can prove the durable local copy is
+// intact after all (issue #220, see machine.go's "Reinstatement" section
+// and TestCompleteCannotLivelockThroughQuarantine).
 package lifecycle
 
+// This file is the vocabulary: the thirteen state names, the type that
+// carries one, and the parse and validity checks that keep a raw string from
+// becoming a State without being looked at.
+//
+// It holds no rules about MOVEMENT at all. Which state may follow which is
+// machine.go's table, and the separation is deliberate: a name is a fact
+// about what an artifact is, and an edge is a claim about what may happen
+// next, and mixing them is how a constant file grows opinions nobody
+// reviews. The package doc above sits here because this is the file that
+// introduces the vocabulary the rest of the package is written in.
+
 // State is one named point in the FR-10 artifact lifecycle.
+//
+// It is a defined string type rather than an int, because the journal stores
+// exactly this string and an operator reads exactly this string in a log
+// line. An integer with a lookup table would make the stored form an
+// implementation detail that could be renumbered, and the stored form is a
+// contract with every row already on disk.
 type State string
 
+// The thirteen states. Their string forms are a contract with the FR-9
+// journal and with every log line an operator has already read, so a name
+// here is not renameable without a migration and an FR-35 conversation.
 const (
 	// Discovered is the entry point: the artifact exists on the remote and
 	// the manager has recorded it, but nothing has moved yet.
@@ -94,6 +118,21 @@ const (
 	// copy is retained. This is the happy-path terminal state.
 	Complete State = "COMPLETE"
 
+	// RemoteRetained means this artifact's backup set is declared
+	// read-only (issue #282, config.BackupSet.ReadOnly): FR-15's delete
+	// step is never offered this artifact, transport.Transport.DeleteRemote
+	// is never called for it, and the remote object is retained by policy
+	// rather than pending deletion. It is a second happy-path terminal
+	// state, reached from Committed or RemoteDeletePending exactly where
+	// Complete normally would be, and it exists so that a read-only set's
+	// artifacts stop being re-offered to the delete gate every cycle and
+	// logging a refusal each time -- the exact complaint the issue makes
+	// about a config that can only delay, never withhold, consent to
+	// delete. Unlike Complete, reaching this state says nothing about
+	// whether the remote object still exists: this manager never checked,
+	// on purpose, because it was never going to touch it either way.
+	RemoteRetained State = "REMOTE_RETAINED"
+
 	// Failed means the pipeline could not produce a valid backup on this
 	// attempt because of a permanent, non-retryable error (FR-22). It is
 	// never reached once the artifact is Committed: by then the backup has
@@ -104,18 +143,25 @@ const (
 	// needs a human, either because a validator rejected it (FR-13) or
 	// because later reconciliation (FR-17) found the durable local copy had
 	// gone bad after the fact, while a remote copy still exists (or hasn't
-	// been confirmed gone) to recover from. Its one exit, back to
-	// Discovered, is a real recovery path: a fresh attempt can still find
-	// the source. Contrast QuarantinedLost, where that source is gone.
+	// been confirmed gone) to recover from. It has two operator-only exits
+	// and no automatic one: back to Discovered, which throws the local copy
+	// away and re-fetches, and back to Committed, which keeps the local
+	// copy and trusts it again on re-checked evidence (issue #220).
+	// Contrast QuarantinedLost, where the source is confirmed gone and only
+	// the second kind of recovery is available.
 	Quarantined State = "QUARANTINED"
 
 	// QuarantinedLost means an artifact's durable local copy was found
 	// corrupted after Complete, when the remote source is already confirmed
-	// deleted. There is no copy anywhere left to recover from, so unlike
-	// Quarantined this state has no automatic exit: retrying would only
-	// rediscover nothing and fail again. This is FR-10's one addition
-	// beyond the names the issue lists, added to close a gap FR-17's
-	// reconciliation table doesn't cover (see the package doc).
+	// deleted. There is no source left to re-fetch from, so this state has
+	// no automatic exit at all and no route back into the pipeline:
+	// retrying would only rediscover nothing and fail again. What it does
+	// have is an operator-only way back to the Complete it came from, taken
+	// when the local copy turns out to be intact after all and the finding
+	// was the mistake, an unmounted volume being the case that motivated it
+	// (issue #220). This is FR-10's one addition beyond the names the issue
+	// lists, added to close a gap FR-17's reconciliation table doesn't
+	// cover (see the package doc).
 	QuarantinedLost State = "QUARANTINED_LOST"
 )
 
@@ -133,11 +179,19 @@ var AllStates = []State{
 	Committed,
 	RemoteDeletePending,
 	Complete,
+	RemoteRetained,
 	Failed,
 	Quarantined,
 	QuarantinedLost,
 }
 
+// validStates is AllStates as a set, built once at init.
+//
+// It is derived from AllStates rather than written out again, which is the
+// same discipline the tests follow: a state added to the constants and to
+// AllStates becomes valid automatically, and a state added to the constants
+// alone is caught by TestAllStatesAreValidAndDistinct rather than silently
+// being rejected at runtime by a lookup nobody remembered to update.
 var validStates = func() map[State]bool {
 	m := make(map[State]bool, len(AllStates))
 	for _, s := range AllStates {

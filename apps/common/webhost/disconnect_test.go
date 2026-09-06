@@ -10,6 +10,21 @@ import (
 	"time"
 )
 
+// The proof that a submitted operation outlives the request that
+// submitted it.
+//
+// This is the one test in the package that must run against a real
+// listening server rather than a recorder. On a recorder, the request
+// context behaves however the test constructs it; on a real server it is
+// cancelled by net/http when the client goes away, which is the exact
+// event a handler that carelessly started its work under the request
+// context would be destroyed by. So a recorder-based version of this test
+// would pass against the bug it exists to catch.
+//
+// The asynchronous double's channel gate is what keeps it deterministic:
+// the background work is held open until the test decides, instead of the
+// assertion racing a delay somebody tuned.
+
 // TestSubmitOperation_SurvivesClientDisconnect is issue #94's INTEGRATION
 // requirement: "Run the disconnect test against a real HTTP server
 // (httptest.Server or equivalent), not an in-process fake, to prove
@@ -57,6 +72,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "idem-disconnect")
+	attachValidCSRF(req)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -69,7 +85,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&submitted); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	operationID, _ := submitted["operation_id"].(string)
 	if operationID == "" {
 		t.Fatal("submitted operation_id is empty")

@@ -1,4 +1,21 @@
-import { useCallback, useEffect } from "react";
+/**
+ * A fetched resource as a graph node: loading, resolved and failed, with
+ * one hook to read it and one function to drive it.
+ *
+ * This is the graph-backed successor to `useAsync`, and it keeps that
+ * hook's exact `AsyncState<T>` shape so a page could be moved across
+ * without touching the props it hands its children. What it adds is that
+ * the value now lives somewhere two surfaces can both read it, which is
+ * the whole reason a fetch moves here at all. State only one page cares
+ * about is better off staying in `useAsync`, and several pages still are.
+ *
+ * The two hardest things in the file are both about identity rather than
+ * data, and both were regressions once. A late response must not overwrite
+ * a newer one, and the object this hook returns must not change identity
+ * when nothing changed, or every consumer keyed on it churns. Each carries
+ * its own note where it is handled.
+ */
+import { useCallback, useEffect, useMemo } from "react";
 import type { InputNode } from "@causlts/core";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
@@ -83,14 +100,27 @@ export function useResource<T>(
   deps: unknown[] = []
 ): ResourceState<T> & { reload(): void } {
   const state = useCausl(node);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // This wrapper's whole job is forwarding a caller-supplied deps array
+  // to useCallback, which the newer react-hooks/use-memo rule can't
+  // statically verify (it requires a literal array so it can compare
+  // entries itself). Each call site below already lists its own real
+  // dependencies in `deps`; this hook has nothing more specific to add.
+  // eslint-disable-next-line react-hooks/use-memo, react-hooks/exhaustive-deps
   const run = useCallback(fetchFn, deps);
   const reload = useCallback(() => fetchResource(node, run), [node, run]);
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
-  return { ...state, reload };
+  // `state` (useCausl) and `reload` (useCallback above) are both already
+  // referentially stable when nothing changed — useCausl caches its read
+  // by graph.now (see useCausl.ts), and reload's own deps (node, run) only
+  // change when the caller's `deps` array does. Without this useMemo,
+  // though, `{ ...state, reload }` was a fresh object literal on every
+  // call regardless, so a caller like App.tsx's `reloadAll` — a
+  // useCallback keyed on health/sets/operations — churned identity on
+  // every render, tearing down and rebuilding usePolling's setInterval
+  // instead of letting it run for a full 30s (mandatory review, PR #143).
+  return useMemo(() => ({ ...state, reload }), [state, reload]);
 }

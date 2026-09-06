@@ -115,6 +115,16 @@ const (
 	// crossing a configured warning or critical threshold (FR-21).
 	EventDiskPressure = "disk_pressure"
 
+	// EventAlert records one proactive alert actually delivered to an
+	// operator (docs/EPIC-B-multi-nas.md §71's Work Package 3.5): a
+	// stale backup, repeated failure, changed SSH host key or critical
+	// storage pressure that internal/alert observed for the first time
+	// and pushed through the configured notification mechanism. It is
+	// deliberately one line per DELIVERY, not one per evaluation pass,
+	// so the log answers "who was told what, and when" rather than
+	// re-stating a still-unresolved condition on every poll.
+	EventAlert = "alert"
+
 	// EventError is the catch-all for an error that does not already have
 	// a more specific event above attached to it (for example, a failure
 	// reading config, or an unexpected panic recovered at the top of a
@@ -217,8 +227,15 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 
 // TransferStats logs EventTransferStats for one completed FR-11 transfer:
 // bytesTransferred and duration describe what moved and how long it took,
-// and checksummed reports whether the transport backend verified the copy
-// against a checksum itself (transport.TransferResult.Checksummed).
+// and checksummed carries state.TransferResult.Checksummed straight
+// through.
+//
+// That field is a journal column nothing writes any more (#492 removed the
+// transport-side claim it came from, and its doc says why), so this
+// attribute is false on every real transfer. The key stays in the event
+// because the shape of a log line is an operator-visible surface under
+// FR-35, and it stays honest because false is exactly what "no copy-time
+// checksum was recorded" should read as.
 func (l *Logger) TransferStats(ctx context.Context, artifact string, bytesTransferred int64, duration time.Duration, checksummed bool) {
 	l.emit(ctx, LevelInfo, EventTransferStats, "transfer complete",
 		slog.String("artifact", artifact),
@@ -349,6 +366,26 @@ func (l *Logger) StaleBackup(ctx context.Context, backupSet string, age, thresho
 		slog.String("backup_set", backupSet),
 		slog.Duration("age", age),
 		slog.Duration("threshold", threshold),
+	)
+}
+
+// Alert logs EventAlert: one proactive notification that internal/alert
+// just delivered. kind is the alert's own typed kind (STALE_BACKUP,
+// REPEATED_FAILURE, HOST_KEY_CHANGED, CRITICAL_STORAGE_PRESSURE),
+// backupSet is what it was about, and detail is the operator-facing text
+// that actually went out.
+//
+// This always logs at LevelWarn: every condition §71 alerts on is, by
+// definition, something already wrong. It is deliberately not LevelError,
+// which this package reserves for the manager itself failing at something
+// (see Error and CycleEnd) rather than for correctly reporting a problem
+// it detected. A delivery that FAILED is logged through Error instead, by
+// internal/alert, since that one is the manager failing.
+func (l *Logger) Alert(ctx context.Context, kind, backupSet, detail string) {
+	l.emit(ctx, LevelWarn, EventAlert, "proactive alert delivered",
+		slog.String("alert_kind", kind),
+		slog.String("backup_set", backupSet),
+		slog.String("detail", detail),
 	)
 }
 

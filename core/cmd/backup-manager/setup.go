@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
@@ -14,9 +15,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The plumbing every command in this binary shares: the flag set, the
+// operand-tolerant parse, the two ways a service gets opened, the log sink,
+// and the two functions that decide what a cycle's exit status is.
+//
+// It is one file because the point of each of these is that there is exactly
+// one of it. Every command answering an unknown flag the same way, resolving
+// --config the same way, and closing its journal and releasing its lock in
+// the same order are all properties that only hold while nobody writes a
+// second version, and the two exit-status functions are here specifically
+// because `run` and `fetch` disagreed twice about what a failed cycle is,
+// each time because each was still deciding for itself.
+//
+// The refusals and diagnostics printed from here are operator-visible and
+// pinned by core/tests/compat, so their wording is part of the contract
+// rather than part of the implementation.
+
 // defaultConfigPath matches container/compose.yaml's mount point and
-// docs/deployment.md's documented layout: /etc/backup-manager/config.yaml.
-const defaultConfigPath = "/etc/backup-manager/config.yaml"
+// docs/deployment.md's documented layout. The packaged mount is the
+// DIRECTORY /etc/backup-manager/config (issue #196) and config.yaml lives
+// inside it; --config also accepts that directory, which
+// config.ResolvePath turns into this same file.
+const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
 
 // newFlagSet builds a flag.FlagSet every subcommand but `version` shares:
 // a name (for its own usage/error output) and the one flag they all take,
@@ -26,8 +46,46 @@ const defaultConfigPath = "/etc/backup-manager/config.yaml"
 // os.Exit out from under a subcommand that has already opened a journal.
 func newFlagSet(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "path to the manager's YAML config file")
+	cfgPath := fs.String("config", defaultConfigPath, "path to the manager's YAML config file, or to the directory holding it")
 	return fs, cfgPath
+}
+
+// parseFlagsAroundOperands parses args into fs and returns the operands
+// that were not flags, in the order they appeared, accepting flags on
+// either side of them.
+//
+// flag.Parse on its own stops at the first argument that is not a flag,
+// which makes `validate <artifact-id> --config <path>` two extra operands
+// rather than one operand and one flag. Both of those forms are what this
+// binary's own usage text describes (one line gives validate an operand,
+// another says every command except version accepts --config, and neither
+// puts them in an order), and command-then-subject-then-options is the
+// order most CLIs take, so the parse accommodates the operator here
+// instead of the message explaining the parser to them (issue #188).
+//
+// This is the ordinary repeated-Parse loop: parse, take the operand that
+// stopped the parse, parse what is left, until nothing is left. An
+// explicit "--" keeps its usual meaning, ending flag parsing for good, so
+// an operand that looks like a flag can still be written after one.
+func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error) {
+	var operands []string
+	rest := args
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return operands, nil
+		}
+		// Whatever Parse consumed out of rest, which ends in "--" when it
+		// stopped at an explicit terminator rather than at an operand.
+		consumed := rest[:len(rest)-fs.NArg()]
+		if len(consumed) > 0 && consumed[len(consumed)-1] == "--" {
+			return append(operands, fs.Args()...), nil
+		}
+		operands = append(operands, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
 }
 
 // openService loads and validates configPath, opens its state journal
@@ -44,13 +102,19 @@ func newFlagSet(name string) (*flag.FlagSet, *string) {
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` immediately.
 func openService(ctx context.Context, configPath string, withTransport bool) (*app.Service, *config.Config, func(), error) {
-	cfg, journal, err := service.OpenConfigAndJournal(ctx, configPath)
+	cfg, journal, releaseJournal, err := service.OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
 	cleanup := func() {
 		if err := journal.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+		// Only after the journal handle is closed: the shared journal lock
+		// is what keeps another process from migrating this journal while
+		// this command still has it open (see core/service's startup.go).
+		if err := releaseJournal(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing the state database lock: %v\n", err)
 		}
 	}
 
@@ -61,6 +125,32 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 
 	svc := app.New(cfg, journal, tr, logger())
 	return svc, cfg, cleanup, nil
+}
+
+// openBackupService is openService's counterpart for the handful of
+// subcommands (today, just `settings`) whose use case lives on
+// core/service.BackupService rather than internal/app.Service: anything
+// that needs a file-backed configPath to persist a change to (see
+// BackupService.configPath's own doc), which internal/app.Service, built
+// directly from an already-loaded *config.Config, has no notion of at
+// all. service.Open is the identical production constructor
+// apps/common/webhost's Open uses, so a CLI-driven settings write goes
+// through the exact same persist-then-hot-reload sequence
+// (BackupService.UpdateSettings's own doc) an HTTP PATCH would.
+//
+// The returned cleanup func closes the journal (via BackupService.Close);
+// callers should always `defer cleanup()` immediately.
+func openBackupService(ctx context.Context, configPath string) (*service.BackupService, func(), error) {
+	svc, closeFn, err := service.Open(ctx, configPath)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	cleanup := func() {
+		if err := closeFn(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+	}
+	return svc, cleanup, nil
 }
 
 // logger builds the FR-23 structured-observability sink every Service
@@ -81,6 +171,132 @@ func logger() *obs.Logger {
 func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 	l.Startup(ctx, info.BinaryVersion, info.Commit, info.GoVersion)
 	l.RcloneVersion(ctx, info.RcloneVersion)
+}
+
+// cycleFailed is the one place `run` and `fetch` both decide whether a
+// cycle counts as failed (issue #283): a systemic error (reconcile or
+// discover exhausting its retry budget, a journal listing failing
+// outright, or a shutdown mid-cycle), OR an artifact reconciliation could
+// not reach a verdict on, OR any artifact the cycle walked ending in
+// FAILED, QUARANTINED or QUARANTINED_LOST, OR a cycle that had work in
+// front of it and got none of it through. Before this existed, each
+// command checked only the systemic half, so a cycle where every artifact
+// discovered fine and then failed verification exited 0 -- the exact bug
+// this function exists to make structurally impossible to reintroduce in
+// one of the two commands without the other.
+//
+// The last of those four is issue #361, and it is the one that needs
+// stating carefully, because the obvious version of it is wrong. "Nothing
+// was transferred" is not a failure: a backup set with nothing new
+// waiting on the remote transfers nothing every poll interval for weeks
+// at a time, and that is the product working. What is a failure is a
+// cycle that had artifacts in front of it and moved none of them, whether
+// they were refused at discovery or refused at transfer. app.CycleProgress
+// is the count that tells those two apart; see its doc for what it
+// deliberately does not count, which is the other half of not turning a
+// quiet night into an alarm.
+//
+// It takes one app.CycleVerdict rather than a list of arguments each
+// command assembles for itself. That is not tidiness: #283 introduced
+// this function to stop the two commands disagreeing, and #361 found them
+// disagreeing anyway, because each was still building its own arguments
+// at the call site. The verdict is built in internal/app now, from the
+// same fields, for both.
+//
+// failedArtifacts (internal/app.processArtifacts) already folds in a
+// loss this cycle's own reconcile pass discovered on its own -- a
+// previously-durable artifact whose local copy turned out corrupted or
+// missing, moved to QUARANTINED or QUARANTINED_LOST -- not just a
+// this-cycle transfer/verify/commit failure: a successful reconciliation
+// pass that finds rot is not a systemic error, but it is a stronger case
+// for a non-zero exit than a single artifact this cycle's own pipeline
+// quarantined, and this function must not let that distinction matter.
+func cycleFailed(v app.CycleVerdict) bool {
+	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0 || v.NothingGotThrough()
+}
+
+// cycleExit turns one cycle's per-backup-set verdicts into the exit
+// status `run` and `fetch` both return, and prints the reason for any
+// non-zero one it can name. Both commands go through this single
+// function so neither can grow its own idea of what a failed cycle is.
+//
+// Callers pass os.Stderr, deliberately. This binary's stdout is FR-23's
+// newline-delimited JSON event stream (logger, above, writes there), and
+// a sentence in the middle of it would break every consumer that parses
+// the stream a line at a time. `fetch` already prints its own human
+// summary to stdout, which predates this and is not worth changing, but
+// nothing new goes there.
+func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
+	code := 0
+	for _, v := range verdicts {
+		if !cycleFailed(v) {
+			continue
+		}
+		code = 1
+		if v.NothingGotThrough() {
+			// Deliberately unchecked, like every other diagnostic this
+			// binary prints: a write to stderr failing cannot change the
+			// verdict that is being reported, and swallowing the verdict
+			// because the terminal went away would be the worse answer.
+			_, _ = fmt.Fprintf(w, "backup-manager: %s backed nothing up this cycle: %d walked, %d got through\n",
+				v.Set, v.Progress.Walked, v.Progress.Durable)
+		}
+	}
+	return code
+}
+
+// moveExit is cycleExit's FR-30 half: the exit status a cycle's move pass
+// contributes, with the reason for a non-zero one printed beside it.
+//
+// # Why a failed move pass fails the cycle
+//
+// An operator who writes `medium: cold_offsite` against a tier has said
+// where those backups belong. A cycle in which every move was refused has
+// not put them there, and will not on the next cycle either, because the
+// reasons a move is refused are configuration reasons: a credential that
+// is not set, a bucket that is not there, a storage class an artifact
+// cannot be delivered to. Left at exit 0 that is issue #361's defect one
+// layer up, a cycle that did nothing reporting success, and it stays
+// invisible for exactly as long as nobody reads the logs.
+//
+// It is deliberately narrow. One refused move among several that landed
+// does not fail anything, because the pass is working and one artifact
+// hit something transient. It takes the whole pass getting nothing
+// through, which is the same line CycleVerdict.NothingGotThrough draws.
+//
+// A deployment that declares no storage medium attempts no moves and
+// therefore can never reach a non-zero code here. That is FR-35's
+// compatibility promise for this exit status, which is pinned by a
+// black-box contract suite in another repository, held by arithmetic
+// rather than by a guard: the denominator is zero.
+//
+// # Two shapes, and MovesErr is the other one
+//
+// A pass that could not RUN at all (no way to reach a medium, a journal
+// that cannot record a move) reports no outcomes, so the arithmetic above
+// is silent about it. It is still a deployment that declared a medium and
+// moved nothing, so it fails here too, on its own line, naming its own
+// cause.
+//
+// Callers pass os.Stderr for cycleExit's reason: this binary's stdout is
+// FR-23's JSON event stream and a sentence in the middle of it breaks
+// every consumer that parses it a line at a time.
+func moveExit(w io.Writer, report app.CycleReport) int {
+	code := 0
+	if report.MovesErr != nil {
+		code = 1
+		_, _ = fmt.Fprintf(w, "backup-manager: this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
+	}
+	if p := report.MoveProgress(); p.NothingMoved() {
+		code = 1
+		if p.Reason == "" {
+			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
+		} else {
+			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
+				p.Attempted, p.Reason)
+		}
+	}
+	return code
 }
 
 // fail prints err to stderr in a consistent shape and returns the exit

@@ -1,0 +1,50 @@
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: sftp
+          host: production.example.internal
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backup-manager/known_hosts
+        remote_path: /backups/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+# Issue #156 (B3.8): FR-18's retention chain spelled out explicitly. The
+# three legacy scalars are deliberately absent: setting both spellings is
+# a validation error, not a precedence rule.
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  protect_last_known_good: true
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7
+    - name: weekly
+      granularity: week
+      keep: 3
+      window_unit: month
+    - name: monthly
+      granularity: month
+      keep: 12
+    - name: semi_annual
+      granularity: half_year
+      keep: 6
+    - name: annual
+      granularity: year
+      keep: 10
+    - name: fortnightly
+      granularity: days
+      period_days: 14
+      keep: 26

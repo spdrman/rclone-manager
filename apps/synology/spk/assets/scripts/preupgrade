@@ -1,0 +1,11 @@
+#!/bin/sh
+# Nothing to save before an upgrade.
+#
+# DSM replaces target/ and keeps etc/, var/ and home/. Everything this
+# package must carry across an upgrade - the configuration, the SQLite
+# journal, the local-auth record - already lives in etc/ or var/, so there
+# is nothing to stage into SYNOPKG_TEMP_UPGRADE_FOLDER and nothing to
+# restore afterwards. postinst's "only seed a config if none exists" rule
+# is the other half of that: the upgrade path runs it too, and it leaves
+# the existing configuration alone.
+exit 0

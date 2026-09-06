@@ -1,0 +1,23 @@
+#!/bin/sh
+# Deletes nothing. On purpose.
+#
+# This is issue #85's "uninstall behavior does not unexpectedly delete
+# retained backup data" criterion, and the safest implementation of it is
+# an empty one. Three separate things would have to be deleted for that
+# criterion to fail, and none of them is this script's business:
+#
+#   * The backup data itself. It lives in the DSM shared folder the
+#     data-share resource worker created, which Synology documents as
+#     never removed on uninstall "since it might delete the user's
+#     personal data as well". Removing it here would defeat exactly the
+#     protection that worker exists to provide.
+#   * The SQLite lifecycle journal and the local-auth administrator
+#     record, both under /var/packages/<pkg>/var, which the package FHS
+#     documents as surviving an uninstall.
+#   * The configuration under /var/packages/<pkg>/etc, likewise.
+#
+# What DSM removes on its own is the target directory, which holds only
+# the two release binaries and the DSM UI files - all of them replaceable
+# by reinstalling. So there is nothing left for this script to clean up,
+# and every deletion it could add would be a deletion of somebody's data.
+exit 0

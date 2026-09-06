@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+// The claim this file has to establish is a negative one about every
+// rendering path at once, and a negative of that shape is usually asserted
+// by checking the output looks redacted. That is the weaker check, because
+// a path that renders nothing, or renders some other field, passes it too.
+//
+// So every case reduces to assertNeverLeaked, which hunts for the raw bytes
+// in whatever came out the other end. The placeholder turning up is a
+// separate and secondary assertion. Only the absence of the secret is the
+// property being defended.
+//
+// The last test is the odd one out on purpose: it asserts the leak. fmt
+// cannot pull an interface value out of an unexported struct field, so a
+// Secret held in one renders its contents whenever the enclosing struct is
+// formatted. Pinning the hole means a future Go that closes it shows up
+// here as a failing test, rather than leaving secret.go carrying a warning
+// that quietly stopped being true.
+
 // theSecret is the raw value every test below wraps and then hunts for in
 // whatever came out the other end. If any assertion below ever needs to
 // change what "the raw value" is, this is the one place to do it.
@@ -228,4 +245,50 @@ func TestSecretThroughLoggerEndToEnd(t *testing.T) {
 	)
 
 	assertNeverLeaked(t, "obs.Logger end-to-end", buf.String())
+}
+
+// unexportedSecretHolder and ExportedSecretHolder are the two halves of
+// the measurement in Secret's own doc: the same wrapped value in an
+// unexported field and in an exported one.
+type unexportedSecretHolder struct{ s Secret }
+
+// ExportedSecretHolder is the control. It is exported for no reason other
+// than that its FIELD has to be, which is the whole point being measured.
+type ExportedSecretHolder struct{ S Secret }
+
+// TestSecretInAnUnexportedFieldStillLeaks pins a limitation, not a
+// behaviour anyone wants.
+//
+// fmt cannot take an interface out of an unexported struct field
+// (reflect.Value.CanInterface is false for one), so it never asks whether
+// the value implements Formatter and prints the wrapped string instead.
+// Secret's doc used to claim it covered every rendering path the standard
+// library offers; it does not, and this test is what keeps that correction
+// true.
+//
+// If a future Go stops leaking here this test will fail. That is a good
+// failure: DELETE THIS TEST, and delete the "one rendering path this does
+// NOT cover" section from Secret's doc with it. Do not weaken the
+// assertion to keep it passing, because everything that reasserts
+// redaction on top of this (internal/transport/rclone's
+// resolvedCredentials, keyEncryptionSecretCacheEntry) exists only because
+// of it.
+func TestSecretInAnUnexportedFieldStillLeaks(t *testing.T) {
+	const raw = "hunter2"
+
+	leaked := fmt.Sprintf("%+v", unexportedSecretHolder{s: NewSecret(raw)})
+	if !strings.Contains(leaked, raw) {
+		t.Fatalf("an unexported Secret field no longer leaks through %%+v (got %q). "+
+			"Go has closed the hole: delete this test and the limitation section in Secret's doc, "+
+			"rather than weakening this assertion", leaked)
+	}
+
+	// The control, which is what makes the assertion above a measurement
+	// of the FIELD's exportedness rather than of Secret being broken
+	// outright.
+	redactedRendering := fmt.Sprintf("%+v", ExportedSecretHolder{S: NewSecret(raw)})
+	if strings.Contains(redactedRendering, raw) {
+		t.Fatalf("an EXPORTED Secret field leaked through %%+v (got %q); Secret's Formatter is not working at all, "+
+			"which makes the unexported-field result above meaningless", redactedRendering)
+	}
 }

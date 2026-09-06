@@ -25,9 +25,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -61,10 +63,31 @@ var closeDrainTimeout = 5 * time.Second
 // methods below, never by reaching past them into an internal.Service,
 // a *state.Journal or a *config.Config it could not even name.
 type BackupService struct {
-	inner    *app.Service
-	journal  *state.Journal
-	revision string
-	logger   *obs.Logger
+	// state bundles inner (the wrapped internal/app.Service) and revision
+	// (ConfigRevision's value) behind one atomic.Pointer, so every reader
+	// — ConfigRevision, SubmitRunCycle/executeRunCycle (operations.go),
+	// the scheduler's own tick (scheduler.go), TestConnection
+	// (backupsets.go) and ListBackupSets/GetBackupSet (backupsets.go) —
+	// always observes one consistent, non-torn {inner, revision} pair
+	// with a lock-free Load(), no matter how many goroutines read
+	// concurrently with CreateBackupSet's own hot-reload Store() after a
+	// config write. Before this, inner and revision were two plain
+	// fields written under configMu (below) but read by every one of
+	// those call sites with no lock at all — a real, reachable data race
+	// under the Go memory model (net/http runs each request on its own
+	// goroutine, and the scheduler ticks independently), not merely a
+	// theoretical one; see CreateBackupSet's own doc for the write side
+	// of this contract.
+	state atomic.Pointer[configState]
+
+	journal *state.Journal
+	logger  *obs.Logger
+
+	// pollInterval is cfg.PollInterval.Duration(), copied out at
+	// construction time so PollInterval() (scheduler.go) can report it
+	// without exposing *config.Config itself, which a caller outside
+	// core/ cannot even name.
+	pollInterval time.Duration
 
 	// ctx/cancel give executeRunCycle a lifetime independent of both
 	// context.Background() and any single request's context: it is
@@ -95,6 +118,107 @@ type BackupService struct {
 	// method's own doc for why a second submission while this is held is
 	// rejected rather than queued.
 	runOnce sync.Mutex
+
+	// retentionMu guards retentionPlans (retention.go): every previewed
+	// retention plan this BackupService currently holds, keyed by its own
+	// plan_id, until ApplyRetentionPlan consumes it (applied, found stale,
+	// or expired) or it is simply never applied at all. This is
+	// deliberately an in-memory, non-durable store, unlike the operations
+	// table: a preview carries its own expires_at precisely so nothing
+	// needs to survive a restart — see retention.go's own doc for what IS
+	// durable (the apply itself, once confirmed).
+	retentionMu    sync.Mutex
+	retentionPlans map[string]retentionPlanRecord
+
+	// progress is the in-memory registry of live transfer progress for
+	// the operations executing in this process (progress.go). Like
+	// retentionPlans above it is deliberately non-durable, and for a
+	// sharper reason: a retention preview that outlived a restart would
+	// merely be stale, while a transfer progress reading that outlived
+	// one would describe a transfer that no longer exists.
+	progress *liveProgress
+
+	// holds is issue #350's in-memory registry of the backup sets an
+	// operator currently has open for editing (edithold.go). It is
+	// deliberately NOT rebuilt by a configuration hot-reload the way
+	// state (above) is: an operator editing a set through the Web UI
+	// causes hot-reloads (that is what saving a box does), and a hold
+	// that vanished on the first per-box Save would release itself
+	// halfway through the very edit it exists to protect.
+	holds *editHolds
+
+	// cycleWatch is the one live reading of whatever run cycle is
+	// executing in this process, whether an API caller submitted it or
+	// the scheduler started it. progress (above) is keyed by operation
+	// id and therefore cannot see a scheduled tick, which has no
+	// operation row; see cycleWatch's own doc for why that gap matters
+	// to the edit-hold warning specifically.
+	cycleWatch *cycleWatch
+
+	// configPath is the YAML file this BackupService was opened from
+	// (Open), or "" for a BackupService built directly with New (every
+	// core/ test, which constructs its own *config.Config in memory and
+	// has no file backing it). CreateBackupSet (backupsets.go) refuses to
+	// run at all when this is "": persisting a backup-set change to a
+	// config that has no file of its own to write back to would either
+	// silently no-op or panic deeper in, neither of which is the honest
+	// failure a caller needs.
+	configPath string
+
+	// alertSink is the proactive-alert delivery mechanism a provider app
+	// installed through EnableAlerts (alerts.go), or nil when none was
+	// ever installed. It is kept here, not only on the wrapped
+	// internal/app.Service, because CreateBackupSet's hot reload re-reads
+	// alerts.enabled from disk and has to be able to turn alerting ON, in
+	// a process that started with it off, without a restart: that needs
+	// the mechanism itself, which the wrapped Service does not hold when
+	// alerting is off. It is written under configMu, which is also the
+	// lock CreateBackupSet reads it under.
+	alertSink AlertSink
+
+	// releaseJournal drops the SHARED journal lock runStartupSequence took
+	// on this BackupService's behalf (startup.go, lock_unix.go), and is
+	// called by Close once the journal handle itself is closed. It is nil
+	// for a BackupService built with New, which never took one: New's
+	// caller opened the journal itself and owns whatever locking that
+	// implied.
+	releaseJournal func() error
+
+	// ready records that this BackupService came from Open, and therefore
+	// that §46.1's startup sequence completed. See Ready's own doc for why
+	// this is stored rather than re-derived: the previous definition of
+	// readiness (a non-empty config revision) was true for every
+	// BackupService that could exist, on the one flag §36 puts in front of
+	// a destructive operation.
+	ready bool
+
+	// configMu serializes every call that reads-modifies-writes this
+	// BackupService's configuration (today: CreateBackupSet) against
+	// ITSELF — two concurrent CreateBackupSet calls must not interleave
+	// their read-modify-write of the config file. It is a separate lock
+	// from runOnce on purpose: runOnce guards "at most one RunCycle
+	// executing", a completely different invariant, and a backup-set
+	// creation blocking on, or being blocked by, an in-progress run_cycle
+	// would be a surprising and unnecessary coupling between the two.
+	// configMu does NOT protect state (above) — state's own
+	// atomic.Pointer is what makes every READ of it safe with no lock at
+	// all; configMu only ever needs to keep two WRITERS (two overlapping
+	// CreateBackupSet calls) from racing each other's file write (see
+	// backupsets.go's CreateBackupSet for the full sequence).
+	configMu sync.Mutex
+}
+
+// configState bundles a BackupService's wrapped internal/app.Service
+// (inner) with the configuration revision (revision) computed from
+// exactly the *config.Config inner was itself built from, so the two can
+// never be swapped independently and observed as a mismatched pair: a
+// reader that Load()s one configState always gets the revision that
+// actually describes that inner, never inner from one hot-reload and
+// revision from another. See BackupService.state's own doc for why this
+// is a Pointer, not two separate fields.
+type configState struct {
+	inner    *app.Service
+	revision string
 }
 
 // New builds a BackupService from already-constructed dependencies. This
@@ -110,6 +234,16 @@ type BackupService struct {
 // on a nil *obs.Logger, exactly as internal/obs's own package doc
 // promises.
 //
+// New does NOT resolve a backup set's Validation.ValidatorID into a
+// runnable Validation.Command: that is load-time work, and
+// OpenConfigAndJournal (below) is where it happens, so it covers both
+// production entry points (Open here, and cmd/backup-manager's own
+// openService) in one place rather than each caller of this constructor
+// remembering it. A cfg handed to New with an unresolved ValidatorID is
+// not silently un-validated either: internal/lifecycle/verify.go refuses
+// an artifact whose backup set names a validator that was never resolved,
+// rather than reading it as "no validator configured".
+//
 // New also sweeps journal for any operation left at "queued" or "running"
 // by a previous process using it (see
 // internal/state.Journal.FailInterruptedOperations's own doc): a fresh
@@ -119,15 +253,26 @@ type BackupService struct {
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &BackupService{
-		inner:    app.New(cfg, journal, tr, logger),
-		journal:  journal,
-		revision: computeConfigRevision(cfg),
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
+		journal:        journal,
+		logger:         logger,
+		pollInterval:   cfg.PollInterval.Duration(),
+		ctx:            ctx,
+		cancel:         cancel,
+		retentionPlans: make(map[string]retentionPlanRecord),
+		progress:       newLiveProgress(),
+		holds:          newEditHolds(),
+		cycleWatch:     newCycleWatch(),
 	}
+	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
-	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
+	// The sweep skips actions whose work does not happen in this process.
+	// A restore runs at the storage provider for hours and is entirely
+	// unaffected by this process restarting, so marking its row failed
+	// would be this product recording a failure that did not happen about
+	// a job somebody else is still doing and still billing for (EPIC E,
+	// FR-34). Its real state is re-derived by asking the provider; see
+	// internal/archive.Restorer.Derive.
+	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart", externallyExecutedActions...); err != nil {
 		logger.Error(context.Background(), "sweep-interrupted-operations", err)
 	}
 
@@ -142,18 +287,96 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // so it exists in exactly one place; see this package's introducing PR
 // description for why that duplication existed in the first place and
 // this issue's own review for why it stopped being acceptable.
-func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, error) {
+//
+// Everything between loading the config and having a usable journal is
+// docs/EPIC-B-multi-nas.md §46.1's startup sequence, and it lives in
+// runStartupSequence (startup.go), not here: read that function's own doc
+// for the ordered steps, why the state directory is validated before the
+// lock is taken, and exactly what each failure between them does to the
+// data already on disk. What matters at THIS level is the contract it
+// gives every caller: a failure returns a non-nil error and a nil
+// *state.Journal, which Open (below) and cmd/backup-manager's openService
+// both already treat as fatal, so a failed migration means no
+// BackupService is ever constructed and no daemon, API, scheduler tick or
+// transfer ever starts.
+func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
+	configPath = config.ResolvePath(configPath)
+
+	// An absent configuration file is reported as its own error, before
+	// anything else is attempted (issue #176, firstrun.go). It is the one
+	// startup failure that means "this deployment has not been set up
+	// yet" rather than "this deployment is set up wrongly", and a
+	// provider app branches on it to serve the setup flow instead of
+	// exiting. Statting first, rather than inspecting whatever
+	// config.Load's wrapped error happens to say, keeps that distinction
+	// a property of this function rather than of an error string another
+	// package is free to reword.
+	//
+	// The stat runs on the RESOLVED path, which is why the resolution
+	// above comes first. An operator may spell --config as the packaged
+	// configuration DIRECTORY (#196 made the mount a directory, and
+	// config.ResolvePath exists for that spelling), and statting the
+	// directory would find it present on a completely empty install: the
+	// one shape that most needs ErrConfigAbsent would be the one shape
+	// that never gets it, and the process would exit on a fresh install
+	// rather than serve setup.
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil, fmt.Errorf("%w at %s", ErrConfigAbsent, configPath)
+	}
+
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("service: load config: %w", err)
+		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)
 	}
 
-	journal, err := state.Open(ctx, cfg.State.Database)
+	// The catalog-membership half of validator resolution runs BEFORE
+	// §46.1's startup sequence, because it is the one refusal here that
+	// needs nothing from disk and every other one is irreversible if it
+	// lands second: runStartupSequence applies any pending schema
+	// migration, and a process that migrates the journal forward and then
+	// refuses to start on a validator_id leaves an operator with a
+	// database the previous binary can no longer open either. The id set
+	// is code-defined, so this is reachable without operator error --
+	// a release that retires an id turns a config file this product wrote
+	// itself into a daemon that will not come up.
+	if err := checkValidatorCatalogMembership(cfg); err != nil {
+		return nil, nil, nil, err
+	}
+
+	journal, releaseJournal, err := runStartupSequence(ctx, cfg.State.Database)
 	if err != nil {
-		return nil, nil, fmt.Errorf("service: open state: %w", err)
+		return nil, nil, nil, err
 	}
 
-	return cfg, journal, nil
+	// Load-time resolution of every backup set's registered validator
+	// (validator.go's applyValidatorCatalog): the config file carries an
+	// id, the running process carries the command it resolves to. This
+	// happens AFTER runStartupSequence, which is what validated the state
+	// directory the scripts materialize into, and after LoadAndValidate,
+	// which refuses a Validation naming both an id and a command.
+	//
+	// An unregistered id has already been refused above, before anything
+	// on disk moved; what can still fail here is materializing the scripts
+	// themselves. That fails startup too, deliberately. The alternative --
+	// carrying on with no validator for that backup set -- would mean the
+	// one check standing between a bad artifact and remote deletion
+	// silently switched off, with the operator believing it was on.
+	if err := applyValidatorCatalog(cfg); err != nil {
+		// runStartupSequence already took the shared journal lock and
+		// opened the journal, and this function's contract is that a
+		// failure returns a nil *state.Journal. Both have to be given back
+		// here, in that order (see Close's own comment on why the lock is
+		// released only after the handle is closed), or a startup that
+		// fails on a bad validator_id leaves the lock held for the life of
+		// the process that is about to exit anyway.
+		_ = journal.Close()
+		if releaseJournal != nil {
+			_ = releaseJournal()
+		}
+		return nil, nil, nil, err
+	}
+
+	return cfg, journal, releaseJournal, nil
 }
 
 // Open is the production constructor: it loads and validates configPath,
@@ -166,12 +389,31 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 // `defer cleanup()` (or handle its error) once they are done with the
 // returned BackupService.
 func Open(ctx context.Context, configPath string) (*BackupService, func() error, error) {
-	cfg, journal, err := OpenConfigAndJournal(ctx, configPath)
+	logger := obs.New(os.Stdout, obs.LevelInfo)
+
+	cfg, journal, releaseJournal, err := OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
+		// §46.1 asks for a failed startup to be actionable, not merely
+		// fatal. The process is about to exit without ever constructing a
+		// BackupService (which is what makes readiness fail closed), so
+		// this line is the only record of WHY it did: without it an
+		// operator diagnosing a container that will not come up has a
+		// non-zero exit code and nothing else.
+		logger.Error(ctx, "startup", err)
 		return nil, nil, err
 	}
 
-	svc := New(cfg, journal, rclone.New(), obs.New(os.Stdout, obs.LevelInfo))
+	svc := New(cfg, journal, rclone.New(), logger)
+	// Resolved, not as supplied: --config may name the configuration
+	// DIRECTORY the packaging mounts (issue #196), and every write path
+	// below (CreateBackupSet, UpdateSettings, ImportSSHKey, the
+	// known-hosts store) derives its own path from this field.
+	svc.configPath = config.ResolvePath(configPath)
+	svc.releaseJournal = releaseJournal
+	// ready is set here, and only here: Open is the one constructor that
+	// runs §46.1's startup sequence, so it is the one constructor that can
+	// truthfully report the sequence completed. See the field's own doc.
+	svc.ready = true
 	return svc, svc.Close, nil
 }
 
@@ -202,7 +444,48 @@ func (b *BackupService) Close() error {
 			fmt.Errorf("timed out after %s waiting for an in-flight operation to finish", closeDrainTimeout))
 	}
 
-	return b.journal.Close()
+	err := b.journal.Close()
+	// The shared journal lock is released only after the journal handle
+	// itself is closed, never before: the whole point of holding it is that
+	// no other process migrates this journal while THIS process still has
+	// it open, and "still has it open" ends at the line above, not at the
+	// start of Close.
+	if b.releaseJournal != nil {
+		if releaseErr := b.releaseJournal(); releaseErr != nil && err == nil {
+			err = releaseErr
+		}
+	}
+
+	// The materialized validator scripts are deliberately left where they
+	// are. They used to live in a per-process os.MkdirTemp, where removing
+	// them on the way out was the only thing that stopped one directory
+	// leaking per process start; they now live in one fixed directory
+	// beside the state database, which makes them shared deployment state.
+	// The journal lock this just released is a SHARED one, and startup.go
+	// names a container restart racing an old process's shutdown against a
+	// new one's start as a supported case, so a Close that removed the
+	// directory would be deleting the scripts a successor has already
+	// resolved every one of its backup sets against -- wedging every
+	// artifact in every validator-using set for the whole life of the new
+	// process. What is left behind is one directory per deployment, whose
+	// contents are rewritten from the embedded copies at the start of
+	// every cycle anyway (validator.go's refreshValidatorScripts).
+	return err
+}
+
+// Ready reports whether this BackupService was constructed by Open, having
+// completed docs/EPIC-B-multi-nas.md §46.1's startup sequence in full
+// (state-directory validation, the startup lock, the pending-migration
+// check, any migration, and the shared journal lock it still holds).
+//
+// It is a fact this value owns, not something re-derived from its
+// configuration: a BackupService built with New has not run that sequence
+// (its caller opened the journal some other way, or handed in one built
+// for a test) and says so. §36 makes readiness the precondition an API
+// client checks before a destructive operation, and a precondition that
+// cannot be false is worse than no precondition at all.
+func (b *BackupService) Ready() bool {
+	return b.ready
 }
 
 // ConfigRevision identifies the exact configuration content this
@@ -215,17 +498,16 @@ func (b *BackupService) Close() error {
 // an accurate picture of (docs/EPIC-B-multi-nas.md §14, §15.6's
 // RETENTION_PLAN_STALE precedent applied to configuration generally).
 //
-// This has no persistence or reload story of its own: it is computed once,
-// at construction time, from whatever *config.Config the caller handed
-// New (or Open loaded from disk). Backup-set CRUD and any other API
-// surface that would actually let a configuration change while a process
-// keeps running are out of this issue's scope (see this package's
-// introducing PR description); today, two BackupService values report
-// different revisions because they were each built from a different
-// config, for example across a restart with an edited YAML file, or, in a
-// test, deliberately, to prove the conflict check itself.
+// It is computed at construction time from whatever *config.Config the
+// caller handed New (or Open loaded from disk), and again by
+// CreateBackupSet (backupsets.go) every time it hot-reloads b.state after
+// persisting a change: two BackupService values (or the same one, before
+// and after a CreateBackupSet call) report different revisions exactly
+// when their underlying configuration content actually differs, whether
+// that difference came from a restart against a manually edited YAML
+// file or from an in-process backup-set creation.
 func (b *BackupService) ConfigRevision() string {
-	return b.revision
+	return b.state.Load().revision
 }
 
 // computeConfigRevision hashes a canonical YAML encoding of cfg. YAML

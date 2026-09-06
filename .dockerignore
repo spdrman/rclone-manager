@@ -1,19 +1,57 @@
 # Keep the container build context to exactly what container/Dockerfile
-# COPYs (core/go.mod, core/go.sum, core/cmd/, core/internal/,
-# core/migrations/) plus whatever Docker itself needs to see this file.
-# Everything else here would either bloat the context for no reason or
-# actively undermine reproducibility: the Dockerfile passes -buildvcs=false
-# precisely because the build isn't supposed to depend on .git being
-# present or clean, so .git is excluded rather than merely ignored by that
-# flag.
+# COPYs (core/, apps/common/, apps/generic/, ui/shared/) plus whatever
+# Docker itself needs to see this file. Everything else here would either
+# bloat the context for no reason or actively undermine reproducibility:
+# the Dockerfile passes -buildvcs=false precisely because the build isn't
+# supposed to depend on .git being present or clean, so .git is excluded
+# rather than merely ignored by that flag.
 .git
 .github
 .claude
+
+# Local dependency/build-output directories: Docker's COPY does not
+# consult .gitignore, so these have to be excluded here too, or a
+# developer machine that happens to have them installed locally would
+# copy them straight into the build context (platform-specific binaries,
+# megabytes of files, none of it needed - the frontend-build stage runs
+# its own `npm ci` and `npm run build` from scratch).
+**/node_modules
+ui/shared/dist
+ui/shared/dist-bundles
+ui/shared/.vite
+ui/shared/coverage
+ui/shared/playwright-report
+ui/shared/test-results
+apps/generic/webui/dist
+*.tsbuildinfo
 
 # Not needed by the build; excluding them keeps an in-progress edit to one
 # of these from invalidating Docker's layer cache for no reason.
 docs
 container
+
+# Generated release compliance artifacts (SBOM, checksums, provenance
+# bundle). They describe the image; they are not inputs to building it.
+#
+# One exception, and it is load-bearing rather than a convenience.
+# third-party-licenses.json is the machine-readable inventory that
+# LICENSE and NOTICE both point a recipient at, so an image carrying the
+# first two and not it hands somebody two documents that reference a
+# third they cannot reach (#407). The runtime stage COPYs it, and a
+# `provenance` exclusion with no exception under it makes that COPY fail
+# the build outright ("failed to compute cache key ... not found") rather
+# than quietly producing an image without the file. Deleting the line
+# below therefore breaks the release build, and
+# distribution/packaging's TestTheImageCarriesTheLicenceMaterials refuses
+# it here first, where nobody needs a Docker daemon to find out.
+#
+# Only that one file. sbom.spdx.json, checksums.txt and
+# release-provenance.json stay out: nothing COPYs them, they change on
+# every release cut, and putting them in the context would make the cut's
+# own commit able to change the image (see scripts/release/publish-image.sh,
+# which reasons from this file about exactly that).
+provenance
+!provenance/third-party-licenses.json
 README.md
 *.md
 

@@ -17,6 +17,38 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// FR-14's operator door: one artifact, checked right now, because somebody
+// asked.
+//
+// Three other places in this codebase check a durable copy. internal/verify
+// does it once, at ingestion. internal/reconcile does it as part of a cycle.
+// internal/revalidate does it on a cadence a backup set opts into. All three
+// are schedules or pipelines, and all three answer to a policy. This one
+// answers to a person, and that difference is what the file is arranged
+// around.
+//
+// It buys two things a scheduled check cannot have. It runs against a backup
+// set that has configured no revalidation at all, because there is no
+// due-ness to be due. And it is the one place in the product where a content
+// check of a copy on a storage medium is legitimate, because FR-31 makes
+// egress operator-initiated and this command IS the operator initiating it;
+// validatemedium.go is that half and carries the rules.
+//
+// Reaching a medium needs a transport, and `validate` opened its Service
+// without one for as long as the medium fork existed, so it refused every
+// moved artifact in every deployment for a reason no operator could act on.
+// Service.MediumStore is filled in from the transport adapter (app.go), so
+// "this command needs no remote, it only reads a local file" is true right
+// up until it is asked about an artifact that has been moved. The comment
+// that keeps it wired lives on cmdValidate in cmd/backup-manager, next to
+// the argument that would be edited to break it again.
+//
+// The other thing worth knowing before changing anything here is that a
+// failure is not neutral. A failed check quarantines, which is protective
+// rather than destructive and is why there is no --dry-run, but it does mean
+// every "I could not check" that leaks into the verdict path costs a good
+// backup its standing.
+
 // ValidateResult is `backup-manager validate <artifact-id>`'s use case
 // output.
 type ValidateResult struct {
@@ -63,23 +95,53 @@ type ValidateResult struct {
 // already established), so `validate` can prove an artifact still actually
 // restores, not merely that its bytes are unchanged.
 //
+// # An artifact whose copy is on a storage medium (issue #435)
+//
+// Since EPIC E a durable copy can be an object on a storage medium
+// instead of a local file, which is what a completed move leaves. There
+// is nothing for the local check above to open, and that is a fact about
+// WHERE the copy is rather than a verdict about the artifact: reading it
+// as a verdict is what marked the first successfully moved artifact
+// QUARANTINED_LOST (#434).
+//
+// So the check forks. With no ACTIVE local placement and at least one
+// ACTIVE medium placement, the copies on the mediums are verified through
+// Service.MediumStore, at the strongest class the medium can give for
+// free, and at placement.Content when ValidateOptions.Content asks for it.
+// FR-31 makes a content check of a medium copy operator-initiated because
+// it downloads the object, and this command is the operator initiating it.
+// checkMediumCopies (validatemedium.go) is that fork, and its doc carries
+// the rules; the one worth repeating here is that a medium which could not
+// be asked comes back as an error rather than as a failed verdict, because
+// an unreachable bucket is not evidence that a backup is gone.
+//
 // # Which artifacts this accepts
 //
-// Only COMMITTED, REMOTE_DELETE_PENDING or COMPLETE: the same "a durable
-// local copy has actually landed" set internal/health's decideState,
-// internal/retention's gfsIsManagedComplete and internal/revalidate's
-// eligibleStates all already agree on. Anything else (still in flight, or
-// already FAILED/QUARANTINED/QUARANTINED_LOST) is refused outright: there
-// is either no durable copy yet to check, or the artifact has already been
-// routed to wherever it needs to go.
+// Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED
+// (issue #315): the same "a durable local copy has actually landed" set
+// internal/health's decideState, internal/retention's gfsIsManagedComplete
+// and internal/revalidate's eligibleStates all already agree on. Anything
+// else (still in flight, or already FAILED/QUARANTINED/QUARANTINED_LOST) is
+// refused outright: there is either no durable copy yet to check, or the
+// artifact has already been routed to wherever it needs to go.
+//
+// REMOTE_RETAINED belongs in that set for exactly the reason issue #315
+// exists: an operator running `validate` by hand against one specific
+// artifact id is the third, on-demand way this codebase can catch a
+// retained artifact's local copy going bad, alongside FR-17 reconciliation
+// (internal/reconcile) and Phase 4's scheduled revalidation
+// (internal/revalidate). Before this fix `validate` refused a
+// REMOTE_RETAINED artifact outright, "not a durable restore point", which
+// was simply wrong: it is one, this manager just never deletes the remote
+// copy alongside it.
 //
 // # No --dry-run, on purpose
 //
 // Unlike `fetch` and `retention`, `validate` is not gated behind a dry-run
 // flag. A failed check has a real, but protective rather than destructive,
 // consequence: it quarantines the artifact (the exact same
-// COMMITTED/REMOTE_DELETE_PENDING -> QUARANTINED, COMPLETE ->
-// QUARANTINED_LOST routing internal/reconcile and internal/revalidate
+// COMMITTED/REMOTE_DELETE_PENDING/REMOTE_RETAINED -> QUARANTINED, COMPLETE
+// -> QUARANTINED_LOST routing internal/reconcile and internal/revalidate
 // already use for "the durable local copy was found invalid after the
 // fact"), which preserves evidence and asks for human attention rather
 // than deleting anything. A passing check writes nothing at all: unlike
@@ -87,7 +149,7 @@ type ValidateResult struct {
 // reset that package's own due-ness clock, a concept `validate` has no
 // use for since it is not on any schedule), there is no due-ness clock
 // here to reset, so a clean result has no side effect to record.
-func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (ValidateResult, error) {
+func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID, opts ValidateOptions) (ValidateResult, error) {
 	rec, err := s.Journal.Get(ctx, id)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
@@ -95,11 +157,11 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 
 	cur := lifecycle.State(rec.State)
 	switch cur {
-	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.Complete:
+	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.Complete, lifecycle.RemoteRetained:
 		// eligible
 	default:
 		return ValidateResult{Artifact: id}, fmt.Errorf(
-			"app: validate: %s is %s, not a durable restore point (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE)", id, cur)
+			"app: validate: %s is %s, not a durable restore point (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED)", id, cur)
 	}
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
@@ -107,13 +169,13 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		return ValidateResult{}, fmt.Errorf("app: validate: %s has no configured backup set", id.Set)
 	}
 
-	checked, passed, reason, err := s.runValidationChecks(ctx, rec, bs.Validation.Command)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation, opts)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
 	}
 
-	result := ValidateResult{Artifact: id, Checked: checked, Passed: passed, Reason: reason}
-	if passed {
+	result := ValidateResult{Artifact: id, Checked: checks.Checked, Passed: checks.Passed, Reason: checks.Reason}
+	if checks.Passed {
 		return result, nil
 	}
 
@@ -126,7 +188,7 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		Key:      fmt.Sprintf("app:validate:%s:%s", id, s.now().Format(time.RFC3339Nano)),
 		From:     string(cur),
 		To:       string(to),
-		Detail:   "operator-triggered validate: " + reason,
+		Detail:   "operator-triggered validate: " + checks.Reason,
 	})
 	if err != nil {
 		return result, fmt.Errorf("app: validate: quarantining %s: %w", id, err)
@@ -135,35 +197,91 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 	return result, nil
 }
 
-// runValidationChecks runs the local-file check (always) and cmd (only
-// when non-nil) against rec, and reports a combined verdict.
-func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, cmd *config.Command) (checked, passed bool, reason string, err error) {
-	var reasons []string
-	passed = true
+// runValidationChecks runs the local-file check (always) and the backup
+// set's application validator (only when one is configured) against rec,
+// and reports a combined verdict.
+//
+// It takes the whole config.Validation, not the *config.Command, so that
+// the one combination that must never be read as "no validator
+// configured" -- a ValidatorID that nothing resolved into a runnable
+// Command -- is refused here too and not only in internal/lifecycle's
+// verify path. FR-14's operator-triggered `validate` would otherwise
+// report an artifact as passing without ever running the validator its
+// backup set names, which is the same fail-open outcome FR-13 exists to
+// prevent, reached through the other door. The rule itself lives on
+// config.Validation (ResolvedCommand), so both consumers get it from one
+// place rather than each re-implementing it.
+//
+// An unresolved validator is an error, not a failed verdict: it says
+// nothing about the artifact, and quarantining a durable restore point
+// over what is an infrastructure or wiring problem would be its own kind
+// of damage. The caller gets a refusal and the artifact is left exactly
+// as it was, which is how the restore-test hook's own error is already
+// handled below.
+//
+// opts is what the operator asked for beyond the defaults, and today that
+// is only whether a copy on a storage medium may be downloaded and
+// re-hashed (issue #435). The two quarantine actions that also call this
+// pass the zero value: `quarantine revalidate` and `quarantine reinstate`
+// name no artifact-specific cost the operator has authorised, so neither
+// spends egress, and neither can reach the one class that would.
+func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation, opts ValidateOptions) (checkOutcome, error) {
+	cmd, err := validation.ResolvedCommand()
+	if err != nil {
+		return checkOutcome{}, err
+	}
 
-	if rec.LocalPath == "" {
-		return true, false, "no local final path is recorded in the journal", nil
+	var reasons []string
+	out := checkOutcome{Passed: true}
+
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly; in Phase 1 they are the same
+	// value, and the difference is what happens once an artifact's only
+	// copy can live on a storage medium.
+	localPath, hasLocal := rec.ReadableLocalPath()
+	if !hasLocal {
+		// An artifact whose durable copy is on a storage medium has no
+		// local copy for this command to open, and that is a fact about
+		// where the copy is rather than a verdict about the artifact.
+		// Reading it as a verdict routed a COMPLETE artifact into
+		// QUARANTINED_LOST the first time an operator ran `validate`
+		// against a moved one, over a copy that was there and verified
+		// (#434).
+		//
+		// So the copy is checked where it actually is (#435). The
+		// restore-test hook below is not attempted against it: that hook
+		// opens the artifact, which off local disk means downloading it,
+		// and checkMediumCopies says so rather than quietly reporting a
+		// pass for a tier that stopped running.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			return s.checkMediumCopies(ctx, rec, mediums, opts, cmd != nil)
+		}
+		if len(rec.Placements) > 0 {
+			return checkOutcome{Checked: true, Reason: "no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING"}, nil
+		}
+		return checkOutcome{Checked: true, Reason: "no local final path is recorded in the journal"}, nil
 	}
-	info, statErr := os.Stat(rec.LocalPath)
+	info, statErr := os.Stat(localPath)
 	if statErr != nil {
-		return true, false, fmt.Sprintf("local final file %s: %v", rec.LocalPath, statErr), nil
+		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", localPath, statErr)}, nil
 	}
-	checked = true
+	out.Checked = true
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
-			return true, false, fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg), nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}, nil
 		}
-		sum, hashErr := sha256File(rec.LocalPath)
+		sum, hashErr := sha256File(localPath)
 		if hashErr != nil {
-			return true, false, fmt.Sprintf("hashing %s: %v", rec.LocalPath, hashErr), nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", localPath, hashErr)}, nil
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			passed = false
+			out.Passed = false
 			reasons = append(reasons, fmt.Sprintf(
 				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash))
+				localPath, sum, rec.LocalHashAlg, rec.LocalHash))
 		} else {
+			out.HashMatched = true
 			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
 		}
 	} else {
@@ -171,19 +289,60 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, cmd
 	}
 
 	if cmd != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, localPath)
 		if hookErr != nil {
-			return checked, false, "", fmt.Errorf("restore-test hook: %w", hookErr)
+			return checkOutcome{Checked: out.Checked}, fmt.Errorf("restore-test hook: %w", hookErr)
 		}
 		if !result.Passed {
-			passed = false
+			out.Passed = false
 			reasons = append(reasons, "restore-test hook failed: "+result.Detail)
 		} else {
+			out.ValidatorPassed = true
 			reasons = append(reasons, "restore-test hook passed")
 		}
 	}
 
-	return checked, passed, strings.Join(reasons, "; "), nil
+	out.Reason = strings.Join(reasons, "; ")
+	return out, nil
+}
+
+// checkOutcome is one runValidationChecks call's full result.
+//
+// Checked, Passed and Reason are the combined verdict every caller has
+// always used. HashMatched and ValidatorPassed are the per-tier verdicts
+// underneath it, and they exist because the combined Passed is not enough
+// to decide whether an artifact may be trusted AGAIN after quarantine
+// (issue #220): the local-file check runs unconditionally, so an artifact
+// with no recorded hash baseline and no configured validator "passes" on
+// nothing more than the file still being present, which is a pass that
+// could not have failed on content. See
+// lifecycle.ReinstatementEvidence, which is what these two feed.
+type checkOutcome struct {
+	Checked bool
+	Passed  bool
+	Reason  string
+
+	// HashMatched is true when a hash baseline recorded at VERIFIED
+	// existed, the durable local copy was re-hashed now, and the two
+	// still agree.
+	HashMatched bool
+
+	// ValidatorPassed is true when the backup set's configured
+	// application validator actually ran in this call and passed. It is
+	// false both when no validator is configured and when one ran and
+	// failed, which is exactly right for its one use: only a validator
+	// that ran and passed is evidence.
+	ValidatorPassed bool
+}
+
+// evidence renders o as what lifecycle.ReinstateFromQuarantine takes.
+func (o checkOutcome) evidence() lifecycle.ReinstatementEvidence {
+	return lifecycle.ReinstatementEvidence{
+		HashMatched:     o.HashMatched,
+		ValidatorPassed: o.ValidatorPassed,
+		AnyCheckFailed:  !o.Passed,
+		Summary:         o.Reason,
+	}
 }
 
 // sha256File duplicates the small (open, io.Copy into a hasher, hex-encode)

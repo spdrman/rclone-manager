@@ -11,6 +11,26 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// The two properties of the loop's shape, proven without sending a signal.
+//
+// Daemon's guarantees are structural: passes never overlap, and cancellation
+// stops it promptly. Both are claims about the loop rather than about any
+// step inside it, which is exactly why the loop lives in this package instead
+// of in the CLI, where proving either would mean driving a real process
+// through a real SIGTERM.
+//
+// The overlap test works by making overlap inevitable if it is possible at
+// all: a 10ms poll interval against a journal deliberately slowed to about
+// 40ms per call, run for 220ms. So the interesting number is not how many
+// cycles happened, it is the high-water mark of concurrent journal calls,
+// which slowJournal counts as they enter and leave. A test that only counted
+// cycles at the end would pass against an implementation that ran two at once
+// and finished both.
+//
+// The interval and cancellation cases are the ordinary halves, and the
+// non-positive interval case is argument validation that costs nothing and
+// catches a caller passing a zero duration through from an unset field.
+
 // slowJournal wraps a real *state.Journal and, on every ListByBackupSet
 // call (which every RunCycle call makes at least twice per backup set:
 // once to list in-flight artifacts, once inside RetentionPreview), tracks

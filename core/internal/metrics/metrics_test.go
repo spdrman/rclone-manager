@@ -9,6 +9,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// A renderer's tests are only as good as their idea of who is reading the
+// output, and here the reader is a scraper rather than a person. Most of
+// what is below follows from that.
+//
+// Metric names are pinned literally rather than checked for plausibility,
+// because a name is a contract. A dashboard, an alert rule and a recording
+// rule all break silently when one is renamed, and none of them lives in
+// this repository to fail. That is the same reasoning internal/obs applies
+// to its event constants, for the same reason.
+//
+// The absent-versus-zero pair is the other half of it. Prometheus reads a
+// missing sample as "nobody knows" and a zero as "known to be zero", so the
+// two readings are asserted apart: a field the caller never populated has
+// to omit its sample, and a counter that is genuinely zero has to emit one
+// anyway. Collapsing those into a single test is how a gauge starts
+// reporting a fabricated zero for something nothing ever measured.
+//
+// Determinism gets two tests because rendering sorts, and the caller's
+// slice has to survive the sort. Prometheus itself tolerates any order, but
+// a human diffing two scrapes does not, and a renderer that reorders a
+// slice it was lent has changed something it does not own.
+
 func mustSet(source, set string) model.BackupSetID {
 	id, err := model.NewBackupSetID(source, set)
 	if err != nil {
@@ -63,6 +85,7 @@ func TestRenderEveryMetricFamilyHasHelpAndType(t *testing.T) {
 		"backup_manager_backup_set_failures",
 		"backup_manager_backup_set_quarantined",
 		"backup_manager_backup_set_quarantined_lost",
+		"backup_manager_backup_set_reinstated_remote_retained",
 		"backup_manager_backup_set_current_transfers",
 		"backup_manager_backup_set_free_bytes",
 		"backup_manager_backup_set_last_successful_poll_timestamp_seconds",
@@ -253,5 +276,45 @@ func TestFormatFloatAvoidsScientificNotation(t *testing.T) {
 func TestContentTypeIsPrometheusTextFormat(t *testing.T) {
 	if !strings.HasPrefix(ContentType, "text/plain") {
 		t.Fatalf("ContentType = %q, want a text/plain content type", ContentType)
+	}
+}
+
+// Issue #227. A reinstated artifact's remote source is preserved forever,
+// and the whole point of exposing the count is that an operator can watch
+// it over months: a scraped gauge is the surface that answers "is this
+// growing", which neither a one-off CLI reading nor the sentence shown at
+// the moment of reinstatement can.
+//
+// Two sets, two different counts, so a renderer that emitted a constant or
+// labelled every sample with the same backup set fails here.
+func TestRenderReportsReinstatedRemoteRetainedPerBackupSet(t *testing.T) {
+	report := health.NewReport(health.ProcessHealth{}, []health.BackupSetHealth{
+		{Set: mustSet("prod", "one"), ReinstatedRemoteRetainedCount: 3},
+		{Set: mustSet("prod", "two"), ReinstatedRemoteRetainedCount: 0},
+	}, time.Now())
+
+	out := Render(report)
+
+	want := []string{
+		`backup_manager_backup_set_reinstated_remote_retained{backup_set="prod/one"} 3`,
+		`backup_manager_backup_set_reinstated_remote_retained{backup_set="prod/two"} 0`,
+	}
+	for _, line := range want {
+		if !strings.Contains(out, line) {
+			t.Errorf("expected line %q in output:\n%s", line, out)
+		}
+	}
+}
+
+// A zero here is a real reading, not an absent one, so unlike free_bytes
+// and the timestamps it always renders. The count is derived from the
+// journal the health pass already holds open; a read that fails makes the
+// whole report an error rather than a zero (see internal/app), so there is
+// no "unknown" case for this metric to omit.
+func TestRenderAlwaysEmitsReinstatedRemoteRetained(t *testing.T) {
+	report := health.NewReport(health.ProcessHealth{}, []health.BackupSetHealth{{Set: mustSet("prod", "one")}}, time.Now())
+
+	if !strings.Contains(Render(report), `backup_manager_backup_set_reinstated_remote_retained{backup_set="prod/one"} 0`) {
+		t.Errorf("a backup set holding no reinstated remote sources must still report 0, not omit the sample:\n%s", Render(report))
 	}
 }

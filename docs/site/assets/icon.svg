@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="rclone-manager">
+  <title>rclone-manager</title>
+  <!-- Favicon. Same mark, in the brand slate blue, on a transparent
+       ground so it reads on either browser theme. -->
+  <circle cx="24" cy="24" r="17" fill="none" stroke="#3a628f" stroke-width="5" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)"/>
+  <circle cx="24" cy="24" r="5.5" fill="#3a628f"/>
+</svg>

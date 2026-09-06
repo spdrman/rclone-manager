@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+// This file is where the event vocabulary stops being a set of Go
+// identifiers and starts being an API.
+//
+// Each name is pinned against a literal typed out again here rather than
+// against the constant itself. That reads like duplication and is the whole
+// point: a table comparing EventStartup to EventStartup passes whatever
+// either one becomes, and the thing at risk is the string a dashboard
+// query, an alert rule or a jq filter matches on, none of which lives in
+// this repository to break loudly.
+//
+// The per-event tests then cover the two things a downstream reader depends
+// on past the name, which are the severity a line arrives at and the
+// attributes it always carries. Severity gets asserted even where the
+// method name makes it look obvious, because an alert rule keyed on level
+// is exactly as brittle as one keyed on the event field, and nothing
+// outside this package would notice either one moving.
+
 // TestEventNamesAreStable pins every event constant's literal string
 // against a value hardcoded independently, right here, rather than against
 // itself. If a future edit to events.go changes what EventLifecycleTransition
@@ -37,6 +54,7 @@ func TestEventNamesAreStable(t *testing.T) {
 		{"EventRetry", EventRetry, "retry"},
 		{"EventStaleBackup", EventStaleBackup, "stale_backup"},
 		{"EventDiskPressure", EventDiskPressure, "disk_pressure"},
+		{"EventAlert", EventAlert, "alert"},
 		{"EventError", EventError, "error"},
 	}
 	seen := make(map[string]string, len(cases))
@@ -366,5 +384,28 @@ func TestErrorEvent(t *testing.T) {
 	got := lines[0]
 	if got["event"] != EventError || got["level"] != "ERROR" || got["op"] != "load_config" {
 		t.Errorf("got %#v", got)
+	}
+}
+
+// TestAlertEvent proves the proactive-alert line carries the typed kind,
+// the backup set it was about, and the operator-facing text that went
+// out, at LevelWarn.
+func TestAlertEvent(t *testing.T) {
+	l, buf := newRecorder(t)
+	l.Alert(context.Background(), "STALE_BACKUP", "production/postgres-primary",
+		"Backup set production/postgres-primary is STALE.")
+
+	got := decodeLines(t, buf)[0]
+	if got["event"] != EventAlert {
+		t.Errorf("event = %v, want %q", got["event"], EventAlert)
+	}
+	if got["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", got["level"])
+	}
+	if got["alert_kind"] != "STALE_BACKUP" || got["backup_set"] != "production/postgres-primary" {
+		t.Errorf("alert line = %v, want the typed kind and backup set carried through", got)
+	}
+	if got["detail"] != "Backup set production/postgres-primary is STALE." {
+		t.Errorf("detail = %v, want the delivered message", got["detail"])
 	}
 }

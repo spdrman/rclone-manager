@@ -9,6 +9,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// FR-24's four states are a precedence order rather than four independent
+// checks, so most of what can go wrong here is a verdict that is perfectly
+// defensible on its own and wrong next to another one.
+//
+// That is why so much of this file is pairs rather than single cases. A
+// QUARANTINED_LOST artifact is put next to a fresh known-good backup and
+// then next to a stale set; a retrying failure is put next to a stuck one;
+// a quarantined newest arrival is put next to an older good backup that is
+// still perfectly fine. Read alone, each of those has an answer that looks
+// reasonable. Only the pairing says which one is supposed to win.
+//
+// The stale window has both its edges asserted, exactly at the threshold
+// and one nanosecond past it, because "inside the window" is where an
+// off-by-one hides and the two answers either side of it are a page an
+// operator gets and a page they do not.
+//
+// TestInjectedInputsPassThroughUnchangedAndNeverAffectState is the one
+// guarding the package doc's central claim. Free space and version strings
+// arrive as caller-supplied inputs, and this checks they reach the report
+// and move no verdict. It is the readable half of a separation that
+// evidence's own shape already enforces structurally, and it is here so a
+// reader can see the claim tested rather than only argued.
+
 var testSet = mustSet("prod", "postgres-primary")
 
 func mustSet(source, set string) model.BackupSetID {
@@ -49,7 +72,7 @@ const day = 24 * time.Hour
 
 func TestNoRecordsIsDegradedNotStale(t *testing.T) {
 	now := time.Now().UTC()
-	got := ComputeBackupSetHealth(testSet, nil, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, nil, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (a set with no backups yet must never read as STALE, which implies backups stopped)", got.State, Degraded)
@@ -67,7 +90,7 @@ func TestRecentFirstAttemptInProgressIsDegradedNotStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Transferring, now.Add(-time.Hour), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (first backup still in flight, well within the stale window)", got.State, Degraded)
@@ -81,7 +104,7 @@ func TestNoGoodBackupAndNoRecentActivityIsStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Discovered, now.Add(-10*day), now.Add(-9*day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s (no known-good backup, and nothing has happened in days)", got.State, Stale)
@@ -93,7 +116,7 @@ func TestFreshKnownGoodBackupIsHealthy(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s", got.State, Healthy)
@@ -116,7 +139,7 @@ func TestCommittedButNotYetRemoteDeletedCountsAsKnownGood(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Committed, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s", got.State, Healthy)
@@ -134,7 +157,7 @@ func TestExactlyAtStaleThresholdIsStillFresh(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s (age == threshold should be inclusive-fresh)", got.State, Healthy)
@@ -146,7 +169,7 @@ func TestOneNanosecondPastStaleThresholdIsStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-day-time.Nanosecond)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s", got.State, Stale)
@@ -159,7 +182,7 @@ func TestFreshGoodBackupWithQuarantinedNewestArrivalIsDegradedNotHealthy(t *test
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		rec("b.dump", lifecycle.Quarantined, now.Add(-time.Minute), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (something arrived but isn't trustworthy, so this is not HEALTHY)", got.State, Degraded)
@@ -180,7 +203,7 @@ func TestQuarantinedLostAlwaysFailsEvenWithFreshGoodBackup(t *testing.T) {
 		// ...but a newer one is a perfectly good, fresh restore point.
 		rec("new.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s: QUARANTINED_LOST must never read as merely DEGRADED, no matter how fresh other backups are", got.State, Failing)
@@ -198,7 +221,7 @@ func TestQuarantinedLostOutweighsStale(t *testing.T) {
 	records := []state.Record{
 		rec("old.dump", lifecycle.QuarantinedLost, now.Add(-30*day), now.Add(-29*day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s", got.State, Failing)
@@ -211,7 +234,7 @@ func TestStuckFailureIsFailingEvenWithFreshGoodBackup(t *testing.T) {
 		rec("good.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		rec("stuck.dump", lifecycle.Failed, now.Add(-time.Minute), now.Add(-time.Minute)), // no NextRetryAt: exhausted
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s (a FAILED artifact with no retry scheduled needs a human)", got.State, Failing)
@@ -227,7 +250,7 @@ func TestRetryingFailureWithFreshGoodBackupIsDegradedNotFailing(t *testing.T) {
 		rec("good.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		withRetry(rec("retrying.dump", lifecycle.Failed, now.Add(-time.Minute), now.Add(-time.Minute)), now.Add(5*time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (a scheduled retry is not yet a FAILING condition)", got.State, Degraded)
@@ -241,7 +264,7 @@ func TestPendingDeletesAndCurrentTransfersAreCounted(t *testing.T) {
 		rec("deleting.dump", lifecycle.RemoteDeletePending, now.Add(-3*day), now.Add(-2*day)),
 		rec("transferring.dump", lifecycle.Transferring, now.Add(-time.Minute), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.PendingDeletes != 1 {
 		t.Fatalf("PendingDeletes = %d, want 1", got.PendingDeletes)
@@ -270,7 +293,7 @@ func TestInjectedInputsPassThroughUnchangedAndNeverAffectState(t *testing.T) {
 		LastRetentionRunAt:   &retention,
 		FreeBytes:            &free,
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, in, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, in, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s: a recent successful poll must not paper over a stale backup (invariant 14)", got.State, Stale)
@@ -296,7 +319,7 @@ func TestUnknownJournalStateStringDoesNotCrashOrCountAsGood(t *testing.T) {
 			UpdatedAt:    now.Add(-time.Minute),
 		},
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 
 	if got.NewestGoodBackupAt != nil {
 		t.Fatalf("an unrecognized state must never be counted as known-good, got %v", got.NewestGoodBackupAt)
@@ -313,7 +336,7 @@ func TestZeroOrNegativeStaleThresholdDoesNotPanic(t *testing.T) {
 		rec("a.dump", lifecycle.Complete, now.Add(-time.Hour), now.Add(-time.Second)),
 	}
 	for _, threshold := range []time.Duration{0, -time.Hour} {
-		got := ComputeBackupSetHealth(testSet, records, threshold, BackupSetInputs{}, now)
+		got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, threshold, BackupSetInputs{}, now)
 		if got.State == Healthy {
 			t.Fatalf("threshold %s: State = %s, a non-positive stale threshold should never read as HEALTHY", threshold, got.State)
 		}
@@ -334,13 +357,85 @@ func TestMultipleBackupSetsInputsStayIndependent(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-time.Hour), now),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
 	if got.Set != testSet {
 		t.Fatalf("Set = %v, want %v", got.Set, testSet)
 	}
 	for _, tr := range got.CurrentTransfers {
 		if tr.Artifact == otherArtifact {
 			t.Fatalf("leaked an artifact from another backup set: %v", tr.Artifact)
+		}
+	}
+}
+
+// TestRemoteRetainedCountsAsKnownGoodAndIsCounted is issue #282's health
+// proof: a read-only backup set whose only artifact ever reaches
+// REMOTE_RETAINED (never COMPLETE, by design) must still read HEALTHY, not
+// STALE -- the whole point of the feature is that this manager keeps
+// producing valid backups it will simply never delete the remote copy
+// of -- and ReadOnlyRetainedCount must report it, the way
+// ReinstatedRemoteRetainedCount already reports #227's shape.
+func TestRemoteRetainedCountsAsKnownGoodAndIsCounted(t *testing.T) {
+	now := time.Now().UTC()
+	records := []state.Record{
+		rec("a.dump", lifecycle.RemoteRetained, now.Add(-2*day), now.Add(-time.Hour)),
+	}
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
+
+	if got.State != Healthy {
+		t.Fatalf("State = %s, want %s: a read-only set with a fresh REMOTE_RETAINED backup is exactly as healthy as one with a fresh COMPLETE backup (reason: %s)", got.State, Healthy, got.Reason)
+	}
+	if got.NewestGoodBackupAt == nil {
+		t.Fatalf("NewestGoodBackupAt should be set for REMOTE_RETAINED")
+	}
+	if got.LastCompletedBackupAt != nil {
+		t.Fatalf("LastCompletedBackupAt should stay nil for REMOTE_RETAINED (not COMPLETE), got %v", got.LastCompletedBackupAt)
+	}
+	if got.ReadOnlyRetainedCount != 1 {
+		t.Fatalf("ReadOnlyRetainedCount = %d, want 1", got.ReadOnlyRetainedCount)
+	}
+}
+
+// TestReadOnlyRetainedCountDefaultsZero pins the regression this whole
+// issue depends on at the health layer too: a backup set that has never
+// retained anything reports zero, the same silent default every existing
+// deployment already reads.
+func TestReadOnlyRetainedCountDefaultsZero(t *testing.T) {
+	now := time.Now().UTC()
+	records := []state.Record{
+		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
+	}
+	got := ComputeBackupSetHealth(testSet, records, nil, PlacementEvidence{}, day, BackupSetInputs{}, now)
+	if got.ReadOnlyRetainedCount != 0 {
+		t.Fatalf("ReadOnlyRetainedCount = %d, want 0", got.ReadOnlyRetainedCount)
+	}
+}
+
+// TestKnownGoodMatchesLifecycleDurableRestorePoints ties this package's own
+// copy of the restore-point set to lifecycle's.
+//
+// The copy is deliberate: this package depends on nothing upstream of it, so
+// it keeps its own map rather than importing one, and compute.go's doc says
+// so. What that costs is exactly what issue #505 was about: two spellings of
+// one set, free to drift, with nothing red when they do. internal/metrics
+// now builds the HELP line for the newest-known-good gauge out of
+// lifecycle.DurableRestorePointNames, so an operator scraping that gauge is
+// reading lifecycle's list to find out what this package counted. That
+// sentence is only honest while the two sets are the same set.
+func TestKnownGoodMatchesLifecycleDurableRestorePoints(t *testing.T) {
+	for _, s := range lifecycle.AllStates {
+		want := lifecycle.IsDurableRestorePoint(s)
+		if got := knownGood[s]; got != want {
+			t.Errorf("knownGood[%s] = %v, want %v (lifecycle.IsDurableRestorePoint says %v). "+
+				"internal/metrics quotes lifecycle's list as the answer to what this map counted, "+
+				"so a state the two disagree about is a HELP line that lies about its own gauge.",
+				s, got, want, want)
+		}
+	}
+
+	for s := range knownGood {
+		if !s.Valid() {
+			t.Errorf("knownGood holds %q, which lifecycle does not define as a state at all", s)
 		}
 	}
 }

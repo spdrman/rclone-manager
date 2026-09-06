@@ -8,6 +8,24 @@ import (
 	"github.com/rclone/rclone/fs"
 )
 
+// This file is what makes FR-4's "each backend is an architecture
+// decision, not an import line" enforceable rather than aspirational.
+//
+// rclone registers backends through package-level init, so the set this
+// binary supports is decided by the blank imports anywhere in its
+// dependency graph and is visible nowhere in this repository's own code
+// except backends.go's list. Worse, a backend can arrive without anyone
+// writing an import for it: crypt is registered today because
+// fs/operations imports it to decrypt names for ListJSON, and
+// fs/operations is a dependency this adapter genuinely needs.
+//
+// So the check is against the LIVE registry rather than against the source,
+// and it is an exact-set comparison rather than a subset one in either
+// direction. A widening fails, which is the point; a narrowing fails too,
+// because a backend disappearing from the registry means an import this
+// product depends on has gone away and every source of that type has
+// silently stopped working.
+
 // TestRegisteredBackendsExactSet is the enforcement FR-4 asks for: the set
 // of rclone backends this binary registers at runtime must match
 // ExpectedBackends() exactly, not "at least" or "at most". A new blank

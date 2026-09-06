@@ -491,6 +491,12 @@ sources:
         completion:
           strategy: stable
           stable_for: 10m
+          # Only read when strategy is "stable". FR-15's remote-delete gate
+          # additionally waits this long after an artifact last reached a
+          # confirmed-good state before it treats a size/mtime heuristic as
+          # equivalent to a producer rename/marker signal. Omit it and it
+          # defaults to 1h; a negative value is refused.
+          delete_safety_delay: 60m
 
         stale_after: 30h
 
@@ -501,10 +507,42 @@ sources:
 retention:
   timezone: America/Vancouver
   week_starts_on: monday
+  # The classic three-tier chain, written as scalars. These are sugar for
+  # the equivalent `tiers:` list below and cannot be combined with it.
   daily_days: 7
   weekly_months: 3
   monthly_months: 12
   protect_last_known_good: true
+
+# Or, spelled as an explicit chain of any length (FR-18). This example is
+# byte-for-byte equivalent to the three scalars above for its first three
+# entries, and then chains on past them.
+#
+# retention:
+#   timezone: America/Vancouver
+#   week_starts_on: monday
+#   protect_last_known_good: true
+#   tiers:
+#     - name: daily
+#       granularity: day
+#       keep: 7
+#     - name: weekly
+#       granularity: week
+#       keep: 3
+#       window_unit: month
+#     - name: monthly
+#       granularity: month
+#       keep: 12
+#     - name: semi_annual
+#       granularity: half_year
+#       keep: 6
+#     - name: annual
+#       granularity: year
+#       keep: 10
+#     - name: fortnightly
+#       granularity: days
+#       period_days: 14
+#       keep: 26
 ```
 
 Configuration MUST NOT require recompilation.
@@ -591,6 +629,52 @@ public key will fail authentication rather than falling back to anything.
 `docs/ssh-setup.md` is the operational procedure, and `docs/deployment.md`
 covers mounting the key into the container.
 
+### Key at rest: optional encryption (#298)
+
+An imported key (the wizard's "Import key" step, `core/service/backupsets
+.go`'s `ImportSSHKey`) IS a case where the manager stores key material of
+its own, on disk, alongside the deployment's configuration -- unlike the
+operator-provisioned `key_file` custody model above. Before #298 that file
+was defended only by filesystem permissions (FR-6's account-hardening
+requirements below, and #293's permission-drift detection); nothing
+encrypted it. Two real incidents on the same live deployment -- a
+permission drift to world-writable (#293), and a plaintext copy reachable
+through an SMB/AFP share exported from the same NAS volume -- showed that
+permission hardening alone does not close the reported exposure: an
+SMB/AFP share can bypass Unix owner-only file-mode bits entirely depending
+on how the share is configured, so a hardened-permissions-only posture
+leaves that exact attack vector open.
+
+`config.KeyEncryption` (the `key_encryption` block, `file`/`env`/`command`,
+the same shape `key` and `key.passphrase` already use) SHALL be the
+optional mechanism for encrypting such a key file at rest, with AES-GCM
+authenticated encryption and a key resolved through that block. It is
+opt-in and config-wide: a `config.yaml` with no `key_encryption` block
+(every one written before #298, and any deployment that has not chosen to
+opt in) behaves exactly as before, an unencrypted PEM file on disk. A key
+already on disk in plaintext from before this was configured SHALL be
+migrated to at-rest encryption transparently, in place, the first time a
+source that uses it actually connects once `key_encryption` is set, with
+no separate migration step and no window where the key is unreadable.
+
+This defends the key FILE against being read directly: disk theft, a
+backup of the manager's own state directory, and the SMB/AFP-share case
+above. It does NOT defend a live process's memory -- authenticating a
+connection still requires the plaintext key in memory for the duration of
+that attempt, exactly as `key.env`/`key.command` already do today. And it
+defends nothing at all if the `key_encryption` source itself is reachable
+from the same share or backup root as the encrypted key file: an
+encryption key stored next to what it protects, inside the same exported
+tree, gives back exactly the exposure this feature exists to close.
+`docs/ssh-setup.md`'s "Encrypting the key store at rest" section states
+this trade-off in full and is the operational guidance for where the
+`key_encryption` source itself belongs.
+
+A future medium credential of the same shape (EPIC E's S3 keys, #235) is
+expected to answer "how is a secret this manager itself persists to disk
+protected at rest" by reusing this same `key_encryption` mechanism, rather
+than each credential type inventing its own.
+
 ### Key source: file, environment, or command (#74)
 
 A source's private key is named exactly one of three ways:
@@ -672,6 +756,28 @@ Producer-controlled atomic completion SHOULD be preferred.
 
 Remote filenames and metadata SHALL be treated as untrusted input.
 
+The manifest marker strategy's directory-level marker filename is
+configurable (`completion.manifest_marker`, issue #291). It defaults to
+`_SUCCESS`, the well-known Hadoop/Spark convention this manager recognized
+unconditionally before this field existed, so a configuration written
+before this field existed keeps recognising exactly the marker it
+recognised before, unchanged. A read-only producer that already writes its
+own completion signal under a different name (for example a checksum
+manifest, written last, after every artifact) is told that name instead of
+being asked to rename its output to match this manager's convention, which
+a read-only source cannot do. `manifest_marker` is a single literal
+filename, never a pattern: it is matched by exact comparison against a
+directory's contents, not a glob. It is validated as a bare filename, on
+the same terms `include` patterns are (FR-5): no path separator, no `.`/`..`
+traversal. Its resolved value is also cross-checked against the same
+backup set's own `include` patterns, and rejected if one of them would
+match it: discovery treats a manifest-marker match as a completion signal,
+never a candidate, so a marker name an operator picked that collides with
+their own `include` patterns would otherwise silently and permanently
+exclude a real artifact from every backup. The sibling per-artifact marker
+convention (`<artifact-name>.complete`) is unrelated to this field and
+stays fixed.
+
 ------------------------------------------------------------------------
 
 ## FR-9 --- SQLite Lifecycle Journal
@@ -732,6 +838,47 @@ QUARANTINED
 ```
 
 Transitions SHALL be durable and idempotent.
+
+### Leaving quarantine (issue #220, ADR 0004)
+
+A quarantined artifact SHALL have a way back that does not require re-fetching
+it from the remote source. Re-ingesting (QUARANTINED to DISCOVERED) is the right
+answer when the local copy is bad and the source still exists, and it is the
+wrong answer when the local copy is fine and the quarantine was the mistake, or
+when the source is already gone and the intact local copy is the only remaining
+restore point. Without a second exit those cases can only stay quarantined
+forever, where FR-24 keeps reporting them and FR-19's last-known-good protection
+keeps skipping them.
+
+So both quarantine states carry one additional, operator-only exit:
+QUARANTINED to COMMITTED, and QUARANTINED_LOST to COMPLETE. Each returns the
+artifact to the state it already held and to nothing else, proved from the
+append-only transition log rather than assumed, so an artifact quarantined
+before it ever committed (whose local file is still a `.partial`) cannot be
+declared a restore point. There is deliberately no QUARANTINED to
+REMOTE_DELETE_PENDING edge: COMMITTED remains the only predecessor of
+REMOTE_DELETE_PENDING.
+
+Reinstating an artifact SHALL require evidence that could have failed. The
+durable-local-copy check runs unconditionally, so a backup with no recorded hash
+baseline and no configured validator "passes" on nothing more than the file
+still being present, and that re-trusts nothing. At least one of a recorded hash
+the copy still matches, or the backup set's configured validator running now and
+passing, is required; and when the artifact's own record carries a validator
+rejection, the validator itself MUST have run and passed, because a matching
+hash proves only that the bytes are the ones the validator refused. The checks
+and the write are one operation: a verdict measured in an earlier request is not
+evidence about now.
+
+Reinstating SHALL permanently forfeit the artifact's remote delete. See FR-15
+below. This is what makes the edge safe to have at all, and it is why the edge
+does not weaken FR-13's rule that a required validator failure must prevent
+source deletion.
+
+QUARANTINED_LOST remains terminal in the sense that matters: nothing automatic
+moves an artifact out of it, and it has no path back into the pipeline. The
+livelock the state exists to prevent needed neither a passing check nor a human;
+its one exit needs both, every time.
 
 ------------------------------------------------------------------------
 
@@ -823,7 +970,11 @@ validation:
     timeout: 10m
 ```
 
-Required validator failure MUST prevent source deletion.
+Required validator failure MUST prevent source deletion. This holds through
+reinstatement too (FR-10, ADR 0004): an artifact that was quarantined and later
+re-trusted is refused by the deletion gate permanently, so re-trusting one can
+never become a way to authorise deleting the source of something a validator
+rejected.
 
 Invalid artifacts SHOULD enter `QUARANTINED`.
 
@@ -860,6 +1011,7 @@ COMMITTED → REMOTE_DELETE_PENDING → COMPLETE
 Before deletion, the manager SHALL revalidate that:
 
 -   the database artifact is `COMMITTED` or `REMOTE_DELETE_PENDING`;
+-   the artifact has never been reinstated out of quarantine;
 -   the expected local final file exists;
 -   local identity/size is consistent;
 -   the remote object still corresponds to the artifact originally
@@ -871,6 +1023,26 @@ reconciliation/intervention.
 
 This protects against deleting a newly replaced remote file that reused
 an old pathname.
+
+I added the reinstatement check above, and it is the price FR-10's
+reinstatement edges pay for existing (issue #220, ADR 0004). An artifact that
+was distrusted and later re-trusted was re-trusted on a local re-check, which is
+a weaker thing than the full FR-13 verification chain it passed on its way to
+COMMITTED the first time, and not enough to authorise destroying the last
+remaining source. The refusal is permanent, not a delay, and it is not
+conditional on how strong the evidence was. It is read from the append-only
+transition log rather than from a column, so it survives every later write, and
+the edges it consults are derived from the state machine's own transition table,
+so a future exit from quarantine into a durable state is covered the moment it
+is declared.
+
+The consequence is that a reinstated artifact's remote source is preserved
+indefinitely and releasing it becomes an operator's job outside this manager.
+That is the same cost this gate already imposes routinely against the project's
+own recommended hardened SFTP posture, where remote identity usually cannot be
+reconfirmed with enough confidence to delete. Preserving a remote copy costs
+storage; deleting the source of an artifact that should not have been re-trusted
+costs the backup.
 
 ------------------------------------------------------------------------
 
@@ -940,8 +1112,9 @@ final". When the remote copy is gone too, there is no source left to
 re-fetch from, so preserve-and-quarantine (which assumes a fresh attempt
 could still recover the artifact) is the wrong answer. The state machine
 carries a twelfth state, QUARANTINED_LOST, reachable only from COMPLETE and
-terminal by design, for exactly this case; see internal/lifecycle/state.go
-and machine.go. Reconciliation reaches it either directly from COMPLETE, or
+with no route back into the pipeline, for exactly this case; see
+internal/lifecycle/state.go and machine.go, and FR-10's own "Leaving
+quarantine" section for the one operator-triggered exit it does have. Reconciliation reaches it either directly from COMPLETE, or
 by first reconciling REMOTE_DELETE_PENDING to COMPLETE (the row above) and
 then on to QUARANTINED_LOST in the same pass, since that is the only legal
 path the state machine admits.
@@ -952,26 +1125,86 @@ Reconciliation SHALL be idempotent.
 
 ## FR-18 --- GFS Retention
 
-Default:
+Retention is an **ordered chain of named tiers**. An administrator picks
+how many tiers there are and what each one keeps: the classic
+daily/weekly/monthly grandfather-father-son chain is the default, but a
+chain may be as long as the operator wants and may reach out to
+semi-annual, annual, or an arbitrary custom period.
 
-  Tier                    Policy
-  --------- --------------------
-  Daily                   7 days
-  Weekly       3 calendar months
-  Monthly     12 calendar months
+Each tier has:
 
-For each backup set:
+  Field              Meaning
+  ------------------ -----------------------------------------------------
+  `name`             lower_snake_case identifier, unique within the chain
+  `granularity`      the calendar bucket the tier groups artifacts into
+  `keep`             how many of that tier's own buckets to look back over
+  `window_unit`      optional: measure the look-back in this unit instead
+  `period_days`      only for `granularity: days`, the custom period length
+
+`granularity` is one of `day`, `week`, `month`, `quarter`, `half_year`,
+`year`, or `days` (with `period_days: N`, the escape hatch for any period
+the named list does not cover: fortnightly, every 10 days, and so on).
+
+`window_unit` accepts the same named granularities (never `days`) and
+exists because a tier's look-back is not always measured in its own
+bucket. The default `weekly` tier is exactly that case: it buckets by
+week but looks back over 3 calendar *months*. Omit `window_unit` and the
+look-back is measured in the tier's own granularity.
+
+A tier's window runs from the start of the bucket `keep - 1` units back
+from today, through today inclusive, where "start of the bucket" means
+the same calendar anchor the granularity itself names: the day itself for
+`day`, the configured week-start weekday for `week`, the 1st for `month`,
+the 1st of January/April/July/October for `quarter`, the 1st of
+January/July for `half_year`, the 1st of January for `year`, and a fixed
+epoch-aligned boundary for a custom `days` period (so custom buckets never
+drift with the day the calculation runs).
+
+Within its window, each tier independently selects the **newest valid
+backup in each of its own buckets**. Which timestamp puts an artifact in a
+bucket is answered below, under "Which timestamp puts an artifact in a
+bucket", and the answer is two of them.
+
+Default chain:
+
+  Tier      Granularity   Look-back
+  --------- ------------- -------------------
+  daily     day           7 days
+  weekly    week          3 calendar months
+  monthly   month         12 calendar months
+
+For each backup set, with `tiers` the configured chain:
 
 ``` text
 KEEP =
-    daily
-  ∪ weekly
-  ∪ monthly
+    ⋃ over every configured tier t of
+        ( selections_discovery(t) ∪ selections_producer(t) )
   ∪ protected
 
 DELETE =
     managed_complete_backups - KEEP
 ```
+
+The shape of that formula is unchanged from the fixed three-tier version:
+it is still a union of tier selections plus FR-19's protected term, and
+DELETE is still everything managed and complete that the union did not
+claim. What is generalized is *how many* tiers may contribute to the
+union, *what granularities* they may use, and that each tier contributes
+two selections rather than one. The next section says what those two are.
+
+Two consequences follow, and are stated here rather than left to be
+inferred:
+
+-   The chain does not have to be contiguous. `daily` plus `annual` with
+    nothing in between is a legal policy, and every artifact falling in
+    the gap between the two windows is a DELETE candidate.
+-   An artifact older than the longest configured window is a DELETE
+    candidate, regardless of how many tiers there are.
+
+Tier order is the order the administrator writes the chain in. It is
+presentation and processing order (it fixes the order tier names appear
+against a KEEP verdict) and never changes which artifacts are kept, since
+KEEP is a union.
 
 Retention SHALL be deterministic.
 
@@ -980,11 +1213,196 @@ Default semantics:
 ``` text
 timezone: America/Vancouver
 week starts: Monday
-weekly representative: newest valid backup in bucket
-monthly representative: newest valid backup in bucket
+bucket key: discovery timestamp, and producer timestamp where admissible
+bucket representative: newest valid backup in bucket, per bucket key
 ```
 
-Calendar semantics, DST, leap years and year boundaries SHALL be tested.
+Calendar semantics, DST, leap years and year boundaries SHALL be tested,
+for every granularity the chain admits, including the calendar half-year
+and calendar-year boundaries semi-annual and annual tiers depend on.
+
+### Which timestamp puts an artifact in a bucket
+
+A tier's buckets are calendar buckets, so something has to place an
+artifact on a calendar. Two timestamps could, and they are not the same
+thing:
+
+-   the **discovery timestamp**: the moment this manager first observed
+    the artifact on the remote (`state.Record.DiscoveredAt`). It comes
+    from this manager's own clock and nothing outside the manager can
+    move it. Note that this is *not* the recovery manifest's
+    `received_timestamp`, which records when the artifact finished
+    committing locally; the manifest field carrying this one is
+    `retention_timestamp`.
+-   the **producer timestamp**: the remote object's own modification time
+    as captured at discovery. It describes when the backup was actually
+    taken, and FR-8 requires it to be treated as untrusted input.
+
+Neither one alone is the answer, and this document used to pick neither,
+which is the ambiguity this section closes.
+
+Bucketing on the discovery timestamp alone collapses an ingested backlog.
+A new backup set pointed at a directory that already holds a year of dumps,
+a manager that was down for a week and catches up, a NAS restored from
+elsewhere and re-reconciled: in each of those the artifacts have genuinely
+different backup dates, and a discovery-only key puts every one of them in
+the same daily bucket, the same weekly bucket and the same monthly bucket.
+Each tier then selects a single representative, FR-19 saves one more, and
+everything else is a DELETE candidate on the very first retention pass.
+That is the situation GFS retention exists to protect an operator from,
+and it is the situation where a discovery-only key does the opposite.
+
+Bucketing on the producer timestamp alone is worse. It hands a producer
+with a wrong clock, or a hostile one, the power to move artifacts *out* of
+every tier window: back-date a set to 1990 and every artifact in it
+becomes a DELETE candidate on the next pass, with only FR-19's single
+protected artifact left standing. Refusing a future-dated producer
+timestamp does not help, because the direction that deletes is the past
+one. This is the ordinary accident as much as the attack: a NAS with a
+dead clock, a backend that reports no modification time, a copy that did
+not preserve times.
+
+**Each tier is therefore evaluated twice over the same artifacts, and KEEP
+is the union.** One pass places every artifact by its discovery timestamp.
+The other places it by its producer timestamp, and selects among the
+artifacts that have an admissible one. Both passes use the same windows,
+the same buckets and the same "newest valid backup in the bucket" rule;
+they differ only in which timestamp puts an artifact where.
+
+A producer timestamp is **admissible** only when all three hold:
+
+-   the backend reported one at all (many do not);
+-   it is not the zero time (a missing value, not a date);
+-   it is **not after** the discovery timestamp.
+
+The third is a refusal, not a clamp. A completed artifact cannot have been
+produced after the moment this manager first observed it, so a timestamp
+in that range is a wrong or forged clock, and clamping it to the discovery
+timestamp would manufacture a date this manager has no evidence for. An
+artifact whose producer timestamp is refused is placed by the discovery
+pass alone, which is exactly where an artifact with no usable producer
+timestamp belongs.
+
+Nothing bounds how far into the *past* a producer timestamp may reach, and
+nothing needs to. One that is absurdly old simply lands outside every
+window and contributes no selection, while the artifact's discovery
+placement is untouched.
+
+Three properties follow, and SHALL hold:
+
+-   **The producer term may only add.** For any set of artifacts, and
+    for every tier, every artifact the discovery pass selects is still
+    selected when producer timestamps are read. No producer timestamp,
+    absent or wrong or hostile, can take a tier away from an artifact or
+    move one from KEEP to DELETE. This is what makes it safe for
+    retention to read a value FR-8 calls untrusted at all: being wrong
+    about a producer timestamp costs disk, never a backup.
+-   **The most recently discovered artifact is always kept.** It is
+    placed by the discovery pass on today's date, today falls inside
+    every enabled tier's window by construction, so it is always some
+    bucket's representative whatever any producer claims.
+-   **Each bucket still selects at most one artifact per pass.** Two
+    passes mean one bucket can contribute up to two artifacts to KEEP, so
+    a chain can retain up to twice what its bucket count nominally
+    implies. That is bounded, and it is in the fail-safe direction.
+
+The two passes SHALL NOT be merged into a single selection per bucket.
+Merged, an artifact produced late on Monday but discovered on Tuesday
+competes for Monday's bucket against an artifact discovered early on
+Monday and can win it, which takes a tier away from an artifact the
+discovery-only calculation kept, and the first property above is lost.
+
+#### What an operator sees
+
+In ordinary running the two timestamps agree to within minutes, both
+passes select the same artifact, and the union changes nothing. They
+diverge in exactly the cases described above, and there the divergence is
+the point.
+
+An ingested backlog therefore keeps its real shape: artifacts dated days
+apart land in different daily buckets, artifacts dated months apart land
+in different monthly buckets, and an artifact older than the longest
+configured window is still a DELETE candidate, which this document has
+always said it is. An operator who wants such an artifact kept extends the
+chain rather than relying on the ingest that happened to bring it in.
+
+An operator who does not trust a remote's clock needs no setting for it.
+There is deliberately no configuration key here, because the producer term
+can never make retention keep less than it would without it; distrusting
+it is a capacity question, not a safety one.
+
+Because a KEEP can now come from either pass, the retention preview SHALL
+say which one selected the artifact, **per tier**. FR-20 requires the
+dry-run to explain every KEEP/DELETE decision, and a bare tier name no
+longer explains one: `DAILY` on its own does not say whether this
+manager's own record of when it first saw the artifact put it in that
+bucket, or a timestamp FR-8 calls untrusted did, and those two have
+different consequences for an operator deciding whether to trust the
+verdict. So the placement is named beside each tier:
+
+``` text
+KEEP   pg-2026-08-28.dump    tiers=[DAILY(discovery) MONTHLY(producer)]
+```
+
+Per tier rather than per artifact, because the two passes can disagree
+tier by tier. An artifact whose discovery placement wins its own daily
+bucket outright, but loses this month's monthly bucket to a newer
+arrival, while its own producer timestamp wins a monthly bucket months
+back, is selected by `DAILY` through one placement and by `MONTHLY`
+through the other. One answer for the whole artifact would be wrong in
+exactly the case an operator is reading the preview to understand.
+
+The placements are `discovery` (only the discovery pass selected this
+artifact for this tier), `producer` (only the producer pass did) and
+`both`. FR-19's protected term carries none of them and is reported
+without a placement: it is not a bucket selection at all, so neither
+timestamp produced it, and dressing it as a placement would report a
+calendar decision this manager never made.
+
+### Backward compatibility
+
+`daily_days`, `weekly_months` and `monthly_months` remain valid
+configuration and are **sugar for the default three-tier chain**. A
+config file that sets only those three (or omits the retention block
+entirely, and takes 7/3/12) SHALL produce exactly the decisions it
+produced before this generalization existed.
+
+Setting both the three scalar keys and an explicit `tiers:` list is a
+configuration error, not a silent precedence rule: an operator who writes
+both is asking two different questions and deserves to be told so rather
+than have one answer quietly discarded.
+
+An explicitly empty `tiers: []` is not distinguishable from an absent key
+and reads the same way: the three scalars, which resolve to 7/3/12. So
+emptying the chain does **not** spell "keep nothing", it reinstates the
+default daily/weekly/monthly policy. There is deliberately no "keep
+nothing" spelling in the schema at all, and no chain out of which nothing
+can be selected is accepted: a policy with every tier disabled is refused
+rather than resolved to an empty KEEP, because an empty KEEP puts every
+managed backup in the set on the delete side. Retention is turned off by
+not running a retention pass.
+
+### Multi-file restore points
+
+GFS retention assumes one artifact is one restore point. A producer that
+instead writes a restore point as several files sharing one run's
+timestamp (a portable archive alongside a native database dump, in issue
+#292's own reproduction) breaks that assumption: within one backup set,
+GFS still selects at most one representative per bucket per tier, so one
+file of the run is kept and the rest become DELETE candidates.
+
+Configure such a producer as one backup set per file pattern instead: a
+distinct `include` glob (FR-5) and `backup_set_id` (FR-7) per file type,
+so every set's bucket holds exactly one artifact per run. The sets then
+retain independently, which has a real cost worth weighing going in: a
+verification failure quarantines only that set's artifact for a given
+run, so the sets can drift onto different runs over time, and each set's
+own health and last-known-good age are reported without regard to the
+other set's. `retention --dry-run` still flags a same-run tie inside a
+single set as a sibling collision rather than a silent split (see
+GFSVerdict.SiblingCollisionLines in core/internal/retention/gfs.go), but
+that is a safety net for a set left misconfigured, not a reason to prefer
+one set over several.
 
 ------------------------------------------------------------------------
 
@@ -995,6 +1413,22 @@ it exceeds normal retention age.
 
 A backup is eligible as known-good only if it is a valid
 committed/complete restore point satisfying required verification.
+
+"Newest" here means newest by the artifact's own retention date, resolved
+exactly as FR-18's producer pass resolves it: the producer's own timestamp
+when the backend reported an admissible one, and the discovery timestamp
+otherwise. It does **not** mean the most recently ingested artifact. A
+backlog ingested in one cycle therefore protects the most recent backup in
+it rather than whichever artifact happens to sort last by name, and the
+reason an operator is shown SHALL carry the resolved date and say which of
+the two timestamps produced it.
+
+A producer that back-dates its newest artifact can move this protection
+onto an older one. It cannot move the newest artifact out of KEEP, because
+FR-18's discovery pass places a recently discovered artifact on today's date
+and today falls inside every enabled tier's window, so the manipulation
+costs a label rather than a restore point. A forward-dated producer
+timestamp is refused before it reaches this calculation at all.
 
 `FAILED`, `QUARANTINED` and `.partial` artifacts cannot satisfy this
 protection.
@@ -1192,6 +1626,10 @@ Decision Record because it creates fork-like maintenance obligations.
 13. Container runs non-root where practical.
 14. Architecture should permit future immutable/off-site copies.
 15. rclone dependency security updates SHALL be tracked.
+16. A manager-stored key file MAY be encrypted at rest (`key_encryption`,
+    #298); when configured, the encryption key's own storage location MUST
+    NOT be reachable from the same SMB/AFP share or backup root as the key
+    file it protects.
 
 ------------------------------------------------------------------------
 

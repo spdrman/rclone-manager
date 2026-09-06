@@ -10,6 +10,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file walks the FR-17 table row by row, and the test names spell out
+// all three inputs and the required outcome on purpose. The table is the
+// specification, and a test nobody can match back to a row is a test nobody
+// can check the table for completeness against.
+//
+// The pairs worth reading together are the ones where the same journal
+// state reaches two different destinations. COMMITTED with a bad local copy
+// quarantines; COMPLETE with a bad local copy quarantines as LOST. The
+// difference is not severity, it is that COMPLETE already means this
+// manager deleted the remote, so there is no source left to recover from.
+// Seeing those two apart is how a reader discovers that the machine has no
+// COMMITTED to QUARANTINED_LOST edge and that this package will not
+// manufacture one by recording a delete intent it never had.
+//
+// The ambiguous-stat case is the negative control for the whole file.
+// Without it, every "remote absent" test here would pass just as happily
+// against an implementation that read any Stat failure as gone.
+
 // --- assertion helpers ---
 
 func requireNoErrors(t *testing.T, report Report) {
@@ -253,6 +271,84 @@ func TestReconcile_Complete_ValidLocal_IsConsistent(t *testing.T) {
 	}
 	if tp.statCalls != 0 {
 		t.Errorf("statCalls = %d, want 0", tp.statCalls)
+	}
+}
+
+// TestReconcile_RemoteRetained_IsConsistent proves issue #282's terminal
+// state does not break FR-17's startup pass: reconcileOne must not error
+// out (the pre-#282 default case would have refused every unrecognised
+// state), must take no action, and must never call Stat -- this manager
+// never examined the remote object on the way into REMOTE_RETAINED and has
+// no business examining it now either.
+func TestReconcile_RemoteRetained_IsConsistent(t *testing.T) {
+	j := openTestJournal(t)
+	artifact := testArtifact(t, "retained.dump")
+	size := int64(32)
+	localPath := writeLocalFile(t, size)
+	driveTo(t, j, driveParams{
+		artifact: artifact, remote: state.RemoteIdentity{Size: &size}, localPath: localPath,
+		transfer: &state.TransferResult{BytesTransferred: size}, stopAt: lifecycle.RemoteRetained,
+	})
+
+	tp := &fakeTransport{}
+	report, err := Reconcile(context.Background(), Deps{Journal: j, Transport: tp}, testSource, testSet(t))
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	requireNoErrors(t, report)
+	f := requireOneFinding(t, report)
+	if f.Changed() {
+		t.Errorf("Finding.Changed() = true, want false (From=%s To=%s)", f.From, f.To)
+	}
+	if f.From != lifecycle.RemoteRetained {
+		t.Errorf("From = %s, want REMOTE_RETAINED", f.From)
+	}
+	if tp.statCalls != 0 {
+		t.Errorf("statCalls = %d, want 0: a read-only set's retained remote is never examined", tp.statCalls)
+	}
+}
+
+// TestReconcile_RemoteRetained_InvalidLocal_Quarantines is issue #315's
+// core proof: unlike the no-action case above, a REMOTE_RETAINED artifact
+// whose local final copy has gone bad must actually be noticed by FR-17's
+// startup pass, exactly like TestReconcile_Committed_InvalidLocal_Quarantines
+// proves for COMMITTED. Before this, reconcileOne's REMOTE_RETAINED case
+// was a pure no-op regardless of the local copy's condition, which is the
+// gap issue #315 exists to close: for a read-only source, the local final
+// copy is often the only copy this manager still has any relationship to.
+func TestReconcile_RemoteRetained_InvalidLocal_Quarantines(t *testing.T) {
+	cases := []struct {
+		name      string
+		localPath func(t *testing.T) string
+	}{
+		{"corrupted size", func(t *testing.T) string { return writeLocalFile(t, 4) }}, // recorded size is 128
+		{"missing file", func(t *testing.T) string { return t.TempDir() + "/never-written.final" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			j := openTestJournal(t)
+			artifact := testArtifact(t, "retained-invalid.dump")
+			size := int64(128)
+			driveTo(t, j, driveParams{
+				artifact: artifact, remote: state.RemoteIdentity{Size: &size}, localPath: tc.localPath(t),
+				transfer: &state.TransferResult{BytesTransferred: size}, stopAt: lifecycle.RemoteRetained,
+			})
+
+			tp := &fakeTransport{}
+			report, err := Reconcile(context.Background(), Deps{Journal: j, Transport: tp}, testSource, testSet(t))
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			requireNoErrors(t, report)
+			f := requireOneFinding(t, report)
+			if f.To != lifecycle.Quarantined {
+				t.Errorf("To = %s, want QUARANTINED (reason: %s)", f.To, f.Reason)
+			}
+			if tp.statCalls != 0 {
+				t.Errorf("statCalls = %d, want 0: a retained artifact's remote is never examined, valid local copy or not", tp.statCalls)
+			}
+			assertJournalState(t, j, artifact, lifecycle.Quarantined)
+		})
 	}
 }
 

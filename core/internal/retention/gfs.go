@@ -6,6 +6,16 @@
 // weekly and monthly tiers, each of which retains the newest valid backup
 // in every calendar bucket that falls inside that tier's look-back window.
 //
+// # Which timestamp puts an artifact in a bucket
+//
+// Two of them, and each tier is evaluated once per placement with the
+// results unioned: the discovery timestamp (when this manager first saw
+// the artifact) always, and the producer's own timestamp (the remote
+// object's modification time) where one is admissible. bucketkey.go holds
+// that rule, why neither timestamp alone is the answer, and why the union
+// is what keeps FR-8's untrusted-input requirement intact. Read it before
+// changing anything in this file's tier loop.
+//
 // # Determinism
 //
 // The whole point of this package is that the same inputs always produce
@@ -58,7 +68,16 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
-// GFSTier names one of the three tiers FR-18's retention table defines.
+// GFSTier names one tier of FR-18's retention chain, as it appears on the
+// wire: apps/common/webhost sends these strings straight through to the
+// client as a verdict's tiers, so a tier name is API surface, not an
+// internal label.
+//
+// A tier's name comes from configuration (config.RetentionTier.Name),
+// upper-cased. The three constants below are the names FR-18's default
+// chain has always used and are pinned here because renaming any of them
+// would break every existing client: a tier configured as "daily" reports
+// as DAILY, exactly as it did when there were only ever three tiers.
 type GFSTier string
 
 const (
@@ -66,6 +85,158 @@ const (
 	GFSWeekly  GFSTier = "WEEKLY"
 	GFSMonthly GFSTier = "MONTHLY"
 )
+
+// gfsTierName renders a configured tier's name for the wire. Uppercasing
+// is the whole transformation, so "daily" lands on GFSDaily by
+// construction rather than through a lookup table that could fall out of
+// step with it.
+//
+// The set of strings this can produce is open, and a client has to treat
+// it that way: FR-18's chain is operator-defined, so SEMI_ANNUAL, ANNUAL
+// or any other name a config file spells arrives here. What bounds the
+// shape of that string is config.Validate's lower_snake_case rule, which
+// belongs to config alone and is not re-checked here; the one name this
+// function's caller does refuse is FR-19's reserved LAST_KNOWN_GOOD (see
+// gfsResolveTier), because that one is not merely unrecognised by a
+// client, it means something else.
+func gfsTierName(configured string) GFSTier {
+	return GFSTier(strings.ToUpper(configured))
+}
+
+// GFSSelectedBy names which of FR-18's two placements put an artifact in
+// one tier's bucket (issue #218).
+//
+// bucketkey.go's doc has the two placements and why there are two of
+// them. What matters here is that they are not interchangeable evidence:
+// the discovery placement comes from this manager's own clock and nothing
+// outside the manager can move it, while the producer placement is the
+// remote object's own modification time, which FR-8 requires be treated
+// as untrusted. An operator asking "why is this being kept" is asking
+// which of those two answered, and before this type existed the preview
+// could not tell them.
+//
+// It is a string rather than an int for the same reason GFSTier is: these
+// values reach a client through apps/common/webhost, so they are API
+// surface and renaming one would break every reader of it.
+type GFSSelectedBy string
+
+const (
+	// GFSSelectedByDiscovery: the discovery pass selected this artifact
+	// for this tier and the producer pass did not. The selection rests
+	// entirely on this manager's own record of when it first saw the
+	// artifact, so nothing a producer reports can change it.
+	GFSSelectedByDiscovery GFSSelectedBy = "DISCOVERY"
+
+	// GFSSelectedByProducer: the producer pass selected it and the
+	// discovery pass did not. This is the tier attribution that exists
+	// only because FR-18 admits the remote's own timestamp, and therefore
+	// the one an operator auditing an ingested backlog, a wrong clock or a
+	// hostile one actually needs to see. It can only ever have ADDED a
+	// KEEP (see bucketkey.go), never removed one.
+	GFSSelectedByProducer GFSSelectedBy = "PRODUCER"
+
+	// GFSSelectedByBoth: both passes selected it for this tier, which is
+	// the ordinary case for an artifact whose producer timestamp and
+	// discovery timestamp fall on the same calendar date. Reported as its
+	// own value rather than collapsed into either single one, because
+	// "the producer term is not load-bearing here" is a materially
+	// different fact from "the producer term is the only thing keeping
+	// this".
+	GFSSelectedByBoth GFSSelectedBy = "BOTH"
+
+	// GFSSelectedByProtection: not a placement at all. FR-19's
+	// last-known-good term (TierLastKnownGood) is not a bucket selection,
+	// so it has no placement to name, and dressing it as one would tell an
+	// operator this manager had made a calendar decision it never made.
+	// ApplyLastKnownGood is the only thing that ever produces it.
+	GFSSelectedByProtection GFSSelectedBy = "PROTECTION"
+)
+
+// GFSTierSelection is one tier's claim on an artifact, together with which
+// placement made it.
+//
+// The pairing is the whole point of issue #218 and is deliberately not
+// two parallel lists or one attribution per verdict. A single artifact can
+// be selected by DAILY through the discovery placement and by MONTHLY
+// through the producer placement in the same calculation (see
+// TestGFSDecideAttributesEachTierToThePlacementThatSelectedIt), so an
+// attribution that hung off the verdict would be wrong in exactly the
+// cases an operator is looking at the preview to understand.
+type GFSTierSelection struct {
+	Tier GFSTier
+	By   GFSSelectedBy
+}
+
+// String renders one selection the way the CLI's per-artifact line and the
+// web UI's badges both spell it: the tier, and the placement that selected
+// it in parentheses.
+//
+// FR-19's protected term renders bare. It has no placement, and a
+// parenthesised word after it would read as one; the tier name
+// LAST_KNOWN_GOOD already says what kind of thing it is. Anything else
+// carrying an unrecognised placement renders it verbatim rather than
+// silently dropping to bare, so a value this build has never heard of can
+// never be mistaken for FR-19's protection.
+func (s GFSTierSelection) String() string {
+	if s.By == GFSSelectedByProtection {
+		return string(s.Tier)
+	}
+	return string(s.Tier) + "(" + strings.ToLower(string(s.By)) + ")"
+}
+
+// GFSSiblingCollision names one tier+placement bucket in which this
+// verdict's own artifact tied, on the exact placement instant (not merely
+// the same calendar bucket), with another artifact in the same backup
+// set, and lost only to gfsIsNewerRepresentative's deterministic
+// name tie-break -- never to being genuinely older (issue #292).
+//
+// The distinction that makes this worth its own type, rather than just
+// noting "this bucket had more than one candidate", is trust: two
+// artifacts landing in the same daily bucket on merely the same calendar
+// date is the ordinary case GFS exists to arbitrate (the newer one wins,
+// the older one is a real delete candidate). Two artifacts sharing the
+// exact same producer instant, the remote's own reported modification
+// time, down to the second, is not that case: outside a contrived test,
+// the only realistic way for two artifacts in one backup set to carry an
+// identical producer timestamp is that they are the same backup run,
+// captured as more than one file (a portable archive and a native
+// database dump of the same restore point, in the issue's own
+// reproduction). Flagging the exact producer tie, and only that, is what
+// keeps this signal from firing on every ordinary "newest of the day"
+// delete -- see TestGFSDecideDoesNotFlagAGenuinelyOlderArtifactAsASiblingCollision.
+//
+// A discovery-timestamp tie is deliberately never flagged, and that is
+// not the same case merely restated: the discovery pass is this
+// manager's own clock, not the artifacts' history, and one ingest cycle
+// routinely discovers several, entirely unrelated artifacts at the same
+// instant (bucketkey.go's own doc, and the very fixture that motivated
+// FR-18's producer pass in the first place -- a year of dumps ingested
+// in one cycle -- is exactly that). Treating a discovery tie as a
+// collision would flag most ordinary backlog ingests, not same-run
+// siblings, which is why GFSDecide only ever populates this from the
+// producer pass.
+type GFSSiblingCollision struct {
+	// Tier names which bucket the collision happened in: the same tier a
+	// matching entry in the winning artifact's own GFSTierSelection would
+	// name.
+	//
+	// By is always GFSSelectedByProducer (see this type's own doc for why
+	// a discovery-timestamp tie is never reported here), never
+	// GFSSelectedByBoth (a single pass produces at most one collision per
+	// artifact) and never GFSSelectedByProtection (FR-19's protection is
+	// not a bucket selection and cannot tie one). It is still a field,
+	// rather than a hardcoded constant this type omits, so a caller
+	// rendering a collision can reuse GFSTierSelection{Tier, By}.String()
+	// verbatim (see SiblingCollisionLines) instead of special-casing one
+	// more type that happens to always carry the same placement today.
+	Tier GFSTier
+	By   GFSSelectedBy
+
+	// Sibling is the artifact whose name won the deterministic tie-break
+	// and became that bucket's representative instead of this verdict's
+	// own artifact.
+	Sibling model.ArtifactID
+}
 
 // GFSVerdict is one backup set artifact's GFS classification.
 //
@@ -79,23 +250,111 @@ type GFSVerdict struct {
 	// bucket's representative.
 	Keep bool
 
-	// Tiers lists every tier that selected this artifact, in the fixed
-	// order Daily, Weekly, Monthly (never reordered, so two runs over the
-	// same inputs render it identically). Nil when Keep is false.
+	// Tiers lists every tier that selected this artifact, in the order the
+	// configured chain lists them (never reordered, so two runs over the
+	// same inputs render it identically), each paired with the placement
+	// that selected it there. Nil when Keep is false.
 	//
-	// GFSDecide itself only ever appends GFSDaily, GFSWeekly or GFSMonthly
-	// here. TierLastKnownGood (lastknowngood.go) can appear too, but only
-	// after ApplyLastKnownGood composes FR-19's protected term into a
-	// GFSDecide result; it is always appended after any GFS tiers already
-	// present, so the Daily/Weekly/Monthly ordering above is unaffected.
-	Tiers []GFSTier
+	// For the default chain that is still Daily, Weekly, Monthly.
+	// TierLastKnownGood (lastknowngood.go) can appear too, but only after
+	// ApplyLastKnownGood composes FR-19's protected term into a GFSDecide
+	// result; it is always appended after any GFS tiers already present,
+	// so the configured chain's own ordering above is unaffected.
+	//
+	// The placement travels WITH the tier rather than beside it, so there
+	// is no way to render a tier here without saying what selected it.
+	// That is issue #218's actual requirement: see GFSTierSelection.
+	Tiers []GFSTierSelection
+
+	// SiblingCollisions lists every tier+placement bucket in which this
+	// artifact tied, on the exact placement instant, with another
+	// artifact in the same backup set, and lost the deterministic
+	// tie-break (issue #292). Populated only when Keep is false: an
+	// artifact this manager is keeping anyway has nothing here worth
+	// disambiguating, and GFSDecide, ApplyLastKnownGood both clear it the
+	// moment an artifact's own Keep flips to true, so a caller can treat
+	// "Keep == false but SiblingCollisions is non-empty" as a fact this
+	// field alone establishes, never something it merely happens to still
+	// be carrying from an earlier, since-overridden decision.
+	//
+	// This is what lets a caller (this package's own
+	// GFSVerdict.SiblingCollisionLines, `retention --dry-run`,
+	// PruneVerdict.Reason) tell "no tier claimed this because it is older
+	// than every window" apart from "no tier claimed this because a
+	// sibling in the same bucket won" -- the exact distinction issue
+	// #292's acceptance criteria asks for. Neither this field nor its
+	// renderers change what gets kept or deleted: GFSDecide still selects
+	// at most one representative per bucket per tier, on purpose (see this
+	// issue's own scope decision) -- this only makes the resulting split
+	// impossible to mistake for an unrelated, ordinary delete.
+	SiblingCollisions []GFSSiblingCollision
+}
+
+// SiblingCollisionLines renders v.SiblingCollisions into one human
+// sentence per distinct sibling, for `retention --dry-run`
+// (cmd/backup-manager/retention.go) and FR-20's own PruneVerdict.Reason
+// (prune.go) to print verbatim. Returns nil when SiblingCollisions is
+// empty, so a caller can range over the result without a length check.
+//
+// One line per sibling, not one line per (tier, placement) entry: the
+// realistic case (issue #292's own reproduction) is two files from the
+// same run tying under the producer placement in every tier that admits
+// them, which would otherwise print the same pair of names three times
+// over for the default daily/weekly/monthly chain. The tiers and
+// placements that tied are still named, just folded into that one line,
+// via GFSTierSelection's own String().
+func (v GFSVerdict) SiblingCollisionLines() []string {
+	if len(v.SiblingCollisions) == 0 {
+		return nil
+	}
+	var order []model.ArtifactID
+	bySibling := map[model.ArtifactID][]string{}
+	for _, c := range v.SiblingCollisions {
+		if _, seen := bySibling[c.Sibling]; !seen {
+			order = append(order, c.Sibling)
+		}
+		bySibling[c.Sibling] = append(bySibling[c.Sibling], GFSTierSelection{Tier: c.Tier, By: c.By}.String())
+	}
+	out := make([]string, 0, len(order))
+	for _, sib := range order {
+		out = append(out, fmt.Sprintf(
+			"sibling collision: %s shares an identical timestamp with %s (%s) and lost only the name tie-break, not the retention window -- this is not an ordinary supersession; if these are two files of one restore point, see docs/EPIC.md's FR-18 \"Multi-file restore points\" section on configuring one backup set per file pattern before deleting either",
+			v.Artifact.Name, sib.Name, strings.Join(bySibling[sib], ", ")))
+	}
+	return out
+}
+
+// tierNames projects Tiers down to bare tier names, which is what this
+// package's own tests assert against when the claim under test is which
+// tiers kept an artifact rather than which placement selected it.
+//
+// Unexported, and staying that way while nothing outside this package
+// needs it: the wire's own `tiers` field is the same projection but is
+// built one layer out, in apps/common/webhost, from what core/service
+// hands it. Exporting a second way to spell it would invite a caller to
+// read the names and never look at the placements, which is the exact
+// habit issue #218 exists to break.
+func (v GFSVerdict) tierNames() []GFSTier {
+	if len(v.Tiers) == 0 {
+		return nil
+	}
+	out := make([]GFSTier, 0, len(v.Tiers))
+	for _, sel := range v.Tiers {
+		out = append(out, sel.Tier)
+	}
+	return out
 }
 
 // gfsManagedCompleteStates are the lifecycle states FR-18's "managed
 // complete backups" refers to: a durable local artifact the pipeline has
 // finished producing, that has not (yet, or ever) been found bad.
 //
-// Committed is the earliest of the three included here. lifecycle's own
+// Four states are included, and the count is worth stating because a
+// list that stops at three has already caused real harm here: see
+// internal/health's knownGood, whose doc records what an undercount of
+// this same set did to the README.
+//
+// Committed is the earliest of the four. lifecycle's own
 // package doc is explicit that "[f]rom here on the backup has already
 // succeeded, regardless of what happens to the remote copy next", so
 // waiting for RemoteDeletePending or Complete before considering an
@@ -112,14 +371,39 @@ type GFSVerdict struct {
 // left to recover from, and lifecycle's package doc is explicit that
 // leaving it requires an operator to act rather than another automatic
 // decision, GFS math included.
+//
+// RemoteRetained (issue #282) is included for the same reason Committed
+// is: it means the durable local backup already succeeded, exactly as
+// much a completed backup as Complete is, just with the remote copy kept
+// by policy rather than deleted. Excluding it would make GFS's view of
+// "what backups exist" for a read-only set depend on a remote-delete step
+// that set will never take, which is the same category error the
+// Committed paragraph above already rules out for the ordinary case.
 var gfsManagedCompleteStates = map[lifecycle.State]bool{
 	lifecycle.Committed:           true,
 	lifecycle.RemoteDeletePending: true,
 	lifecycle.Complete:            true,
+	lifecycle.RemoteRetained:      true,
 }
 
 func gfsIsManagedComplete(raw string) bool {
 	return gfsManagedCompleteStates[lifecycle.State(raw)]
+}
+
+// gfsManagedCompleteNames is the map above rendered for a person:
+// "COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED".
+//
+// Every refusal in this package that turns gfsIsManagedComplete down has to
+// tell the operator which states it would have accepted, and issue #505 is
+// what happens when that list is typed out beside the map instead of read
+// off it: REMOTE_RETAINED joined the map with #282 and three sentences
+// stayed at three states, so the one operator most likely to be refused,
+// the one running a read-only backup set where REMOTE_RETAINED is the only
+// state anything ever reaches, was told by name that their artifacts' state
+// is not one of the permitted ones. Reading the map means the sentence
+// cannot be wrong about the map, whatever is added to it next.
+func gfsManagedCompleteNames() string {
+	return lifecycle.NameSet(gfsManagedCompleteStates)
 }
 
 // gfsWeekdaysByName mirrors config's own validWeekdays: any
@@ -143,6 +427,24 @@ var gfsWeekdaysByName = map[string]time.Weekday{
 // (daily_days: 7 and so on). A tier whose configured window is zero or
 // negative is treated as disabled (it selects nothing), not as an error,
 // since a caller that bypasses Validate has no other way to spell that.
+// That reading is per tier only: a chain in which every tier is disabled
+// is refused, because "keeps nothing" is not a retention policy (see
+// gfsResolveChain).
+//
+// The chain GFSDecide decides with is cfg.EffectiveTiers(): the explicit
+// cfg.Tiers list when one is configured, and otherwise the three legacy
+// daily_days/weekly_months/monthly_months scalars expanded through
+// config.DefaultTierChain. That expansion lives in internal/config rather
+// than here so there is exactly one definition of what the old keys mean,
+// and it is what makes a config file written before FR-18 was generalized
+// produce the identical decisions it always has.
+//
+// A tier GFSDecide cannot evaluate at all (an unknown granularity, a
+// custom period with no length, an empty name), and a whole chain in
+// which no tier is enabled, are errors, not a chain that quietly selects
+// nothing. The difference matters because this
+// output feeds FR-20: a chain silently reduced to "keeps nothing" would
+// turn a config typo into a proposal to delete every backup in the set.
 //
 // records must all belong to set: retention is calculated strictly per
 // backup set (FR-7), and GFSDecide refuses a record from another set
@@ -167,12 +469,6 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		return nil, fmt.Errorf("retention: week_starts_on %q is not a day of the week", cfg.WeekStartsOn)
 	}
 
-	type gfsDated struct {
-		artifact model.ArtifactID
-		occurred time.Time // Record.DiscoveredAt, kept for representative tie-breaking
-		date     gfsCivilDate
-	}
-
 	var eligible []gfsDated
 	verdicts := make(map[model.ArtifactID]*GFSVerdict)
 
@@ -183,11 +479,13 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		if !gfsIsManagedComplete(rec.State) {
 			continue
 		}
-		eligible = append(eligible, gfsDated{
-			artifact: rec.Artifact,
-			occurred: rec.DiscoveredAt,
-			date:     gfsCivilDateIn(rec.DiscoveredAt, loc),
-		})
+		discovered, producer, hasProducer := gfsPlacementsFor(rec, loc)
+		d := gfsDated{artifact: rec.Artifact, discovered: discovered}
+		if hasProducer {
+			p := producer
+			d.producer = &p
+		}
+		eligible = append(eligible, d)
 		verdicts[rec.Artifact] = &GFSVerdict{Artifact: rec.Artifact}
 	}
 
@@ -196,66 +494,91 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	// tiers is a slice, not a map, deliberately: GFSVerdict.Tiers is built
 	// by appending in this exact order as each tier is processed, which is
 	// what makes its contents reproducible without a separate sort step.
-	tiers := []struct {
-		tier   GFSTier
-		inSpan func(gfsCivilDate) bool
-		bucket func(gfsCivilDate) gfsCivilDate
-	}{
-		{
-			tier: GFSDaily,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.DailyDays <= 0 {
-					return false
-				}
-				start := today.addDays(-(cfg.DailyDays - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d },
-		},
-		{
-			tier: GFSWeekly,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.WeeklyMonths <= 0 {
-					return false
-				}
-				start := today.firstOfMonth().addMonths(-(cfg.WeeklyMonths - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d.weekStart(weekStartDay) },
-		},
-		{
-			tier: GFSMonthly,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.MonthlyMonths <= 0 {
-					return false
-				}
-				start := today.firstOfMonth().addMonths(-(cfg.MonthlyMonths - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d.firstOfMonth() },
-		},
+	// The order is the order the administrator wrote the chain in.
+	tiers, err := gfsResolveChain(cfg.EffectiveTiers(), today, weekStartDay)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, tb := range tiers {
-		type champion struct {
-			artifact model.ArtifactID
-			occurred time.Time
-		}
-		champions := map[gfsCivilDate]champion{}
+		// Two passes, unioned, never merged. See bucketkey.go's doc for
+		// why folding them into one champion map per bucket would let an
+		// untrusted producer timestamp displace an artifact the discovery
+		// pass had kept, which is the one thing this design forbids.
+		//
+		// The two results are also kept apart here rather than unioned on
+		// the spot, because which of them selected an artifact is the fact
+		// issue #218 is about: it is recorded per tier, below, as the
+		// union is formed.
+		byDiscovery, _ := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
+		byProducer, producerTies := gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement)
+
+		// A tier is attributed to an artifact exactly once even when both
+		// passes selected it, so a verdict never reads DAILY twice. The
+		// walk is over eligible rather than over either map, because map
+		// iteration order is random and this loop now decides the order
+		// nothing later re-sorts: eligible is the caller's own record
+		// order, and within one tier every artifact appends at most one
+		// entry, so the resulting Tiers list is the chain's order for
+		// every artifact regardless.
 		for _, d := range eligible {
-			if !tb.inSpan(d.date) {
+			inDiscovery, inProducer := byDiscovery[d.artifact], byProducer[d.artifact]
+			if !inDiscovery && !inProducer {
 				continue
 			}
-			key := tb.bucket(d.date)
-			cur, exists := champions[key]
-			if !exists || gfsIsNewerRepresentative(d.artifact, d.occurred, cur.artifact, cur.occurred) {
-				champions[key] = champion{artifact: d.artifact, occurred: d.occurred}
+			by := GFSSelectedByBoth
+			switch {
+			case !inProducer:
+				by = GFSSelectedByDiscovery
+			case !inDiscovery:
+				by = GFSSelectedByProducer
 			}
-		}
-		for _, c := range champions {
-			v := verdicts[c.artifact]
+			v := verdicts[d.artifact]
 			v.Keep = true
-			v.Tiers = append(v.Tiers, tb.tier)
+			v.Tiers = append(v.Tiers, GFSTierSelection{Tier: tb.tier, By: by})
+		}
+
+		// gfsSelectRepresentatives' own producer-pass tie map (issue
+		// #292): every artifact that placed at the exact same producer
+		// instant as this tier's bucket champion, and lost only to
+		// gfsIsNewerRepresentative's name tie-break. Recorded onto every
+		// loser's own verdict regardless of what else keeps it; the
+		// "Keep == false only" contract SiblingCollisions documents is
+		// enforced once, below, after every tier has had a turn, rather
+		// than re-checked per tier here.
+		//
+		// The discovery pass's own tie map (byDiscovery's second return,
+		// discarded above) is deliberately never consulted here, and that
+		// is not an oversight: a discovery-timestamp tie is the ordinary
+		// shape of one ingest cycle picking up several, entirely
+		// unrelated artifacts at once (bucketkey.go's own doc is explicit
+		// that this manager's clock, not the artifacts' own history, is
+		// what a discovery timestamp records), so flagging it would fire
+		// on every batch ingest, not on same-run siblings specifically.
+		// TestGFSDecideDoesNotFlagTheBatchIngestDiscoveryTieAsASiblingCollision
+		// (bucketkey_test.go) pins exactly this against the six-artifact
+		// backlog fixture the pinned CLI contract suite in
+		// spdrman/rclone-manager-tests also exercises. A producer
+		// timestamp tie has no such innocent explanation: two artifacts
+		// in one backup set reporting an identical remote modification
+		// time, to the second, is what two files of one backup run
+		// actually look like, which is the signal this issue is about.
+		for loser, sibling := range producerTies {
+			v := verdicts[loser]
+			v.SiblingCollisions = append(v.SiblingCollisions, GFSSiblingCollision{Tier: tb.tier, By: GFSSelectedByProducer, Sibling: sibling})
+		}
+	}
+
+	// SiblingCollisions is populated only when Keep is false (see that
+	// field's own doc): an artifact some other bucket, tier or placement
+	// still keeps has nothing here worth disambiguating, and carrying a
+	// stale collision forward on a KEEP verdict would contradict the
+	// field's own contract. This is the one place that contract is
+	// enforced, after every tier's ties have already been recorded above,
+	// rather than re-derived per artifact per tier.
+	for _, v := range verdicts {
+		if v.Keep {
+			v.SiblingCollisions = nil
 		}
 	}
 
@@ -267,11 +590,98 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	return out, nil
 }
 
+// gfsDated is one eligible artifact together with the placements FR-18
+// offers it to a tier's buckets under: always the discovery placement, and
+// the producer placement when one is admissible (nil otherwise). See
+// bucketkey.go for what those two are and why there are two of them.
+type gfsDated struct {
+	artifact   model.ArtifactID
+	discovered gfsPlacement
+	producer   *gfsPlacement
+}
+
+// gfsDiscoveryPlacement and gfsProducerPlacement are the two placement
+// selectors gfsSelectRepresentatives is run with. They exist as named
+// functions rather than inline closures so the two passes in GFSDecide
+// read as one calculation applied twice, which is exactly what they are.
+func gfsDiscoveryPlacement(d gfsDated) (gfsPlacement, bool) { return d.discovered, true }
+
+func gfsProducerPlacement(d gfsDated) (gfsPlacement, bool) {
+	if d.producer == nil {
+		return gfsPlacement{}, false
+	}
+	return *d.producer, true
+}
+
+// gfsSelectRepresentatives runs one tier's selection over one placement
+// key: every artifact that place() offers a date for, that falls inside
+// the tier's window, competes for its bucket, and the newest in each
+// bucket is that bucket's representative. The first return value is the
+// set of artifacts this pass selected, with each bucket contributing at
+// most one of them, which is FR-18's "the newest valid backup in each of
+// its own buckets" exactly as it always read.
+//
+// The second return value is issue #292's addition: every artifact that
+// competed for a bucket at the exact same placement instant as that
+// bucket's eventual representative, and so lost purely to
+// gfsIsNewerRepresentative's name tie-break rather than to being older,
+// mapped to the representative it tied with. A candidate whose instant is
+// merely older, not equal, never appears here: that is the ordinary case
+// this pass exists to arbitrate, not a collision. See
+// GFSSiblingCollision's own doc for why an exact instant tie is the
+// signal worth naming.
+func gfsSelectRepresentatives(tb gfsBoundTier, eligible []gfsDated, place func(gfsDated) (gfsPlacement, bool)) (map[model.ArtifactID]bool, map[model.ArtifactID]model.ArtifactID) {
+	type candidate struct {
+		artifact model.ArtifactID
+		occurred time.Time
+	}
+	buckets := map[gfsCivilDate][]candidate{}
+	for _, d := range eligible {
+		p, ok := place(d)
+		if !ok || !tb.inSpan(p.date) {
+			continue
+		}
+		key := tb.bucket(p.date)
+		buckets[key] = append(buckets[key], candidate{artifact: d.artifact, occurred: p.occurred})
+	}
+
+	winners := make(map[model.ArtifactID]bool, len(buckets))
+	ties := map[model.ArtifactID]model.ArtifactID{}
+	for _, cands := range buckets {
+		// gfsIsNewerRepresentative totally orders candidates by (occurred,
+		// name), so folding it over the bucket's members in any order
+		// finds the same maximum gfsIsNewerRepresentative's own original,
+		// incremental, single-pass form found: this is not a behaviour
+		// change, only a restructuring that also lets every candidate in
+		// the bucket be inspected afterward, which the original form
+		// discarded as soon as a new champion replaced the old one.
+		champ := cands[0]
+		for _, c := range cands[1:] {
+			if gfsIsNewerRepresentative(c.artifact, c.occurred, champ.artifact, champ.occurred) {
+				champ = c
+			}
+		}
+		winners[champ.artifact] = true
+		for _, c := range cands {
+			if c.artifact == champ.artifact {
+				continue
+			}
+			if c.occurred.Equal(champ.occurred) {
+				ties[c.artifact] = champ.artifact
+			}
+		}
+	}
+	return winners, ties
+}
+
 // gfsIsNewerRepresentative reports whether candidate should replace
 // current as a bucket's representative: FR-18 says "the newest valid
-// backup in a bucket". Ties (equal DiscoveredAt) are broken on artifact
-// name, which is unique within a backup set, so the winner never depends
-// on which of the two GFSDecide happened to see first in the input slice.
+// backup in a bucket". The two times compared are the two placements'
+// own instants (see bucketkey.go), so a discovery placement is compared on
+// the discovery timestamp and a producer placement on the producer's own.
+// Ties are broken on artifact name, which is unique within a backup set,
+// so the winner never depends on which of the two GFSDecide happened to
+// see first in the input slice.
 func gfsIsNewerRepresentative(candidate model.ArtifactID, candidateTime time.Time, current model.ArtifactID, currentTime time.Time) bool {
 	if !candidateTime.Equal(currentTime) {
 		return candidateTime.After(currentTime)

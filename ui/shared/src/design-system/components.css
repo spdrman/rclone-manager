@@ -49,6 +49,39 @@
 }
 .input--mono { font-family: var(--font-mono); }
 
+/* Password reveal toggle (issue #344). The button sits inside the input's
+   own box rather than beside it, so a revealable field keeps the same
+   footprint and baseline as every other field on the form. .field is a
+   column flex, so the wrapper re-establishes a row for the two to share. */
+.password-field {
+  position: relative; display: flex;
+  /* One number, two rules. The toggle's width and the padding that keeps
+     the value from running under it are the same measurement, and a
+     stylesheet that spells it twice is a stylesheet where they drift.
+     Inherited, so both rules below read it. */
+  --password-toggle-width: 36px;
+}
+.password-field__input {
+  flex: 1; min-width: 0;
+  /* The toggle, plus the 1px it is inset by, plus 1px of daylight. */
+  padding-right: calc(var(--password-toggle-width) + 2px);
+}
+.password-field__toggle {
+  position: absolute; right: 1px; top: 1px; bottom: 1px;
+  width: var(--password-toggle-width);
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; padding: 0;
+  color: var(--text-3); cursor: pointer;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.password-field__toggle:hover:not(:disabled) { color: var(--text); }
+.password-field__toggle:disabled { cursor: not-allowed; opacity: 0.5; }
+/* The global :focus-visible ring is drawn 2px OUTSIDE the element, and this
+   button is inset 1px from the input's border, so the shared rule would put
+   the ring on top of that border and read as the input being focused rather
+   than the toggle. Negative offset draws it inside the button instead. */
+.password-field__toggle:focus-visible { outline-offset: -2px; }
+
 .table { width: 100%; border-collapse: collapse; font-size: var(--text-base); }
 .table thead tr { background: var(--surface-2); }
 .table th {
@@ -87,3 +120,53 @@
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap;
 }
+
+/* Field help pop-ups (issue #278). The interaction lives in
+   components/FieldHelp.tsx; this is only its shape. Hidden state is the
+   `hidden` attribute, not a class, so the copy keeps one stable id for
+   aria-describedby and the close button is unfocusable while it is off
+   screen. See the [hidden] rule below, which is what makes that true. */
+.fieldhelp { position: relative; }
+.fieldhelp__pop {
+  position: absolute; z-index: 40;
+  top: calc(100% + 6px); left: 0;
+  width: max(100%, 292px); max-width: min(384px, 88vw);
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  padding: 11px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-2);
+  cursor: default;
+}
+/* Load-bearing, and its absence is a functional bug rather than a style
+   one. The pop-up is hidden with the `hidden` ATTRIBUTE, whose display:
+   none comes from the user-agent stylesheet, and the author `display`
+   above beats it outright. Without this line every pop-up on the page is
+   permanently open, covering the control beneath it and swallowing the
+   clicks meant for that control.
+
+   It goes AFTER the rule it overrides, not before. A browser would resolve
+   it either way on specificity, but jsdom's cascade is order-based, so
+   written first it loses there and the test environment stops agreeing
+   with the product. */
+.fieldhelp__pop[hidden] { display: none; }
+.fieldhelp__body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fieldhelp__body p { margin: 0; }
+.fieldhelp__what { color: var(--text); }
+.fieldhelp__example-lead {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3);
+}
+.fieldhelp__example code { color: var(--text); overflow-wrap: anywhere; }
+.fieldhelp__close {
+  flex: none; width: 22px; height: 22px; margin: -2px -3px 0 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-3);
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.fieldhelp__close:hover { background: var(--surface-3); color: var(--text); }

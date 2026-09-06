@@ -23,6 +23,8 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 // TestRcloneAdapter_LocalBackend_ContractSuite is the deliverable this issue
@@ -65,9 +67,7 @@ func (localFixtures) Put(t *testing.T, source transport.Source, remotePath strin
 
 func (localFixtures) Deny(t *testing.T, source transport.Source, remotePath string) func() {
 	t.Helper()
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: chmod-based permission denial is not enforced")
-	}
+	testenv.RequirePermissionBitsApply(t)
 	full := filepath.Join(source.Root, filepath.FromSlash(remotePath))
 	if err := os.Chmod(full, 0o000); err != nil {
 		t.Fatalf("Chmod(%q): %v", full, err)
@@ -148,9 +148,7 @@ func TestRcloneErrorTranslationShape_NotFound(t *testing.T) {
 // library's io/fs.ErrPermission still works even though no manager-owned
 // PermissionDenied category exists yet.
 func TestRcloneErrorTranslationShape_PermissionDenied(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: permission checks are not enforced")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	ctx := context.Background()
 	root := t.TempDir()

@@ -14,6 +14,12 @@ own automated command: the design's answer to "how do I get a backup back" has a
 populated by a full daemon loop or, as today, by your own driver code or the test suite.
 This procedure is the permanent shape, not a workaround.
 
+> **No terminal?** Everything below assumes a shell on the NAS. If you have only the web
+> interface, which is the normal case on a NAS appliance and the case every provider store
+> assumes, read [recovery without a terminal](recovery-without-a-terminal.md) instead. It
+> covers the same three failures this page starts with, through the interface, and it is
+> the page the submission bundle's support materials point a reviewer at.
+
 ## The one fact everything else depends on
 
 The journal is a plain SQLite file at whatever path `state.database` names in your config
@@ -46,25 +52,33 @@ sqlite3 /path/to/state.db "
 What `core/internal/health` would tell you if it were wired to anything (see the README's
 [Status and health](../README.md#status-and-health)):
 
-- If the newest row across the whole set is `COMMITTED`, `REMOTE_DELETE_PENDING` or
-  `COMPLETE`, and it's recent enough for your `stale_after` window, that's a healthy set.
-  Nothing to do.
-- If there's no row in one of those three states inside the freshness window, treat it as
+- If the newest row across the whole set is `COMMITTED`, `REMOTE_DELETE_PENDING`,
+  `COMPLETE` or `REMOTE_RETAINED`, and it's recent enough for your `stale_after` window,
+  that's a healthy set. Nothing to do.
+- If there's no row in one of those four states inside the freshness window, treat it as
   stale: something has stopped landing new backups for this set, whether or not any single
   attempt has technically "failed" yet.
 - If any row is `QUARANTINED_LOST`, that's an unconditional alarm regardless of anything
   else in the set, because it means an irrecoverable loss happened. See Step 3.
 - If the newest row is `FAILED` with no `next_retry_at`, the retry budget for that attempt
-  is exhausted and it needs a human, not another automatic pass.
+  is exhausted and it needs a human, not another automatic pass. See Step 7 for what that
+  human actually does, which until recently was nothing this product offered.
 
 ## Step 2: finding a restore point
 
-Only three states are ever a valid restore point. This isn't a convention this document is
+Only four states are ever a valid restore point. This isn't a convention this document is
 inventing, it's the exact set `core/internal/health/compute.go` calls `knownGood`:
 
 - `COMMITTED`
 - `REMOTE_DELETE_PENDING`
 - `COMPLETE`
+- `REMOTE_RETAINED`
+
+`REMOTE_RETAINED` is the one to check for first if the backup set is declared `read_only`,
+because it is the only one of the four those artifacts ever reach: FR-15's delete step is
+never offered them, so they stop at a terminal state of their own instead of moving on to
+`COMPLETE`. A query that leaves it out answers "this set has no restore points at all" for
+a set that is working exactly as declared.
 
 Everything else is not a restore point, with no exceptions:
 
@@ -86,7 +100,7 @@ sqlite3 /path/to/state.db "
   FROM artifacts
   WHERE source = 'production'
     AND backup_set = 'postgres-primary'
-    AND state IN ('COMMITTED', 'REMOTE_DELETE_PENDING', 'COMPLETE')
+    AND state IN ('COMMITTED', 'REMOTE_DELETE_PENDING', 'COMPLETE', 'REMOTE_RETAINED')
   ORDER BY updated_at DESC
   LIMIT 1;
 "
@@ -105,16 +119,31 @@ the entire remaining procedure once you have the right path.
 
 ## Step 3: the newest good row is `QUARANTINED_LOST`
 
-Stop looking for that specific backup. It's gone. `QUARANTINED_LOST` is reachable only from
-`COMPLETE`, the one state that confirms the remote copy was already deleted, so by the time
-an artifact reaches it there is no copy anywhere: not on the remote (already deleted), not
-intact locally (that's why it's here). It's terminal by design; nothing in the state machine
-ever routes an artifact back out of it (`core/internal/lifecycle/machine.go`).
+`QUARANTINED_LOST` is reachable only from `COMPLETE`, the one state that confirms the remote
+copy was already deleted, so by the time an artifact reaches it the manager believes there is
+no copy anywhere: not on the remote (already deleted), not intact locally (that's why it's
+here). Nothing automatic ever routes an artifact back out of it
+(`core/internal/lifecycle/machine.go`).
 
-What to actually do:
+**Check the obvious thing first, because the finding itself can be wrong.** The local check
+that put the artifact here fails identically for "the bytes are corrupt" and "the volume was
+not mounted when the check ran", and an unmounted volume takes every `COMPLETE` artifact in
+the backup set down with it. If the file is there and reads correctly now, ask the manager to
+re-check it and trust it again rather than treating this as a loss:
 
-1. Query for the next-newest row in `COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE` for
-   the same backup set (same query as Step 2, drop the `LIMIT 1` and look further down, or
+```
+POST /api/v1/quarantine/<source>/<set>/<name>/reinstate
+```
+
+It re-runs the checks itself and only moves the artifact if they pass and the evidence is
+conclusive (a recorded hash the copy still matches, or the backup set's validator running and
+passing now). A reinstated artifact goes back to `COMPLETE` and counts as a restore point
+again. See `docs/adr/0004-reinstating-a-quarantined-backup.md`.
+
+If the local copy really is bad, the backup is gone. What to actually do then:
+
+1. Query for the next-newest row in `COMMITTED`, `REMOTE_DELETE_PENDING`, `COMPLETE` or
+   `REMOTE_RETAINED` for the same backup set (same query as Step 2, drop the `LIMIT 1` and look further down, or
    add `AND state != 'QUARANTINED_LOST'` if it's mixed in with rows you do want). Restore
    from that instead.
 2. Treat the gap as a real, permanent loss of that specific restore point when you report
@@ -195,31 +224,93 @@ That's a real operational consequence, not a cosmetic one:
 
 ## Step 6: retention decided this backup should be deleted, but it's still there
 
-That's expected, not a bug, for two independent reasons documented in the README's
-[Retention](../README.md#retention) section:
+That's expected, not a bug. A verdict and a deletion are two different things here, and
+nothing crosses between them on its own. The README's [Retention](../README.md#retention)
+section is the longer version:
 
 - `core/internal/retention.GFSDecide` only classifies artifacts into keep/not-kept-by-GFS. It
   contains no deletion code at all. A `Keep: false` verdict is a candidate, not an order.
-- There is no code path anywhere in this repository that deletes a local file yet (FR-20,
-  issue #21, the mandatory dry-run local deletion safety, is open). Local disk usage only
-  grows today; nothing prunes it automatically.
-- Last-known-good protection (FR-19, issue #20) is also not implemented, so don't rely on
-  "the newest good backup is protected" as a reason retention hasn't touched something,
-  either. Nothing is currently touching anything.
+- Deletion is real, and it is deliberately somewhere else. FR-20 (issue #21) landed in
+  `core/internal/retention/prune.go`: `PruneApply` removes the positively identified local
+  file, and since #239 the object on a storage medium beside it. FR-19's last-known-good
+  protection (issue #20) landed with it and does protect the newest good backup.
+- Nothing schedules that. The only thing that runs `PruneApply` is the API's retention
+  preview/apply pair (`core/service`): `PreviewRetention` issues a `plan_id`, and
+  `ApplyRetentionPlan` deletes only against that `plan_id`, and only while the plan it
+  re-derives still matches the one an administrator reviewed. No cycle, no daemon and no
+  timer ever calls it, so local disk usage grows until somebody applies a plan.
+- `backup-manager retention` is a preview in both of its modes and deletes nothing, with or
+  without `--dry-run`. That is not a gap waiting to be filled: a CLI that deleted backups
+  without the `plan_id` confirmation the HTTP path insists on would be a second, weaker
+  authorisation path to the same act (issue #431).
 
-If local disk usage is a concern before #21 lands, that's a manual housekeeping problem
-today, and the GFS verdicts above (`GFSDecide`, callable against the journal) are the
-closest thing to a source of truth for "what would be safe to remove," not a live guarantee
-that removal is happening or will happen automatically.
+So if a file survives a `Keep: false` verdict, the question is who was supposed to apply the
+plan, not whether deletion works. The verdicts above are the source of truth for "what would
+be safe to remove"; applying them is somebody's deliberate act through the API.
+
+## Step 7: the newest row is `FAILED` and nothing is happening
+
+`FAILED` means an attempt did not finish. It does **not** mean the backup is bad, and it is
+not the same thing as quarantine: quarantine is where a backup waits for somebody to decide
+whether it can be trusted, and `FAILED` is where one stopped part-way.
+
+Nothing moves it on its own, and that is deliberate rather than an oversight. Re-running the
+attempt means re-running the transfer, which for most backups means downloading the whole
+thing again, and there is nothing recorded on a failed row that says whether the cause has
+cleared. A manager that guessed would spend that download on a coin flip. So it waits for
+you.
+
+First, read why:
+
+```
+backup-manager artifacts production/postgres/dump-2026-09-04.zst
+```
+
+The `reason` line is the literal sentence the manager recorded at the moment it gave up.
+Three shapes come up most:
+
+- **A transient failure that ran out of attempts** ("copy failed: transient: ..."). The
+  source was unreachable or the link dropped. If it is back, there is nothing else to fix.
+- **A final-name collision.** A file is already sitting where this backup's final copy
+  belongs. Move or remove it first; a retry re-checks before it copies a byte, so retrying
+  without dealing with it costs nothing and changes nothing.
+- **A hash policy the backend cannot serve** ("hash verification required (sha256) but the
+  backend could not supply a comparable remote hash"). This one will not clear on its own,
+  and a retry against an unchanged configuration will download the whole backup again and
+  reach the identical verdict. Change `validation.hash`, or configure an application
+  validator, *before* you retry. See `docs/ssh-setup.md`: a hardened SFTP account cannot
+  compute a remote hash at all, by design.
+
+Then put it back into the pipeline:
+
+```
+backup-manager retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
+```
+
+That moves the row from `FAILED` to `DISCOVERED` and the next cycle picks it up like any
+other new backup. The note is recorded with the transition, so if the same backup fails
+again, whoever looks next can see what was tried. The count of attempts spent on the backup
+goes up by one, which is the same counter a release from quarantine moves, so a backup that
+keeps coming back here is visible as one rather than looking like a fresh failure every
+time.
+
+It is safe from every way a backup can reach `FAILED`, and the reason is worth knowing:
+`FAILED` is only reachable *before* the local copy is committed, so the remote source has
+never been deleted and is presumptively still there to fetch again. The retry touches no
+remote object and removes no durable copy.
+
+The one thing it refuses is a backup whose backup set is no longer in the configuration.
+Sending it back to a set no cycle walks would leave it somewhere nothing picks up and no
+recovery path reaches. Create a backup set with the same source and name first.
 
 ## Quick reference
 
 | Symptom in the journal | Meaning | What to do |
 |---|---|---|
-| Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`, recent | Healthy | Nothing |
+| Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`/`REMOTE_RETAINED`, recent | Healthy | Nothing |
 | No good row inside `stale_after` | Stale | Investigate why new backups aren't landing |
-| `FAILED`, no `next_retry_at` | Retry budget exhausted | Human intervention needed |
+| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backup-manager retry <id>` (Step 7) |
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |
 | Newest good row is `QUARANTINED` | Content suspect, source may still exist | Manual re-fetch or re-run reconciliation yourself |
 | `REMOTE_DELETE_PENDING` stuck, `remote_delete_error` set | Expected refusal under a hardened SFTP account | Monitor remote disk directly; this is not corrupting anything |
-| `Keep: false` from GFS but the file is still there | Expected; nothing deletes local files yet | Manual housekeeping if disk space matters before #21 lands |
+| `Keep: false` from GFS but the file is still there | Expected; a verdict is not a deletion, and nothing applies one on a timer | Apply a retention plan through the API if the space is needed |

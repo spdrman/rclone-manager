@@ -1,3 +1,19 @@
+// These cover the graph, and most of them are written as properties of the
+// TABLE rather than as scenarios.
+//
+// That follows from machine.go's central choice. Because legality is data
+// and not code, a test can walk every state and every edge and make a
+// complete statement, which is a stronger thing than a list of examples:
+// TestFailedIsUnreachableOnceCommitted, say, is not three cases that happen
+// to be refused, it is the claim that there is no way at all to fail out of
+// a committed backup.
+//
+// Several tests exist to catch the failure that a table makes easy, which is
+// a state or an edge added without anyone thinking about the rest of the
+// graph. TestEveryStateParticipatesInTheGraph and
+// TestTransitionsTableIsWellFormed are that guard, and the entry-point and
+// exit tests below pin the individual answers so a new edge into
+// QUARANTINED, say, has to be argued rather than merely appended.
 package lifecycle
 
 import (
@@ -16,6 +32,14 @@ func stateSet(states []State) map[State]bool {
 	return m
 }
 
+// sortedStrings renders a state slice for a failure message.
+//
+// The sort is for the message only, never for the comparison: these
+// assertions are about set membership, and sorting the two sides and
+// comparing them would additionally pin an order the graph does not
+// promise. What it buys is that two failures of the same test print the same
+// way, so a diff between runs is about the states and not about their
+// order.
 func sortedStrings(states []State) []string {
 	out := make([]string, len(states))
 	for i, s := range states {
@@ -25,6 +49,16 @@ func sortedStrings(states []State) []string {
 	return out
 }
 
+// assertStateSet compares two state slices as sets and reports every
+// difference, in both directions, in one run.
+//
+// Reporting both directions matters more than it looks. An edge added to the
+// table and an edge removed from it are different mistakes with different
+// fixes, and a helper that stopped at the first discrepancy would make a
+// change that did both look like only one of them. The duplicate check is
+// separate for the same reason: a duplicated member makes the set smaller
+// than the slice, which would otherwise hide a genuinely missing state
+// behind a coincidentally matching count.
 func assertStateSet(t *testing.T, label string, got []State, want ...State) {
 	t.Helper()
 	gotSet, wantSet := stateSet(got), stateSet(want)
@@ -45,6 +79,16 @@ func assertStateSet(t *testing.T, label string, got []State, want ...State) {
 
 // --- the table itself is well formed ---
 
+// TestTransitionsTableIsWellFormed checks the table's own hygiene before
+// any test reads meaning out of it.
+//
+// The self-loop refusal is the one carrying a decision rather than a
+// sanity check. Validate treats current == target as an idempotent no-op
+// whether or not the pair is declared, because a crash matrix that kills the
+// process after every state means a step routinely retries a move that
+// already landed. Declaring self-loops as well would be a second statement
+// of the same rule, and the two would drift the first time somebody added a
+// state and remembered only one of them.
 func TestTransitionsTableIsWellFormed(t *testing.T) {
 	seen := map[Transition]bool{}
 	for _, tr := range Transitions {
@@ -74,6 +118,12 @@ func TestDeclaredTransitionsValidate(t *testing.T) {
 	}
 }
 
+// TestEveryStateParticipatesInTheGraph catches a state constant that was
+// declared and then never wired up. Such a state is not inert: Valid reports
+// true for it, so the journal would accept it in a row and ParseState would
+// read it back, while nothing could ever legally enter or leave it. An
+// artifact that reached it would be stuck with no way forward, which is the
+// one outcome this machine is built to make impossible.
 func TestEveryStateParticipatesInTheGraph(t *testing.T) {
 	touched := map[State]bool{}
 	for _, tr := range Transitions {
@@ -120,7 +170,7 @@ func TestIllegalTransitionsFail(t *testing.T) {
 		{Quarantined, QuarantinedLost},    // quarantine can't declare loss without going through Complete
 		{Complete, Committed},             // terminal can't rewind
 		{RemoteDeletePending, Discovered}, // can't abandon a delete-pending mid-flight back to the start
-		{QuarantinedLost, Discovered},     // terminal by design, see TestCompleteCannotLivelockThroughQuarantine
+		{QuarantinedLost, Discovered},     // no route back into the pipeline, see TestCompleteCannotLivelockThroughQuarantine
 		{QuarantinedLost, Quarantined},    // no route from the unrecoverable outcome to the recoverable one
 	} {
 		err := Validate(tc.from, tc.to)
@@ -134,6 +184,15 @@ func TestIllegalTransitionsFail(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsUnknownStates checks both argument positions, because
+// they fail for different reasons and one implementation could easily
+// validate only the target.
+//
+// An unknown CURRENT state is the more important half: that is what a
+// corrupted or drifted journal row looks like, and treating it as merely
+// "not in the table" would report an illegal transition when the real
+// problem is that the row does not say anything this build understands. The
+// error type is asserted for that reason, since callers route on it.
 func TestValidateRejectsUnknownStates(t *testing.T) {
 	if err := Validate(State("BOGUS"), Discovered); err == nil {
 		t.Error("Validate with an unknown current state accepted")
@@ -159,12 +218,12 @@ func TestOnlyCommittedPrecedesRemoteDeletePending(t *testing.T) {
 
 	for _, s := range AllStates {
 		err := Validate(s, RemoteDeletePending)
-		switch {
-		case s == Committed:
+		switch s {
+		case Committed:
 			if err != nil {
 				t.Errorf("Validate(COMMITTED, REMOTE_DELETE_PENDING) = %v, want nil", err)
 			}
-		case s == RemoteDeletePending:
+		case RemoteDeletePending:
 			// The idempotent no-op case, not a "predecessor" in the graph
 			// sense: re-recording the same intent must still succeed.
 			if err != nil {
@@ -191,12 +250,12 @@ func TestOnlyCompletePrecedesQuarantinedLost(t *testing.T) {
 
 	for _, s := range AllStates {
 		err := Validate(s, QuarantinedLost)
-		switch {
-		case s == Complete:
+		switch s {
+		case Complete:
 			if err != nil {
 				t.Errorf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
 			}
-		case s == QuarantinedLost:
+		case QuarantinedLost:
 			if err != nil {
 				t.Errorf("Validate(QUARANTINED_LOST, QUARANTINED_LOST) = %v, want nil (idempotent)", err)
 			}
@@ -210,6 +269,13 @@ func TestOnlyCompletePrecedesQuarantinedLost(t *testing.T) {
 
 // --- FAILED: defined entry points, defined exits ---
 
+// TestFailedEntryPoints pins the exact set, not just that some states can
+// fail.
+//
+// Pinning the whole set is what makes the companion test below meaningful:
+// together they say FAILED is reachable from precisely the six states before
+// COMMITTED and from nowhere else, which is a claim about the entire graph
+// rather than about six examples.
 func TestFailedEntryPoints(t *testing.T) {
 	assertStateSet(t, "Predecessors(Failed)", Predecessors(Failed),
 		Discovered, Transferring, Transferred, Verifying, Verified, Committing)
@@ -225,6 +291,11 @@ func TestFailedIsUnreachableOnceCommitted(t *testing.T) {
 	}
 }
 
+// TestFailedHasExits checks for emptiness first and then for the exact set,
+// and the order is deliberate: an empty result would satisfy the set
+// comparison's "no unexpected members" half, so without the length check the
+// worst possible outcome, a FAILED artifact with nowhere to go, would pass
+// half of this test.
 func TestFailedHasExits(t *testing.T) {
 	exits := Successors(Failed)
 	if len(exits) == 0 {
@@ -235,34 +306,94 @@ func TestFailedHasExits(t *testing.T) {
 
 // --- QUARANTINED: defined entry points, defined exits, no shortcut back to success ---
 
+// TestQuarantinedEntryPoints pins which states may quarantine, with the
+// reasoning for each written out inline because the absences carry as much
+// weight as the presences: COMPLETE is excluded here on purpose, since by
+// then the remote is confirmed gone and that case has to route to
+// QUARANTINED_LOST instead.
 func TestQuarantinedEntryPoints(t *testing.T) {
 	// VERIFYING: a validator found the content itself invalid.
 	// COMMITTED / REMOTE_DELETE_PENDING: reconciliation found the durable,
 	// final-named local copy corrupted after the fact, but before the
 	// remote delete has actually happened, so a source may still exist.
+	// REMOTE_RETAINED (issue #315): the same finding, for a retained,
+	// read-only-source artifact this manager was never going to delete
+	// the remote copy of anyway; the remote is presumptively still there
+	// since it was never touched, on purpose.
 	// COMPLETE is deliberately excluded here: by then the remote is
 	// confirmed gone, so that case routes to QUARANTINED_LOST instead (see
 	// TestOnlyCompletePrecedesQuarantinedLost).
 	// FAILED: the retry budget is exhausted and this needs a human instead
 	// of another automatic attempt.
 	assertStateSet(t, "Predecessors(Quarantined)", Predecessors(Quarantined),
-		Verifying, Committed, RemoteDeletePending, Failed)
+		Verifying, Committed, RemoteDeletePending, RemoteRetained, Failed)
 }
 
+// QUARANTINED has exactly three exits, and they answer two different
+// questions. DISCOVERED re-ingests: throw the local copy away and fetch the
+// artifact again from the remote, which is the right answer when the local
+// copy really is bad. COMMITTED and REMOTE_RETAINED (issue #315) each
+// reinstate: keep the local copy and trust it again, which is the right
+// answer when the local copy is provably intact and the remote may be gone
+// (issue #220) or is retained by policy and was never examined (issue
+// #315). Neither reinstatement target is automatic; both are operator
+// decisions gated on evidence that could have failed, and both forfeit the
+// artifact's remote delete permanently (see quarantine.go and
+// remotedelete.go). Which of the two applies to one specific artifact is
+// resolved per artifact, from its own history, not by this table: see
+// quarantine.go's quarantineOrigins.
 func TestQuarantinedHasExits(t *testing.T) {
 	exits := Successors(Quarantined)
 	if len(exits) == 0 {
 		t.Fatal("QUARANTINED has no declared successors; an artifact that's quarantined would be stuck there forever, which is a leak")
 	}
-	assertStateSet(t, "Successors(Quarantined)", exits, Discovered)
+	assertStateSet(t, "Successors(Quarantined)", exits, Discovered, Committed, RemoteRetained)
+}
+
+// HasReinstatementExit only promises existence, never a resolved target
+// (see its own doc for why that is all it is safe to promise now that
+// QUARANTINED declares two reinstatement edges). This pins down that
+// existence answer for both quarantine states and for a sample of states
+// that were never quarantined at all.
+func TestHasReinstatementExit(t *testing.T) {
+	cases := []struct {
+		from State
+		want bool
+	}{
+		{Quarantined, true},
+		{QuarantinedLost, true},
+		{Discovered, false},
+		{Verifying, false},
+		{Failed, false},
+		{Committed, false},
+		{Complete, false},
+	}
+	for _, c := range cases {
+		if got := HasReinstatementExit(c.from); got != c.want {
+			t.Errorf("HasReinstatementExit(%s) = %v, want %v", c.from, got, c.want)
+		}
+	}
 }
 
 // The hole this whole package exists to close: a quarantined artifact must
-// never be able to silently resume the happy path. Its only way out is
-// DISCOVERED, which forces a full re-run of transfer, verification and
-// commit, never a shortcut straight back to something that looks done.
+// never be able to silently resume the happy path.
+//
+// Issue #220 added one exit that does return an artifact to a state that
+// "looks done", QUARANTINED -> COMMITTED, and it is deliberately not in
+// the list below. What keeps the guarantee intact is that the table alone
+// is no longer the whole proof for that one edge: nothing in this package
+// records it except ReinstateFromQuarantine, which refuses without
+// evidence that could have failed (see quarantine.go), and an artifact
+// that takes it can never reach REMOTE_DELETE_PENDING again, because
+// DeleteRemote refuses every reinstated artifact outright (remotedelete.go,
+// TestDeleteRemoteRefusesAnArtifactReinstatedFromQuarantine).
+//
+// Everything else this test named still holds exactly as it did, including
+// the two that matter most: quarantine cannot re-enter the middle of the
+// pipeline, and it cannot reach REMOTE_DELETE_PENDING or COMPLETE, the two
+// states that stand between an artifact and a destroyed remote source.
 func TestQuarantineCannotShortcutToSuccess(t *testing.T) {
-	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Complete, QuarantinedLost} {
+	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, RemoteDeletePending, Complete, QuarantinedLost} {
 		if err := Validate(Quarantined, target); err == nil {
 			t.Errorf("Validate(QUARANTINED, %s) = nil, want an error: quarantine must not shortcut back onto the happy path", target)
 		}
@@ -289,55 +420,89 @@ func TestCompleteCannotLivelockThroughQuarantine(t *testing.T) {
 	if err := Validate(Complete, QuarantinedLost); err != nil {
 		t.Fatalf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
 	}
-	// ...and QUARANTINED_LOST must have no way back into the graph at all,
-	// which is what actually breaks the loop: there is nothing left to
-	// retry, so nothing can cycle.
-	if successors := Successors(QuarantinedLost); len(successors) != 0 {
-		t.Fatalf("QUARANTINED_LOST has successors %v, want none: any exit here re-creates the livelock this state exists to prevent", successors)
+	// ...and QUARANTINED_LOST must have no way back into the PIPELINE,
+	// which is what actually breaks the loop. Its one exit (issue #220) is
+	// back to COMPLETE, the state it came from: an operator who can prove
+	// the durable local copy is intact after all gets the restore point
+	// back. That cannot cycle the way a DISCOVERED exit would. Re-entering
+	// COMPLETE re-attempts nothing, since the pipeline stops there and
+	// reconciliation's COMPLETE row only re-reads the local copy, and
+	// getting there at all needs both a passing check and a deliberate
+	// operator action, where the loop this test exists to prevent needed
+	// neither.
+	assertStateSet(t, "Successors(QuarantinedLost)", Successors(QuarantinedLost), Complete)
+	for _, forbidden := range []State{Discovered, Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Failed} {
+		if err := Validate(QuarantinedLost, forbidden); err == nil {
+			t.Errorf("Validate(QUARANTINED_LOST, %s) = nil, want an error: the one exit is back to the state it came from, never into the pipeline", forbidden)
+		}
 	}
 }
 
-// --- no state is a dead end, except the one that's terminal on purpose ---
+// --- no state is a dead end, and two move only when an operator says so ---
 
-// terminalByDesign lists states this package deliberately gives no
-// automatic exit. Landing in one of these is not "the artifact is stuck"
-// in the sense the issue calls a design bug; it's a hard stop that
-// surfaces as an operator-visible alarm (FR-24) instead of an automatic
-// retry, because there is genuinely nothing left for an automatic retry to
-// do. QUARANTINED_LOST is the only member: it means the remote source is
-// confirmed gone (only COMPLETE precedes it) and the local copy has also
-// gone bad, so retrying would only rediscover nothing and fail again. See
-// TestCompleteCannotLivelockThroughQuarantine for the loop this avoids.
-var terminalByDesign = map[State]bool{
+// noAutomaticExit lists the states this package deliberately gives no
+// AUTOMATIC exit: every edge out of one of them is recorded by an
+// operator-triggered use case and by nothing else, never by the cycle, the
+// scheduler, or a retry policy. Landing in one is not "the artifact is
+// stuck" in the sense the issue calls a design bug; it is a hard stop that
+// surfaces as an operator-visible alarm (FR-24) and waits for a human.
+//
+// This replaced an earlier "terminalByDesign" map holding QUARANTINED_LOST
+// alone, when that state had no declared successors at all. Issue #220
+// gave it exactly one, back to the COMPLETE it came from, so the property
+// worth pinning is no longer "has no exits" but "has no exit anything
+// automatic can take", which is the property both quarantine states have
+// always actually had. The successor sets themselves are pinned exactly,
+// by TestQuarantinedHasExits and TestCompleteCannotLivelockThroughQuarantine,
+// so this map cannot quietly absorb a new edge.
+var noAutomaticExit = map[State]bool{
+	Quarantined:     true,
 	QuarantinedLost: true,
 }
 
 // "The artifact is stuck" is a design bug per the issue, so prove it can't
-// happen for anything other than the one state that's terminal on purpose,
-// and prove that state really is exactly as terminal as declared.
+// happen: every state has somewhere to go, and the two that only an
+// operator can move are exactly the two that say so.
 func TestNoStateIsALeak(t *testing.T) {
 	for _, s := range AllStates {
 		successors := Successors(s)
-		if terminalByDesign[s] {
-			if len(successors) != 0 {
-				t.Errorf("%q is listed as terminal by design but has successors %v; update terminalByDesign or Transitions, they've drifted apart", s, successors)
-			}
-			continue
-		}
 		if len(successors) == 0 {
-			t.Errorf("%q has no declared successors and is not in terminalByDesign; an artifact reaching it would be stuck there forever with no documented reason", s)
+			t.Errorf("%q has no declared successors; an artifact reaching it would be stuck there forever with no documented reason", s)
+		}
+	}
+	for s := range noAutomaticExit {
+		if !IsQuarantineState(s) {
+			t.Errorf("%q is listed as having no automatic exit but is not a quarantine state; the two lists have drifted apart", s)
+		}
+	}
+	for _, s := range AllStates {
+		if IsQuarantineState(s) && !noAutomaticExit[s] {
+			t.Errorf("%q is a quarantine state but is not listed in noAutomaticExit; every way out of quarantine must be an operator decision", s)
 		}
 	}
 }
 
 // --- Machine: the ergonomic, stateful wrapper ---
 
+// TestNewMachineRejectsUnknownState pins that a Machine cannot be built
+// around a state name nobody defined. The constructor is where a value read
+// out of the journal becomes a walkable position, so accepting an
+// unrecognised one would mean every later Apply reasoned about a state the
+// table has no rows for and refused everything for the wrong reason.
 func TestNewMachineRejectsUnknownState(t *testing.T) {
 	if _, err := NewMachine(State("BOGUS")); err == nil {
 		t.Fatal("NewMachine accepted an unknown state")
 	}
 }
 
+// TestMachineWalksTheNominalPath drives DISCOVERED to COMPLETE one step at
+// a time, which is the happy path FR-11 describes.
+//
+// The changed flag is asserted on every step, not just the final state. That
+// is what separates this from the idempotence test below it: a genuinely new
+// move must report changed, and a repeat must not, and an implementation
+// that always reported one or the other would satisfy exactly one of the two
+// tests.
 func TestMachineWalksTheNominalPath(t *testing.T) {
 	m, err := NewMachine(Discovered)
 	if err != nil {

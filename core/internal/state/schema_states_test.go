@@ -1,3 +1,18 @@
+// One check, in an external test package: the states the journal's CHECK
+// constraint accepts are exactly the states internal/lifecycle defines.
+//
+// It is external so this package does not grow a production dependency on
+// lifecycle just to be checked. The dependency runs the other way in
+// production, which is why the two can drift at all: lifecycle names the
+// vocabulary, the journal's schema enforces a copy of it, and nothing
+// connects them at compile time.
+//
+// That drift has happened. QUARANTINED_LOST was added to the state machine
+// while the schema still listed eleven states, and every build and test in
+// this repository stayed green. The first symptom would have been a
+// constraint violation at the moment something tried to record irrecoverable
+// data loss.
+
 package state_test
 
 import (
@@ -75,6 +90,15 @@ func TestJournalAcceptsExactlyTheStatesTheMachineDefines(t *testing.T) {
 	}
 }
 
+// insertWithState tries to write an artifact row carrying state s and
+// reports whether the database accepted it.
+//
+// It returns a bool rather than failing, because both answers are the
+// result: the test asks it about every state the machine defines (each must
+// be accepted) and about states it does not (each must be refused). It also
+// probes the live constraint by attempting a write, rather than re-reading
+// the .sql file, so what is being checked is what the migrations actually
+// produced and not what they claim.
 func insertWithState(t *testing.T, db *sql.DB, s string) bool {
 	t.Helper()
 	_, err := db.Exec(

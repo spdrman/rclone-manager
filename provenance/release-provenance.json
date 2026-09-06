@@ -1,0 +1,260 @@
+{
+  "schema": "backup-manager/release-provenance/1",
+  "note": [
+    "Generated. Do not hand-edit: run `go run ./cmd/provenance -write` from apps/common.",
+    "",
+    "The compliance half of the release record. container/release-manifest.json is",
+    "the other half, and it is a separate file because it records what a",
+    "two-architecture Docker build produced and nothing else: adding a field to it",
+    "that no build produces would need either a rebuild to change one string, or a",
+    "no-build write path into the file that carries the build record, and the second",
+    "is a hole in exactly the guard #174 put there.",
+    "",
+    "releaseManifest.sha256 is what stops the two halves drifting. Regenerating the",
+    "manifest without regenerating this bundle changes that digest and",
+    "TestProvenanceBundleIsTiedToTheReleaseManifest goes red."
+  ],
+  "semanticVersion": "0.3.0",
+  "imageReference": "ghcr.io/spdrman/backup-manager:0.3.0",
+  "releaseManifest": {
+    "path": "container/release-manifest.json",
+    "sha256": "9c5e84183f1e3f2cd035e266443b9dc2b9861130af86e161116a263b55929926",
+    "commit": "a3552517e4b89ba4e9396f863a3811c1fe67cbb4",
+    "recordedBuildVersion": "0.3.0",
+    "architectures": [
+      "amd64",
+      "arm64"
+    ],
+    "published": false,
+    "registryDigests": {
+      "amd64": null,
+      "arm64": null
+    },
+    "versionIsABuildStamp": false
+  },
+  "license": {
+    "spdxId": "Apache-2.0",
+    "file": {
+      "path": "LICENSE",
+      "sha256": "c280b11a4727ba0a4df3946833798978cbd581bb48696e548b6af6bbf4e71b35"
+    },
+    "notice": {
+      "path": "NOTICE",
+      "sha256": "c6c503b714051e9e9d4663044cb4b07ee0ba306b89c4aea1af8ab55f3a05b6e5"
+    },
+    "inventory": {
+      "path": "provenance/third-party-licenses.json",
+      "sha256": "42f094bf3ee8ec9451b9321af9d716dd3f6c68073e8b0f746c363b8e875c2790",
+      "format": "backup-manager/third-party-licenses/1"
+    },
+    "componentCount": 97
+  },
+  "sbom": {
+    "path": "provenance/sbom.spdx.json",
+    "sha256": "09bc7427da4dcfb9414fc6f6260f1cd6287f10e314b54d01c357db091ebecc5c",
+    "format": "SPDX-2.3"
+  },
+  "checksums": {
+    "path": "provenance/checksums.txt",
+    "sha256": "1e6cef3a09d5647d2613abb85694dd1ea6647a8e502ae783b4d7cb2c2098cbe5",
+    "format": "sha256sum"
+  },
+  "artifacts": [
+    {
+      "target": "casaos",
+      "path": "apps/casaos/compose/backup-manager.yml",
+      "sha256": "7d580097db1c7e1c5c1911e46dc90a59388e4c9155a3ef9eeae2c8458a5500c7"
+    },
+    {
+      "target": "casaos",
+      "path": "apps/casaos/icon.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
+    {
+      "target": "openmediavault",
+      "path": "apps/openmediavault/compose/backup-manager.env",
+      "sha256": "bc8af37e58db79d905bd5af8ebeaaad37fc0574899e7ed109d2c1d4cb274c508"
+    },
+    {
+      "target": "openmediavault",
+      "path": "apps/openmediavault/compose/backup-manager.yml",
+      "sha256": "6bf596a86e2c5b208db74e66127e3e17a2295980c3986492f677acad4a8c8936"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/compose/backup-manager.env",
+      "sha256": "c9752b6a31a193b5ab1d5bf47fa6738c6580f3a8f216543b7ae4cf38a243a464"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/compose/backup-manager.yml",
+      "sha256": "61b2c46d064788597f202458771740293bf57e2837d08ce0680f44fdc9163673"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/logo.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/templates.json",
+      "sha256": "1713172584d707b16af51812bfaab13a111dfa20e33b21f07c972c73f2f4d8ed"
+    },
+    {
+      "target": "proxmox",
+      "path": "apps/proxmox/compose/backup-manager.env",
+      "sha256": "8961b96b236a4a277dde637e86f6ae1133c7544150fa279191ffa4e6dd003b13"
+    },
+    {
+      "target": "proxmox",
+      "path": "apps/proxmox/compose/backup-manager.yml",
+      "sha256": "87ebc819cd3ff51f244f29d38842b50afff168f85cecb169026c5e3d6c121cba"
+    },
+    {
+      "target": "truenas",
+      "path": "apps/truenas/catalog/app.yaml",
+      "sha256": "4371def0a237eb5225fe869eccfaa3bb40576a5bc5fc5b0ca021bf71d846c261"
+    },
+    {
+      "target": "truenas",
+      "path": "apps/truenas/catalog/ix_values.yaml",
+      "sha256": "0ba556c4f500259db01ee901d62a4cc15ea8bde8cf3ca561b1a52104ca68dcf7"
+    },
+    {
+      "target": "truenas",
+      "path": "apps/truenas/catalog/questions.yaml",
+      "sha256": "da45568b97cbcac0f51474dc2699959d08b9f58f6cbb29bef2d2e8d7b97911ef"
+    },
+    {
+      "target": "truenas",
+      "path": "apps/truenas/catalog/templates/docker-compose.yaml",
+      "sha256": "9262c23adcd281dbf2aaead6dae88f296f5207b183dab95eaafcb20a87fbbe10"
+    },
+    {
+      "target": "truenas",
+      "path": "apps/truenas/compose/backup-manager.yaml",
+      "sha256": "2e438c0fdc3add47e81ab4d97c2428e510b1ab0cc293e4f1b498c6afc597ae05"
+    },
+    {
+      "target": "unraid",
+      "path": "apps/unraid/template/backup-manager-ui.xml",
+      "sha256": "8c6ce9dd50a9ea5651098d132df974b258ac560e994590147c8f81a43d065efc"
+    },
+    {
+      "target": "unraid",
+      "path": "apps/unraid/template/backup-manager.xml",
+      "sha256": "5570cca2c73095c530e61abad0d3b3ce01cea1518fccd90c0e6cadae954e3f71"
+    },
+    {
+      "target": "zimaos",
+      "path": "apps/zimaos/compose/backup-manager.yml",
+      "sha256": "0d873c345f02e2781f9c7bf16f8c813d82fbcc439ca69097248b7c789a073450"
+    },
+    {
+      "target": "zimaos",
+      "path": "apps/zimaos/icon.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
+    {
+      "target": "generic",
+      "path": "container/.env.example",
+      "sha256": "44516790cbbebfed6826f115d23d9d87faa2f3c317eb45818b3878b4346656cf"
+    },
+    {
+      "target": "generic",
+      "path": "container/Dockerfile",
+      "sha256": "3770ef6ab3fa93b66b329d9f7c95265e6c5e22867cf40a7eec225d0a7abe869b"
+    },
+    {
+      "target": "generic",
+      "path": "container/compose.yaml",
+      "sha256": "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+    }
+  ],
+  "unbuiltTargets": [
+    {
+      "target": "dockge",
+      "reason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
+    },
+    {
+      "target": "synology",
+      "reason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json, and it owns getting LICENSE, NOTICE and provenance/third-party-licenses.json into the package too: the .spk installs the binaries natively and never pulls the canonical image, so the image's /licenses reaches nobody who installed this way"
+    },
+    {
+      "target": "ugos",
+      "reason": "the shipped artifact is a .upk, packed by ugcli against a known canonical image digest; that build is EPIC D's #83 and its App Center submission is #178, neither of which happens in this repository's gate"
+    }
+  ],
+  "links": {
+    "publiclyReachable": true,
+    "reason": "the source repository is public, so every declared link resolves for a reviewer outside the project"
+  },
+  "signing": {
+    "status": "unsigned",
+    "method": "sigstore-keyless",
+    "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release",
+    "transparencyLog": "https://rekor.sigstore.dev",
+    "note": [
+      "Nothing has been pushed to ghcr.io/spdrman/backup-manager:0.3.0, so there is no digest to sign and no signature to verify.",
+      "The mechanism is scripts/release/publish-image.sh; the key design is in docs/compliance/release-provenance.md.",
+      "There is no signing key to store, rotate or leak: the workflow's OIDC identity is exchanged for a short-lived Fulcio certificate at signing time."
+    ]
+  },
+  "performance": {
+    "note": [
+      "#81 asks that the refactor's performance evidence travel with the release",
+      "rather than staying in the issues that produced it. The seven metric names",
+      "below are pinned as a set so one cannot be dropped quietly; the values are",
+      "carried forward, never measured here.",
+      "",
+      "All seven read pending today, honestly: #165 captures the baselines and",
+      "#167/#170 record the after numbers, and none of the three has merged to main.",
+      "A pending slot is not a satisfied criterion and this file does not claim it",
+      "is - what it buys is that the gap is enumerated and named rather than absent."
+    ],
+    "metrics": [
+      {
+        "id": "idle-rss",
+        "unit": "bytes",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "startup-to-healthy",
+        "unit": "seconds",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "api-read-latency",
+        "unit": "ms",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "config-write-latency",
+        "unit": "ms",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "transfer-throughput",
+        "unit": "MiB/s",
+        "value": null,
+        "source": "#165 baseline, #170 after"
+      },
+      {
+        "id": "image-size",
+        "unit": "bytes",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "idle-cpu",
+        "unit": "percent",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      }
+    ]
+  }
+}

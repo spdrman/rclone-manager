@@ -1,3 +1,19 @@
+/**
+ * An SSH host key, shown the way it has to be read before anyone trusts
+ * it.
+ *
+ * The two layouts are the whole component. When nothing has changed, the
+ * fingerprint is one row and the question is simply whether it matches
+ * what the operator can check independently. When it HAS changed, the old
+ * and new values are shown together, in that order, both in full: the
+ * comparison is the point, and a display that showed only the new value
+ * would be asking someone to trust it against a memory.
+ *
+ * Fingerprints break on any character rather than wrapping on word
+ * boundaries, because a base64 digest has no words and a line break in a
+ * convenient-looking place is how two different keys come to look the
+ * same at a glance.
+ */
 export function FingerprintDisplay({
   host,
   algorithm,
