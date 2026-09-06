@@ -374,7 +374,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath)
+	svc, cleanup, err := openBackupService(ctx, *f.cfgPath, writesConfig)
 	if err != nil {
 		return fail(err)
 	}
@@ -406,7 +406,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 // itself once the set is out of the configuration.
 func backupSetRemove(f *backupSetFlags, id string) int {
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *f.cfgPath)
+	svc, cleanup, err := openBackupService(ctx, *f.cfgPath, writesConfig)
 	if err != nil {
 		return fail(err)
 	}
@@ -487,7 +487,7 @@ const defaultStateDatabase = "/data/state/state.db"
 // that already exists, through the same BackupService method POST
 // /api/v1/backup-sets calls.
 func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
-	svc, cleanup, err := openBackupService(ctx, configPath)
+	svc, cleanup, err := openBackupService(ctx, configPath, writesConfig)
 	if err != nil {
 		return fail(err)
 	}

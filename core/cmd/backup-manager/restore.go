@@ -67,7 +67,13 @@ func cmdRestore(args []string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *cfgPath)
+	// readsConfig, not writesConfig: a restore submits a durable
+	// operation into the journal, which is SQLite and shared, so a
+	// running engine sees it at request time exactly as it sees an
+	// artifact. Nothing here rewrites config.yaml, and refusing it
+	// beside a live engine would take away the surface an operator
+	// reaches for when a restore is what they need.
+	svc, cleanup, err := openBackupService(ctx, *cfgPath, readsConfig)
 	if err != nil {
 		return fail(err)
 	}

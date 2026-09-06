@@ -106,7 +106,17 @@ func cmdBackupSetRetention(args []string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *cfgPath)
+	// Which of the three branches below this command lands in is already
+	// decided by here, so the intent is too: --inherit clears a policy
+	// and the policy flags write one, both of which rewrite config.yaml,
+	// while naming neither only prints the policy in force. The switch
+	// below reads the same two values, so the two cannot drift apart
+	// without this line being touched.
+	intent := readsConfig
+	if *inherit || len(named) > 0 {
+		intent = writesConfig
+	}
+	svc, cleanup, err := openBackupService(ctx, *cfgPath, intent)
 	if err != nil {
 		return fail(err)
 	}

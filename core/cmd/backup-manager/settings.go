@@ -67,7 +67,15 @@ func cmdSettings(args []string) int {
 	}
 
 	ctx := context.Background()
-	svc, cleanup, err := openBackupService(ctx, *cfgPath)
+	// The intent is decided from the operand, before anything opens, and
+	// it has to be: `settings` reads and `settings patch` writes, and
+	// only a write is refused beside a running engine (#538,
+	// liveengine.go).
+	intent := readsConfig
+	if patching {
+		intent = writesConfig
+	}
+	svc, cleanup, err := openBackupService(ctx, *cfgPath, intent)
 	if err != nil {
 		return fail(err)
 	}

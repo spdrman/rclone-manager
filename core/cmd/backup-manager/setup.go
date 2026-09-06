@@ -138,9 +138,39 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 // through the exact same persist-then-hot-reload sequence
 // (BackupService.UpdateSettings's own doc) an HTTP PATCH would.
 //
+// intent is issue #538, and it is why this function has an argument
+// openService does not need. Every route that rewrites config.yaml is a
+// *BackupService method, so this is the one door in this binary a
+// configuration write can come through, and a write aimed at a
+// configuration a running engine holds is refused here before anything is
+// opened rather than performed and reported as a success (#535). See
+// liveengine.go for why the check cannot live further in, beside the
+// write itself, and why a read beside a live engine must keep working.
+//
+// openService has no such argument because it structurally cannot write a
+// configuration: it hands back an internal/app.Service built from an
+// already-loaded *config.Config, which carries no path to persist to, and
+// every writeConfigBytesAtomically in core/service hangs off
+// *BackupService. That is a property to re-check rather than assume if
+// internal/app.Service ever grows a configuration path of its own.
+//
 // The returned cleanup func closes the journal (via BackupService.Close);
 // callers should always `defer cleanup()` immediately.
-func openBackupService(ctx context.Context, configPath string) (*service.BackupService, func(), error) {
+func openBackupService(ctx context.Context, configPath string, intent configIntent) (*service.BackupService, func(), error) {
+	switch intent {
+	case readsConfig:
+	case writesConfig:
+		if err := refuseIfAnEngineHoldsTheConfiguration(configPath); err != nil {
+			return nil, func() {}, err
+		}
+	default:
+		// Not reachable from any call site in this package, and it stays
+		// that way by being loud rather than by being permissive: an
+		// unrecognised intent defaulting to "go ahead" is how a new
+		// command would silently reacquire #535.
+		return nil, func() {}, fmt.Errorf("internal: openBackupService was given no intent for %s; a command has to say whether it writes the configuration", configPath)
+	}
+
 	svc, closeFn, err := service.Open(ctx, configPath)
 	if err != nil {
 		return nil, func() {}, err
