@@ -137,10 +137,28 @@ die() {
 }
 
 # A capability this machine does not have is not a failure and is not a
-# pass either. Exit 3, the same status scripts/lib/ci-local-gate.sh uses
-# for INCOMPLETE, so the caller can tell "could not run it" from "ran it
-# and it failed" without parsing prose.
-EXIT_CANNOT_RUN=3
+# pass either. The caller reads that verdict as exit 3, the same status
+# scripts/lib/ci-local-gate.sh uses for INCOMPLETE, so it can tell "could
+# not run it" from "ran it and it failed" without parsing prose.
+#
+# Which is exactly why the verdict does not travel through this script AS
+# 3. The CLI under test now has its own meaning for that status (#551:
+# another process is already serving this deployment), and every `bm` call
+# below runs that CLI under `set -euo pipefail`. One unguarded call
+# meeting that refusal would end this script with the number that means
+# "this machine cannot perform the proof": ci-local.sh would ledger it,
+# the run would end INCOMPLETE, and .husky/pre-commit lets INCOMPLETE
+# commit. The one test anywhere that proves a backup can be pulled off a
+# real machine would have failed and been read as a machine that never
+# tried.
+#
+# Nothing reaches that today. Every `bm` that can meet the refusal is
+# guarded with `|| die`, and the one unguarded command substitution runs
+# `version`, which cannot return 3. But that is safety by review, where it
+# used to be safety by construction, because the CLI had no 3 at all. So
+# the verdict gets a number nothing else here produces, and `finish` below
+# is the single place either number is spoken to the caller.
+EXIT_CANNOT_RUN=97
 cannot_run() {
   echo "" >&2
   echo "==> two-machine: CANNOT RUN. $1" >&2
@@ -306,7 +324,37 @@ teardown() {
 # The status is passed in rather than read from $?, because inside a
 # signal handler $? is the status of whatever command the signal
 # interrupted and says nothing about why the script is ending.
-trap 'teardown $?' EXIT
+#
+# finish, rather than teardown itself, is what EXIT runs, because the
+# status this script leaves with is a translation now and a translation
+# belongs in one place (see EXIT_CANNOT_RUN above for why there is one).
+#
+#   EXIT_CANNOT_RUN  ->  3, the verdict ci-local.sh ledgers.
+#   3                ->  1, because nothing here means 3, so a 3 arriving
+#                        at this trap came from a command with its own
+#                        meaning for it (the CLI's is "another process is
+#                        already serving this deployment"). That is a
+#                        failed proof, and it is reported as one instead
+#                        of borrowing a verdict about the machine.
+#   anything else    ->  itself, untouched.
+finish() {
+  local status="${1:-0}"
+  teardown "$status"
+  case "$status" in
+    "$EXIT_CANNOT_RUN") exit 3 ;;
+    3)
+      echo "" >&2
+      echo "==> two-machine: FAILED. A command exited 3." >&2
+      echo "    This script reserves 3 for the gate's \"this machine could not perform the proof\" verdict and never" >&2
+      echo "    produces it itself, so a 3 here came from something with its own meaning for that status: most" >&2
+      echo "    likely the CLI refusing because another process is already serving the deployment (#551), from a" >&2
+      echo "    bm call with no || die on it. Reported as a failure (1), which is what a proof that did not finish" >&2
+      echo "    is. The run above says which step it died on." >&2
+      exit 1 ;;
+    *) exit "$status" ;;
+  esac
+}
+trap 'finish $?' EXIT
 trap 'teardown 130; exit 130' INT
 trap 'teardown 143; exit 143' TERM
 
@@ -390,6 +438,12 @@ mgr_compose() {
     "$@"
 }
 
+# bm runs the real CLI inside the engine container, so its exit status is
+# the CLI's own. That includes the 3 issue #551 gave it (another process
+# is already serving this deployment), which is the status this script
+# reserves for the gate's "could not run" verdict: see EXIT_CANNOT_RUN
+# above for what keeps the two apart, and scripts/tests/two-machine-exit-status.test.sh
+# for the proof that it does.
 bm() {  # bm <mgr> <prefix> <backup-manager args...>
   local mgr="$1" prefix="$2"; shift 2
   mgr_compose "$mgr" "$prefix" exec -T rclone-manager /backup-manager "$@"
