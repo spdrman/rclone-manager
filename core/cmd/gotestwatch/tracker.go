@@ -98,13 +98,18 @@ type trip struct {
 	// gotestwatch's own watchdog loop asked to be run on, and the worst
 	// it was actually late by over the run.
 	//
-	// That lag is the only reading this tool has on the host itself. The
-	// loop does nothing but wake up and look, so anything it is late by
-	// is the machine declining to run a process that was ready, which is
-	// a fact about the host rather than an inference from the test
-	// stream. Zero pollInterval means nothing measured it (the synthetic
-	// clock tests, mostly) and the sentence is left out rather than
-	// printed as a reading of zero.
+	// That lag is the closest this tool gets to a reading of the machine
+	// rather than of the run, and it is worth being exact about how
+	// close. run.go's pollLag subtracts the loop's own turn, which takes
+	// the tracker's mutex and can therefore be blocked by the goroutine
+	// draining `go test`'s stdout, so what is left is the host not
+	// running a process that was parked and ready. What it cannot
+	// subtract is gotestwatch's own GC pauses, and the subtraction is
+	// conservative besides, so this is a ceiling on what the host took
+	// and not an exact figure (pollLag has the arithmetic and why both
+	// errors point the safe way). Zero pollInterval means nothing
+	// measured it (the synthetic clock tests, mostly) and the sentence is
+	// left out rather than printed as a reading of zero.
 	pollInterval time.Duration
 	worstPollLag time.Duration
 
@@ -172,8 +177,12 @@ func (tr trip) String() string {
 	}
 	host := ""
 	if tr.pollInterval > 0 {
-		host = fmt.Sprintf(" gotestwatch's own watchdog loop asked for a turn every %s and was late by up to %s over this run, which is what the host was giving a process that does nothing but wake up and look.",
-			tr.pollInterval.Round(time.Millisecond), tr.worstPollLag.Round(time.Microsecond))
+		// The percentage is not decoration. A bare "late by up to
+		// 1.019ms" is a number nobody can judge; the same number as 2%
+		// of the interval it was late for says at a glance that this
+		// host was fine, and 300% says it was not.
+		host = fmt.Sprintf(" gotestwatch's own watchdog loop asked for a turn every %s and the worst it was run late by was %s, %s of that interval: time the host had it parked and ready, with the loop's own work taken out but not its GC pauses, so read it as a ceiling rather than an exact reading.",
+			tr.pollInterval.Round(time.Millisecond), tr.worstPollLag.Round(time.Microsecond), shareOf(tr.worstPollLag, tr.pollInterval))
 	}
 	var out string
 	switch tr.kind {
@@ -191,6 +200,17 @@ func (tr trip) String() string {
 			tr.reapWait.Round(time.Second))
 	}
 	return out
+}
+
+// shareOf renders d as a percentage of whole, which is what turns a
+// duration nobody has a feel for into one they can judge. Never a
+// division by zero: every caller checks the interval first, and this
+// returns a shrug rather than an infinity if one ever stops.
+func shareOf(d, whole time.Duration) string {
+	if whole <= 0 {
+		return "an unknown share"
+	}
+	return fmt.Sprintf("%.1f%%", 100*float64(d)/float64(whole))
 }
 
 // eventCount is "1 event" or "N events". A small thing, and the sentence

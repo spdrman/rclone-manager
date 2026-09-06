@@ -485,7 +485,11 @@ func TestTrip_ReportsWhatTheHostDidToTheWatchdogItself(t *testing.T) {
 		worstPollLag: 812 * time.Millisecond,
 	}
 	got := tr.String()
-	for _, want := range []string{"250ms", "812ms"} {
+	// The third string is the reference point, and it is the one worth
+	// asserting hardest: 812ms means nothing on its own, and "324.8% of
+	// the interval it was late for" is a reading somebody can act on
+	// without knowing what the interval was.
+	for _, want := range []string{"250ms", "812ms", "324.8%"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("the trip does not report %s, so an operator cannot see what the host was doing to a process that only wanted a turn:\n%s", want, got)
 		}

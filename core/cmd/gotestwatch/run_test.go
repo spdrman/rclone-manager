@@ -1279,6 +1279,16 @@ func TestRun_ABurstyHostIsKilledWithoutBeingToldWhy(t *testing.T) {
 		t.Fatalf("the run's slowest gap is reported as %s (%s), but the fixture stalled for %s and `go test` replayed the line that says so; the whole-run measurement is not being kept",
 			res.Trip.runSlowest.Round(time.Millisecond), res.Trip.runSlowestLabel, burstStall)
 	}
+	// The duration on its own does not say the PLANTED stall is what was
+	// measured. runSlowest covers the whole run including the gap between
+	// starting `go test` and its first event, so on a host where a warm
+	// start takes longer than the stall the line above passes without the
+	// burst ever being seen. The label says which gap it was, and only
+	// the fixture's own stall line can produce this one.
+	if !strings.Contains(res.Trip.runSlowestLabel, "stalling for") {
+		t.Fatalf("the run's slowest gap is reported as %s between %q, which is not the %s the fixture plants: this run measured its own startup rather than the burst, so it is not the blind spot being reproduced",
+			res.Trip.runSlowest.Round(time.Millisecond), res.Trip.runSlowestLabel, burstStall)
+	}
 
 	msg := res.Trip.String()
 	if phrase := namesACause(msg); phrase != "" {
@@ -1298,4 +1308,48 @@ func TestRun_ABurstyHostIsKilledWithoutBeingToldWhy(t *testing.T) {
 	}
 
 	t.Logf("bursty run killed by the cap: %s", msg)
+}
+
+// TestPollLag_DoesNotChargeTheHostForTheWatchdogsOwnTurn is the guard on
+// the one reading gotestwatch publishes about the machine rather than
+// about the run.
+//
+// The trip's sentence says the lag is what the host took from a process
+// that was parked and ready, and that is only true if the loop's own turn
+// is kept out of it. It is not a hypothetical: the turn takes the
+// tracker's mutex, and the goroutine draining `go test`'s JSON stdout
+// holds the same mutex on every event, so under a firehose the loop can
+// genuinely be busy when the next tick fires. Charging that to the host
+// would be this package's own defect, one level down from the one it
+// exists to fix.
+func TestPollLag_DoesNotChargeTheHostForTheWatchdogsOwnTurn(t *testing.T) {
+	const poll = 50 * time.Millisecond
+	start := time.Now()
+	lag := newPollLag(poll, start)
+
+	// A turn that cost the loop 200ms of its own: by the time it is back
+	// in the select the next tick is already waiting, so it takes it
+	// immediately and the whole gap is work it did to itself. The host
+	// never made it wait for anything.
+	lag.worked(200 * time.Millisecond)
+	lag.turn(start.Add(200 * time.Millisecond))
+	if lag.worst != 0 {
+		t.Fatalf("worst = %s after a turn the loop spent 200ms of its own inside; that is gotestwatch's own work being reported as what the host did to it", lag.worst)
+	}
+
+	// And the reading the sentence is actually about: the loop did
+	// nothing, asked for its turn, and was run 300ms after it could have
+	// been.
+	at := start.Add(200*time.Millisecond + poll + 300*time.Millisecond)
+	lag.turn(at)
+	if lag.worst != 300*time.Millisecond {
+		t.Fatalf("worst = %s, want 300ms: a turn the loop was parked for the whole of is exactly the quantity this measures", lag.worst)
+	}
+
+	// One more, on time, to prove the worst is a maximum and not the
+	// last thing that happened.
+	lag.turn(at.Add(poll))
+	if lag.worst != 300*time.Millisecond {
+		t.Fatalf("worst = %s after an on-time turn, want the 300ms it had already seen", lag.worst)
+	}
 }

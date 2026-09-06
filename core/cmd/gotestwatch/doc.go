@@ -83,8 +83,11 @@
 // made of, the slowest gap of the WHOLE run (which is how a reader sees a
 // stall the rolling window has already forgotten, and is the one number
 // that would have made the original incident obvious), and how late this
-// host was running gotestwatch's own watchdog loop, which is the only
-// reading this tool has on the machine rather than on the run.
+// host was running gotestwatch's own watchdog loop, against the interval
+// that loop asked for, which is the closest this tool gets to a reading
+// of the machine rather than of the run. Run's pollLag is exact about
+// what that number does and does not contain, because a figure offered as
+// a fact about the host has to be one.
 //
 // # Usage
 //
