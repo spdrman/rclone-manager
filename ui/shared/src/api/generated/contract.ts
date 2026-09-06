@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "04bd50d849b30c82118f2639c3de6ef6439a0b89a11e7ad4c51388f6ff498611";
+export const CONTRACT_SHA256 = "6ddc5de94d41a714fe2449ef308df6f2b84878530fa6d881138ff649faf01dd2";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1138,6 +1138,7 @@ export interface WireBackupSet {
   retention_is_override: boolean;
   source_name: string;
   stable_for_seconds: number;
+  stale_after_seconds: number;
   user: string;
   validator_id: string;
 }
@@ -1980,6 +1981,7 @@ export interface WireVersionResponse {
   config_revision: string;
   configured: boolean;
   core_version: string;
+  deployment_id: string;
   engine_version: string;
   go_version: string;
   ready: boolean;

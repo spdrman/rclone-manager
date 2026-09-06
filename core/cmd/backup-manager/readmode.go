@@ -229,6 +229,34 @@ func enterReadMode(ctx context.Context, configPath string, cfg *config.Config, a
 		return d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and it did not answer at %s (%v)", engine.StateDatabase, client.BaseURL(), err), announceTo), nil
 	}
 
+	// Which deployment before which configuration, because they are
+	// different questions and the first one is the more basic (#555).
+	// A revision is a hash of configuration CONTENT, so two deployments
+	// built from one template hold the same one: on a host running a
+	// staging and a production instance from one compose file, a read
+	// pointed at the wrong address passed the revision comparison and
+	// printed the other instance's world. Asking the revision first would
+	// also mean telling an operator their configurations differ when what
+	// actually happened is that they reached a different deployment.
+	//
+	// An identity either side cannot name is NOT a refusal here, unlike on
+	// the write path. It joins the other three ways this file ends up
+	// unconfirmed, for this file's own reason: a write that cannot confirm
+	// something has an alternative, which is not writing, and a read has
+	// none.
+	mine, err := service.DeploymentIdentity(engine.StateDatabase)
+	if err != nil {
+		return d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and this command could not read which deployment it is standing in (%v)", engine.StateDatabase, err), announceTo), nil
+	}
+	switch {
+	case mine == "" || served.DeploymentID == "":
+		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and one of the two could not say which deployment it is, so this answer was not checked against it", engine.StateDatabase), announceTo)
+		return d, nil
+	case mine != served.DeploymentID:
+		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and the engine at %s serves a different deployment", engine.StateDatabase, client.BaseURL()), announceTo)
+		return d, wrongDeploymentRead(engine, client.BaseURL(), mine, served.DeploymentID)
+	}
+
 	local := service.ConfigRevisionOf(cfg)
 	if served.ConfigRevision != local {
 		// Announced as unconfirmed rather than as engine-attached: the
@@ -289,6 +317,25 @@ func configDivergence(engine *service.RunningEngine, configFile, local, served s
 	return fmt.Errorf(
 		"the process serving this deployment (state database %s) is holding a different configuration from %s, so nothing was printed: it is serving configuration %s and this command loaded %s, and nothing re-reads that file, so an answer from here would describe a deployment that process does not have. Restart that process to make it read %s, or make the change through the Web UI or HTTP API it serves",
 		engine.StateDatabase, configFile, served, local, configFile)
+}
+
+// wrongDeploymentRead is #555 on the reading side: the engine this command
+// was told to check itself against is not the one serving this deployment
+// at all, so every answer it gave is about somebody else's world.
+//
+// It refuses rather than falling back to the file, for the same reason
+// configDivergence does: the engine answered, and what it answered is that
+// this is not its deployment, so printing under an announcement that
+// something had been checked would be worse than printing nothing.
+//
+// Both identities, because an operator who has just mistyped an address
+// needs to see the one they meant beside the one they reached. Told only
+// where they ended up, they still cannot tell whether that was the
+// instance they wanted.
+func wrongDeploymentRead(engine *service.RunningEngine, address, mine, theirs string) error {
+	return fmt.Errorf(
+		"the engine at %s is not the process serving this deployment, so nothing was printed: it serves deployment %s, and this deployment (state database %s) is %s. An answer checked against that engine would describe a different deployment on this host, so check $%s",
+		address, theirs, engine.StateDatabase, mine, apiURLEnv)
 }
 
 // disagreement is what a command reports when the engine answered its

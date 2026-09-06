@@ -876,24 +876,25 @@ func printBackupSet(s service.BackupSet) {
 	if s.CompletionStrategy == "stable" {
 		fmt.Printf("  stable_for: %s\n", s.StableFor)
 	}
-	// stale_after is the one field that survives a direct write and not a
-	// routed one, and the difference is the API's rather than this
-	// command's: BackupSetSpec accepts stale_after_seconds on the way in,
-	// UpdateBackupSetRequest can change it, and the BackupSet the engine
-	// answers with carries no such property at all, so a routed create or
-	// patch gets back a set the engine cannot say this about
-	// (engineroute.go's staleAfterFromWire).
+	// stale_after used to be the one field that survived a direct write
+	// and not a routed one. The API accepted it on the way in
+	// (BackupSetSpec) and UpdateBackupSetRequest could change it, and the
+	// BackupSet the engine answered with carried no such property at all,
+	// so a routed create printed "not reported" for a value the operator
+	// had typed on that very command line. #555 put stale_after_seconds on
+	// the wire and both routes now report it.
 	//
-	// Zero is therefore not a value here, it is the absence of one:
+	// Zero is still not a value, it is the absence of one:
 	// config.Validate refuses a configuration whose stale_after is not
 	// positive, so nothing that came out of a validated configuration can
-	// reach this branch. Printing "0s" would be a specific claim about
-	// FR-24's freshness budget made from a field nothing looked at, which
-	// is the class of quiet wrongness this whole EPIC is about.
+	// reach the second branch, and what can is an engine older than that
+	// field. Printing "0s" would be a specific claim about FR-24's
+	// freshness budget made from a field nothing looked at, which is the
+	// class of quiet wrongness this whole EPIC is about.
 	if s.StaleAfter > 0 {
 		fmt.Printf("  stale_after: %s\n", s.StaleAfter)
 	} else {
-		fmt.Printf("  stale_after: not reported (the engine's API carries no stale_after field; `backup-manager sources` reads it from the configuration)\n")
+		fmt.Printf("  stale_after: not reported (the engine that answered serves no stale_after; `backup-manager sources` reads it from the configuration)\n")
 	}
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)

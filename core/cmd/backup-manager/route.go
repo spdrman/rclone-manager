@@ -60,6 +60,12 @@ import (
 // fail obscurely or, far worse, reach a DIFFERENT deployment's engine and
 // write there. So the address is told, never inferred.
 //
+// Being told it is not the same as it being right, which is what #555
+// found: an address an operator typed one character wrong reached the
+// other instance on the host and the write landed there, quietly. So an
+// address that was told is now checked as well, against the deployment the
+// command was typed at, before anything is sent (deploymentcheck.go).
+//
 // # And why the address and the credentials come from the environment
 //
 // Not from flags. `backup-manager --help` is pinned line for line by
@@ -160,21 +166,27 @@ type configWriteRoute interface {
 	settingsRoute
 }
 
-// attachToEngine builds this invocation's route to the serving process, or
-// reports that nothing named one.
+// attachToEngine builds this invocation's route to the serving process,
+// confirms it leads to THIS deployment, or reports that nothing named one.
 //
 // Three answers, not two, and the middle one is why. A route that was
 // never named is (nil, "", nil): the caller refuses with the sentence it
 // already had, because an operator who told this command nothing about
 // their engine is in exactly the position #538 left them in. A route that
-// was named and cannot be built is an error, because they did tell it
-// something and it does not work, and quietly ignoring a setting somebody
-// wrote is how a command ends up doing the opposite of what it was told.
+// was named and cannot be built, or that leads somewhere else, is an
+// error, because they did tell it something and it does not do what they
+// meant, and quietly ignoring a setting somebody wrote is how a command
+// ends up doing the opposite of what it was told.
 //
-// Nothing is contacted here. Whether the engine answers is the first
-// call's business, and it reports that with an address in it
-// (apiclient.Unreachable), which is what an operator has to check.
-func attachToEngine() (configWriteRoute, string, error) {
+// The engine IS contacted here, and that changed with #555. It used to be
+// left to the first call, on the reasoning that an unreachable engine
+// reports itself with an address in the message. What that could not do is
+// notice a REACHABLE engine that is a different deployment, which is a
+// mistyped address rather than a broken one and which used to succeed
+// silently. So one round trip is spent before anything is sent, asking the
+// engine which deployment it serves; deploymentcheck.go holds the
+// reasoning and the refusals.
+func attachToEngine(ctx context.Context, engine *service.RunningEngine) (configWriteRoute, string, error) {
 	base := strings.TrimSpace(os.Getenv(apiURLEnv))
 	if base == "" {
 		return nil, "", nil
@@ -191,6 +203,12 @@ func attachToEngine() (configWriteRoute, string, error) {
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("$%s does not name an engine this command can reach, so nothing was written: %w", apiURLEnv, err)
+	}
+	// Before the route is handed back, never after. A route returned and
+	// then checked would be a route some later caller could use without
+	// checking, and there is no version of this that is safe to skip.
+	if err := confirmDeployment(ctx, client, engine); err != nil {
+		return nil, "", err
 	}
 	// BaseURL() rather than the raw environment value: it is normalised
 	// and, more to the point, redacted, and this string is printed.
