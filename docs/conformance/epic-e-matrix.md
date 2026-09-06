@@ -80,11 +80,21 @@ after phase 2 landed and nothing in the repository could tell.
 | The planted violations, automated | `scripts/compat/selftest.sh`, `scripts/conformance/selftest.sh` |
 | The gate step that runs them | `scripts/ci-local.sh` |
 
-Regenerating the corpus is `COMPAT_UPDATE=1 go test ./tests/compat/` from `core/`,
-and every regeneration is a claimed behavior change that belongs in a commit
-message. The one assertion a regeneration cannot silence is
+Regenerating the corpus is `COMPAT_UPDATE=<cell-name> go test ./tests/compat/` from
+`core/`, naming the cell that moved (several are a comma-separated list), and every
+regeneration is a claimed behavior change that belongs in a commit message.
+`COMPAT_UPDATE=1` sweeps every cell instead: it is there for a first capture and for
+a change that really does move several surfaces, and what it costs is that it also
+brings back whatever drifted in the surfaces the commit is not about, which #546 ran
+into and #549 fixed. The one assertion a regeneration cannot silence is
 `TestUpgradingAndInstallingFreshAgreeWithEachOther`, which compares two captures
 from the same run rather than a capture against a file.
+
+The corpus can only fail on a line it already holds, so a command whose usage lines
+were never captured is not protected by it at all. That is closed from the other
+end, by `TestUsage_EveryRegisteredCommandIsPinned` in `core/cmd/backup-manager`,
+which requires every verb the binary dispatches to have its usage entry pinned in
+`06b-cli-usage-block`.
 
 ## What has landed since this file was written
 
