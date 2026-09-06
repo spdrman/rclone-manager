@@ -210,6 +210,28 @@ enrolls with is generated per run and never leaves memory either. No harness
 output carries anything but measurements, which is why the records are safe to
 commit.
 
+## These numbers are not the UGREEN numbers
+
+D2.1 (#89) measures the same quantities on a real UGREEN NAS, and none of
+its results belong in this directory or in a comparison with it. The host
+above is a Mac with ten cores; a UGREEN unit is not, and
+`check-baseline.sh` already refuses a capture taken anywhere else because
+comparing across machines reports the machine. A UGOS number that is worse
+than one here is not a regression, it is a different computer.
+
+So that work keeps its own evidence, its own thresholds and its own
+harness: `docs/acceptance/ugos-resource-certification.md` and
+`distribution/hwcert`, which has no code path that can read anything in
+this directory. Its thresholds are budgets argued from the canonical
+runtime's own declared resource expectations rather than from any measured
+baseline, and the three quantities that would need a number nobody has yet
+are gated as ratios against a control measured on the same device in the
+same session.
+
+What the two do share is which quantities get measured, so the seven
+metrics EPIC B #81's contract names appear in both, spelled the same way.
+A test holds the UGOS procedure to that list.
+
 ## If a number moves
 
 Moving files should not move any of these numbers. If one does, that is a

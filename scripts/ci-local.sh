@@ -652,6 +652,21 @@ if [ "$FAST" != "1" ]; then
   gate_step "the package-documentation gate can actually fail, and its independent half stays quiet (mutation self-test, #526)"
   bash scripts/docs/selftest.sh
 
+  # And D2.1's hardware-certification harness, shown to fire (#89). The
+  # harness decides whether numbers taken off a real UGREEN unit are a
+  # pass, and nobody will be standing next to it on the day: the run
+  # happens once, on a device most reviewers cannot reach. So the question
+  # worth answering in advance is not whether it passes on a fixture, it is
+  # whether it can fail at all. Four planted defects, each of which has to
+  # turn a named test red: a threshold that cannot be exceeded, a missing
+  # measurement filled in with a benign default, one architecture standing
+  # in for the other, and an absent process read as an idle one. The last
+  # is the one nothing else could catch, because an app that is not running
+  # and an app that is idle use exactly the same amount of CPU. One Go
+  # package, five short runs, no Docker and no device.
+  gate_step "the UGOS resource-certification harness can actually fail (mutation self-test, #89)"
+  bash scripts/hwcert/selftest.sh
+
   # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
   # is a wall of "nothing about a medium-free deployment moved" assertions,
   # and every one of them is the shape this repository keeps finding passing
