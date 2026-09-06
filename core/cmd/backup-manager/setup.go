@@ -127,16 +127,27 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 	return svc, cfg, cleanup, nil
 }
 
-// openBackupService is openService's counterpart for the handful of
-// subcommands (today, just `settings`) whose use case lives on
-// core/service.BackupService rather than internal/app.Service: anything
-// that needs a file-backed configPath to persist a change to (see
-// BackupService.configPath's own doc), which internal/app.Service, built
-// directly from an already-loaded *config.Config, has no notion of at
-// all. service.Open is the identical production constructor
-// apps/common/webhost's Open uses, so a CLI-driven settings write goes
-// through the exact same persist-then-hot-reload sequence
-// (BackupService.UpdateSettings's own doc) an HTTP PATCH would.
+// openBackupService is openService's counterpart for the subcommands
+// whose use case lives on core/service.BackupService rather than
+// internal/app.Service: anything that needs a file-backed configPath to
+// persist a change to (see BackupService.configPath's own doc), which
+// internal/app.Service, built directly from an already-loaded
+// *config.Config, has no notion of at all. That is `settings`, every
+// `backup-set` verb, and `restore`.
+//
+// service.Open is the identical production constructor
+// apps/common/webhost's Open uses, so a CLI-driven write goes through the
+// same service layer, and the same persist-then-hot-reload sequence
+// (BackupService.UpdateSettings's own doc), that an HTTP PATCH does. It
+// does not go through it BY CALLING that route, and the difference is the
+// whole of issue #535: the hot reload is this process's own view of the
+// file, and this process then exits. A `settings patch`, or a `backup-set
+// create`, `patch` or `remove`, typed at a terminal reaches an engine
+// that is already running only when that engine restarts, because there
+// is no config watcher and no SIGHUP reload in this build. Issue #539
+// corrects that claim wherever this tree made it; the intent argument
+// below is what stops this binary reporting such a write as a success in
+// the meantime.
 //
 // intent is issue #538, and it is why this function has an argument
 // openService does not need. Every route that rewrites config.yaml is a
