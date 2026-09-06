@@ -150,6 +150,41 @@ verdict.
 | 2 | Opens inside UGOS desktop with `open_type: inner` | **BLOCKED** (config verified, behavior not observed) | `project.yaml` has `open_type: inner` and passed `ugcli check`; the actual windowing behavior needs criterion 1 first. |
 | 3 | JSSDK obtains a UGOS session context | **BLOCKED** (code verified, live handshake not observed) | The frontend type-checks and builds against the real `@ugreen-nas/core` types and calls the real `UGOSCore.init()` / `CloudWindow.getSizeInfo()`; the actual host handshake (`isHost: true`, a real `{ucVer, locale}` reply) needs criterion 1 first. |
 
+### Re-run on 2026-09-06 against the current merged tree
+
+The branch was 623 commits behind main when this evidence was first recorded. After merging
+main back in, the whole procedure was run again on the same real NAS (`HIGARA`), building
+the image fresh from the merged source. Every result held:
+
+- `ugcli check` → `✓ check passed` (ugcli `1.1.0.13`, the pinned CLI already on the device).
+- `ugcli pack --arch amd64 --build 1` → `amd64_com.spdrman.upkproofb12_0.1.0.0001.upk`,
+  5,408,172 bytes, signed on the NAS. (The size differs from the first run's 5,407,983
+  bytes because the image was rebuilt from a fresher base and Go toolchain; this is a new
+  build of the same project, not a byte-for-byte reproduction, which the packaging tree
+  never claimed.)
+- `docker load` the bundled tar, `docker compose up` the shipped compose file, then
+  `curl 127.0.0.1:29090/health/live` on the NAS → `HTTP/1.1 200 OK`, `{"status":"ok"}`.
+- The running container's image ID matched the loaded tag's ID exactly
+  (`sha256:1ddc848b4efa9f03fe026f2f4555280abd19b93672e07c672bcb87438a84d94a`), so the
+  answer provably came from this packaged artifact.
+- `GET /` returned this build's `index.html` (`<title>Backup Manager — UPK proof</title>`).
+- A `curl` to the LAN address `:29090` was refused while loopback answered, confirming the
+  compose file's `127.0.0.1:29090:8080` loopback-only publication (§22).
+- Criteria 1–3 stayed **BLOCKED** for the same reason as the first run (below): the install
+  click needs a signed-in browser, which this SSH-only account does not have. I
+  re-confirmed the block from scratch this session rather than inheriting it: `ugcli` still
+  has no `install`/`deploy` subcommand (only `check`, `config`, `create`, `pack`);
+  `/ugreen/@appstore/` is `root:root` and not writable by `rom`; `/var/ugreen/` (where the
+  App Center daemon's own `app_serv.sock` lives) is `root` `0700`; and `sudo` prompts for a
+  password. The App Center's own HTTP API (its nginx front end on `:9999`) answers an app
+  query without an authenticated session by refusing it, so there is no unauthenticated
+  install path there either. I made no write call against any of these, per the task's
+  ground rules.
+
+The manually-started container, its network and the loaded image were all torn down after
+capture (`docker compose down`, `docker rmi`), and the NAS's own `postgresql` container was
+untouched before and after. Nothing from this run was left on the device.
+
 ### What didn't work: the App Center install step needs a browser I don't have
 
 Everything up to "install the package" is proven for real, on the real device. The literal
