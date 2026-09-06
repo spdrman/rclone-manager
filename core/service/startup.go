@@ -40,9 +40,16 @@ const journalLockSuffix = ".journal-lock"
 
 // servingLockSuffix names the third lock file, and the only one that
 // means "an engine is running here". A process that is going to SERVE
-// this deployment takes it SHARED before it reads anything and holds it
-// for as long as it serves (AnnounceServing, liveengine.go); nothing
-// else takes it at all.
+// this deployment takes it EXCLUSIVE before it reads anything and holds
+// it for as long as it serves (AnnounceServing, liveengine.go). Nothing
+// else ever holds it: a process asking the question only ever tries for
+// it SHARED and gives it straight back, so a shared attempt that fails
+// is the proof that somebody is serving.
+//
+// That polarity is the point rather than an implementation detail. Two
+// askers take compatible locks, so they cannot see each other, which is
+// what a probe taking the exclusive side got wrong: it manufactured its
+// own positives whenever two of them landed together.
 //
 // It is a separate file from the journal lock because the journal lock
 // answers a different question and cannot be made to answer this one:
