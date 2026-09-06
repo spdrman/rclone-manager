@@ -244,8 +244,9 @@ claim is per device, and only amd64 has one.
 ## 7. The recorded run
 
 Run on 2026-09-05 against a real UGREEN NAS (amd64, UGOS Pro, Docker
-29.4.3, `ugcli` 1.1.0.13 installed from `tools/ugcli-install/`). The
-device address is deliberately not recorded here.
+29.4.3, `ugcli` 1.1.0.13, which was already on the device rather than
+installed by this run). The device address is deliberately not recorded
+here.
 
 ### 7.1 Stage and verify, both architectures
 
