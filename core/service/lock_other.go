@@ -69,3 +69,16 @@ func acquireExclusiveJournalLock(lockPath string) (*journalLock, error) {
 func (l *journalLock) downgradeToShared() error { return nil }
 
 func (l *journalLock) release() error { return nil }
+
+// journalHeldByAnotherProcess cannot be answered on a GOOS with no
+// advisory locking wired up, and says so rather than answering "no".
+//
+// "No" is the dangerous default here: it is the answer that lets a second
+// process rewrite a configuration a running engine holds and report
+// success, which is issue #535. This file's whole rule is that a safety
+// condition this codebase cannot honestly assess is reported, never
+// quietly skipped, and a detector is exactly the place that rule earns
+// its keep.
+func journalHeldByAnotherProcess(lockPath string) (bool, error) {
+	return false, fmt.Errorf("service: cannot tell whether another process holds this journal on %s, because journal locking is not implemented there", runtime.GOOS)
+}

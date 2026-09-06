@@ -187,3 +187,61 @@ func (l *journalLock) release() error {
 	_ = unix.Flock(int(l.f.Fd()), unix.LOCK_UN)
 	return l.f.Close()
 }
+
+// journalHeldByAnotherProcess reports whether some other open file
+// description currently holds the journal whose lock file is lockPath.
+//
+// It is the read-only half of the two acquire functions above, and issue
+// #537's whole detection mechanism: the shared/exclusive arrangement was
+// built so that "nobody else has this journal open" is something the
+// kernel answers rather than something this package assumes, and this
+// asks the kernel that question without keeping the answer. If the
+// exclusive lock comes, nobody held it and it is dropped again
+// immediately; if it does not, somebody does.
+//
+// # Why it must not create the lock file
+//
+// The open is O_RDONLY with no O_CREATE, unlike acquireJournalLock's.
+// That is what makes the probe non-destructive rather than merely brief:
+// a deployment that has never started has no lock file, and a probe that
+// created one to find out would leave a file behind on every bare host it
+// was asked about. An absent file is also a CONCLUSIVE answer rather than
+// a guess, which is what makes leaving it alone free: every process that
+// opens this journal creates that file on the way in, so nothing can be
+// holding a journal whose lock file does not exist.
+//
+// flock(2) does not care what mode the descriptor was opened in (unlike
+// fcntl(2) record locks, which need write access for a write lock), so a
+// read-only descriptor takes a perfectly real exclusive lock here.
+//
+// # The window this opens, said out loud
+//
+// Between the Flock below and its release, a process entering
+// runStartupSequence would fail to take its own SHARED lock and report
+// ErrJournalInUse. That window is a few microseconds wide and it is not
+// new: two concurrent startups already race each other through the
+// startup lock. It cannot touch a RUNNING engine, which is the thing this
+// must not disturb: a running engine took its shared lock when it started
+// and never asks for it again.
+func journalHeldByAnotherProcess(lockPath string) (bool, error) {
+	f, err := os.OpenFile(lockPath, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("service: open journal lock %s: %w", lockPath, err)
+	}
+	defer f.Close()
+
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return true, nil
+		}
+		return false, fmt.Errorf("service: probing journal lock %s: %w", lockPath, err)
+	}
+	// Given back at once. Holding it for any longer than the question
+	// takes would make asking whether an engine is running a reason for
+	// one not to be able to start.
+	_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	return false, nil
+}
