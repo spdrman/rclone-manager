@@ -80,6 +80,15 @@ import (
 // running `serve` keeps working. Nothing here may narrow that. Only a
 // write that lands in config.yaml is at risk of being believed by one
 // process and not the other.
+//
+// #544 qualified that in exactly one place, and the qualification is
+// worth stating beside the claim rather than only next door. A read still
+// always answers when the two processes hold the same configuration, and
+// still answers, saying so, when it cannot reach the engine at all. What
+// it will not do is print an answer while the serving process is holding
+// a DIFFERENT configuration, because that answer describes a deployment
+// nobody is running, which is #535 seen from the surface an operator
+// actually reads.
 
 // configIntent is what a subcommand is about to do to config.yaml, named
 // at every openBackupService call site.

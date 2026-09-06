@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -42,11 +44,23 @@ func cmdArtifacts(args []string) int {
 	}
 
 	ctx := context.Background()
-	svc, _, cleanup, err := openService(ctx, *cfgPath, false)
+	svc, cfg, cleanup, err := openService(ctx, *cfgPath, false)
 	if err != nil {
 		return fail(err)
 	}
 	defer cleanup()
+
+	// Issue #544. Every row below is a journal row, and the journal is
+	// read live by both processes, so the rows themselves cannot diverge.
+	// What can is which backup sets are configured, which is what decides
+	// whether a row is marked as belonging to one whose configuration was
+	// removed -- and that marker is the difference between "kept under
+	// this deployment's retention chain" and "kept because nothing is
+	// looking any more".
+	mode, err := enterReadMode(ctx, *cfgPath, cfg, os.Stderr)
+	if err != nil {
+		return fail(err)
+	}
 
 	if len(operands) == 1 {
 		if *sourceFlag != "" || *setFlag != "" {
@@ -60,6 +74,9 @@ func cmdArtifacts(args []string) int {
 		if err != nil {
 			return fail(err)
 		}
+		if err := mode.agreeOnArtifact(ctx, id, detail.Record.Artifact.String()+" "+detail.Record.State); err != nil {
+			return fail(err)
+		}
 		printArtifactDetail(detail)
 		return 0
 	}
@@ -71,6 +88,29 @@ func cmdArtifacts(args []string) int {
 	// for a filter naming nothing.
 	records, err := svc.ListArtifacts(ctx, app.ArtifactFilter{Source: *sourceFlag, Set: *setFlag, IncludeUnconfigured: true})
 	if err != nil {
+		return fail(err)
+	}
+
+	// The engine is asked about exactly the rows this listing is about
+	// when the filter names one backup set the contract can express, and
+	// about the whole journal otherwise. GET /backups filters on a
+	// "source/set" id and on nothing else, so `--source` alone has no wire
+	// equivalent; comparing the unfiltered listings in that case is a
+	// wider question than the command asked, which is the safe direction
+	// to be wrong in.
+	filterID := filterSetID(cfg, *sourceFlag, *setFlag)
+	compare := records
+	if filterID == "" && (*sourceFlag != "" || *setFlag != "") {
+		compare, err = svc.ListArtifacts(ctx, app.ArtifactFilter{IncludeUnconfigured: true})
+		if err != nil {
+			return fail(err)
+		}
+	}
+	var mine []string
+	for _, r := range compare {
+		mine = append(mine, r.Artifact.String()+" "+r.State)
+	}
+	if err := mode.agreeOnArtifacts(ctx, filterID, mine); err != nil {
 		return fail(err)
 	}
 
@@ -104,6 +144,35 @@ func cmdArtifacts(args []string) int {
 		fmt.Println("advances them. `backup-manager unconfigured` says what they hold and what can be done about it.")
 	}
 	return 0
+}
+
+// filterSetID is the "source/set" id this listing's flags name, or the
+// empty string when they name none or more than one.
+//
+// `--backup-set` takes a bare set name and a deployment may configure that
+// name under several sources, which is why this resolves against the
+// loaded configuration rather than pasting the two flags together: an
+// ambiguous name has no single id, and inventing one would ask the engine
+// about a backup set the operator did not mean.
+func filterSetID(cfg *config.Config, source, set string) string {
+	if set == "" {
+		return ""
+	}
+	var found []string
+	for _, src := range cfg.Sources {
+		if source != "" && src.Name != source {
+			continue
+		}
+		for _, bs := range src.BackupSets {
+			if bs.Name == set {
+				found = append(found, bs.ID.String())
+			}
+		}
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	return ""
 }
 
 // unconfiguredSetIDs is the set of backup set ids the journal remembers

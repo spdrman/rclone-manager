@@ -255,3 +255,21 @@ func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
 	*r = next
 	return nil
 }
+
+// overridden reports whether any of the six FR-18/FR-19 flags was passed,
+// which is what tells a hypothetical preview apart from the deployment's
+// own (issue #544).
+//
+// It reads the same resolved value applyRetentionOverrides folds, rather
+// than the flag set, so the two can never disagree about what "an operator
+// passed nothing" means: applyRetentionOverrides treats every zero value
+// as "not passed", and so does this.
+func overridden(o retentionOverrides) bool {
+	return o.timezone != "" ||
+		o.weekStartsOn != "" ||
+		o.dailyDays != 0 ||
+		o.weeklyMonths != 0 ||
+		o.monthlyMonths != 0 ||
+		len(o.tiers) > 0 ||
+		o.protectLastKnownGood != nil
+}

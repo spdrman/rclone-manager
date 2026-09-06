@@ -2,6 +2,7 @@ package apiclient
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
 )
@@ -18,8 +19,9 @@ import (
 // regeneration rather than by somebody noticing.
 //
 // The set below is the surface the commands issue #543 and #544 route need
-// - the mutating backup-set verbs and the two steps a create takes before
-// them, and the reads `sources` and `status` are built on - plus the
+// - the mutating backup-set verbs, the two steps a create takes before
+// them, and the five operations the reads `sources`, `status`, `artifacts`
+// and the retention preview put their questions to - plus the
 // session verbs. It is deliberately not all forty-six operations: an
 // untested wrapper around an endpoint no command calls is a claim that
 // this client works against it, and nothing here has watched that claim
@@ -170,5 +172,57 @@ func (c *Client) SystemVersion(ctx context.Context) (apicontract.VersionResponse
 func (c *Client) StorageStatus(ctx context.Context) (apicontract.ListStorageStatusResponse, error) {
 	var out apicontract.ListStorageStatusResponse
 	err := c.call(ctx, "listStorageStatus", nil, nil, &out)
+	return out, err
+}
+
+// ListArtifacts is GET /backups: every artifact the ENGINE's journal holds
+// at the moment it is asked, optionally narrowed to one backup set.
+//
+// setID is a "source/set" id and goes in the QUERY rather than the path,
+// which is why this is the one call in this package that sends one at all.
+// An empty setID sends no query, and that is not the same request as
+// ?setId=: the contract refuses an id naming no configured backup set
+// rather than answering it with an empty list, so an empty filter sent as
+// a filter would turn "show me everything" into a 404.
+//
+// The unfiltered listing includes the artifacts of backup sets whose
+// configuration was removed (issue #391), and every artifact carries
+// retention_policy so a caller can tell those apart (issue #523).
+func (c *Client) ListArtifacts(ctx context.Context, setID string) (apicontract.ListArtifactsResponse, error) {
+	var query url.Values
+	if setID != "" {
+		query = url.Values{"setId": []string{setID}}
+	}
+	var out apicontract.ListArtifactsResponse
+	err := c.callQuery(ctx, "listArtifacts", nil, query, nil, &out)
+	return out, err
+}
+
+// GetArtifact is GET /backups/{source}/{set}/{name}.
+//
+// Three arguments rather than one composite id, for GetBackupSet's reason
+// one level deeper: the contract used to spell this "/backups/{id}", and
+// an artifact id is three segments, so fillPath escaped two slashes into
+// one unroutable parameter and this operation could not be called at all
+// (PR #546 review).
+func (c *Client) GetArtifact(ctx context.Context, source, set, name string) (apicontract.Artifact, error) {
+	var out apicontract.Artifact
+	err := c.call(ctx, "getArtifact", []string{source, set, name}, nil, &out)
+	return out, err
+}
+
+// PreviewRetention is GET /backup-sets/{source}/{set}/retention/preview:
+// the plan the ENGINE would apply, derived from the configuration that
+// engine holds rather than from the file on disk.
+//
+// It issues a plan_id and deletes nothing. FR-20's deletion runs through
+// applyRetention, which refuses unless the plan it re-derives still
+// fingerprints as the one that id was issued for, and this package
+// deliberately has no method for that: `backup-manager retention` is a
+// preview in both its modes (retention.go's own doc) and a CLI apply would
+// be a second authorisation path beside the one an administrator reviews.
+func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apicontract.RetentionPlan, error) {
+	var out apicontract.RetentionPlan
+	err := c.call(ctx, "previewRetention", []string{source, set}, nil, &out)
 	return out, err
 }
