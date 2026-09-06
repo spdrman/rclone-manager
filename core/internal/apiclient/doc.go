@@ -59,7 +59,22 @@
 // an Argon2id hash, which is not a credential anybody can present, and a
 // second reader of it would be a second thing deciding who is signed in.
 // The operator's password is supplied by the caller, from the environment
-// or a prompt, and this package never writes it anywhere.
+// or a prompt, and this package never writes it anywhere. Nor does it
+// print one: Config.BaseURL refuses userinfo outright, and every address
+// this package renders goes through url.URL.Redacted, because the whole
+// reason BaseURL exists is that somebody prints it.
+//
+// What this client believes about the engine is versioned and cheap to
+// re-establish rather than assumed. A 401 on an authenticated call clears
+// the belief and the call is retried once, because the engine holds
+// sessions in memory and a restart signs everybody out while the CLI still
+// holds a cookie; and Probe answers "is an engine there, and does it know
+// me" for the price of one GET, so #542 can decide and report the mode
+// without spending an Argon2id verification against the engine's own login
+// rate limiter. That limiter is ten logins a minute per remote IP, so a
+// 429 on an operation the contract declares one for is waited out, with
+// backoff, up to a whole window. Adding a CLI-only credential to dodge it
+// would be the very second authority this package exists not to be.
 //
 // # Shapes
 //
@@ -76,4 +91,22 @@
 // operation does not declare, or an error code outside the set it declares
 // for that status, is refused as a ContractViolation rather than decoded
 // into a zero value and reported as success.
+//
+// # Failures
+//
+// Five things happen to a call and they are five different types, listed
+// in errors.go, which also carries the argument for why they are separate.
+// The list is exhaustive: every failure this package returns is one of
+// them, so a command in #543 or #544 can switch on them and have no
+// default branch to fill in with a sentence that says nothing.
+//
+// # Both routes, and the transport
+//
+// Config.BaseURL is the address and Config.HTTPClient is how to reach it.
+// The second exists because the product terminates no TLS itself: a host
+// on the published port over https is going through the operator's own
+// reverse proxy, very often with a certificate no public root signed, and
+// without a transport hook that operator's only working option is plain
+// http. Supply a client with the right roots and nothing else here
+// changes, which is the same claim the two routes rest on.
 package apiclient

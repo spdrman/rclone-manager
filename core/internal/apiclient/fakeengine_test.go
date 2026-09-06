@@ -3,6 +3,8 @@ package apiclient
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -49,6 +51,7 @@ type seenRequest struct {
 	CSRFHeader string
 	CSRFCookie string
 	Session    string
+	UserAgent  string
 }
 
 // fakeEngine serves /api/v1 the way the engine container does.
@@ -95,6 +98,21 @@ func (e *fakeEngine) start() string {
 	srv := httptest.NewServer(e)
 	e.t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// startTLS runs the engine behind TLS with a certificate no public root
+// signed, which is the shape a host reaching the published port through
+// the operator's own reverse proxy meets: the product terminates no TLS
+// itself, so that certificate is very often NAS-issued or self-signed. It
+// returns the base URL and an http.Client that trusts it.
+func (e *fakeEngine) startTLS() (string, *http.Client) {
+	srv := httptest.NewTLSServer(e)
+	// One test here deliberately fails a handshake, and net/http logs that
+	// from the server side. The failure is the assertion, not a surprise,
+	// so it does not also need to be on the suite's stderr.
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	e.t.Cleanup(srv.Close)
+	return srv.URL, srv.Client()
 }
 
 // requests returns what the engine was asked for, in order.
@@ -187,7 +205,7 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	escaped := r.URL.EscapedPath()
 	ep, known := lookupRoute(r.Method, escaped)
 
-	seen := seenRequest{Method: r.Method, Path: escaped, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName)}
+	seen := seenRequest{Method: r.Method, Path: escaped, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName), UserAgent: r.Header.Get("User-Agent")}
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		seen.CSRFCookie = c.Value
 	}
@@ -225,6 +243,8 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.login(w, r, ep)
 	case "logout":
 		e.logout(w)
+	case "getSession":
+		e.session(w)
 	default:
 		e.succeed(w, ep)
 	}
@@ -270,6 +290,26 @@ func (e *fakeEngine) login(w http.ResponseWriter, r *http.Request, ep apicontrac
 	e.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: token, Path: "/", HttpOnly: true})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// session answers GET /auth/session the way the real one does: with the
+// name of the administrator whose session this is. The generic succeed
+// below would answer with the schema's zero value, and {"username":""} is
+// a 200 that says nobody, which is not a live session and is not what a
+// client asking "am I signed in" may be handed.
+func (e *fakeEngine) session(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(apicontract.SessionResponse{Username: e.username})
+}
+
+// dropSessions is the engine restarting. Sessions are held in memory, so a
+// restart signs everybody out while the client on the other end still
+// holds a cookie and still believes it is signed in.
+func (e *fakeEngine) dropSessions() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sessions = map[string]bool{}
 }
 
 func (e *fakeEngine) logout(w http.ResponseWriter) {
