@@ -77,6 +77,11 @@ capable of.
 7. Nothing else installed on the NAS is doing work during the idle window.
    Record what is installed and what is running; a NAS mid-RAID-scrub is
    not an idle NAS.
+8. Three files on the device and nothing else: `scripts/hwcert/measure-ugos.sh`,
+   this document (the driver reads the sampling method out of it rather
+   than carrying a second copy of the numbers), and the probe binary for
+   this architecture from `scripts/hwcert/build-probe.sh`. No credential
+   ever travels with them.
 
 - [ ] `config.yaml` exists in the adapter's config directory and validates.
 
@@ -315,11 +320,13 @@ than an impression.
 ### Step 7. Build and verify the record
 
 ```sh
-# on the device, from the raw samples the steps above wrote
-go run ./cmd/hwcert record --samples samples.json --out ugos-resource-<arch>.json
+# on the device, with the probe built for it, from the raw samples the
+# steps above wrote. There is no Go toolchain on a NAS and none is needed:
+# scripts/hwcert/build-probe.sh produces a static binary per architecture.
+./hwcert-linux-<arch> record -samples samples.json -out ugos-resource-<arch>.json
 
-# anywhere
-go run ./cmd/hwcert verify --record docs/acceptance/evidence/ugos-resource-<arch>.json
+# back in a checkout, once the record is committed
+go run ./cmd/hwcert verify -record docs/acceptance/evidence/ugos-resource-<arch>.json
 ```
 
 `verify` prints every metric, passing or failing, with its threshold and
