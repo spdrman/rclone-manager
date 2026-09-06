@@ -1430,6 +1430,7 @@
         "schema VersionResponse.config_revision type=string required=true",
         "schema VersionResponse.configured type=boolean required=true",
         "schema VersionResponse.core_version type=string required=true",
+        "schema VersionResponse.deployment_id type=string required=true",
         "schema VersionResponse.engine_version type=string required=true",
         "schema VersionResponse.go_version type=string required=true",
         "schema VersionResponse.ready type=boolean required=true"

@@ -163,6 +163,24 @@ func runStartupSequence(ctx context.Context, dbPath string) (*state.Journal, fun
 	}
 	defer func() { _ = startupLock.release() }()
 
+	// This deployment's identity, minted on the first start that ever
+	// reaches here and read on every one after (deploymentidentity.go).
+	//
+	// It is done under the startup lock and nowhere else, which is what
+	// makes "one deployment, one identity" a fact rather than a hope: the
+	// read-then-mint below is not a race because every process that opens
+	// this journal is holding this lock while it runs, and a deployment
+	// with two identities would be worse than one with none.
+	//
+	// Before the migration and before the journal is opened, deliberately.
+	// A client asks GET /system/version for this before it sends a
+	// mutation, and an identity that only appeared once a schema upgrade
+	// had gone through would be missing on exactly the starts where the
+	// most is happening.
+	if _, err := ensureDeploymentIdentity(dbPath); err != nil {
+		return nil, nil, err
+	}
+
 	pending, err := state.PendingMigration(ctx, dbPath)
 	if err != nil {
 		return nil, nil, err

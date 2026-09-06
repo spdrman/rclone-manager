@@ -192,6 +192,15 @@ type BackupService struct {
 	// a destructive operation.
 	ready bool
 
+	// deploymentID is which deployment this BackupService serves, read
+	// from beside the journal by Open (deploymentidentity.go). It is
+	// empty for a BackupService built with New, which ran no startup
+	// sequence and therefore has no journal of its own to be the identity
+	// of, and empty is what DeploymentID's own doc tells a caller to read
+	// as "this process cannot name its deployment" rather than as a name
+	// that happens to be blank.
+	deploymentID string
+
 	// configMu serializes every call that reads-modifies-writes this
 	// BackupService's configuration (today: CreateBackupSet) against
 	// ITSELF — two concurrent CreateBackupSet calls must not interleave
@@ -414,6 +423,18 @@ func Open(ctx context.Context, configPath string) (*BackupService, func() error,
 	// runs §46.1's startup sequence, so it is the one constructor that can
 	// truthfully report the sequence completed. See the field's own doc.
 	svc.ready = true
+	// Read rather than minted, because runStartupSequence has just minted
+	// it while holding the startup lock and this is not a second place
+	// that may decide what a deployment is called. A read that fails is
+	// not fatal: the identity is a check a client runs before a mutation,
+	// and a process that refused to start because it could not name
+	// itself would trade a routed write that gets refused for a
+	// deployment that does not come up at all.
+	id, err := DeploymentIdentity(cfg.State.Database)
+	if err != nil {
+		logger.Error(ctx, "startup", fmt.Errorf("reading this deployment's identity, so clients cannot confirm which deployment they are writing to: %w", err))
+	}
+	svc.deploymentID = id
 	return svc, svc.Close, nil
 }
 
@@ -508,6 +529,27 @@ func (b *BackupService) Ready() bool {
 // file or from an in-process backup-set creation.
 func (b *BackupService) ConfigRevision() string {
 	return b.state.Load().revision
+}
+
+// DeploymentID identifies the DEPLOYMENT this BackupService serves, which
+// is a different question from ConfigRevision above and the one a client
+// about to send a mutation has to ask.
+//
+// A revision says what configuration content this process holds, so two
+// deployments built from one template report the same one, and comparing
+// revisions cannot tell an operator that the address they typed reached
+// the other instance. This says which instance is answering. It is minted
+// once beside the journal, it does not move when the configuration moves,
+// and it survives a restart and a restore; deploymentidentity.go argues
+// the choice and names the one case it cannot see.
+//
+// It is empty for a BackupService built with New rather than Open, and for
+// one whose identity file could not be read. Empty means "this process
+// cannot name its deployment", and a client must treat that as unable to
+// confirm rather than as agreement: two processes that both answer nothing
+// are not thereby the same deployment.
+func (b *BackupService) DeploymentID() string {
+	return b.deploymentID
 }
 
 // computeConfigRevision hashes a canonical YAML encoding of cfg. YAML

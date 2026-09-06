@@ -54,7 +54,7 @@ func attachEngineTo(t *testing.T, configPath string) {
 // is untouched.
 func TestBackupSetCreateReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
 	attachEngineTo(t, cliConfig)
 
@@ -159,7 +159,7 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cliConfig := writeTestConfig(t)
-			engine := startFakeEngine(t, writeTestConfig(t))
+			engine := startFakeEngineFor(t, cliConfig)
 			engine.attach(t)
 			attachEngineTo(t, cliConfig)
 
@@ -190,7 +190,7 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 // pair of shapes in the same file.
 func TestSettingsPatchReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
 	attachEngineTo(t, cliConfig)
 
@@ -290,7 +290,7 @@ func TestAnEngineAttachedWriteIsRefusedWhenTheRouteDoesNotAnswer(t *testing.T) {
 func TestTheModeIsAnnouncedOnBothRoutes(t *testing.T) {
 	t.Run("engine-attached", func(t *testing.T) {
 		cliConfig := writeTestConfig(t)
-		engine := startFakeEngine(t, writeTestConfig(t))
+		engine := startFakeEngineFor(t, cliConfig)
 		engine.attach(t)
 		attachEngineTo(t, cliConfig)
 
@@ -416,6 +416,12 @@ func TestAFirstConfigurationIsNotRouted(t *testing.T) {
 	keyPath := writeTestPrivateKey(t)
 	dbPath := filepath.Join(filepath.Dir(cliConfig), "state.db")
 
+	// A separate deployment, unlike every other engine in this file. This
+	// write is never routed at all (enterFirstConfigWriteMode passes no
+	// attachFunc), so the assertion below is that nothing reaches this
+	// engine even though it is reachable, and an engine that is a
+	// different deployment makes that a stronger statement rather than a
+	// weaker one.
 	engine := startFakeEngine(t, writeTestConfig(t))
 	engine.attach(t)
 	attachEngineTo(t, cliConfig)
@@ -457,7 +463,7 @@ func TestAFirstConfigurationIsNotRouted(t *testing.T) {
 // what to type instead.
 func TestAWindowTheWireCannotCarryIsRefusedRatherThanTruncated(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
 	attachEngineTo(t, cliConfig)
 

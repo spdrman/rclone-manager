@@ -238,6 +238,63 @@ func TestAReadRefusesWhenTheEngineHoldsADifferentConfiguration(t *testing.T) {
 	}
 }
 
+// TestAReadRefusesWhenTheEngineServesADifferentDeployment is #555 on the
+// reading side, folded in with the write guard because it is the same
+// mistake and the same one line of environment.
+//
+// The revision comparison above cannot catch this on its own. A revision
+// is a hash of configuration content, so a staging and a production
+// instance built from one template report the same one, and a read pointed
+// at the wrong instance passed it and printed the other instance's world.
+// What tells them apart is the deployment identity, which is minted per
+// journal and has nothing to do with what any configuration says.
+//
+// The two deployments here also hold different configurations, because two
+// deployments on one filesystem cannot help it: a state database path is
+// part of a configuration and two journals cannot share a path. So the
+// refusal is asserted for the reason it has to be the identity check that
+// produced it, by its words rather than by its exit code alone.
+func TestAReadRefusesWhenTheEngineServesADifferentDeployment(t *testing.T) {
+	for _, rc := range readCommands {
+		t.Run(rc.name, func(t *testing.T) {
+			configPath := seededDeployment(t)
+			// A whole other deployment, journal and all, which is what an
+			// address one character wrong reaches on a host running two of
+			// these.
+			engine := startReadEngine(t, configPath, seededDeployment(t))
+			engine.use(t)
+
+			mine, err := service.DeploymentIdentity(journalNamedByTestConfig(t, configPath))
+			if err != nil {
+				t.Fatalf("reading this deployment's own identity: %v", err)
+			}
+			theirs := engine.svc.DeploymentID()
+			if mine == "" || theirs == "" || mine == theirs {
+				t.Fatalf("the two deployments report %q and %q, so this test is not driving two deployments at all", mine, theirs)
+			}
+
+			var out string
+			code := 0
+			stderr := captureStderr(t, func() {
+				out = captureStdout(t, func() { code = run(rc.args(configPath)) })
+			})
+
+			if code == 0 {
+				t.Errorf("%s exited 0 while checking itself against an engine serving a different deployment, so an operator was shown a world that is not theirs\nstdout:\n%s\nstderr:\n%s", rc.name, out, stderr)
+			}
+			if !strings.Contains(stderr, mine) || !strings.Contains(stderr, theirs) {
+				t.Errorf("the refusal does not name both deployments (%s here, %s there), and an operator who has just mistyped an address needs to see the one they meant beside the one they reached:\n%s", mine, theirs, stderr)
+			}
+			if strings.Contains(stderr, "holding a different configuration") {
+				t.Errorf("the read refused on a configuration comparison rather than on which deployment it had reached, which is the check that cannot see two instances built from one template:\n%s", stderr)
+			}
+			if strings.Contains(out, "postgres-primary") {
+				t.Errorf("%s printed its own answer anyway\nstdout:\n%s", rc.name, out)
+			}
+		})
+	}
+}
+
 // steadyStatus replaces the lines a surface is allowed to disagree with
 // itself about, in both answers, and fails if a pattern matched neither.
 //

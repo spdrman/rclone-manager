@@ -221,6 +221,10 @@
             "type": "string",
             "description": "The optimistic-concurrency token a client echoes back on POST /operations. Read here rather than scraped out of a 409's prose."
           },
+          "deployment_id": {
+            "type": "string",
+            "description": "Which deployment this is, as opposed to what it currently holds. Minted once per instance and stable across every configuration edit, so two instances built from the same template are told apart by it where a config_revision, being a hash of configuration content, reports them as the same. A client about to send a mutation compares it against the deployment the command was aimed at, so a write typed at one instance with another instance's address configured is refused rather than carried out somewhere nobody was looking. Empty on an instance that cannot name itself, which a client reads as unconfirmable rather than as agreement."
+          },
           "ready": {
             "type": "boolean",
             "description": "True once the runtime has completed its startup sequence."
@@ -237,6 +241,7 @@
           "go_version",
           "engine_version",
           "config_revision",
+          "deployment_id",
           "ready",
           "configured"
         ]

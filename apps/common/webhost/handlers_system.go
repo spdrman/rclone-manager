@@ -51,6 +51,24 @@ type versionResponse struct {
 	EngineVersion  string `json:"engine_version"`
 	ConfigRevision string `json:"config_revision"`
 
+	// DeploymentID is issue #555's answer to "which deployment am I
+	// talking to", which nothing on this response could answer before.
+	//
+	// ConfigRevision above says what configuration the backend holds, and
+	// that is what a read command compares to find out whether it is
+	// looking at the same world. It cannot answer this question, because
+	// it is a hash of configuration content: a staging and a production
+	// instance built from one template report the same revision, and
+	// those are exactly the two an operator points the wrong address at.
+	// So a routed WRITE compares this instead, and refuses when the
+	// engine it reached is not the deployment the command was typed at.
+	//
+	// Empty means this process cannot name its deployment (a nil backend,
+	// or an identity file that could not be read). A client must read
+	// that as unable to confirm rather than as agreement: two processes
+	// that both answer nothing are not thereby one deployment.
+	DeploymentID string `json:"deployment_id"`
+
 	// Ready is issue #104 (B3.4)'s startup-readiness flag
 	// (docs/EPIC-B-multi-nas.md §46.1/§36): true once this process has a
 	// backend wired that has actually completed its startup sequence
@@ -100,9 +118,10 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 	// ConfigRevision in that case rather than panicking matches this
 	// package's existing "not fully wired yet is a degraded response, not
 	// a crash" posture.
-	var configRevision string
+	var configRevision, deploymentID string
 	if h.backend != nil {
 		configRevision = h.backend.ConfigRevision()
+		deploymentID = h.backend.DeploymentID()
 	}
 	writeJSON(w, http.StatusOK, versionResponse{
 		APIVersion:     "v1",
@@ -111,6 +130,7 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 		GoVersion:      v.GoVersion,
 		EngineVersion:  v.EngineVersion,
 		ConfigRevision: configRevision,
+		DeploymentID:   deploymentID,
 		Ready:          isReady(h.backend),
 		Configured:     h.configured(),
 	})

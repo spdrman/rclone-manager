@@ -90,6 +90,23 @@ func startFakeEngine(t *testing.T, configPath string) *fakeEngine {
 	return e
 }
 
+// startFakeEngineFor stands an engine up over a configuration file of its
+// own that names the SAME deployment as cliConfig.
+//
+// Two files, one deployment, and both halves matter. Two files is what
+// lets a test assert that a routed write changed the engine's
+// configuration and left the CLI's alone, which is the whole of what
+// routing means. One deployment is what #555 made necessary: a routed
+// write now asks the engine which deployment it serves and refuses when
+// it is not the one the command was typed at, so a fixture with two
+// journals would drive that refusal on every row instead of the route the
+// row is about. It is also the truthful arrangement, since a real CLI and
+// a real engine share one config.yaml and one journal.
+func startFakeEngineFor(t *testing.T, cliConfig string) *fakeEngine {
+	t.Helper()
+	return startFakeEngine(t, writeTestConfigFor(t, cliConfig))
+}
+
 // baseURL is the address the CLI is told to reach this engine at.
 func (e *fakeEngine) baseURL() string { return e.server.URL }
 
@@ -217,6 +234,8 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 	}
 
 	switch {
+	case r.Method == http.MethodGet && path == "/system/version":
+		e.systemVersion(w, r)
 	case r.Method == http.MethodPost && path == "/ssh-keys":
 		e.importKey(w, r)
 	case r.Method == http.MethodPost && path == "/ssh/host-key-probe":
@@ -234,6 +253,29 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 	default:
 		refuse(w, http.StatusNotFound, apicontract.ErrorCodeInternal, "this fake engine serves no "+r.Method+" "+path)
 	}
+}
+
+// systemVersion is GET /system/version, and it is the call a routed write
+// makes before it sends anything (#555).
+//
+// Every value comes from the real BackupService behind this engine, the
+// deployment identity included. That is what makes the check under test
+// able to fail: an identity typed into a fixture would agree with whatever
+// the test wanted it to agree with, and the whole question is whether the
+// engine at the other end is the deployment the command was typed at.
+func (e *fakeEngine) systemVersion(w http.ResponseWriter, _ *http.Request) {
+	v := service.BuildVersion("dev", "none")
+	writeJSON(w, http.StatusOK, apicontract.VersionResponse{
+		APIVersion:     apicontract.Version,
+		CoreVersion:    v.CoreVersion,
+		Commit:         v.Commit,
+		GoVersion:      v.GoVersion,
+		EngineVersion:  v.EngineVersion,
+		ConfigRevision: e.svc.ConfigRevision(),
+		DeploymentID:   e.svc.DeploymentID(),
+		Ready:          e.svc.Ready(),
+		Configured:     true,
+	})
 }
 
 func (e *fakeEngine) importKey(w http.ResponseWriter, r *http.Request) {

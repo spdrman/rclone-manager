@@ -136,7 +136,7 @@ func refuseThroughAnEngine(t *testing.T, in refusingInput) (int, string) {
 	t.Helper()
 	configPath := writeTestConfig(t)
 	keyPath := writeTestPrivateKey(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, configPath)
 	engine.attach(t)
 	attachEngineTo(t, configPath)
 	before := readFile(t, configPath)

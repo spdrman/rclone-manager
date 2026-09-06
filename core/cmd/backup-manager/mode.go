@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -72,6 +74,15 @@ import (
 // quiet or otherwise, and there is no path through settleConfigWriteMode
 // on which an engine-attached command with no route returns a usable
 // claim.
+//
+// #555 added a third way to fail here, and it is the one an operator is
+// most likely to cause. A route can be named, built and reachable and
+// still lead to a DIFFERENT deployment, which is what one wrong character
+// in $BACKUP_MANAGER_API_URL looks like on a host running two of these.
+// That used to succeed silently. It is now settled in the same act as the
+// other two, before anything is sent, and it announces itself in words of
+// its own rather than borrowing the no-route sentence; deploymentcheck.go
+// holds the reasoning.
 //
 // # And there is no third mode
 //
@@ -185,6 +196,18 @@ type modeDecision struct {
 	// inferred, and "through the engine" without saying which engine is
 	// half a report.
 	routeAddress string
+
+	// misaimedAt is the address of an engine that answered and turned out
+	// to be serving a DIFFERENT deployment (#555), already redacted, or
+	// "" when that is not what happened.
+	//
+	// It is a third refusal shape rather than a variation on the second
+	// because they are different facts about an operator's host. "No
+	// route to the engine serving this deployment" sends somebody to set
+	// $BACKUP_MANAGER_API_URL; "the route goes somewhere else" sends them
+	// to correct one they have already set. Printing the first when the
+	// second is true would send them looking for a setting they made.
+	misaimedAt string
 }
 
 // heldBy names the state database the serving process announced, or the
@@ -252,6 +275,9 @@ func (d modeDecision) announce(announceTo, refuseTo io.Writer) {
 	// invocation is in, and swallowing the command because the
 	// announcement could not be delivered would be the worse answer.
 	switch {
+	case d.mode == engineAttachedMode && d.misaimedAt != "":
+		_, _ = fmt.Fprintf(refuseTo, "%s%s. Another process is serving this deployment (state database %s) and the engine at %s serves a different deployment, so the change is refused here rather than sent to a deployment this command was not typed at.\n",
+			modeLinePrefix, d.mode, d.heldBy(), d.misaimedAt)
 	case d.mode == engineAttachedMode && d.route != nil:
 		_, _ = fmt.Fprintf(announceTo, "%s%s. Another process is serving this deployment (state database %s), so this command hands the change to it at %s rather than writing %s itself.\n",
 			modeLinePrefix, d.mode, d.heldBy(), d.routeAddress, d.configFile)
@@ -313,7 +339,7 @@ func (d modeDecision) refusal() error {
 // granted, an engine that got there first is already visible to the
 // question below, and one that arrives later cannot finish starting until
 // the claim is released.
-func enterConfigWriteMode(configPath string, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
+func enterConfigWriteMode(ctx context.Context, configPath string, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
 	guard, err := service.BeginConfigWrite(configPath)
 	if err != nil {
 		return nil, err
@@ -328,7 +354,7 @@ func enterConfigWriteMode(configPath string, attach attachFunc, announceTo, refu
 	// operator matching either sentence against their own deployment
 	// needs the file, not the directory they typed.
 	resolved := config.ResolvePath(configPath)
-	return settleConfigWriteMode(guard, modeDecision{
+	return settleConfigWriteMode(ctx, guard, modeDecision{
 		engine:     engine,
 		configFile: resolved,
 		because:    fmt.Sprintf("that process read %s when it started and nothing re-reads that file", resolved),
@@ -368,7 +394,7 @@ func enterFirstConfigWriteMode(configFile, stateDatabase string, announceTo, ref
 	// configured; POST /system/first-run is the wrong operation to send an
 	// already-configured engine, and there is no other. So engine-attached
 	// here is still exactly what it was: a refusal.
-	write, err := settleConfigWriteMode(guard, modeDecision{
+	write, err := settleConfigWriteMode(context.Background(), guard, modeDecision{
 		engine:     engine,
 		configFile: config.ResolvePath(configFile),
 		because:    "that process read its configuration when it started and nothing re-reads it",
@@ -396,7 +422,7 @@ func enterFirstConfigWriteMode(configFile, stateDatabase string, announceTo, ref
 // direct mode would be reaching for an engine this command has just
 // established is not there, and would turn a stray environment variable
 // into a change aimed at somebody else's deployment.
-func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
+func settleConfigWriteMode(ctx context.Context, guard *service.ConfigWriteGuard, d modeDecision, attach attachFunc, announceTo, refuseTo io.Writer) (*configWrite, error) {
 	d.mode = directMode
 	if d.engine != nil {
 		d.mode = engineAttachedMode
@@ -404,7 +430,14 @@ func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, atta
 
 	var attachErr error
 	if d.mode == engineAttachedMode && attach != nil {
-		d.route, d.routeAddress, attachErr = attach()
+		d.route, d.routeAddress, attachErr = attach(ctx, d.engine)
+	}
+	// Read out of the error rather than returned beside it, so a future
+	// attachFunc cannot report a misaimed route without producing an
+	// error, or an error without the announcement matching it.
+	var misaimed *wrongDeploymentError
+	if errors.As(attachErr, &misaimed) {
+		d.misaimedAt = misaimed.address
 	}
 
 	d.announce(announceTo, refuseTo)
@@ -432,7 +465,13 @@ func settleConfigWriteMode(guard *service.ConfigWriteGuard, d modeDecision, atta
 // passing nil rather than by omitting a step is what makes the unrouted
 // writes visible: they are call sites that deliberately hand over
 // nothing, not call sites that forgot.
-type attachFunc func() (configWriteRoute, string, error)
+//
+// It is handed the engine it is attaching to (#555), because a route is
+// only usable if it leads to THAT deployment, and the check that says so
+// needs to know which one this command is standing in. It is handed a
+// context because it now makes a request: attachToEngine asks the engine
+// which deployment it serves before it hands a route back.
+type attachFunc func(ctx context.Context, engine *service.RunningEngine) (configWriteRoute, string, error)
 
 // configWrite is one settled configuration write: the claim that keeps the
 // decision true, and the route it decided on, which is nil for a write

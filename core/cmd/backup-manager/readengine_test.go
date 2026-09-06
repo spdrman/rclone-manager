@@ -148,8 +148,15 @@ func (e *readEngine) serve(w http.ResponseWriter, r *http.Request) {
 		e.write(w, apicontract.VersionResponse{
 			APIVersion:     apicontract.Version,
 			ConfigRevision: e.svc.ConfigRevision(),
-			Configured:     true,
-			Ready:          e.svc.Ready(),
+			// The real one, off the real service, because #555's check is
+			// whether the engine at the other end is the deployment the
+			// command was typed at. An identity typed in here would agree
+			// with whatever a test wanted it to agree with, and the
+			// per-command questions below would go back to being asked of
+			// a world nobody had established was the right one.
+			DeploymentID: e.svc.DeploymentID(),
+			Configured:   true,
+			Ready:        e.svc.Ready(),
 		})
 
 	case rel == "/backup-sets":

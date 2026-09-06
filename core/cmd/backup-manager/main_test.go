@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,51 @@ func TestRun_VersionSucceeds(t *testing.T) {
 func writeTestConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	return writeTestConfigIn(t, dir, filepath.Join(dir, "state.db"))
+}
+
+// writeTestConfigFor is writeTestConfig for a SECOND configuration file
+// that describes the same deployment as other.
+//
+// It exists for the engine-attached tests (#543, #555). Those stand an
+// engine up over a configuration file of its own and point the CLI at a
+// different one, which is what lets them assert that a routed write
+// changed the engine's file and not the CLI's. What they must not do is
+// make the two files two DEPLOYMENTS: a routed write now checks that the
+// engine it reached is the deployment the command was typed at
+// (deploymentcheck.go), so two journals would be refused, correctly, and
+// every one of those tests would be driving the refusal instead of the
+// route it is about.
+//
+// The journal is the deployment, so both files name one journal and
+// everything else about them is their own. That is also the truthful
+// arrangement: a real CLI and a real engine share one config.yaml and one
+// journal, and the second file here is a fixture's way of watching one end
+// without disturbing the other.
+func writeTestConfigFor(t *testing.T, other string) string {
+	t.Helper()
+	return writeTestConfigIn(t, t.TempDir(), journalNamedByTestConfig(t, other))
+}
+
+// journalNamedByTestConfig reads the state database out of a configuration
+// this file wrote, so the caller above does not have to reconstruct a path
+// from a convention and then drift from it.
+func journalNamedByTestConfig(t *testing.T, configPath string) string {
+	t.Helper()
+	const key = "  database: "
+	for _, line := range strings.Split(readFile(t, configPath), "\n") {
+		if strings.HasPrefix(line, key) {
+			return strings.TrimSpace(strings.TrimPrefix(line, key))
+		}
+	}
+	t.Fatalf("%s names no state database, so nothing here can say which deployment it is", configPath)
+	return ""
+}
+
+// writeTestConfigIn is the fixture itself: one deployment, in dir, with
+// its journal at dbPath.
+func writeTestConfigIn(t *testing.T, dir, dbPath string) string {
+	t.Helper()
 	remoteDir := filepath.Join(dir, "remote")
 	localDir := filepath.Join(dir, "local")
 	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
@@ -58,7 +104,6 @@ func writeTestConfig(t *testing.T) string {
 	}
 
 	configPath := filepath.Join(dir, "config.yaml")
-	dbPath := filepath.Join(dir, "state.db")
 	content := "poll_interval: 15m\n" +
 		"state:\n" +
 		"  database: " + dbPath + "\n" +
