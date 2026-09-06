@@ -1,27 +1,26 @@
 {
   "version": "0.3.1",
-  "commit": "eac085e6072cdb6b56875a91339bc475a8c69f21",
-  "generated_at": "2026-09-06T01:53:15Z",
+  "commit": "f6077d6c6508a34f4114dd91094b34db1fedb5c2",
+  "generated_at": "2026-09-06T22:24:21Z",
   "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; distribution/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
   "architectures": [
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "backup-manager": "cf10f406afa2c1eda8c7c6aa4d3dbe156db2fc9bee5a85c3889235be235658c9",
-        "backup-manager-web": "a3a86b36e32a673b40bc49ef7bd62eae7c944860c4b8ee8610ffc8465aaca72f"
+        "backup-manager": "b80311b0aae0833f591d0190bc9d94fd5abd8b889451b5904bd6860a35659ae6",
+        "backup-manager-web": "99057189f322cef26e03cfd4eb2dd593fa09fc27f66e9fcb31765d04e35042d5"
       },
-      "local_image_id_sha256": "450741ef4e3b40689c025f65efb6e56fb1e266faaa61c848c6b6d10dbdefa249",
+      "local_image_id_sha256": "0869e481b720cbe973ddb1da5ba04337e25bd39405842cdbf1c33b07d316a491",
       "registry_digest": null
     },
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "backup-manager": "243e00b458cc451a6195f2512ee3b4623a4bcab5e483ee1c5202d54921ea681c",
-        "backup-manager-web": "4ad25c69ee21249290d3c3a429aa13bc6d342b1b0b0851fe7c53b42488eb85cd"
+        "backup-manager": "19ec8ed0844c8ef21bbf122259f857435dcaa1eefdb998c0fb18380d34e75c1a",
+        "backup-manager-web": "e5e442ed10b50da7967ffd9c8a5a7198239fbafc6ba744a8272e99928d287727"
       },
-      "local_image_id_sha256": "3b15b631a3cff20e2601c1124b7741520f449ae00d1489cb63a0f74c5db452e8",
+      "local_image_id_sha256": "c7501a885a5a4601f258b933c1966a4f6e6c65921da39c3162741a5fee6418a3",
       "registry_digest": null
     }
-  ],
-  "index_digest": null
+  ]
 }
