@@ -533,7 +533,7 @@ regardless of everything above.
 **Hardware:** A UGREEN NAS running UGOS Pro
 **Deliverable:** `docs/submission/ugreen.md` (UGREEN App Center)
 
-**This section is written and not yet runnable.** EPIC D's #83 has produced no `.UPK`, so there is nothing to install. It is here so that #178 has the procedure waiting rather than writing a second one, and the preflight records every UGREEN row as not yet applicable rather than as a failure. Nothing in this section is EPIC B's to run, and nothing in it can hold Phase 5 open.
+**This section is written and still not runnable, and the reason has changed.** EPIC D's #83 has produced a `.UPK`, so the preflight now decides every UGREEN row with the same rules it uses on every other store. What is still missing is the install: the App Center needs a person at the UGOS desktop, and the account on the device this was built against is SSH-only, `/ugreen/@appstore/` is root-owned, `sudo` wants a password and `ugcli` has no install subcommand. `apps/ugos/docs/upk-acceptance-procedure.md` §6 is the standing record. It is here so that #178 has the procedure waiting rather than writing a second one, and nothing in this section is EPIC B's to run or can hold Phase 5 open.
 
 ### UGOS Pro: install
 

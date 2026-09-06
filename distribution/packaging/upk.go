@@ -2,6 +2,7 @@ package packaging
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -664,13 +665,10 @@ func readArchiveMetadata(tarPath string) (archiveMetadata, error) {
 		if hdr.Typeflag != tar.TypeReg {
 			return nil
 		}
-		name := path.Clean(hdr.Name)
-		if hdr.Size > smallBlobLimit && !strings.HasSuffix(name, ".json") {
-			return nil
-		}
 		if hdr.Size > smallBlobLimit {
 			return nil
 		}
+		name := path.Clean(hdr.Name)
 		body, err := io.ReadAll(io.LimitReader(r, smallBlobLimit+1))
 		if err != nil {
 			return err
@@ -839,12 +837,12 @@ func maybeGunzip(r io.Reader) (io.Reader, error) {
 	var magic [2]byte
 	n, err := io.ReadFull(r, magic[:])
 	if err == io.EOF {
-		return strings.NewReader(""), nil
+		return bytes.NewReader(nil), nil
 	}
 	if err != nil && err != io.ErrUnexpectedEOF {
 		return nil, err
 	}
-	head := io.MultiReader(strings.NewReader(string(magic[:n])), r)
+	head := io.MultiReader(bytes.NewReader(magic[:n]), r)
 	if n == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		return gzip.NewReader(head)
 	}

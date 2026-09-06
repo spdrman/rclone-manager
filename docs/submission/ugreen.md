@@ -7,14 +7,23 @@ packaging metadata under `(EPIC D)`.
 
 That store's own published requirements: https://www.ugreen.com/pages/nas-developer
 
-**This checklist is ready and its target is not.** EPIC D's #83 has produced no `.UPK`,
-so there is nothing to submit yet, and #178 is the work package that submits it.
+**The target exists now.** EPIC D's #83 built `apps/ugos/upk`, a `ugcli` project that
+packages the canonical release, and #178 is still the work package that submits it. Every
+UGREEN row in `docs/conformance/submission-preflight.md` used to read not-yet-applicable
+because there was nothing to preflight; they are decided by the same rules as every other
+store now, exactly as this file said would happen, with no change to any rule.
 
-That is the whole point of this file existing now. #178 consumes this bundle and the
-recorded verdict in `docs/conformance/submission-preflight.md` rather than assembling a
-second copy of either, and every UGREEN row in that report reads not-yet-applicable rather
-than failing, so nothing here can hold EPIC B's Phase 5 open. The day the `.UPK` exists,
-the same mechanism decides this column with no change to any rule.
+What has not changed is that this column cannot hold EPIC B's Phase 5 open. It never could,
+and the reason was never the missing artifact: the `.UPK`'s acceptance runs on hardware this
+repository does not own. Being decided and being gating are two different things and only
+the first one moved.
+
+Two things are still outstanding before anyone clicks submit, and neither is a rule this
+repository can decide. The App Center install has not been performed, because it needs a
+person at the UGOS desktop and an account that is not SSH-only;
+`apps/ugos/docs/upk-acceptance-procedure.md` §6 is the standing record of what that leaves
+unproven. And the UGOS frontend bridge is not the bridge an installed deployment loads,
+because the canonical image carries five per-provider bundles and has no room for a sixth.
 
 ## Materials
 
