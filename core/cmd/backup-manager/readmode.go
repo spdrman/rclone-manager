@@ -244,19 +244,22 @@ func enterReadMode(ctx context.Context, configPath string, cfg *config.Config, a
 		return d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and this command has no route to it (%v)", engine.StateDatabase, err), announceTo), nil
 	}
 
-	version, err := client.SystemVersion(ctx)
+	// Named for what it is rather than `version`, which is this package's
+	// own build stamp: two different facts one letter apart is how a
+	// wrong one gets printed.
+	served, err := client.SystemVersion(ctx)
 	if err != nil {
 		return d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and it did not answer at %s (%v)", engine.StateDatabase, client.BaseURL(), err), announceTo), nil
 	}
 
 	local := service.ConfigRevisionOf(cfg)
-	if version.ConfigRevision != local {
+	if served.ConfigRevision != local {
 		// Announced as unconfirmed rather than as engine-attached: the
 		// engine answered, but what it answered is that this command is
 		// holding a different deployment's configuration, so nothing that
 		// follows would have been about the engine's world.
 		d = d.unconfirmed(fmt.Sprintf("another process is serving this deployment (state database %s) and holds a different configuration", engine.StateDatabase), announceTo)
-		return d, configDivergence(engine, d.configFile, local, version.ConfigRevision)
+		return d, configDivergence(engine, d.configFile, local, served.ConfigRevision)
 	}
 
 	d.mode = engineAttachedMode
