@@ -56,7 +56,7 @@ import (
 // and #544 the CLI is not a second implementation of the same decision, it
 // is a caller of the first one.
 //
-// # What these three tests establish, stated no more strongly than it is
+// # What this establishes, stated no more strongly than it is
 //
 // The issue's words are that a CLI mutation must be "visible over HTTP and
 // in the Web UI without a restart". That is proved below in the only sense
@@ -70,6 +70,14 @@ import (
 // the two routes cannot disagree about the CONFIGURATION they answer from,
 // and the fields they still cannot be compared on are enumerated in
 // unreportedOnTheWire below, as an executed list rather than a paragraph.
+//
+// Two of the tests here record a gap rather than a property, and both say
+// so in their own name. A read on a deployment that has not been told where
+// its engine is announces `unconfirmed` rather than being prevented, which
+// is the shipped container's own default. And a routed WRITE compares no
+// revision at all, so one wrong character in $BACKUP_MANAGER_API_URL writes
+// into a different deployment's engine, which is driven rather than
+// speculated about.
 //
 // # The Web UI itself
 //
@@ -1158,3 +1166,125 @@ func reportLines(out string) []string {
 // something a deployment feels, so this has to notice one rather than
 // follow it.
 const modeLine = "mode: "
+
+// TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWereServing
+// is the containerised operator's own default, which is the case #545's
+// first proof does NOT cover.
+//
+// Nothing in container/compose.yaml sets $BACKUP_MANAGER_API_URL, so on a
+// shipped deployment today every read finds a serving engine, has no route
+// to it, and answers from the file. #544 chose to answer rather than refuse,
+// for a reason worth repeating: a write that cannot reach the engine has an
+// alternative, which is not writing, and a read has none. Taking `status`
+// away from every operator whose deployment has not been told where its own
+// engine is, at the moment something is already wrong, would buy nothing an
+// announcement does not.
+//
+// So what is asserted is the announcement, in both directions. The answer
+// still comes, and it does not claim to be about a world nobody checked:
+// "mode: direct. No process has announced itself as serving this
+// deployment" is a false sentence here, and a read that printed it would be
+// #535 with a reassuring line on top.
+func TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWereServing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	var reads int
+	for _, s := range surfaces {
+		if s.mode == "" || s.writes {
+			continue
+		}
+		reads++
+		t.Run(s.verb+" "+s.name, func(t *testing.T) {
+			f := newFixture(t, bin, s)
+			release, err := service.AnnounceServing(f.configPath)
+			if err != nil {
+				t.Fatalf("announcing this process as serving %s: %v", f.configPath, err)
+			}
+			defer func() { _ = release() }()
+
+			got := runCLI(t, bin, nil, s.argv(f)...)
+			if got.code != s.exit {
+				t.Fatalf("a read beside an engine it cannot reach exited %d, want %d; it is meant to answer rather than refuse\n%s", got.code, s.exit, got)
+			}
+			if strings.TrimSpace(got.stdout) == "" {
+				t.Errorf("the read answered with nothing at all, so the whole point of not refusing was lost:\n%s", got)
+			}
+			if !strings.Contains(got.stderr, "mode: unconfirmed") {
+				t.Errorf("the read did not say its answer had not been checked against the process serving this deployment:\n%s", got)
+			}
+			if strings.Contains(got.stderr, "mode: direct") {
+				t.Errorf("the read said nothing had announced itself as serving this deployment, and something had:\n%s", got)
+			}
+		})
+	}
+	if reads != 4 {
+		t.Fatalf("%d rows are recorded as reads that name a mode; #544 gave four surfaces one, and a table that has lost or gained one is describing a different product", reads)
+	}
+}
+
+// TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo records a gap
+// rather than a property, and it is the sharpest one left.
+//
+// A read compares the engine's own config_revision against the one this
+// command computed, so a read aimed at the wrong engine refuses (that is
+// TestTheTwoRoutesCannotDisagreeAboutTheConfiguration's second case). A
+// WRITE compares nothing. $BACKUP_MANAGER_API_URL is taken as naming this
+// deployment's engine, and one character wrong in a port names somebody
+// else's, on a host running two of these. The write then lands there, with
+// this deployment's own configuration file untouched and both surfaces
+// reporting success.
+//
+// This drives exactly that: two deployments, a create typed at the first
+// with the second's address in the environment, and the set arrives in the
+// second. It is asserted as it behaves today, deliberately, because a gap
+// nobody has run is a gap nobody can size. config_revision is the hook that
+// would close it and it is already on the wire; doing that is a separate
+// issue, and when somebody does, this test goes red, which is the reminder
+// that it was closed rather than a cost.
+func TestARoutedWriteDoesNotCheckWhichDeploymentItIsWritingTo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against two real engines")
+	}
+	bin := buildCLI(t, repoRoot(t))
+
+	_, mine := writeFixture(t)
+	_, theirs := writeFixture(t)
+	if readFile(t, mine) == readFile(t, theirs) {
+		t.Fatal("the two fixtures are byte-identical, so this test could not tell which deployment a write landed in")
+	}
+	// Both deployments are served, which is the shape this is about: one
+	// host running two of these, each with its own engine. Without an
+	// engine on the near side the command would be in direct mode and
+	// would never look at the route at all, which is how the first draft
+	// of this test managed to prove nothing.
+	home := startStack(t, mine)
+	elsewhere := startStack(t, theirs)
+	near := signIn(t, home.uiURL)
+	view := signIn(t, elsewhere.uiURL)
+
+	mineBefore := readFile(t, mine)
+	nearBefore := near.backupSets()
+	theirsBefore := view.backupSets()
+
+	// The address of the OTHER deployment's engine, which is what a
+	// mistyped port looks like from here.
+	got := runCLI(t, bin, routeTo(elsewhere.engineURL), createArgs(mine, writePrivateKey(t), newSetID)...)
+	if got.code != 0 {
+		t.Fatalf("this test records what happens when the write is accepted; it was refused, which would mean the gap has closed and this test should be rewritten as the guard it is waiting for:\n%s", got)
+	}
+
+	if after := readFile(t, mine); after != mineBefore {
+		t.Error("the deployment the operator typed this at changed on disk, which no routed write should do")
+	}
+	if after := near.backupSets(); !equal(after, nearBefore) {
+		t.Errorf("the near deployment's own engine took the change after all\nbefore: %v\nafter:  %v", nearBefore, after)
+	}
+	theirsAfter := view.backupSets()
+	if !contains(theirsAfter, newSetID) {
+		t.Fatalf("the create was accepted and landed in neither deployment\ntheirs before: %v\ntheirs after:  %v\n%s", theirsBefore, theirsAfter, got)
+	}
+	t.Logf("recorded: a routed create typed at %s was written into the deployment %s serves, and nothing anywhere compared the two. config_revision is on the wire and is what would catch it", mine, theirs)
+}
