@@ -1594,8 +1594,8 @@ describe("listSets joins the per-set health report (issue #245)", () => {
           json: async () => ({ generated_at: "2026-08-30T10:00:00Z", backup_sets: health })
         });
       }
-      // GET /backup-sets returns the list; GET /backup-sets/{id} returns
-      // one set on its own, and both go through this join.
+      // GET /backup-sets returns the list; GET /backup-sets/{source}/{set}
+      // returns one set on its own, and both go through this join.
       const one = url.replace(/^.*\/backup-sets/, "") !== "";
       return Promise.resolve({
         ok: true,

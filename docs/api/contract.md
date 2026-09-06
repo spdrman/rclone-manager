@@ -115,6 +115,24 @@ Descriptions are deliberately exempt: a schema is allowed to say "this is not an
 rclone remote", and a check that could not tell a description from an identifier
 would be watered down until it fired on nothing.
 
+### `scripts/api/check-contract-drift.sh` says a security block disagrees with an extension
+
+One operation declares whether it needs a session and the double-submit token in
+two places, and the two say different things. `security` is the standard OpenAPI
+block an external consumer or an off-the-shelf generator reads;
+`x-authenticated` and `x-csrf-required` are the extensions `gen-bindings.go`
+obeys, and they are the ones that reach `apicontract.Endpoint`. So the generated
+bindings can be byte-for-byte correct while the published document tells an
+outside reader something else entirely, which is what happened: fifteen of the
+forty-six operations were mutating, sat behind `requireCSRF` at runtime, and
+said nothing about CSRF in `security` (PR #546 review). The fix is the contract,
+in whichever direction is true of the route, and then `scripts/api/generate.sh`.
+
+A `security` block this rule cannot read is a failure too, never a skip. It
+expects exactly one requirement set per operation, which is all this contract
+has ever declared; a list of alternatives means the rule needs rewriting rather
+than relaxing.
+
 ### `scripts/api/check-client-paths.sh` says a client path is not a declared operation
 
 `ui/shared/src/api/client.ts` asks for a `(method, path)` that
@@ -134,11 +152,20 @@ the client asks for.
 The check is static. It reads `client.ts`, strips its comments (they quote paths,
 and a gate a comment can satisfy is not a gate), and reduces each request
 expression back to a pattern: an interpolated value becomes `{}`, so
-`"/backup-sets/" + id` reduces to `/backup-sets/{}` and the contract's
-`/backup-sets/{id}` normalises to the same thing. A conditional yields both of
-its branches rather than one guess, which is how `listArtifacts`' optional query
-string is checked as the two URLs it can really build. No npm install, no
+`"/settings"` stays `/settings` and `retentionPath(source, set)` reduces to
+`/backup-sets/{}/{}`, which is what the contract's
+`/backup-sets/{source}/{set}/retention` normalises to. A conditional yields both
+of its branches rather than one guess, which is how `listArtifacts`' optional
+query string is checked as the two URLs it can really build. No npm install, no
 bundler, no browser.
+
+One consequence is worth knowing, because it is what made this gate catch a real
+defect rather than only guard against one. A placeholder stands for exactly one
+segment on both sides, so a client that pastes a composite id in whole
+(`"/backups/" + id`) reduces to `/backups/{}` and cannot match a contract that
+declares three parameters. That is not the gate being fussy: the id really is
+three segments on the wire, and a client that treats it as one has no way to
+escape it correctly. Both sides now spell the segments out.
 
 Three properties are worth knowing before changing it:
 
@@ -205,7 +232,7 @@ the real chi route table rather than a list somebody maintains.
 
 ### `scripts/api/selftest.sh`
 
-Twenty-seven mutation controls, each planting one real violation in a copy of
+Thirty-three mutation controls, each planting one real violation in a copy of
 the real tree and asserting the check fails **with the message that names the
 planted reason**, plus two negative controls proving the static gates are clean
 on the unmutated tree. A gate nobody has watched fail is a gate that might not

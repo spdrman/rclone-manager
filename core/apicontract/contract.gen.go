@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "49fde036bcc7b714639364914393b04cd1b4d1941abd695269b3f998600ab558"
+const ContractSHA256 = "04bd50d849b30c82118f2639c3de6ef6439a0b89a11e7ad4c51388f6ff498611"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -325,17 +325,6 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "getBackupSet", Method: "GET", Path: "/backup-sets/{id}",
-		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
-		RequestSchema: "", ResponseSchema: "BackupSet", SuccessStatus: 200,
-		ErrorCodes: map[int][]ErrorCode{
-			401: {ErrorCodeUnauthenticated},
-			404: {ErrorCodeBackupSetNotFound},
-			500: {ErrorCodeInternal},
-			503: {ErrorCodeNotConfigured},
-		},
-	},
-	{
 		ID: "removeBackupSet", Method: "DELETE", Path: "/backup-sets/{source}/{set}",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
@@ -345,6 +334,17 @@ var Endpoints = []Endpoint{
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getBackupSet", Method: "GET", Path: "/backup-sets/{source}/{set}",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -490,7 +490,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "getArtifact", Method: "GET", Path: "/backups/{id}",
+		ID: "getArtifact", Method: "GET", Path: "/backups/{source}/{set}/{name}",
 		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "Artifact", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
@@ -500,7 +500,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "retryFailedIngestion", Method: "POST", Path: "/backups/{id}/retry",
+		ID: "retryFailedIngestion", Method: "POST", Path: "/backups/{source}/{set}/{name}/retry",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "RetryFailedRequest", ResponseSchema: "", SuccessStatus: 204,
 		ErrorCodes: map[int][]ErrorCode{
@@ -575,7 +575,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "reinstateArtifact", Method: "POST", Path: "/quarantine/{id}/reinstate",
+		ID: "reinstateArtifact", Method: "POST", Path: "/quarantine/{source}/{set}/{name}/reinstate",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "ArtifactReinstateResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
@@ -587,7 +587,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "retryArtifactIngestion", Method: "POST", Path: "/quarantine/{id}/retry",
+		ID: "retryArtifactIngestion", Method: "POST", Path: "/quarantine/{source}/{set}/{name}/retry",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
 		ErrorCodes: map[int][]ErrorCode{
@@ -599,7 +599,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "revalidateArtifact", Method: "POST", Path: "/quarantine/{id}/revalidate",
+		ID: "revalidateArtifact", Method: "POST", Path: "/quarantine/{source}/{set}/{name}/revalidate",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "ArtifactCheckResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
@@ -799,14 +799,14 @@ type ArtifactCheckResponse struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// ArtifactReinstateResponse is POST /quarantine/{id}/reinstate. Re-checks one quarantined
-// backup's durable local copy and, when what it finds is enough,
-// returns it to the state it already held so it counts as a restore
-// point again. `reinstated` and `passed` are separate: `passed` is
-// the verdict of the checks, `reinstated` is whether the backup
-// actually moved. A backup reinstated this way NEVER authorises
-// deleting its remote source again; that forfeiture is permanent and
-// is what makes the action safe to offer.
+// ArtifactReinstateResponse is POST /quarantine/{source}/{set}/{name}/reinstate. Re-checks one
+// quarantined backup's durable local copy and, when what it finds is
+// enough, returns it to the state it already held so it counts as a
+// restore point again. `reinstated` and `passed` are separate:
+// `passed` is the verdict of the checks, `reinstated` is whether the
+// backup actually moved. A backup reinstated this way NEVER
+// authorises deleting its remote source again; that forfeiture is
+// permanent and is what makes the action safe to offer.
 type ArtifactReinstateResponse struct {
 	Checked    bool   `json:"checked"`
 	Passed     bool   `json:"passed"`
@@ -1465,12 +1465,12 @@ type RetentionVerdict struct {
 	Tiers          []string                 `json:"tiers,omitempty"`
 }
 
-// RetryFailedRequest is POST /backups/{id}/retry's optional body. Everything about the
-// retry is decided by the backup's own recorded state, so there is
-// nothing here that changes what happens: the note is recorded
-// alongside the transition so a later failure of the same backup
-// carries the context of what was tried last time, rather than only
-// that something was.
+// RetryFailedRequest is POST /backups/{source}/{set}/{name}/retry's optional body.
+// Everything about the retry is decided by the backup's own recorded
+// state, so there is nothing here that changes what happens: the
+// note is recorded alongside the transition so a later failure of
+// the same backup carries the context of what was tried last time,
+// rather than only that something was.
 type RetryFailedRequest struct {
 	Note string `json:"note,omitempty"`
 }
@@ -1498,18 +1498,18 @@ type SessionResponse struct {
 	Username string `json:"username"`
 }
 
-// SetEnabledRequest is POST /backup-sets/{id}/enabled. A disabled backup set is excluded
-// from every run cycle and nothing already backed up is touched,
-// which is why this is state-changing but not destructive.
+// SetEnabledRequest is POST /backup-sets/{source}/{set}/enabled. A disabled backup set is
+// excluded from every run cycle and nothing already backed up is
+// touched, which is why this is state-changing but not destructive.
 type SetEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
-// SetReadOnlyRequest is POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup
-// set's read-only status (issue #282). Turning it on only prevents a
-// future deletion; turning it back off does not retroactively
-// authorise deleting anything already retained under it, so this is
-// state-changing but not destructive.
+// SetReadOnlyRequest is POST /backup-sets/{source}/{set}/read-only. Declares, or
+// withdraws, a backup set's read-only status (issue #282). Turning
+// it on only prevents a future deletion; turning it back off does
+// not retroactively authorise deleting anything already retained
+// under it, so this is state-changing but not destructive.
 type SetReadOnlyRequest struct {
 	ReadOnly bool `json:"read_only"`
 }

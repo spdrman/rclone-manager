@@ -1242,12 +1242,35 @@ function perSetHealth(): Promise<Map<string, WireBackupSetHealth>> {
 }
 
 /** apps/common/webhost/router.go's `{source}/{set}` route params
- *  (model.BackupSetID's own composite shape), URL-encoded independently.
- *  The contract spells the same thing as one `{id}` that spans segments;
- *  the router registers two, because chi matches a parameter per segment.
+ *  (model.BackupSetID's own composite shape), URL-encoded independently,
+ *  which is also how api/v1/openapi.json publishes them.
  *  See BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
 const backupSetPath = (source: string, set: string) =>
   "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set);
+
+/** One segment of a composite id, URL-encoded on its own.
+ *
+ *  A backup set is "source/set" and a backup is "source/set/name", so both
+ *  identities span path segments. A path parameter matches exactly one
+ *  segment everywhere it is consumed, in chi and in any client that
+ *  escapes what it is handed, so the paths below spell out the segments
+ *  the id is made of rather than pasting the whole id in as one. The
+ *  contract used to publish these as a single `{id}`, and that was the
+ *  defect: the second client to be written from the document escaped its
+ *  parameter, as it should, and asked for `production%2Fpostgres`. */
+const idSegment = (id: string, n: number) => encodeURIComponent(id.split("/")[n] ?? "");
+
+/** GET /backup-sets/{source}/{set}, from the composite id a caller holds. */
+const backupSetIdPath = (id: string) => "/backup-sets/" + idSegment(id, 0) + "/" + idSegment(id, 1);
+
+/** /backups/{source}/{set}/{name}, from the composite id a caller holds. */
+const artifactPath = (id: string) =>
+  "/backups/" + idSegment(id, 0) + "/" + idSegment(id, 1) + "/" + idSegment(id, 2);
+
+/** /quarantine/{source}/{set}/{name}: the same backup, under the three
+ *  operator actions a quarantined one has. */
+const quarantinedArtifactPath = (id: string) =>
+  "/quarantine/" + idSegment(id, 0) + "/" + idSegment(id, 1) + "/" + idSegment(id, 2);
 
 const retentionPath = (source: string, set: string) => backupSetPath(source, set) + "/retention";
 
@@ -1297,7 +1320,7 @@ export const httpApi: BackupManagerApi = {
       ([r, health]) => r.backup_sets.map((bs) => fromWireBackupSet(bs, health.get(bs.id)))
     ),
   getSet: (id) =>
-    Promise.all([request<WireBackupSet>("/backup-sets/" + id), perSetHealth()]).then(([bs, health]) =>
+    Promise.all([request<WireBackupSet>(backupSetIdPath(id)), perSetHealth()]).then(([bs, health]) =>
       fromWireBackupSet(bs, health.get(bs.id))
     ),
   // POST /operations with a run_cycle action, not a per-set run route.
@@ -1423,7 +1446,7 @@ export const httpApi: BackupManagerApi = {
     request<WireListArtifactsResponse>(
       "/backups" + (setId ? "?setId=" + encodeURIComponent(setId) : "")
     ).then((r) => r.artifacts.map(fromWireArtifact)),
-  getArtifact: (id) => request<WireArtifact>("/backups/" + id).then(fromWireArtifact),
+  getArtifact: (id) => request<WireArtifact>(artifactPath(id)).then(fromWireArtifact),
 
   listOperations: () =>
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
@@ -1431,13 +1454,13 @@ export const httpApi: BackupManagerApi = {
     request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
   listQuarantine: () =>
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
-  revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
-  retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
+  revalidate: (id) => post(quarantinedArtifactPath(id) + "/revalidate"),
+  retryIngestion: (id) => post(quarantinedArtifactPath(id) + "/retry"),
   // Issue #419. A different path and a different refusal from the one
   // above, because FAILED and QUARANTINED are different facts about a
   // backup: one is not finished, the other is not trusted.
   retryFailedIngestion: (id, note) =>
-    request<void>("/backups/" + id + "/retry", {
+    request<void>(artifactPath(id) + "/retry", {
       method: "POST",
       body: JSON.stringify(note ? { note } : {})
     }).then(() => undefined),
@@ -1446,7 +1469,7 @@ export const httpApi: BackupManagerApi = {
   // not a rejection, so a caller that ignored the body could not tell that
   // from a success.
   reinstate: (id) =>
-    request<WireArtifactReinstateResponse>("/quarantine/" + id + "/reinstate", { method: "POST" }).then((r) => ({
+    request<WireArtifactReinstateResponse>(quarantinedArtifactPath(id) + "/reinstate", { method: "POST" }).then((r) => ({
       reinstated: r.reinstated,
       checked: r.checked,
       passed: r.passed,

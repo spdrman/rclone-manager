@@ -33,10 +33,17 @@ func (c *Client) ListBackupSets(ctx context.Context) (apicontract.ListBackupSets
 	return out, err
 }
 
-// GetBackupSet is GET /backup-sets/{id}.
-func (c *Client) GetBackupSet(ctx context.Context, id string) (apicontract.BackupSet, error) {
+// GetBackupSet is GET /backup-sets/{source}/{set}.
+//
+// Two arguments rather than one composite id, because that is what the
+// contract publishes and what the engine routes. It used to be one, back
+// when the document spelled this path "/backup-sets/{id}": fillPath
+// escapes a parameter, as it must, so "production/postgres" went out as
+// "production%2Fpostgres" and every backup set that existed came back
+// BACKUP_SET_NOT_FOUND (PR #546 review).
+func (c *Client) GetBackupSet(ctx context.Context, source, set string) (apicontract.BackupSet, error) {
 	var out apicontract.BackupSet
-	err := c.call(ctx, "getBackupSet", []string{id}, nil, &out)
+	err := c.call(ctx, "getBackupSet", []string{source, set}, nil, &out)
 	return out, err
 }
 

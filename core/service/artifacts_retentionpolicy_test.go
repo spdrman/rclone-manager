@@ -132,10 +132,10 @@ func TestListArtifacts_SaysWhichBackupsNoPolicyGovernsAndWhichAreStillGoverned(t
 }
 
 // TestGetArtifact_SaysWhichPolicyGovernsOneBackup is the same claim on the
-// single-artifact read, because GET /api/v1/backups/{id} is where an
-// operator lands after clicking the row the list flagged, and a detail
-// page that silently disagreed with the list it came from would be worse
-// than either answer alone.
+// single-artifact read, because GET /api/v1/backups/{source}/{set}/{name}
+// is where an operator lands after clicking the row the list flagged, and
+// a detail page that silently disagreed with the list it came from would
+// be worse than either answer alone.
 func TestGetArtifact_SaysWhichPolicyGovernsOneBackup(t *testing.T) {
 	svc, _, _, _ := openRemovalFixtureService(t)
 	ctx := context.Background()
