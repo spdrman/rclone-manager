@@ -215,13 +215,29 @@ func (r *UPKReport) String() string {
 // carry, because `docker save` discards it: the registry digest the image
 // was pulled at.
 type UPKImageSource struct {
-	Reference    string `json:"reference"`
+	Reference string `json:"reference"`
+	// Digest is the digest the image was PULLED BY, which is the one
+	// statement here that is verified rather than asserted: a pull by
+	// digest is content-checked by the daemon, so a mismatch never
+	// produces a local image at all.
 	Digest       string `json:"digest"`
 	Architecture string `json:"architecture"`
 	Tar          string `json:"tar"`
 	FetchedAt    string `json:"fetched_at"`
 	FetchedBy    string `json:"fetched_by"`
-	Note         string `json:"note,omitempty"`
+	// DaemonRepoDigests is every digest the local daemon says it holds
+	// this image under, recorded verbatim.
+	//
+	// It is a list and not one value because the daemon legitimately
+	// reports two for a multi-architecture release: the index digest and
+	// this architecture's own manifest digest, in an order nothing
+	// promises. Reading [0] and calling it "the digest" picks the index
+	// on one machine and the manifest on another, which is how a package
+	// ends up recording a digest that does not match the architecture it
+	// contains. So the pull digest above is the claim, and this is what
+	// the daemon was seen to agree with.
+	DaemonRepoDigests []string `json:"daemon_repo_digests,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 // upkProject is the part of a ugcli project.yaml this verifier reads.
@@ -547,6 +563,11 @@ func checkUPKDigest(r *UPKReport, arch string, source *UPKImageSource, c Canonic
 			fmt.Sprintf("image-source.json records architecture %q inside rootfs_%s", source.Architecture, arch))
 		return
 	}
+	if !daemonHeld(source) {
+		r.add(UPKCheckRegistryDigestParity, UPKFail,
+			fmt.Sprintf("image-source.json says the image was fetched at %s and records the daemon holding %v, which does not include it", source.Digest, source.DaemonRepoDigests))
+		return
+	}
 	r.add(UPKCheckRegistryDigestParity, UPKPass,
 		fmt.Sprintf("fetched at %s, the digest the release records for %s", recorded, arch))
 }
@@ -868,6 +889,23 @@ func composeImageReferences(path string) (map[string]string, error) {
 		out[name] = svc.Image
 	}
 	return out, nil
+}
+
+// daemonHeld reports whether the sidecar's own record of the local daemon
+// agrees that it held the digest the package was fetched at. An empty
+// list is not a disagreement: a sidecar written by hand, or by an older
+// build script, records no daemon at all, and the pull digest is still
+// the claim.
+func daemonHeld(source *UPKImageSource) bool {
+	if len(source.DaemonRepoDigests) == 0 {
+		return true
+	}
+	for _, held := range source.DaemonRepoDigests {
+		if held == source.Digest || strings.HasSuffix(held, "@"+source.Digest) {
+			return true
+		}
+	}
+	return false
 }
 
 func rel(base, p string) string {
