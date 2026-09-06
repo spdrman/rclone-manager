@@ -49,7 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -73,6 +73,17 @@ DIRECTORY rather than a file mounted on its own, because #196 made the directory
 writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
 pass the directory and it resolves `config.yaml` inside it. `backup-manager` with no
 arguments prints that same list and exits 2.
+
+**No command in that table calls the API.** `backup-manager` opens its own service over the
+same `config.yaml` and state database an engine uses, so a `backup-set create`, `patch`,
+`remove` or `settings patch` typed at a terminal reaches an engine that is already running
+only when that engine restarts. There is no config watcher and no SIGHUP reload in this
+build, and that is what issue #535 cost a real install: a `create` through `docker exec`
+against a live server succeeded, `sources` listed both new sets, and the Web UI showed
+nothing until the engine was restarted. The help text used to describe these commands as
+"the same operation `POST /api/v1/backup-sets` performs", which is true inside one process
+and reads as a promise about the running one. Issue #536 is the campaign that makes the two
+surfaces one live system; until it lands, this paragraph is the whole of the truth.
 
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, last-known-good protection, local prune,
@@ -334,7 +345,8 @@ deployment or the hundredth edit of an existing one. Write the file, run `check`
 wizard's route calls, and `--state-database` names the journal that first configuration
 points at (defaulting to `/data/state/state.db`, the packaged mount). An operator standing
 at a freshly installed NAS therefore has one command to type, not a wizard to open, and the
-two surfaces still reach the same code.
+two surfaces still reach the same code. Same code, two processes: see the note under the
+command table above for what that does and does not mean against a server already running.
 
 **Enabling or disabling a backup set is a config-file field.** `POST
 /backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`

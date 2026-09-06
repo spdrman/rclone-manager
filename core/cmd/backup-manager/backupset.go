@@ -102,6 +102,29 @@ func backupSetVerbNames() []string {
 // set of rules growing here is what backupsetcreate_test.go's refusal
 // table exists to catch.
 //
+// # Sharing the service layer is not reaching the running one
+//
+// Worth saying next to the paragraph above, because that paragraph is
+// exactly what makes the mistake easy. Sharing a service layer is a claim
+// about code, not about liveness. There is no HTTP client anywhere under
+// core/cmd/backup-manager, so none of these verbs calls the API and none
+// of them reaches an engine that is already up: each one opens its own
+// BackupService over the same config.yaml and state database, writes,
+// hot-reloads its OWN view of the file, and exits. A daemon in another
+// process read its configuration when it started and there is no watcher
+// and no SIGHUP reload, so it keeps serving what it loaded until it is
+// restarted.
+//
+// That is issue #535: a `backup-set create` through docker exec against a
+// live server succeeded, `sources` listed both sets, and the Web UI showed
+// nothing. The help text and the doc comments here had said these verbs
+// were "the same operation POST /api/v1/backup-sets performs", which is
+// true inside one process and reads as a promise about the running one, so
+// #539 corrected every one of them. EPIC #536 is what changes the
+// behaviour: phase 1 refuses a write aimed at a configuration a running
+// engine holds, phase 2 gives this tree an API client and a mode it names
+// in its output. Until then, the accurate sentence is the one above.
+//
 // # The two create paths, and why one verb covers both
 //
 // A configured instance folds a new set into the file it already has
@@ -307,8 +330,11 @@ func (f *backupSetFlags) refuseEveryFlagBut(verb string, mine ...string) int {
 	return usageError("backup-set %s: --%s is not a %s flag; passing it here would change nothing and exit 0", verb, wrong, verb)
 }
 
-// backupSetCreate is the `create` verb: the same operation POST
-// /api/v1/backup-sets performs, through the same service layer.
+// backupSetCreate is the `create` verb: the same service layer POST
+// /api/v1/backup-sets is built on, reached in this process rather than by
+// calling that route. Nothing under this directory has an HTTP client, so
+// a create here never reaches a running engine; see the note on the
+// package's process boundary above cmdBackupSet.
 func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 	// Both pairs below are alternatives, not a preference order. A caller
 	// who passed both has not said which one they meant, and picking one
@@ -363,9 +389,11 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 	return createIntoExistingConfig(ctx, *f.cfgPath, *f.keyFile, *f.trustHostKey, req)
 }
 
-// backupSetPatch is the `patch` verb: the same operation PATCH
-// /api/v1/backup-sets/{source}/{set} performs, through the same
-// BackupService.UpdateBackupSet.
+// backupSetPatch is the `patch` verb: the same
+// BackupService.UpdateBackupSet that PATCH
+// /api/v1/backup-sets/{source}/{set} is built on, called in this process
+// rather than over that route. The hot reload it triggers is this
+// process's own, and this process then exits.
 func backupSetPatch(f *backupSetFlags, id string) int {
 	req, named := buildBackupSetPatch(f)
 	req.AcknowledgeRepoint = *f.acknowledgeRepoint
@@ -390,9 +418,10 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	return 0
 }
 
-// backupSetRemove is the `remove` verb: the same operation DELETE
-// /api/v1/backup-sets/{source}/{set} performs, through the same
-// BackupService.RemoveBackupSet.
+// backupSetRemove is the `remove` verb: the same
+// BackupService.RemoveBackupSet that DELETE
+// /api/v1/backup-sets/{source}/{set} is built on, called in this process
+// rather than over that route.
 //
 // It asks for no confirmation, and that is a decision rather than an
 // omission. Nothing this removes is a backup: every artifact the set
@@ -485,7 +514,7 @@ const defaultStateDatabase = "/data/state/state.db"
 
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST
-// /api/v1/backup-sets calls.
+// /api/v1/backup-sets calls, in this process.
 func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
 	svc, cleanup, err := openBackupService(ctx, configPath)
 	if err != nil {
