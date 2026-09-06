@@ -238,6 +238,63 @@ func TestAReadRefusesWhenTheEngineHoldsADifferentConfiguration(t *testing.T) {
 	}
 }
 
+// TestAReadRefusesWhenTheEngineServesADifferentDeployment is #555 on the
+// reading side, folded in with the write guard because it is the same
+// mistake and the same one line of environment.
+//
+// The revision comparison above cannot catch this on its own. A revision
+// is a hash of configuration content, so a staging and a production
+// instance built from one template report the same one, and a read pointed
+// at the wrong instance passed it and printed the other instance's world.
+// What tells them apart is the deployment identity, which is minted per
+// journal and has nothing to do with what any configuration says.
+//
+// The two deployments here also hold different configurations, because two
+// deployments on one filesystem cannot help it: a state database path is
+// part of a configuration and two journals cannot share a path. So the
+// refusal is asserted for the reason it has to be the identity check that
+// produced it, by its words rather than by its exit code alone.
+func TestAReadRefusesWhenTheEngineServesADifferentDeployment(t *testing.T) {
+	for _, rc := range readCommands {
+		t.Run(rc.name, func(t *testing.T) {
+			configPath := seededDeployment(t)
+			// A whole other deployment, journal and all, which is what an
+			// address one character wrong reaches on a host running two of
+			// these.
+			engine := startReadEngine(t, configPath, seededDeployment(t))
+			engine.use(t)
+
+			mine, err := service.DeploymentIdentity(journalNamedByTestConfig(t, configPath))
+			if err != nil {
+				t.Fatalf("reading this deployment's own identity: %v", err)
+			}
+			theirs := engine.svc.DeploymentID()
+			if mine == "" || theirs == "" || mine == theirs {
+				t.Fatalf("the two deployments report %q and %q, so this test is not driving two deployments at all", mine, theirs)
+			}
+
+			var out string
+			code := 0
+			stderr := captureStderr(t, func() {
+				out = captureStdout(t, func() { code = run(rc.args(configPath)) })
+			})
+
+			if code == 0 {
+				t.Errorf("%s exited 0 while checking itself against an engine serving a different deployment, so an operator was shown a world that is not theirs\nstdout:\n%s\nstderr:\n%s", rc.name, out, stderr)
+			}
+			if !strings.Contains(stderr, mine) || !strings.Contains(stderr, theirs) {
+				t.Errorf("the refusal does not name both deployments (%s here, %s there), and an operator who has just mistyped an address needs to see the one they meant beside the one they reached:\n%s", mine, theirs, stderr)
+			}
+			if strings.Contains(stderr, "holding a different configuration") {
+				t.Errorf("the read refused on a configuration comparison rather than on which deployment it had reached, which is the check that cannot see two instances built from one template:\n%s", stderr)
+			}
+			if strings.Contains(out, "postgres-primary") {
+				t.Errorf("%s printed its own answer anyway\nstdout:\n%s", rc.name, out)
+			}
+		})
+	}
+}
+
 // steadyStatus replaces the lines a surface is allowed to disagree with
 // itself about, in both answers, and fails if a pattern matched neither.
 //
@@ -420,6 +477,144 @@ func TestTheReadModeIsDecidedOncePerInvocation(t *testing.T) {
 			}
 			if probes != 1 {
 				t.Errorf("%s asked whether an engine is serving this deployment %d times; a decision asked twice is two answers about a world that can change in between", rc.name, probes)
+			}
+		})
+	}
+}
+
+// TestAReadStillComparesConfigurationsWhenNeitherSideCanNameItsDeployment
+// is #559's first finding, and it is #535 coming back through the door
+// this issue had just closed.
+//
+// The identity check returned as soon as either side could not name
+// itself, so the revision comparison underneath it never ran. Both of
+// those emptinesses are the ordinary state of a fleet mid-rollout:
+// served.DeploymentID is "" on every engine older than this build, and
+// mine is "" on every deployment until the first restart that mints one.
+// So on the four commands an operator runs when something is already
+// wrong, a read beside an engine holding a different configuration went
+// back to printing this host's own world and exiting 0 under a caveat
+// line, which is exactly the shape #544 exists to prevent.
+//
+// An identity nobody can confirm is a reason to check less confidently,
+// and never a reason to stop checking what still works.
+func TestAReadStillComparesConfigurationsWhenNeitherSideCanNameItsDeployment(t *testing.T) {
+	for _, rc := range readCommands {
+		t.Run(rc.name, func(t *testing.T) {
+			configPath := seededDeployment(t)
+			engine := startReadEngine(t, configPath, divergedConfig(t, configPath))
+			engine.anonymous = true
+			engine.use(t)
+			hideDeploymentIdentity(t, configPath)
+
+			var out string
+			code := 0
+			stderr := captureStderr(t, func() {
+				out = captureStdout(t, func() { code = run(rc.args(configPath)) })
+			})
+
+			if code == 0 {
+				t.Errorf("%s exited 0 while the process serving this deployment held a different configuration, because neither end could name its deployment; an unconfirmable identity stopped a check that still worked\nstdout:\n%s\nstderr:\n%s", rc.name, out, stderr)
+			}
+			if strings.Contains(out, "postgres-primary") {
+				t.Errorf("%s printed its own answer anyway\nstdout:\n%s", rc.name, out)
+			}
+		})
+	}
+}
+
+// TestAReadDoesNotTreatTwoUnnamedDeploymentsAsOne is the read side of the
+// sub-rule deploymentcheck.go calls load-bearing.
+//
+// Here the two configurations agree, so the revision comparison passes and
+// there is nothing to refuse. What must not happen is the announcement
+// claiming this answer was checked against the process serving this
+// deployment, because nothing established that the engine at the other end
+// IS that process: two instances built from one template share a revision,
+// which is the whole reason the identity exists.
+func TestAReadDoesNotTreatTwoUnnamedDeploymentsAsOne(t *testing.T) {
+	configPath := seededDeployment(t)
+	engine := startReadEngine(t, configPath, configPath)
+	engine.anonymous = true
+	engine.use(t)
+	hideDeploymentIdentity(t, configPath)
+
+	var out string
+	code := 0
+	stderr := captureStderr(t, func() {
+		out = captureStdout(t, func() { code = run([]string{"sources", "--config", configPath}) })
+	})
+
+	if code != 0 {
+		t.Fatalf("sources exited %d beside an engine holding the configuration it just read; a read that cannot confirm a deployment still has to answer\nstdout:\n%s\nstderr:\n%s", code, out, stderr)
+	}
+	if strings.Contains(stderr, engineAttachedReadLine) {
+		t.Errorf("the read announced that another process is serving this deployment and holds the same configuration, on evidence that amounts to two processes both naming nothing\nstderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, unconfirmedReadLine) {
+		t.Errorf("the read did not say its answer was unconfirmed\nstderr:\n%s", stderr)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Errorf("the read printed nothing at all, so the whole point of not refusing was lost\nstderr:\n%s", stderr)
+	}
+}
+
+// TestAnUnconfirmedReadSaysWhichEndCouldNotNameItself splits a sentence
+// that used to merge two facts with different remedies.
+//
+// "One of the two could not say which deployment it is" leaves an operator
+// to work out which one, and the two answers send them to different
+// places: a deployment with no identity yet is fixed by restarting the
+// process that serves it, and an engine that names none is a process to
+// restart onto this build. mode.go makes the same argument for the write
+// path, one file over.
+func TestAnUnconfirmedReadSaysWhichEndCouldNotNameItself(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(t *testing.T, configPath string, engine *readEngine)
+		wantSay string
+		wantNot string
+	}{
+		{
+			name: "this deployment has no identity yet",
+			arrange: func(t *testing.T, configPath string, engine *readEngine) {
+				hideDeploymentIdentity(t, configPath)
+			},
+			wantSay: "this deployment has no identity yet",
+			wantNot: "answered without naming a deployment",
+		},
+		{
+			name: "the engine names no deployment",
+			arrange: func(t *testing.T, configPath string, engine *readEngine) {
+				engine.anonymous = true
+			},
+			wantSay: "answered without naming a deployment",
+			wantNot: "this deployment has no identity yet",
+		},
+		{
+			name: "neither end can",
+			arrange: func(t *testing.T, configPath string, engine *readEngine) {
+				engine.anonymous = true
+				hideDeploymentIdentity(t, configPath)
+			},
+			wantSay: "neither end could say",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := seededDeployment(t)
+			engine := startReadEngine(t, configPath, configPath)
+			engine.use(t)
+			tc.arrange(t, configPath, engine)
+
+			stderr := captureStderr(t, func() {
+				captureStdout(t, func() { run([]string{"sources", "--config", configPath}) })
+			})
+
+			if !strings.Contains(stderr, tc.wantSay) {
+				t.Errorf("the caveat does not say which end could not name itself, and the two have different remedies\nwant it to say: %s\nstderr:\n%s", tc.wantSay, stderr)
+			}
+			if tc.wantNot != "" && strings.Contains(stderr, tc.wantNot) {
+				t.Errorf("the caveat blames the wrong end\nmust not say: %s\nstderr:\n%s", tc.wantNot, stderr)
 			}
 		})
 	}

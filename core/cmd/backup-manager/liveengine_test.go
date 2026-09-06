@@ -38,6 +38,15 @@ import (
 // exited 0, is still the defect. Both are asserted for every mutating
 // verb.
 //
+// The first of those is asserted as an exact status rather than as "not
+// zero", which is issue #551. Exit 3 is this refusal and nothing else, so
+// a script can wait on it and abort on everything else, and every case
+// here that is NOT this refusal pins its own code for the same reason:
+// the probe that could not be performed stays at 1 and the usage mistake
+// typed beside a running engine stays at 2. A suite that only proved the
+// refusal exits 3 could not tell a working binary from one that exits 3
+// for everything.
+//
 // # And the half that keeps it honest
 //
 // Every case below is run twice: once with the engine up, once with
@@ -230,8 +239,9 @@ func TestAConfigurationWriteIsRefusedWhileAnEngineHoldsIt(t *testing.T) {
 				code = run(m.args(configPath, keyPath))
 			})
 
-			if code == 0 {
-				t.Errorf("%s exited 0 against a running engine; the engine never sees this write, so reporting success is the #535 defect\nstderr: %s", m.name, stderr)
+			if code != exitEngineHoldsDeployment {
+				t.Errorf("%s exited %d against a running engine, want %d; 0 would be the #535 defect the engine never sees, and any other non-zero leaves a script unable to tell this refusal from a deployment that is actually broken\nstderr: %s",
+					m.name, code, exitEngineHoldsDeployment, stderr)
 			}
 			if after := readFile(t, configPath); after != before {
 				t.Errorf("%s changed config.yaml behind a running engine\nbefore:\n%s\nafter:\n%s", m.name, before, after)
@@ -275,8 +285,8 @@ func TestAConfigurationWriteSucceedsWhenNothingIsRunning(t *testing.T) {
 				code = captureStdoutCode(t, func() int { return run(m.args(configPath, keyPath)) })
 			})
 
-			if code != 0 {
-				t.Fatalf("%s exited %d with nothing running, want 0\nstderr: %s", m.name, code, stderr)
+			if code != exitOK {
+				t.Fatalf("%s exited %d with nothing running, want %d\nstderr: %s", m.name, code, exitOK, stderr)
 			}
 			if after := readFile(t, configPath); after == before {
 				t.Errorf("%s exited 0 with nothing running but left config.yaml unchanged, so this arm proves nothing about the write", m.name)
@@ -309,8 +319,8 @@ func TestReadsAreStillAnsweredWhileAnEngineHoldsTheConfiguration(t *testing.T) {
 			stderr := captureStderr(t, func() {
 				code = captureStdoutCode(t, func() int { return run(tc.args) })
 			})
-			if code != 0 {
-				t.Errorf("%s exited %d beside a running engine, want 0; reads have always been allowed to share a journal\nstderr: %s", tc.name, code, stderr)
+			if code != exitOK {
+				t.Errorf("%s exited %d beside a running engine, want %d; reads have always been allowed to share a journal\nstderr: %s", tc.name, code, exitOK, stderr)
 			}
 		})
 	}
@@ -388,8 +398,9 @@ func TestAConfigurationWriteIsRefusedWhenTheEngineArrivesWhileStdinIsStillBeingR
 		})
 	})
 
-	if code == 0 {
-		t.Errorf("backup-set retention --policy-file - exited 0 with an engine that came up while it was reading stdin; the engine never sees this write\nstderr: %s", stderr)
+	if code != exitEngineHoldsDeployment {
+		t.Errorf("backup-set retention --policy-file - exited %d with an engine that came up while it was reading stdin, want %d; the engine never sees this write, and the refusal for it is the same refusal however late the engine arrived\nstderr: %s",
+			code, exitEngineHoldsDeployment, stderr)
 	}
 	if after := readFile(t, configPath); after != before {
 		t.Errorf("backup-set retention --policy-file - changed config.yaml behind an engine that started while it was reading stdin\nbefore:\n%s\nafter:\n%s", before, after)
@@ -430,8 +441,9 @@ func TestAFirstConfigurationIsRefusedWhileAnEngineServesThatJournal(t *testing.T
 		code = captureStdoutCode(t, func() int { return run(args) })
 	})
 
-	if code == 0 {
-		t.Errorf("backup-set create exited 0 writing a FIRST configuration at %s while an engine serves %s; that configuration is one nothing will ever read\nstderr: %s", mistyped, dbPath, stderr)
+	if code != exitEngineHoldsDeployment {
+		t.Errorf("backup-set create exited %d writing a FIRST configuration at %s while an engine serves %s, want %d; that configuration is one nothing will ever read, and the write that has no route at all is refused for the same reason as the ones that do\nstderr: %s",
+			code, mistyped, dbPath, exitEngineHoldsDeployment, stderr)
 	}
 	if _, err := os.Stat(mistyped); !os.IsNotExist(err) {
 		t.Errorf("a first configuration was written at %s while an engine serves %s (stat err = %v)", mistyped, dbPath, err)
@@ -461,8 +473,8 @@ func TestAFirstConfigurationIsWrittenWhenNothingServesThatJournal(t *testing.T) 
 	stderr := captureStderr(t, func() {
 		code = captureStdoutCode(t, func() int { return run(args) })
 	})
-	if code != 0 {
-		t.Fatalf("backup-set create exited %d writing a first configuration with nothing running, want 0\nstderr: %s", code, stderr)
+	if code != exitOK {
+		t.Fatalf("backup-set create exited %d writing a first configuration with nothing running, want %d\nstderr: %s", code, exitOK, stderr)
 	}
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("no first configuration at %s after an exit-0 create: %v", configPath, err)
@@ -508,8 +520,9 @@ func TestAConfigurationWriteIsRefusedWhenTheEngineCheckCannotBePerformed(t *test
 				code = captureStdoutCode(t, func() int { return run(m.args(configPath, keyPath)) })
 			})
 
-			if code == 0 {
-				t.Errorf("%s exited 0 while the engine check could not be performed; \"I could not tell\" and \"nothing is running\" are the same behaviour only if you are willing to write the file anyway\nstderr: %s", m.name, stderr)
+			if code != exitFailure {
+				t.Errorf("%s exited %d while the engine check could not be performed, want %d; 0 would mean \"I could not tell\" was downgraded to \"nothing is running\", and %d would send a script off to wait for an engine to stop when what is wrong is the host\nstderr: %s",
+					m.name, code, exitFailure, exitEngineHoldsDeployment, stderr)
 			}
 			if after := readFile(t, configPath); after != before {
 				t.Errorf("%s changed config.yaml while the engine check could not be performed\nbefore:\n%s\nafter:\n%s", m.name, before, after)
@@ -541,8 +554,9 @@ func TestSettingsPatchWithNoFlagsComplainsAboutTheFlagsBesideARunningEngine(t *t
 		code = captureStdoutCode(t, func() int { return run(args) })
 	})
 
-	if code == 0 {
-		t.Fatalf("run(%v) = 0, want non-zero (a patch must name at least one setting)\nstderr: %s", args, stderr)
+	if code != exitUsage {
+		t.Fatalf("run(%v) = %d, want %d; a patch that names no setting is a usage mistake wherever it is typed, and answering it with the engine's own exit code would send a script off to wait for a daemon to stop over a missing flag\nstderr: %s",
+			args, code, exitUsage, stderr)
 	}
 	if strings.Contains(stderr, "another process") {
 		t.Errorf("`settings patch` with no flags was answered with the engine refusal, so an operator is sent to stop a daemon over a missing flag:\n%s", stderr)

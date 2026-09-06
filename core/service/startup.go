@@ -114,6 +114,19 @@ const servingLockSuffix = ".serving-lock"
 // migration to undo) and risked everything, so it is now reached only on a
 // start that genuinely is about to change the schema.
 //
+// # What this does NOT do: name the deployment
+//
+// This sequence used to mint the deployment identity here, under the
+// startup lock, on the reasoning that every process opening the journal
+// passes through it exactly once. That is true and it is the wrong set of
+// processes. `backup-manager status`, `sources` and every routed write
+// come through here too, and none of them is serving anything, so a
+// deployment whose identity file was missing got a brand new name from
+// whichever CLI command happened to run next, while the engine went on
+// serving the old one. Minting now belongs to AnnounceServing
+// (liveengine.go), which exactly one kind of process calls: one that is
+// about to serve. deploymentidentity.go argues it at length.
+//
 // # Two locks, shared and exclusive
 //
 // The startup lock is held for this function's duration only, released

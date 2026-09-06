@@ -61,6 +61,13 @@ type readEngine struct {
 	// and a guard nobody has watched fail is not a guard.
 	stale bool
 
+	// anonymous makes GET /system/version answer with no deployment_id,
+	// which is every engine older than #555, one that could not read its
+	// own identity file, and one holding no deployment at all. A read has
+	// to be able to tell that apart from agreement: two processes that
+	// both name nothing are not thereby one deployment.
+	anonymous bool
+
 	mu   sync.Mutex
 	seen []string
 }
@@ -71,8 +78,17 @@ type readEngine struct {
 // The two paths are separate arguments so that a test can point the engine
 // at a configuration that is NOT the one the command under test loads,
 // which is the only way to arrange the divergence this issue exists to
-// catch. They name the same journal, because the journal is what a
-// deployment is.
+// catch. Usually they name the same journal, because the journal is what a
+// deployment is; #555's cases point them at two, which is a host running
+// two of these.
+//
+// Both journals get an announcement, and that is load-bearing rather than
+// tidy since #559: core/service mints a deployment identity in
+// AnnounceServing and nowhere else, so a second deployment nothing
+// announced would have no identity, and a test arranging "the engine
+// serves a DIFFERENT deployment" would really be arranging "the engine
+// names no deployment", which is a different refusal. It is also the
+// truthful shape: two deployments on one host have two engines.
 func startReadEngine(t *testing.T, configPath, enginePath string) *readEngine {
 	t.Helper()
 
@@ -81,6 +97,14 @@ func startReadEngine(t *testing.T, configPath, enginePath string) *readEngine {
 		t.Fatalf("announcing this process as serving %s: %v", configPath, err)
 	}
 	t.Cleanup(func() { _ = release() })
+
+	if journalNamedByTestConfig(t, enginePath) != journalNamedByTestConfig(t, configPath) {
+		releaseEngine, err := service.AnnounceServing(enginePath)
+		if err != nil {
+			t.Fatalf("announcing this process as serving the other deployment (%s): %v", enginePath, err)
+		}
+		t.Cleanup(func() { _ = releaseEngine() })
+	}
 
 	svc, closeSvc, err := service.Open(context.Background(), enginePath)
 	if err != nil {
@@ -145,11 +169,22 @@ func (e *readEngine) serve(w http.ResponseWriter, r *http.Request) {
 		e.write(w, apicontract.SessionResponse{Username: "operator"})
 
 	case rel == "/system/version":
+		deploymentID := e.svc.DeploymentID()
+		if e.anonymous {
+			deploymentID = ""
+		}
 		e.write(w, apicontract.VersionResponse{
 			APIVersion:     apicontract.Version,
 			ConfigRevision: e.svc.ConfigRevision(),
-			Configured:     true,
-			Ready:          e.svc.Ready(),
+			// The real one, off the real service, because #555's check is
+			// whether the engine at the other end is the deployment the
+			// command was typed at. An identity typed in here would agree
+			// with whatever a test wanted it to agree with, and the
+			// per-command questions below would go back to being asked of
+			// a world nobody had established was the right one.
+			DeploymentID: deploymentID,
+			Configured:   true,
+			Ready:        e.svc.Ready(),
 		})
 
 	case rel == "/backup-sets":

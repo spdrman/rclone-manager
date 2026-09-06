@@ -85,10 +85,31 @@ uses, writes, and exits; an engine started afterwards reads the new file when it
 something serving this deployment and an address for it, `backup-set create`, `patch` and
 `remove` and `settings patch` hand the change to that process over its own API, so it is made
 by the engine that will go on serving it and there is nothing to restart. With something
-serving and no address, the write is refused with nothing written and a non-zero exit, naming
+serving and no address, the write is refused with nothing written and exit 3, naming
 what was found and where the change can be made instead: there is still no config watcher and
 no SIGHUP reload in this build, so a change left in the file is one the serving process would
 never read.
+
+Exit 3 is that refusal and nothing else (issue #551). It is the one failure this binary has
+that is expected rather than broken, so a script that provisions backup sets can branch on 3
+and abort on everything else, without matching on the message to tell "somebody is serving
+this" apart from "your config.yaml is malformed".
+
+Branching on it is not the same as looping on it, and the first version of this said it was.
+A supervisor replacing a container meets 3 while the outgoing process still holds the lock,
+and that clears on its own in seconds, so waiting is exactly right. An engine serving steadily
+on a host where `BACKUP_MANAGER_API_URL` was never set meets it on every invocation for as
+long as that engine runs, and the sentence beside it says to stop that process or give this
+one a route. Both are 3, only the first one gets better by waiting, and the message is what
+tells them apart.
+
+1 is an ordinary failure, and it is also where the two route mistakes land: an address that
+did not answer, and an address that answered for a *different* deployment. Neither improves by
+being retried. 2 is nothing having run at all, which covers a wrong command line and a help
+request alike: `backup-manager check -h` is a correct command line, an answered request and an
+exit 2, because every subcommand returns the same status for whatever `flag` hands back and
+`flag.ErrHelp` is one of those. `backup-manager` with no arguments prints the whole table, and
+exits 2 for the same reason.
 
 Two writes have no route and are refused beside a serving engine. A `backup-set retention`
 that sets or clears a policy is one, and the API is not what stops it: the endpoints for
@@ -111,10 +132,37 @@ needs:
 Environment rather than flags, because a password on a command line is in every process listing
 on the host and in the shell history of whoever typed it, and because the address belongs to
 the host a command is typed on rather than to the deployment: loopback from inside the
-container, a published port from a NAS shell. One field does not survive the trip, and the
-routed command says so rather than making something up: the API's backup set carries no
-`stale_after`, so a routed `create` or `patch` prints it as not reported where a direct one
-prints the value.
+container, a published port from a NAS shell.
+
+Every field a routed `create` or `patch` writes now comes back from the engine, `stale_after`
+included: the API's backup set carries `stale_after_seconds` since #555, and before it did, a
+routed create printed "not reported" for a value the operator had typed on that same command
+line. What is left of that gap is the engine that is older than the field, which serves none,
+and against one of those the routed command still says "not reported" rather than making
+something up.
+
+Being told an address is not the same as the address being right, so a routed write asks the
+engine which deployment it serves before it sends anything, and refuses if the answer is not
+this one (#555). That closes the mistake a host running two instances from one compose file
+makes easily: one character wrong in the port and the write used to land in the other instance,
+quietly and with a success message. Two things about that check are worth knowing before the
+first upgrade rather than after it, because both live in Go comments and refusal strings today
+and neither is something to meet for the first time at three in the morning.
+
+**Both ends need a build that mints an identity.** A deployment names itself through a
+`<state-database>.deployment-id` file minted beside the journal, and an engine older than that
+serves no identity at all, so an existing install upgraded in place has nothing to compare
+until it has been restarted on the new build. Until then a routed write refuses rather than
+guessing, which is the right answer and is still a refusal: restart the engine first, then
+route. A fresh install mints its identity on its first start and never sees this.
+
+**And it is blind to a state directory copied wholesale.** The identity travels with the
+directory, so two deployments seeded by copying one carry the same name, claim to be each
+other, and accept each other's routed writes with the guard reporting a match. Cloning the
+IMAGE is fine, because each instance mints its own identity on its own first start; copying
+the state directory is what breaks it. Give the copy its own state directory, or take the
+`.deployment-id` file out of it before anything starts, and the next process to open the
+journal mints a fresh one.
 
 Reads work differently, because a read that cannot reach the engine still has to answer.
 `status`, `sources`, `artifacts` and `retention` are never refused for want of an address; they
@@ -122,11 +170,12 @@ say which world the answer is about instead, on a `mode:` line on stderr. `engin
 a serving process that holds the same configuration and was asked the same question.
 `direct` is nothing serving. `unconfirmed` is an answer taken from `config.yaml` that could not
 be checked against the process serving this deployment, because there was no address, or the
-engine did not answer, or the probe could not be performed, and it can disagree with what that
-process serves. A read does refuse in two cases, and they are the same fact twice: the serving
-process turns out to be holding a *different* configuration, or it answers the command's own
-question differently. Either way nothing at all is printed and the exit is non-zero, because an
-answer from here would describe a deployment nobody is running.
+engine did not answer, or the probe could not be performed, or one of the two ends could not
+say which deployment it is, and it can disagree with what that process serves. A read does refuse in three cases, and they are one fact three times over: the
+serving process turns out to be holding a *different* configuration, the engine at the address
+it was given turns out to be serving a *different deployment*, or it answers the command's own
+question differently. Any of the three prints nothing at all and exits non-zero, because an
+answer from here would describe a deployment nobody is running, or somebody else's.
 
 Nine invocations announce a mode, those four reads and the five configuration writes. The rest
 say nothing about one and are ordinary beside a live engine: `run`, `fetch`, `check`, `validate`
@@ -134,7 +183,9 @@ and the others, with the `settings` read and a `backup-set retention` that only 
 them. The one command a running engine refuses is a second `daemon`, or a second web host,
 against a state database something else is already serving. Two of them would run two schedules
 over one set of backups and hold two independent copies of one configuration, which is the
-divergence everything above exists to close.
+divergence everything above exists to close. A `daemon` refused that way exits 3 as well: it is
+the same fact as a refused configuration write, met from the other end, and the answer a
+supervisor wants for it is the same one, wait and try again.
 
 All of it is here because of what issue #535 cost a real install: a `create` through
 `docker exec` against a live server succeeded, `sources` listed both new sets, and the Web UI

@@ -36,6 +36,13 @@ import (
 // kernel reports whoever asks. What is being arranged here is the world
 // the mode decision reads, and a real daemon would arrange the same world
 // far more slowly.
+//
+// It is for the tests with NO engine behind the announcement: a
+// `backup-manager daemon`, which serves this deployment and no HTTP, and
+// the routes that were named and cannot be used. A test that stands a
+// fake engine up over this deployment does not call it, because
+// startFakeEngine announces for itself, and announcing twice over one
+// journal is refused by the exclusive serving lock, correctly.
 func attachEngineTo(t *testing.T, configPath string) {
 	t.Helper()
 	release, err := service.AnnounceServing(configPath)
@@ -54,9 +61,8 @@ func attachEngineTo(t *testing.T, configPath string) {
 // is untouched.
 func TestBackupSetCreateReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	before := readFile(t, cliConfig)
 	keyPath := writeTestPrivateKey(t)
@@ -159,9 +165,8 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cliConfig := writeTestConfig(t)
-			engine := startFakeEngine(t, writeTestConfig(t))
+			engine := startFakeEngineFor(t, cliConfig)
 			engine.attach(t)
-			attachEngineTo(t, cliConfig)
 
 			before := readFile(t, cliConfig)
 			var code int
@@ -190,9 +195,8 @@ func TestBackupSetPatchAndRemoveReachTheAttachedEngine(t *testing.T) {
 // pair of shapes in the same file.
 func TestSettingsPatchReachesTheAttachedEngine(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	before := readFile(t, cliConfig)
 	args := []string{"settings", "--config", cliConfig, "patch",
@@ -245,8 +249,8 @@ func TestAnEngineAttachedWriteIsStillRefusedWithNoRouteToTheEngine(t *testing.T)
 	stderr := captureStderr(t, func() {
 		code = captureStdoutCode(t, func() int { return run(args) })
 	})
-	if code == 0 {
-		t.Errorf("backup-set patch exited 0 beside an engine this command has no route to\nstderr: %s", stderr)
+	if code != exitEngineHoldsDeployment {
+		t.Errorf("backup-set patch exited %d beside an engine this command has no route to, want %d: this is the refusal an operator's script waits on and runs again, so it has to be told apart from an ordinary failure (#551)\nstderr: %s", code, exitEngineHoldsDeployment, stderr)
 	}
 	if after := readFile(t, cliConfig); after != before {
 		t.Errorf("backup-set patch changed config.yaml beside an engine this command has no route to")
@@ -290,9 +294,8 @@ func TestAnEngineAttachedWriteIsRefusedWhenTheRouteDoesNotAnswer(t *testing.T) {
 func TestTheModeIsAnnouncedOnBothRoutes(t *testing.T) {
 	t.Run("engine-attached", func(t *testing.T) {
 		cliConfig := writeTestConfig(t)
-		engine := startFakeEngine(t, writeTestConfig(t))
+		engine := startFakeEngineFor(t, cliConfig)
 		engine.attach(t)
-		attachEngineTo(t, cliConfig)
 
 		var out string
 		stderr := captureStderr(t, func() {
@@ -416,6 +419,12 @@ func TestAFirstConfigurationIsNotRouted(t *testing.T) {
 	keyPath := writeTestPrivateKey(t)
 	dbPath := filepath.Join(filepath.Dir(cliConfig), "state.db")
 
+	// A separate deployment, unlike every other engine in this file. This
+	// write is never routed at all (enterFirstConfigWriteMode passes no
+	// attachFunc), so the assertion below is that nothing reaches this
+	// engine even though it is reachable, and an engine that is a
+	// different deployment makes that a stronger statement rather than a
+	// weaker one.
 	engine := startFakeEngine(t, writeTestConfig(t))
 	engine.attach(t)
 	attachEngineTo(t, cliConfig)
@@ -457,9 +466,8 @@ func TestAFirstConfigurationIsNotRouted(t *testing.T) {
 // what to type instead.
 func TestAWindowTheWireCannotCarryIsRefusedRatherThanTruncated(t *testing.T) {
 	cliConfig := writeTestConfig(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, cliConfig)
 	engine.attach(t)
-	attachEngineTo(t, cliConfig)
 
 	args := createArgs(cliConfig, writeTestPrivateKey(t), "api/postgres",
 		"--completion-strategy", "stable", "--stable-for", "1500ms")

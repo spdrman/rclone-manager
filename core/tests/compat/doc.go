@@ -42,6 +42,28 @@
 // That is the difference between a suite that would catch the planted
 // violation and one that only looks like it would.
 //
+// # What a re-capture is allowed to carry
+//
+// COMPAT_UPDATE is how a pinned line changes, and for a long time it had
+// one setting: 1, meaning every cell at once. That made an honest small
+// change expensive and a careless one dangerous, because the sweep will
+// happily bring back drift in surfaces the commit is not about and nothing
+// in the diff says which hunk is which. EPIC #536 ran into it head on: a
+// change to six API path templates came back carrying about 117 lines from
+// five other surfaces, and the only reason that was safe is that somebody
+// read all 171 insertions by hand.
+//
+// So COMPAT_UPDATE takes cell names too, and naming a cell rewrites that
+// cell and nothing else. The sweep is still there for a first capture and
+// for a change that genuinely moves several surfaces, and it now says out
+// loud what it just did. See writeCorpus in compat_test.go.
+//
+// The other half of the same problem is a surface that was never captured
+// in the first place, which no comparison can notice. For the usage block
+// that is closed by TestUsage_EveryRegisteredCommandIsPinned over in
+// core/cmd/backup-manager: every verb the binary dispatches has to have its
+// entry line pinned here (#549).
+//
 // # Determinism, and the one place it is bought rather than assumed
 //
 // Every cell that can pin its clock does: the retention and prune verdicts

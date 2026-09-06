@@ -10,16 +10,23 @@ import (
 // attached, including the exit code. Prove that with the same input
 // against both routes."
 //
-// # What "identically" is worth here, and what it is not
+// # What "identically" is worth here
 //
-// The exit code half is cheap and this test says so out loud rather than
-// claiming more than it has. Every failure in this binary exits 1 (fail(),
-// setup.go) and every usage mistake exits 2, so an exit-code comparison
-// between two refusals is satisfied by construction today; issue #551 is
-// where that becomes a real signal. What the comparison is worth is that
-// it will start to mean something the moment #551 lands, and that a route
-// which turned a refusal into a usage error, or into a success, fails here
-// now.
+// The exit code half used to be cheap, and this test said so: every
+// failure in this binary exited 1 and every usage mistake 2, so comparing
+// two refusals' exit codes was satisfied by construction and proved that
+// the two routes agreed about nothing in particular.
+//
+// #551 gave that comparison something to compare. There is now a third
+// failure code, 3, and it means one thing: another process is serving this
+// deployment, so nothing was done. So a route that answered one of these
+// inputs with "the engine holds this" rather than with the refusal the
+// input actually earns is now visible here, which it was not before, and
+// the code each route exits with is asserted exactly rather than only
+// against the other. Both have to be the ordinary failure: these are
+// refusals about the REQUEST, and an engine-attached one is refused while
+// attached to an engine, which is exactly the confusion a script branching
+// on 3 would make if either route reached for it.
 //
 // The half that is worth something today is the REASON. The same input is
 // driven at both routes and the refusal the direct route printed has to
@@ -93,13 +100,30 @@ func TestARefusalIsTheSameOnBothRoutes(t *testing.T) {
 			directCode, directErr := refuseDirectly(t, in)
 			engineCode, engineErr := refuseThroughAnEngine(t, in)
 
-			if directCode == 0 || engineCode == 0 {
+			if directCode == exitOK || engineCode == exitOK {
 				t.Fatalf("this input was not refused on both routes, so there is no parity to compare: direct exited %d, engine-attached exited %d\ndirect: %s\nengine: %s",
 					directCode, engineCode, directErr, engineErr)
 			}
 			if directCode != engineCode {
 				t.Errorf("the same input exited %d directly and %d through the engine; a script cannot tell one refusal from the other\ndirect: %s\nengine: %s",
 					directCode, engineCode, directErr, engineErr)
+			}
+			// And they agree on the RIGHT code, which is the half that
+			// only became checkable with #551. Equal-to-each-other was
+			// satisfied by construction while there was one failure code;
+			// equal-to-1 says these refusals are about what was asked for,
+			// and that neither route has started reporting them as the
+			// deployment being busy, which is the one thing a script is
+			// meant to wait on.
+			for _, got := range []struct {
+				route string
+				code  int
+				out   string
+			}{{"directly", directCode, directErr}, {"through the engine", engineCode, engineErr}} {
+				if got.code != exitFailure {
+					t.Errorf("refused %s with exit %d, want %d; %d is reserved for another process holding this deployment, and a script that waited for an engine to stop over a request it will never accept would wait forever\n%s",
+						got.route, got.code, exitFailure, exitEngineHoldsDeployment, got.out)
+				}
 			}
 
 			reason := refusalReason(directErr)
@@ -136,9 +160,8 @@ func refuseThroughAnEngine(t *testing.T, in refusingInput) (int, string) {
 	t.Helper()
 	configPath := writeTestConfig(t)
 	keyPath := writeTestPrivateKey(t)
-	engine := startFakeEngine(t, writeTestConfig(t))
+	engine := startFakeEngineFor(t, configPath)
 	engine.attach(t)
-	attachEngineTo(t, configPath)
 	before := readFile(t, configPath)
 
 	var code int

@@ -75,5 +75,20 @@
 # build-under-test.json names 3a489d2 of this repository and has to move to
 # whatever commit this branch merges as, or #536's specs cannot go green
 # over there.
+#
+# Moved to 0673850, rclone-manager-tests#40, off their merged main again. #555
+# gives a read a third way to refuse, the engine at the address this host was
+# given turning out to serve a different deployment, so the banner says three
+# cases and g5 still pinned the sentence that said two. That is the pin
+# noticing a product change rather than drift, which is the whole point of it.
+#
+# g3 needed nothing this time even though the same batch appended four lines to
+# the banner's exit-code table, because g3 pins one line per command and a table
+# row is not a command.
+#
+# Verified before the bump rather than after: a stamped build of this branch
+# through RM_MODE=local runs the whole of Suite A green, 72 of 72. Their
+# build-under-test.json names 1bed795 and still has to move to this branch's
+# merge commit by hand, which is the half of the lockstep with no automation.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=b3fe0f8da458bc5d0c7175aa0cf719f2f378015c
+TESTS_REPO_SHA=067385086246c907dfb02a57aaf332061fca726e

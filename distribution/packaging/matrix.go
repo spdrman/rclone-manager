@@ -821,7 +821,15 @@ func ProcedureSection(path string, want *regexp.Regexp) (string, error) {
 // mentions "apps/generic's serve command" in a comment, which is prose
 // about the architecture, not a dependency on it.
 func ImportsProviderRe(provider string) *regexp.Regexp {
-	return regexp.MustCompile(`["'][^"']*apps/` + regexp.QuoteMeta(provider) + `/`)
+	// The newline in the negated class is load-bearing. Without it an
+	// apostrophe in ordinary prose opens a match that runs on across
+	// lines until it meets a provider path in a later comment, and the
+	// check then reports core as importing a provider because somebody
+	// wrote "this repository's" a few lines above the word. That is not
+	// hypothetical: it is how core/cmd/backup-manager/usagepins_test.go
+	// first tripped this. An import path and a string literal both live
+	// on one line, so refusing to cross one costs nothing real.
+	return regexp.MustCompile(`["'][^"'\n]*apps/` + regexp.QuoteMeta(provider) + `/`)
 }
 
 // ---------------------------------------------------------------------

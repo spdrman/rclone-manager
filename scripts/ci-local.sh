@@ -293,6 +293,21 @@ bash scripts/architecture/check-unowned-go.sh
 gate_step "the e2e drivers' --help is still the text it was (#514)"
 bash scripts/tests/e2e-help.test.sh
 
+# The two-machine proof's exit statuses, which are this gate's own ledger
+# seen from the other end (#551). That script says "this machine cannot
+# perform the proof" as exit 3, which the step below reads as a skip and
+# ledgers, and the CLI it drives now returns 3 for a refusal of its own.
+# One unguarded `bm` meeting that refusal would report a failed backup
+# proof as a machine that never tried, and the hook would allow the
+# commit. The script keeps its verdict on a number nothing else produces
+# and translates once at its own exit; this is what holds it there.
+#
+# Up here with the other static checks: it stands up no containers and
+# needs no daemon, it drives the real script with a stand-in `docker` and
+# `git` on PATH, and it costs about a second.
+gate_step "the two-machine proof's verdict is still its own number (#551)"
+bash scripts/tests/two-machine-exit-status.test.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 
@@ -319,8 +334,42 @@ else
   # derived from this run's own measured pace instead (issue #247's
   # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
   # is no fixed number to outgrow.
-  gate_docker_step "core/ go test -race ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance + tests/machinegate, run next)"
-  (cd core && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance|machinegate)$'))
+  gate_docker_step "core/ go test -race ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance + tests/machinegate and cmd/gotestwatch, all run next)"
+  (cd core && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -vE '/(tests/(crashmatrix|sftpintegration|miniointegration|conformance|machinegate)|cmd/gotestwatch)$'))
+
+  # cmd/gotestwatch is compiled and run rather than handed to `go test`,
+  # and the reason is the same three-outcome honesty this gate is built on
+  # (#160), one level down. Its TestMain keeps a ledger of controls that
+  # could not be measured and exits 3 when that ledger is not empty. The
+  # one it loses most often is #533's own live proof, which skips itself
+  # when the host stalls it harder than the 800ms its fixture plants: a
+  # loaded gate machine, which is precisely the machine that issue is
+  # about. `go test` flattens any non-zero status from a test binary into
+  # its own 1 and prints FAIL, so a run that merely lost that control
+  # reached this gate as a failure, indistinguishable from a watchdog that
+  # is actually broken. Run directly, the 3 survives and lands in the
+  # ledger, where it says which coverage this run does not have instead of
+  # claiming coverage it never got.
+  gate_step "core/ cmd/gotestwatch -race, reading its own INCOMPLETE (#533)"
+  gotestwatch_bin="$REPO_ROOT/.gotestwatch-gate.test"
+  (cd core && GOWORK=off go test -race -c -o "$gotestwatch_bin" ./cmd/gotestwatch)
+  # Not under `set -e`: 3 is a verdict this script has to READ, exactly as
+  # it reads the two-machine proof's below, and `set -e` would end the run
+  # on it before the ledger ever saw it.
+  set +e
+  (cd core/cmd/gotestwatch && "$gotestwatch_bin" -test.timeout=15m)
+  gotestwatch_status=$?
+  set -e
+  rm -f "$gotestwatch_bin"
+  case "$gotestwatch_status" in
+    0) ;;
+    3)
+      gate_note_skip "at least one of gotestwatch's own controls (the live bursty-host proof from #533, or the negative control from #401): this host could not be measured, so the watchdog's behaviour under load is guarded only by the synthetic-clock tests on this run. The run above names which."
+      ;;
+    *)
+      exit "$gotestwatch_status"
+      ;;
+  esac
 
   gate_docker_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance + tests/machinegate under gotestwatch, -race (issue #256: no fixed go test -timeout)"
   (cd core && GOWORK=off go run ./cmd/gotestwatch -race -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/... ./tests/machinegate/...)
@@ -507,6 +556,14 @@ fi
 # missing browser or a stopped daemon is, so the run ends INCOMPLETE and
 # says which proof it could not perform. Reporting ok for a backup nobody
 # proved would be the single worst version of #160.
+#
+# It exits 3 for that and for nothing else, which is a guarantee that had
+# to be built rather than assumed once the CLI it drives grew its own 3
+# (#551). That script keeps its verdict on a status nothing else produces
+# and translates once at its own exit, so a `bm` call meeting the CLI's
+# refusal arrives here as a failure rather than as a proof this machine
+# could not perform; scripts/tests/two-machine-exit-status.test.sh, up
+# with the static checks, is what holds it there.
 if [ "$FAST" != "1" ]; then
   if [ "${CI_LOCAL_SKIP_TWO_MACHINE:-0}" = "1" ]; then
     gate_note_skip "the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install can pull a real backup off a real machine (CI_LOCAL_SKIP_TWO_MACHINE=1)"

@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
 // Issue #537, Phase 1 of #536: telling whether an engine is already
@@ -185,6 +187,32 @@ func DetectRunningEngineForJournal(dbPath string) (*RunningEngine, error) {
 // needs. A lock that cannot be TAKEN is an error, and fails the start:
 // serving invisibly is the failure mode this whole file exists to
 // prevent.
+//
+// # Where this deployment gets its name
+//
+// This is also the one place that mints a deployment identity (#555,
+// deploymentidentity.go), and it is here because of who calls it: a
+// process about to serve, and nothing else. It used to sit in
+// runStartupSequence, which every CLI subcommand goes through, so a
+// `backup-manager status` against a deployment whose identity file had
+// gone missing renamed the deployment out from under the engine still
+// serving it, and every routed write afterwards refused against that
+// deployment's own engine.
+//
+// It is done after the lock is taken and before anything is opened. After
+// the lock, so the read-then-write inside it has one process in it at a
+// time. Before the open, because a client asks GET /system/version for
+// this and an identity that only appeared once a schema migration had
+// gone through would be missing on exactly the starts where the most is
+// happening.
+//
+// Its failure does not fail the start, and that is the rule rather than a
+// leniency: a deployment that refused to come up because it could not
+// name itself would trade a routed write that gets refused for a whole
+// deployment that is down. An engine that cannot name itself serves
+// deployment_id "" and every routed write against it refuses, which is
+// exactly the state every engine older than this build is in. So it is
+// reported and stepped over.
 func AnnounceServing(configPath string) (func() error, error) {
 	dbPath, ok := journalNamedBy(configPath)
 	if !ok {
@@ -193,6 +221,14 @@ func AnnounceServing(configPath string) (func() error, error) {
 	lock, err := acquireServingLock(dbPath + servingLockSuffix)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := ensureDeploymentIdentity(dbPath); err != nil {
+		// The same sink and the same op Open logs its own startup
+		// failures to, so a container that comes up unable to name itself
+		// says why in the log an operator is already reading rather than
+		// only through a refusal somebody meets later on another host.
+		obs.New(os.Stdout, obs.LevelInfo).Error(context.Background(), "startup",
+			fmt.Errorf("this deployment could not be given an identity, so clients cannot confirm which deployment they are writing to and every routed write against it will be refused: %w", err))
 	}
 	return lock.release, nil
 }

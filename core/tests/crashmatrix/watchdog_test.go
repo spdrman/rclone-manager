@@ -143,8 +143,23 @@ func TestProgressTracker_OverallCapCatchesALivelock(t *testing.T) {
 	if trip.kind != "overall" {
 		t.Fatalf("trip.kind = %q, want overall: %v", trip.kind, trip)
 	}
-	if !strings.Contains(trip.String(), "livelock") {
-		t.Fatalf("the failure text does not say what kind of failure this is:\n%v", trip)
+	// It is caught, and the report carries the measurements the decision
+	// was made from. What it must NOT do is name the cause: fast steps and
+	// no completion is equally what a harness with more steps left than
+	// the cap allows produces, and what one being starved of this machine
+	// produces (issue #533).
+	msg := trip.String()
+	if strings.Contains(msg, "is a livelock") || strings.Contains(msg, "not a slow machine") {
+		t.Fatalf("the failure text names a cause it cannot distinguish from a slow machine or a long run:\n%v", trip)
+	}
+	for _, want := range []string{
+		trip.elapsed.Round(time.Millisecond).String(),
+		trip.overallCap.Round(time.Millisecond).String(),
+		"loop-at-VERIFYING",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("the failure text does not report %q, so a reader has nothing to work from now that it names no cause:\n%s", want, msg)
+		}
 	}
 }
 
