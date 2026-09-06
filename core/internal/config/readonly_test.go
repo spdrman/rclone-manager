@@ -1,3 +1,17 @@
+// Issue #282's inheritance: read_only declared once on a source, overridden
+// per backup set, and resolved into BackupSet.ReadOnly by Validate.
+//
+// The three states are tested separately because they fail differently and
+// the consequence is a delete. A set that inherited when it should have
+// overridden deletes on a host the operator declared read-only; a set that
+// overrode when it should have inherited stops deleting on a host where
+// that is the whole point of the configuration.
+//
+// The first test is the regression guarantee and the one to keep if
+// anything ever has to go: a config that never mentions read_only anywhere
+// has to resolve to false for every set, which is exactly what every
+// deployment written before the field existed already does.
+
 package config
 
 import (

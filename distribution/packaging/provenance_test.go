@@ -77,6 +77,16 @@ const (
 
 1. Definitions`
 
+	// The spelling HashiCorp's LICENSE files use, comma and lower-case v.
+	// go-cleanhttp and go-retryablehttp both ship it, both arrived under
+	// rclone's s3 backend in #235, and both classified as NOASSERTION
+	// until the table learned this second phrase.
+	mplHashiCorpText = `Copyright (c) 2015 HashiCorp, Inc.
+
+Mozilla Public License, version 2.0
+
+1. Definitions`
+
 	apacheText = `                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -144,6 +154,7 @@ func TestClassifyLicense(t *testing.T) {
 		{"AGPL-3.0", agpl3Text, "AGPL-3.0-only", true},
 		{"LGPL-2.1", lgpl21Text, "LGPL-2.1-only", true},
 		{"MPL-2.0", mplText, "MPL-2.0", true},
+		{"MPL-2.0 as HashiCorp spells it", mplHashiCorpText, "MPL-2.0", true},
 		{"Apache-2.0", apacheText, "Apache-2.0", false},
 		{"MIT", mitText, "MIT", false},
 		{"BSD-3-Clause", bsd3Text, "BSD-3-Clause", false},
@@ -177,6 +188,32 @@ func TestClassifyLicense_RefusesRatherThanGuesses(t *testing.T) {
 	} {
 		if got := ClassifyLicense(text); got != "" {
 			t.Errorf("ClassifyLicense(%q) = %q, want the empty string: an unrecognised licence is not evidence of a permissive one", text, got)
+		}
+	}
+}
+
+// TestClassifyLicense_AMentionOfMozillaIsNotTheMPL is the control for the
+// widened MPL table. The table has two positive rows for that licence,
+// one per spelling, and until this existed nothing showed that the
+// second row is still an exact phrase: a row loosened to "Mozilla Public
+// License" plus "2.0" would read every one of these as MPL-2.0, and a
+// permissive dependency classified as copyleft is a wrong answer in the
+// other direction.
+func TestClassifyLicense_AMentionOfMozillaIsNotTheMPL(t *testing.T) {
+	for _, text := range []string{
+		"This file is part of the Mozilla test suite.\n",
+		"Compatible with the Mozilla Public License (any 2.0 release) and with Apache.\n",
+		"Mozilla Public License\nversion 2.0 compatible, but this file is MIT-like in spirit.\n",
+	} {
+		if got := ClassifyLicense(text); got != "" {
+			t.Errorf("ClassifyLicense(%q) = %q, want the empty string; a file that mentions Mozilla is not under the MPL, and a classifier that guesses is worse than one that gives up", text, got)
+		}
+	}
+	// The two exact spellings still read as MPL, or the control above is
+	// a table that matches nothing.
+	for _, text := range []string{mplText, mplHashiCorpText} {
+		if got := ClassifyLicense(text); got != "MPL-2.0" {
+			t.Fatalf("ClassifyLicense read %q from an MPL-2.0 text, so the rows this test guards are not there", got)
 		}
 	}
 }

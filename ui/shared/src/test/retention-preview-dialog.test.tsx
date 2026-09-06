@@ -1,3 +1,25 @@
+/**
+ * The confirm-before-delete dialog: what it shows, and every reason it
+ * refuses to apply.
+ *
+ * The rendering cases are about not losing information an operator needs
+ * to notice a mistake. Verdicts appear per artifact with the tiers that
+ * kept them and what selected them for each; an operator-defined tier
+ * badges under its own name rather than falling through to
+ * "unclassified", which is the wording for the opposite situation.
+ *
+ * The refusals are the rest of the file, and they are separate cases
+ * because they have separate causes: a plan whose inventory moved, a plan
+ * that expired while the confirmation sat open, a plan belonging to a
+ * different backup set. Each has a positive control beside it, because a
+ * dialog that never applied anything would satisfy every refusal on its
+ * own.
+ *
+ * The plan fixture's expiry is computed from the current time rather than
+ * frozen, since a literal quietly falls into the past and turns every
+ * apply here into an expiry refusal, silently converting the whole suite
+ * into a test of one branch.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { RetentionPreviewDialog } from "@shared/pages/RetentionPreviewDialog";
@@ -22,12 +44,28 @@ const PLAN: RetentionPlan = {
   expiresAt: EXPIRES_AT,
   keepCount: 1,
   deleteCount: 1,
+  // Issue #333: which policy decided these verdicts. Deliberately the
+  // set's OWN policy, and a chain that is not the product default, so a
+  // dialog that lost the attribution or fell back to a hardcoded chain
+  // shows something visibly wrong rather than something plausible.
+  retention: {
+    timezone: "Europe/Berlin",
+    weekStartsOn: "monday",
+    protectLastKnownGood: true,
+    tiers: [{ name: "daily", granularity: "day", keep: 4 }]
+  },
+  retentionIsOverride: true,
   reclaimBytes: 2048,
   verdicts: [
     { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }, { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }] },
     { artifact: "refused.dump", action: "REFUSE", reason: "sibling-prefix directory at computed path", tiers: [] },
     { artifact: "b.dump", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
-  ]
+  ],
+  // Issue #430: a medium-free deployment. Every plan in this file is
+  // about something other than placement, so this is the honest shape:
+  // the wire omits both fields and client.ts normalises them to [].
+  moves: [],
+  unconfirmedPlacements: []
 };
 
 /** RetentionVerdict.tiers is an open set: FR-18's chain is operator-defined
@@ -112,6 +150,40 @@ describe("RetentionPreviewDialog", () => {
     // The refuse row is not an alert — it is the plan working as intended.
     const refuseRow = screen.getByText(/sibling-prefix directory/).closest("li");
     expect(refuseRow?.getAttribute("role")).not.toBe("alert");
+  });
+
+  // Issue #333: which policy produced these verdicts. This is the dialog
+  // that asks an operator to authorise a deletion, and "why is this
+  // backup on the delete list" has a different answer, and a different
+  // place to go and change it, depending on whether this set's own chain
+  // or the deployment's decided it.
+  //
+  // Both branches are driven, because a dialog that had hardcoded either
+  // sentence would pass a test that only checked the other one.
+  it("names the policy the verdicts were decided under, on both branches", async () => {
+    const own = apiWith({});
+    const { unmount } = render(
+      <ApiProvider api={own}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under this backup set's own retention policy/);
+    // And the chain itself, not only the attribution: "this set's own"
+    // beside the wrong chain is still wrong.
+    expect(screen.getByText(/daily 4/)).toBeTruthy();
+    unmount();
+    resetGraphForTests();
+
+    const inherited = apiWith({
+      previewRetention: () =>
+        Promise.resolve({ ...PLAN, retentionIsOverride: false })
+    });
+    render(
+      <ApiProvider api={inherited}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under the deployment's retention policy/);
   });
 
   it("badges a KEEP verdict from an operator-defined tier under its own name, never as \"unclassified\"", async () => {

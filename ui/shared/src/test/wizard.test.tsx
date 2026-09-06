@@ -1,3 +1,19 @@
+/**
+ * The add-backup-set wizard's refusals, which are the part of it that has
+ * to hold.
+ *
+ * Most of what a wizard does is collect values, and this file spends
+ * almost none of its length on that. What it pins instead is what Save
+ * will NOT do: not until remote deletion is acknowledged, and not on an
+ * acknowledgement alone while the host is untrusted or no key has been
+ * imported. Those two together are the whole safety argument for a flow
+ * that ends by giving a service permission to delete from somebody's
+ * server.
+ *
+ * The remaining cases cover honesty rather than safety: a storage picker
+ * is not offered on a platform that has none, and no private key is ever
+ * rendered.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -544,6 +560,58 @@ describe("add backup set wizard", () => {
 
       expect(await screen.findByText("remote_path is required")).toBeTruthy();
       expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
+    });
+
+    // Issue #411. Removing a backup set frees its id up, so a create can
+    // land on an id that already has backups on record. Pointed somewhere
+    // other than where those backups came from, that create is refused
+    // until it is acknowledged, and the wizard has to make the refusal a
+    // decision with two answers rather than a red sentence under the
+    // buttons.
+    it("offers a create-anyway decision, not a field error, when the id already has history somewhere else", async () => {
+      const api = createMockApi();
+      const create = vi.spyOn(api, "createBackupSet").mockRejectedValueOnce(
+        new BackupManagerError({
+          code: "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+          message: "3 artifact(s) are already on record for api/postgres-primary",
+          correlationId: "cid_2"
+        })
+      );
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save disabled$/ }));
+
+      expect(await screen.findByText(/already on record for api\/postgres-primary/)).toBeTruthy();
+      expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
+      // The first attempt must not have carried the acknowledgement, or
+      // the refusal being tested could never have fired at all.
+      expect(create.mock.calls[0][0].acknowledgeRepoint).toBeUndefined();
+
+      await userEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+      const confirmed = create.mock.calls[1][0];
+      expect(confirmed.acknowledgeRepoint).toBe(true);
+      // And it re-sends the save that was actually refused. "Save
+      // disabled" confirmed has to stay a disabled save, not quietly
+      // become an enabled one.
+      expect(confirmed.disabled).toBe(true);
+      expect(await screen.findByText("SETS LIST PAGE")).toBeTruthy();
+    });
+
+    // The control for the case above: an ordinary create must never be a
+    // pre-acknowledged one, or the backend refusal could not fire.
+    it("does not send an acknowledgement on a create nobody was asked about", async () => {
+      const api = createMockApi();
+      const create = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      await waitFor(() => expect(create).toHaveBeenCalled());
+      expect(create.mock.calls[0][0].acknowledgeRepoint).toBeUndefined();
     });
 
     // Before M7 (#146 review), this scenario was reachable by clicking

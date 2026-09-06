@@ -30,11 +30,28 @@ apps/generic/webui/dist
 docs
 container
 
-# Generated release compliance artifacts (SBOM, licence inventory,
-# checksums, provenance bundle). They describe the image; they are not
-# inputs to building it, and none of the Dockerfile's COPY lines names
-# them.
+# Generated release compliance artifacts (SBOM, checksums, provenance
+# bundle). They describe the image; they are not inputs to building it.
+#
+# One exception, and it is load-bearing rather than a convenience.
+# third-party-licenses.json is the machine-readable inventory that
+# LICENSE and NOTICE both point a recipient at, so an image carrying the
+# first two and not it hands somebody two documents that reference a
+# third they cannot reach (#407). The runtime stage COPYs it, and a
+# `provenance` exclusion with no exception under it makes that COPY fail
+# the build outright ("failed to compute cache key ... not found") rather
+# than quietly producing an image without the file. Deleting the line
+# below therefore breaks the release build, and
+# distribution/packaging's TestTheImageCarriesTheLicenceMaterials refuses
+# it here first, where nobody needs a Docker daemon to find out.
+#
+# Only that one file. sbom.spdx.json, checksums.txt and
+# release-provenance.json stay out: nothing COPYs them, they change on
+# every release cut, and putting them in the context would make the cut's
+# own commit able to change the image (see scripts/release/publish-image.sh,
+# which reasons from this file about exactly that).
 provenance
+!provenance/third-party-licenses.json
 README.md
 *.md
 

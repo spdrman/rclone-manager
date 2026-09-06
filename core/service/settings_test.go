@@ -1,3 +1,25 @@
+// This file covers the deployment-wide settings write, which is the one
+// route that edits an operator's config.yaml wholesale rather than one
+// field of one set.
+//
+// That makes the file itself the thing under test as much as the values
+// in it. A save has to re-read from disk rather than serialise this
+// process's memory, so an out-of-band edit is not clobbered; it must not
+// write both spellings of a retention policy; it must keep a legacy
+// file's own spelling when the request says nothing about it; and it must
+// not freeze this release's resolved defaults into a file whose owner
+// never chose them. Every one of those is a way a save can succeed and
+// still leave an operator with a file they did not write.
+//
+// The refusals are proved to be all-or-nothing, each with a positive
+// control beside it. A test that asserts "the file is unchanged" passes
+// perfectly on a build where the write never happens at all, so the
+// control is what keeps the refusal cases honest.
+//
+// The two schema tests at the end guard the other direction: what this
+// boundary advertises as valid has to be what the config layer actually
+// enforces, and the advertised defaults have to be what an unconfigured
+// policy really resolves to rather than a copy that drifts.
 package service
 
 import (
@@ -868,12 +890,26 @@ func TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile(t *tes
 	}
 
 	// The opposite half, so the assertions above cannot be satisfied by a
-	// write that simply dropped the keys: the omissions are still there,
-	// spelled as the "not chosen" values config.Validate resolves on load.
-	for _, kept := range []string{"delete_safety_delay: 0s", "protect_last_known_good: null"} {
+	// write that simply dropped the keys: the omission is still there,
+	// spelled as the "not chosen" value config.Validate resolves on load.
+	//
+	// This list used to carry "protect_last_known_good: null" too, and
+	// issue #333 moved that key from "emitted as null" to "omitted": a
+	// per-set retention override that inherits the deployment's FR-19
+	// posture must not come back from a save with the key written under
+	// it, and the same omitempty that fixes it one level down applies
+	// here. Absence is a STRONGER form of "the operator did not choose"
+	// than an explicit null, and the frozen list above is what keeps this
+	// honest: it still requires "protect_last_known_good: true" to be
+	// absent, so a write that had frozen the resolved default fails there
+	// rather than passing here.
+	for _, kept := range []string{"delete_safety_delay: 0s"} {
 		if !strings.Contains(written, kept) {
 			t.Errorf("the written config no longer carries %q, so the operator's omission was not preserved:\n%s", kept, written)
 		}
+	}
+	if strings.Contains(written, "protect_last_known_good:") {
+		t.Errorf("the written config carries protect_last_known_good at all; a file that never chose it must not gain the key:\n%s", written)
 	}
 
 	// Positive control: every frozen spelling IS produced by encoding the

@@ -8,6 +8,19 @@ import (
 	"slices"
 )
 
+// Reading container/release-manifest.json, which is the only place the
+// release binary digests exist.
+//
+// The type models the fields this package needs and deliberately ignores
+// the OCI image id the manifest also records: an SPK contains no image, so
+// an image id is not evidence about one, and modelling it would invite a
+// later check that compares something meaningless.
+//
+// SourcePath is not a field of the file. It is filled in on load so a
+// verification report can name the input its parity verdict was decided
+// against, because a green line about an unnamed file is a green line
+// nobody can act on when it turns red.
+
 // ReleaseManifest is container/release-manifest.json, the file
 // scripts/release/record-release-hashes.sh writes (issue #82/B4.1). §3.7
 // requires a release manifest to record "core binary SHA-256 per
@@ -86,6 +99,14 @@ func (m ReleaseManifest) Arch(goarch string) (ArchEntry, error) {
 	return ArchEntry{}, fmt.Errorf("the release manifest records no %s entry (it has %v), so there is nothing to check a %s package against", goarch, have, goarch)
 }
 
+// isSHA256 reports whether s is exactly 64 hex characters.
+//
+// It is a shape check and not a verification, and the distinction is why
+// it exists at all: a truncated or placeholder digest in the manifest
+// would otherwise be compared against a real one, fail parity, and be
+// reported as "this package carries the wrong binary" when the actual
+// fault is upstream in the manifest. Refusing it at load time names the
+// right file.
 func isSHA256(s string) bool {
 	if len(s) != 64 {
 		return false

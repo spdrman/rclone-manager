@@ -36,6 +36,17 @@ export function apiErrorOf(e: unknown): ApiError | null {
   return e instanceof BackupManagerError ? e.api : null;
 }
 
+/**
+ * A refusal, split into the three things a surface renders separately.
+ *
+ * It is three fields rather than one sentence because the caller decides
+ * where each goes: the message belongs in the banner, the remediation
+ * belongs under it or not at all, and the correlation id belongs behind
+ * "Advanced details" where it can be copied into a support message. A
+ * single pre-joined string would force every surface to render all three
+ * the same way, and would make "there is nothing useful to suggest"
+ * impossible to express.
+ */
 export interface OperatorFailure {
   /** What went wrong, in one sentence, about the thing that actually
    *  went wrong. */

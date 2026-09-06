@@ -8,10 +8,29 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This file is where FR-24's verdict is actually reached, and its shape is
+// a deliberate narrowing rather than a convenience.
+//
+// decideState takes one parameter, and that parameter is evidence: a struct
+// with no field for process liveness, no field for free space, no field for
+// a version string. Invariant 14 says process liveness is not evidence of
+// backup freshness, and this is how that is held. Not by decideState
+// choosing not to look at those facts, but by there being no argument
+// through which one could arrive. An edit that wanted to consult uptime
+// would have to widen the struct first, which is a line somebody has to
+// read and agree to.
+//
+// Everything else here feeds that one function. buildAggregate is the only
+// place records are walked, and it produces two separate things: the
+// evidence decideState is handed, and the display fields it is not. Counts,
+// timestamps and in-flight transfers are reported to an operator and never
+// fed back into the state, so a change to what gets rendered cannot turn
+// into a change of verdict.
+
 // knownGood is FR-19's definition of a valid restore point: currently
-// COMMITTED, REMOTE_DELETE_PENDING or COMPLETE. FAILED, QUARANTINED,
-// QUARANTINED_LOST and every .partial (pre-COMMITTED) state are excluded,
-// exactly as FR-19 requires. An artifact that was once COMPLETE and has
+// COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED. FAILED,
+// QUARANTINED, QUARANTINED_LOST and every .partial (pre-COMMITTED) state
+// are excluded, exactly as FR-19 requires. An artifact that was once COMPLETE and has
 // since moved to QUARANTINED_LOST is excluded too, because this checks the
 // artifact's *current* state, not its history: its one copy is gone, so it
 // cannot be a restore point any more no matter what it used to be.
@@ -51,6 +70,17 @@ type evidence struct {
 	hasQuarantinedLost bool // any artifact currently QUARANTINED_LOST
 	hasStuckFailure    bool // any FAILED artifact with no retry scheduled
 	hasRetryingFailure bool // any FAILED artifact with a retry still scheduled
+
+	// placement is FR-24's medium half (issue #444), and it is here for
+	// one reason: FailedMoves has to be able to change the verdict.
+	//
+	// It belongs in evidence rather than beside it because it is the same
+	// kind of fact as everything else in this struct, a durable journal
+	// read (placements and placement_moves, rather than artifacts), and
+	// not the kind of fact BackupSetInputs holds. The other fields on
+	// PlacementHealth are carried along for the reason a caller can read
+	// on each of them; only FailedMoves is consulted below.
+	placement PlacementHealth
 }
 
 // decideState assigns one of the four FR-24 states from evidence alone.
@@ -66,9 +96,21 @@ type evidence struct {
 //     otherwise, because the freshness guarantee has broken with nothing
 //     to suggest it is about to recover on its own.
 //  3. Otherwise a known-good backup exists inside the window: DEGRADED if
-//     the newest arrival is quarantined or a failure is still being
+//     the newest arrival is quarantined, if a failure is still being
 //     retried (something arrived, or something is wrong, even though an
-//     older restore point is still fine), HEALTHY otherwise.
+//     older restore point is still fine), or if a relocation this
+//     deployment's retention chain asked for has been tried and has not
+//     worked (issue #444); HEALTHY otherwise.
+//
+// The placement check is last of the three deliberately, and it is inside
+// step 3 rather than beside step 1 for the same reason. Where a backup is
+// stored is a lesser problem than whether it exists and is trustworthy: a
+// set holding a QUARANTINED_LOST artifact, or one whose freshness
+// guarantee has broken, must not have its verdict softened or its
+// explanation replaced because a copy is also in the wrong place. So a
+// failing move can only ever turn HEALTHY into DEGRADED, never anything
+// into anything else, and the counts themselves are reported on
+// BackupSetHealth.Placement whatever the verdict turns out to be.
 func decideState(e evidence) (State, string) {
 	if e.hasQuarantinedLost {
 		return Failing, "an irrecoverable QUARANTINED_LOST artifact exists in this backup set"
@@ -95,6 +137,9 @@ func decideState(e evidence) (State, string) {
 	}
 	if e.hasRetryingFailure {
 		return Degraded, "a known-good backup exists within the stale threshold, but a failed attempt is still being retried"
+	}
+	if e.placement.FailedMoves > 0 {
+		return Degraded, placementReason(e.placement)
 	}
 	return Healthy, "a known-good backup exists within the stale threshold and nothing needs attention"
 }
@@ -269,8 +314,9 @@ func ageOf(at *time.Time, now time.Time) *time.Duration {
 // nil (see internal/app's BuildHealthReport, which propagates the error) —
 // and making it a positional argument means a new call site has to say
 // something about it rather than silently inheriting a zero.
-func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reinstated []model.ArtifactID, staleThreshold time.Duration, in BackupSetInputs, now time.Time) BackupSetHealth {
+func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reinstated []model.ArtifactID, placements PlacementEvidence, staleThreshold time.Duration, in BackupSetInputs, now time.Time) BackupSetHealth {
 	agg := buildAggregate(records, staleThreshold, now)
+	agg.placement = buildPlacementHealth(placements, records, now)
 	st, reason := decideState(agg.evidence)
 
 	return BackupSetHealth{
@@ -294,6 +340,8 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reins
 
 		ReinstatedRemoteRetainedCount: countReinstatedRemoteRetained(records, reinstated),
 		ReadOnlyRetainedCount:         agg.readOnlyRetainedCount,
+
+		Placement: agg.placement,
 
 		LastRetentionRunAt: in.LastRetentionRunAt,
 		FreeBytes:          in.FreeBytes,

@@ -10,6 +10,28 @@ import (
 	"strings"
 )
 
+// Choosing which UI bundle to serve, at run time rather than at build
+// time.
+//
+// The shared UI picks its provider shell when it is compiled, so before
+// this existed, shipping Synology's bridge meant compiling a
+// Synology-specific binary, and §3.7 requires every provider package to
+// carry the same core binary digest. That left a choice between the wrong
+// bridge and a forbidden build, and the wrong bridge is what shipped.
+// Resolving the bundle at startup removes the choice: the binary is
+// identical whichever bridge a package serves.
+//
+// Every failure to resolve is a refusal rather than a fallback, and that
+// is the rule worth keeping. A --ui-dir that quietly fell back to the
+// embedded bundle would serve a UI that looks entirely correct while
+// running the wrong provider's bridge, which is the same defect one layer
+// down from where it was first found.
+//
+// The origin is recorded and logged because a deployment needs to be able
+// to see what it actually loaded rather than what it was configured to
+// load. Those differ exactly when something is wrong, which is the only
+// time anybody looks.
+
 // UIBundleOrigin records which of the three sources a served bundle came
 // from. It exists so a deployment can log what it actually loaded rather
 // than what it was configured to load, which is the difference between

@@ -8,11 +8,34 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/fs/accounting"
-
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
 )
+
+// This file is where the progress numbers are actually proved, against a
+// real rclone copy through the real Adapter. internal/transport's own
+// progress_test.go covers the context plumbing; nothing there can say
+// whether a sample ever reads anything but 0 or 100 percent, which is the
+// only thing issue #221 was about.
+//
+// Getting an intermediate reading reliably is the whole difficulty, and
+// the technique is a throttle rather than a large file. "Make it big
+// enough" is a race against whatever disk is underneath: a file large
+// enough to guarantee several sampling windows on fast NVMe is too large
+// to be welcome in a suite. Turning rclone's own bandwidth limiter down
+// and shrinking both the payload and the sampling interval makes the
+// timing a fact instead of a hope, and the test fails outright if the copy
+// finished faster than the limit implies, because an intermediate reading
+// observed under a throttle that did not engage is luck rather than
+// evidence.
+//
+// One thing to carry away before copying this shape into a cancellation
+// test: --bwlimit is the right lever HERE and the wrong one there. It
+// throttles by parking inside rclone, and both parking spots wait with
+// WaitN(context.Background(), n), so a copy under it is slow AND partly
+// uninterruptible. A mid-transfer cancellation test built on it cannot
+// prove what it says, which is what #414 found; that case runs over a slow
+// TCP relay now instead.
 
 // TestCopyToLocal_ReportsIntermediateProgressForARealTransfer is the
 // evidence issue #221 asks for, and it is deliberately not a test that can
@@ -30,11 +53,19 @@ import (
 // this gate runs on, and "make the file big enough" is a race against
 // whatever disk is underneath: on a fast NVMe a file large enough to
 // guarantee several sampling windows is also large enough to be unfriendly
-// in a test suite. gate_test.go's MidTransferCancellation already
-// established the alternative in this package, for the same reason: turn
-// rclone's own bandwidth limiter down and use a small payload. A slow,
-// small, real transfer exercises exactly the same accounting path a fast
-// huge one would, and it makes the timing a fact rather than a hope.
+// in a test suite. So this turns rclone's own bandwidth limiter down and
+// uses a small payload instead. A slow, small, real transfer exercises
+// exactly the same accounting path a fast huge one would, and it makes the
+// timing a fact rather than a hope.
+//
+// --bwlimit is the right lever HERE and the wrong one for a cancellation
+// test, which is worth knowing before copying this file's shape into one.
+// It throttles by parking inside rclone (Account.accountRead and fshttp's
+// dialer both wait with WaitN(context.Background(), n)), so a copy under it
+// is slow AND partly uninterruptible. That is fine for sampling progress
+// and fatal for proving an interruption; gate_test.go's
+// MidTransferCancellation used to use it and did not prove what it said
+// (#414). That row runs over a slow link now instead.
 func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	// "1M" is rclone's own spelling for 1 MiB/s. It is written as a
 	// suffixed string on purpose: a bare number in an rclone bandwidth
@@ -52,15 +83,10 @@ func TestCopyToLocal_ReportsIntermediateProgressForARealTransfer(t *testing.T) {
 	progressSampleInterval = sampleInterval
 	t.Cleanup(func() { progressSampleInterval = restore })
 
-	bwCtx, ci := fs.AddConfig(context.Background())
-	if err := (&ci.BwLimit).Set(bwLimit); err != nil {
-		t.Fatalf("set bwlimit: %v", err)
-	}
-	accounting.TokenBucket.StartTokenBucket(bwCtx)
-	t.Cleanup(func() {
-		unthrottled, _ := fs.AddConfig(context.Background())
-		accounting.TokenBucket.StartTokenBucket(unthrottled)
-	})
+	// bwlimit.Throttle rather than StartTokenBucket-and-put-it-back, because
+	// putting it back that way does not work and this test's own 1MiB/s
+	// limit was outliving it. See that package's doc.
+	bwCtx := bwlimit.Throttle(t, context.Background(), bwLimit)
 
 	srcRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcRoot, "big.bin"), make([]byte, size), 0o644); err != nil {
@@ -185,6 +211,10 @@ func TestCopyToLocal_WithNoReporterIsUnchanged(t *testing.T) {
 	}
 }
 
+// byteCounts renders the samples for the one failure message that needs
+// them. A progress feed that only ever read 0 or the full size is exactly
+// what #221 reports as useless, so the failure has to show the readings
+// rather than just say there were none in between.
 func byteCounts(samples []transport.ByteProgress) []int64 {
 	out := make([]int64, 0, len(samples))
 	for _, s := range samples {

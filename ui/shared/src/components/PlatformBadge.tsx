@@ -1,3 +1,17 @@
+/**
+ * Where this app is running, stated to the operator rather than implied.
+ *
+ * Two renderings of the same facts. The compact one sits at the foot of
+ * the nav and answers "what am I looking at" at a glance; the full one is
+ * a definition list on the Settings page, where the deployment label and
+ * the storage mount are things an administrator reads carefully and may
+ * need to quote. Both come from the bridge, so a provider's own answers
+ * are what appear and the shared tree never guesses.
+ *
+ * The product's identity stays Backup Manager throughout. The platform is
+ * context around it, never branding on it, which is why the platform name
+ * appears as a value in a row and not as a title anywhere.
+ */
 import { usePlatform } from "@shared/platform/PlatformContext";
 
 const INTEGRATION_LABEL: Record<string, string> = {

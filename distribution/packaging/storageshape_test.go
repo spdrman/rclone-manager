@@ -1,3 +1,19 @@
+// Issue #196's suite: every canonical storage role declares one write
+// mode, every adapter's mount carries it, key material stays a read-only
+// single file, and nothing mounts a host path it has no business
+// mounting.
+//
+// #196 itself is the argument for the shape of this file. The
+// configuration mount was `:ro` in production and writable in every test
+// fixture at the same time, and three write paths broke, because two
+// completeness sets each assumed the other covered the canonical
+// definition: the platform enumeration only walked adapter fixtures, and
+// the runtime contract's write-mode booleans covered two of that file's
+// four mounts. Neither gap was visible from inside the check that had it.
+// So the tests here name the canonical definition explicitly rather than
+// trusting it to fall out of an enumeration, and the prohibited host path
+// rule is checked through both of the entry points that implement it,
+// against every spelling that should resolve to the same verdict.
 package packaging
 
 import (

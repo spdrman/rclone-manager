@@ -1,3 +1,20 @@
+/**
+ * What happened to one backup, in order, and what has not happened yet.
+ *
+ * The phases are derived from recorded timestamps rather than authored,
+ * which is what keeps this honest about the one step that matters. Remote
+ * deletion can only ever appear as done when the service recorded doing
+ * it, and the service records that only after the local copy is verified
+ * and durably committed, so there is no arrangement of this component that
+ * can show the original as removed before the copy was safe.
+ *
+ * An unreached phase renders with a dash and no time. Not a zero, not a
+ * projection: the timeline says where this artifact actually got to.
+ *
+ * `buildPhases` is exported separately from the rendering so the ordering
+ * rule can be asserted without a DOM, which is what LifecycleTimeline.test
+ * does.
+ */
 import type { BackupArtifact } from "@shared/types/backup";
 import { clock } from "@shared/utilities/format";
 

@@ -1,0 +1,40 @@
+# ThreadSanitizer suppressions for the children TestDisableSignalExit
+# starts (issue #417).
+#
+# This file exists because of a data race that is real, reproducible and
+# not in this repository. rclone v1.75.0's lib/atexit publishes its signal
+# channel in a plain package-level variable:
+#
+#   Register()       registerOnce.Do -> exitChan = make(...); go func() { sig := <-exitChan; ... }
+#   IgnoreSignals()  signal.Stop(exitChan); close(exitChan); exitChan = nil
+#
+# The goroutine Register starts reads exitChan with no synchronisation
+# against IgnoreSignals writing nil over it, so calling IgnoreSignals
+# after something has already registered is an unsynchronised read/write
+# pair on that variable. The detector reports it every time:
+#
+#   WARNING: DATA RACE
+#   Write at 0x... by goroutine 21:
+#     github.com/rclone/rclone/lib/atexit.IgnoreSignals()
+#         lib/atexit/atexit.go:90
+#     .../core/internal/transport/rclone.DisableSignalExit()
+#         core/internal/transport/rclone/signalexit.go:35
+#   Previous read at 0x... by goroutine 24:
+#     github.com/rclone/rclone/lib/atexit.Register.func1.1()
+#         lib/atexit/atexit.go:45
+#
+# It is reachable only in the order the "disabled-after" row exercises on
+# purpose (register, then disable). cmd/backup-manager's daemon disables
+# first, before any transfer, which never installs the handler and never
+# writes the variable, so nothing in the shipped startup path provokes it.
+# There is nothing to fix on this side either: the racing pair is two
+# accesses to a variable in another module, with no synchronisation edge
+# this repository can add between them.
+#
+# So the row keeps running, under the narrowest suppression that lets it:
+# this one package in one module, and nothing else. TestDisableSignalExit
+# asserts that it is matched exactly once, by the one row that provokes
+# it, and matched by no other row. When rclone fixes this upstream that
+# assertion goes red, which is the signal to delete this file rather than
+# to carry a suppression nobody can remember the reason for.
+race:github.com/rclone/rclone/lib/atexit

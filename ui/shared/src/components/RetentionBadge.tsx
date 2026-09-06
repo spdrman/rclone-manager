@@ -1,4 +1,25 @@
+/**
+ * How a backup's retention shows up on a row: which tiers keep it, and
+ * what selected it for each of them.
+ *
+ * The file holds two badge families and the difference between them is the
+ * thing to understand before changing either. `RetentionBadges` takes the
+ * CLOSED four-value vocabulary that describes a backup, and
+ * `RetentionTierBadges` takes a verdict's own tiers, whose value set is
+ * open because an operator defines the chain. An unrecognised tier is
+ * therefore badged under its own name rather than dropped, since dropping
+ * it would leave a kept artifact looking unclassified, which is the
+ * wording for the opposite situation.
+ *
+ * Placement is named per badge rather than per row on purpose. One
+ * artifact can be selected for one tier by the timestamp this manager
+ * recorded and for another by the producer's own, and those differ in how
+ * much they can be trusted, so a single answer for the row would be wrong
+ * for exactly the artifact where it matters.
+ */
+import { StatusBadge } from "@shared/components/StatusBadge";
 import type {
+  ArtifactRetentionPolicy,
   RetentionClass,
   RetentionTierPlacement,
   RetentionTierSelection
@@ -105,6 +126,41 @@ export function RetentionBadge({ kind, by }: { kind: RetentionClass; by?: Retent
           : placement?.title
       }
     />
+  );
+}
+
+/**
+ * What retains one backup, for the two answers that are not a tier
+ * (issue #523).
+ *
+ * It renders nothing for a governed backup, so a caller can drop it in
+ * beside RetentionBadges without deciding anything, and it is the ONLY
+ * thing shown for the other two: the tiers the journal still remembers for
+ * a backup whose set was removed are a stale claim, and "Daily" next to a
+ * backup no daily chain will ever look at again reads as a current one.
+ *
+ * The wording says the consequence rather than the state, which is the
+ * whole difference between a marker an operator acts on and a marker they
+ * have to interpret. "No retention policy" is true and leaves the reader
+ * to work out that the file is therefore permanent; the CLI's own line
+ * says the permanence, and so does this.
+ */
+export function RetentionPolicyBadge({ policy }: { policy: ArtifactRetentionPolicy }) {
+  if (policy === "configured") return null;
+  const [label, title] =
+    policy === "none"
+      ? [
+          "Nothing will delete this",
+          "This backup set's configuration was removed, so no retention chain selects or expires its backups."
+        ]
+      : [
+          "Retention not reported",
+          "This server did not report which retention policy governs this backup, so this page cannot say whether anything will ever delete it."
+        ];
+  return (
+    <span title={title}>
+      <StatusBadge tone="warn" glyph={"\u25b2"}>{label}</StatusBadge>
+    </span>
   );
 }
 

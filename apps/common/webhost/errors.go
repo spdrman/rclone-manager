@@ -7,6 +7,27 @@ import (
 	"net/http"
 )
 
+// One error shape for every failure this package can return, so a client
+// writes one parser.
+//
+// The nesting under an "error" key is this package's convention and not
+// apps/common/auth/local's, which uses a flat body. They disagree because
+// they were written against different consumers at different times, and
+// the disagreement is recorded in the contract rather than smoothed over,
+// because quietly changing either one breaks a client that already parses
+// it.
+//
+// The one deviation is CONFIG_REVISION_STALE, which gets its own writer
+// and its own struct so the current revision travels as a real field. It
+// used to be available only inside the human-readable message, which this
+// file's own doc describes as free to change without notice, so a client
+// retrying against it was parsing prose that nobody had promised to keep
+// stable.
+//
+// Correlation IDs are minted per response and carry nothing derived from a
+// session, a credential or a request body, so quoting one in a bug report
+// is safe.
+
 // errorResponse is the one error shape every handler in this package
 // returns, so a client only ever has to parse one thing regardless of
 // which endpoint or which failure it hit.

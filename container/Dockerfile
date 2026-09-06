@@ -232,6 +232,42 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/backup-manager /backup-manager
 COPY --from=build-web /out/backup-manager-web /backup-manager-web
 
+# The licence, the notices and the machine-readable inventory the other
+# two point at, at a fixed path a recipient can find without a shell
+# (distroless has none): `docker cp <ctr>:/licenses .` or `docker export
+# | tar -x licenses/`. Apache-2.0 §4(d) says a redistributed copy
+# carries NOTICE, and NOTICE is where the MPL-2.0 §3.2 source offer for
+# go-cleanhttp and go-retryablehttp lives, so an image without these
+# reached nobody with either.
+#
+# All three come from the build context, not from a builder stage, so
+# they are the checked-in files at the commit this image was built from.
+# .dockerignore excludes provenance/ wholesale, because that directory
+# describes the image rather than building it, so the inventory needs the
+# one exception in there and that exception is not decoration: without it
+# this COPY fails the build with "failed to compute cache key ... not
+# found", which is loud, and distribution/packaging's
+# TestTheImageCarriesTheLicenceMaterials says the same thing earlier and
+# names the pattern that did it.
+#
+# Two checks stand behind these lines. TestTheImageCarriesTheLicenceMaterials
+# reads this stage and fails if a COPY goes or moves; and
+# apps/generic/tests/dockercli's TestTheBuiltImageCarriesTheLicenceMaterials
+# builds this file and copies /licenses back out of the result, which is
+# the only one of the two that proves an image rather than a Dockerfile.
+COPY LICENSE /licenses/LICENSE
+COPY NOTICE /licenses/NOTICE
+COPY provenance/third-party-licenses.json /licenses/third-party-licenses.json
+
+# What `docker inspect` answers, for a recipient who has the image and no
+# shell in it. The OCI annotation names the licence; the path label says
+# where its text and the notices actually are, which an id on its own
+# does not. Both values are declared in
+# distribution/packaging/compliance.json under distribution.licenceDelivery
+# and checked against these lines.
+LABEL org.opencontainers.image.licenses="Apache-2.0" \
+      com.iasbuilt.backupmanager.licenses.path="/licenses"
+
 # The per-provider UI bundles (issue #180). Read-only content, served by
 # `serve-ui --ui-root /ui/bundles`, which resolves <root>/<profile>. Each
 # converted distribution adapter sets UI_ROOT to this path and selects its

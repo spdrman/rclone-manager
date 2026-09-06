@@ -103,6 +103,7 @@ echo "==> negative controls: every static check is clean on the real tree"
 expect_check_passes "check-layer-manifest" "$root" ./scripts/architecture/check-layer-manifest.sh
 expect_check_passes "check-layer-ownership" "$root" ./scripts/architecture/check-layer-ownership.sh
 expect_check_passes "check-core-dependency-rule" "$root" ./scripts/architecture/check-core-dependency-rule.sh
+expect_check_passes "check-unowned-go" "$root" ./scripts/architecture/check-unowned-go.sh
 
 echo
 echo "==> layer-manifest completeness"
@@ -484,6 +485,80 @@ d=$(mutant ui-nothing-to-scan)
 mv "$d/ui/shared/src" "$d/ui/shared/source"
 expect_check_fails "a UI scan with no TypeScript file to read" "$d" \
   "verified nothing" ./scripts/architecture/check-ui-shared-provider-imports.sh
+
+
+echo
+echo "==> Go files no module owns (#417)"
+
+# Two Go files in this repository sit outside every module and outside
+# go.work (scripts/api/gen-bindings.go, scripts/architecture/ownership.go),
+# so the per-module `go vet` and `golangci-lint` steps this gate runs cannot
+# reach either of them. Nothing had ever vetted or linted them, which is how
+# one of the pair came to be the only unformatted Go file in the tree.
+#
+# check-unowned-go.sh is what looks now, and these are the controls for it.
+# The first plants something `go vet` catches. The second plants something
+# `go vet` does NOT catch and golangci-lint does, which is what stops the
+# lint half from being decoration on top of the vet half. Both plant into a
+# NEW unowned directory rather than editing one of the two real files, so
+# they also prove the enumeration notices an unowned file appearing, which
+# is the way this gap would actually widen.
+
+# The count is part of the contract: a run that examined nothing would pass
+# this check trivially, and both cells below would then be planting into a
+# tree whose check never looks. The real tree has two.
+if (cd "$root" && ./scripts/architecture/check-unowned-go.sh) >"$tmp/out" 2>&1; then
+  if grep -qE 'OK: [1-9][0-9]* Go file\(s\)' "$tmp/out"; then
+    echo "  ok (clean):  check-unowned-go examined at least one unowned file and passed"
+    pass=$((pass + 1))
+  else
+    echo "SELFTEST FAIL: check-unowned-go passed without examining anything, so the cells below plant into a check that never looks." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  fi
+else
+  echo "SELFTEST FAIL: check-unowned-go FAILED against the real tree, so its failures mean nothing." >&2
+  sed 's/^/    /' "$tmp/out" >&2
+  fail=$((fail + 1))
+fi
+
+d=$(mutant unowned-vet)
+mkdir -p "$d/scripts/selftest-unowned"
+# A printf verb that does not match its argument: compiles, runs, and is
+# exactly the class `go vet` exists for.
+cat >"$d/scripts/selftest-unowned/planted.go" <<'PLANTED'
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Printf("%d\n", "planted by scripts/architecture/selftest.sh")
+}
+PLANTED
+git -C "$d" add -A
+expect_check_fails "a vet-catchable defect in a Go file no module owns" "$d" \
+  "wrong type string" ./scripts/architecture/check-unowned-go.sh
+
+d=$(mutant unowned-lint)
+mkdir -p "$d/scripts/selftest-unowned"
+# An ineffectual assignment: `go vet` is silent on this one (measured, not
+# assumed), and golangci-lint's ineffassign is not. Without this cell the
+# lint half of the check could be removed and every other cell would stay
+# green.
+cat >"$d/scripts/selftest-unowned/planted.go" <<'PLANTED'
+package main
+
+import "fmt"
+
+func main() {
+	n := 1
+	n = 2
+	fmt.Println(n)
+}
+PLANTED
+git -C "$d" add -A
+expect_check_fails "a defect only the linter catches, in a Go file no module owns" "$d" \
+  "ineffectual assignment" ./scripts/architecture/check-unowned-go.sh
 
 if [ "$fail" -ne 0 ]; then
   echo >&2

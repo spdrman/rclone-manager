@@ -1,3 +1,21 @@
+/**
+ * Two things the backup sets page has to get right no matter what state
+ * it is in: how many "Add backup set" buttons exist, and where the run
+ * control lives.
+ *
+ * The button-count cases look trivial and are not. A null list while the
+ * first fetch is in flight is not an empty list, and treating the two the
+ * same rendered the empty state's own button beside the header's, which is
+ * two identically named controls on screen and an ambiguous locator for
+ * anything selecting by name. That raced the browser suite repeatedly
+ * before it was pinned here, which is why all three states are asserted
+ * rather than just the loaded one.
+ *
+ * The run control case is about scope. A deployment-wide pass drawn inside
+ * a per-set card reads as a per-set run whatever its label says, so its
+ * absence from the card is asserted as directly as its presence in the
+ * header.
+ */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";

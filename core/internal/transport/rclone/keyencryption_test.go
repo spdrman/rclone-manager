@@ -17,6 +17,28 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file covers #298's at-rest key encryption, and the property it
+// spends most of its length on is not "the round trip works".
+//
+// It is that a file in the OLD format still opens, and stops being in the
+// old format afterwards. There are three on-disk states an installation
+// can be in (plaintext PEM, V1's unsalted SHA-256 derivation, V2's salted
+// Argon2id one) and resolveKeyFileForSFTP is expected to read all three
+// and leave the file in the third. A migration that silently failed to
+// write back would look identical to a successful one on the call that
+// mattered, and would keep looking identical until somebody read the file.
+//
+// The crypto assertions are made against the real primitives rather than
+// against this package's own helpers wherever that is possible: the test
+// derives a DEK with argon2 directly and opens the ciphertext with
+// crypto/cipher, so an encryptKeyMaterial that had quietly stopped salting,
+// or had reused a nonce, fails here rather than agreeing with itself.
+//
+// The tamper cases are the ones to keep if this file is ever trimmed. GCM's
+// authentication is the entire reason this format is more than obfuscation,
+// and a decrypt that accepted modified bytes would be indistinguishable
+// from a working one on every other case in this file.
+
 // --- format: encrypt/decrypt/detect ---
 
 func TestEncryptDecryptKeyMaterial_RoundTrip(t *testing.T) {

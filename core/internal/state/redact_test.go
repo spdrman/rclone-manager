@@ -1,3 +1,20 @@
+// Issue #295's seam in this package: a Journal told which endpoint is
+// sensitive must not write that endpoint's host and port into the two
+// durable columns a real transport failure reaches, state_transitions.detail
+// and artifacts.remote_delete_error.
+//
+// The errors under test are real ones. Each helper reserves a TCP port,
+// releases it and dials it, so what gets filtered is an actual *net.OpError
+// carrying its own rendering of host:port, not a string a test wrote to
+// look like one. A fabricated error would prove the filter matches the text
+// the test author expected, which is the assumption the whole issue was
+// about.
+//
+// The third test is the control. Redaction that is on unconditionally would
+// pass both of the first two and quietly rewrite every journal in the
+// field, so a Journal nobody called SetRedactor on has to be shown writing
+// the error through byte for byte.
+
 package state
 
 import (

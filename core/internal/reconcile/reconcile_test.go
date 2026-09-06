@@ -10,6 +10,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file walks the FR-17 table row by row, and the test names spell out
+// all three inputs and the required outcome on purpose. The table is the
+// specification, and a test nobody can match back to a row is a test nobody
+// can check the table for completeness against.
+//
+// The pairs worth reading together are the ones where the same journal
+// state reaches two different destinations. COMMITTED with a bad local copy
+// quarantines; COMPLETE with a bad local copy quarantines as LOST. The
+// difference is not severity, it is that COMPLETE already means this
+// manager deleted the remote, so there is no source left to recover from.
+// Seeing those two apart is how a reader discovers that the machine has no
+// COMMITTED to QUARANTINED_LOST edge and that this package will not
+// manufacture one by recording a delete intent it never had.
+//
+// The ambiguous-stat case is the negative control for the whole file.
+// Without it, every "remote absent" test here would pass just as happily
+// against an implementation that read any Stat failure as gone.
+
 // --- assertion helpers ---
 
 func requireNoErrors(t *testing.T, report Report) {

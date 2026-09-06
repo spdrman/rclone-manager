@@ -36,6 +36,10 @@ COMPARE=""
 # be authoritative.
 BASELINES_DIR=docs/perf/baselines
 
+# Three paths, all overridable, and that is deliberate: this script is run
+# both against the checked-in baselines and against a scratch pair in the
+# self-test, and a check that could only read its real inputs could never
+# be watched refuse anything.
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/perf/check-baseline.sh [--compare PATH] [--gate PATH]

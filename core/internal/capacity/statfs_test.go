@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+// These are the only tests in the package that touch a real filesystem,
+// which limits what they are allowed to claim. Exact byte counts belong to
+// whatever else happens to be running on the machine, so none is pinned.
+//
+// What is left is still the part Assess trusts: that the three numbers are
+// internally consistent with each other, that a path which cannot be
+// statted comes back as an error, and that the whole StatPath-then-Admit
+// path can be made to admit and made to refuse rather than only ever
+// returning nil.
+//
+// The error case is the one worth being careful about. A zero-valued Stat
+// is a confident reading of a filesystem nobody looked at, and Assess has
+// no way to tell it apart from one it did look at, so the failure has to
+// arrive as an error or it does not arrive at all.
+
 // TestStatPathReportsSaneValues exercises the real OS statfs call this
 // package's admission logic ultimately depends on. It cannot pin exact
 // byte counts (that would make the test flake with every other thing

@@ -272,6 +272,16 @@ backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker hea
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
 (if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
+Since issue #444 that verdict also covers where the backups are, not only how fresh they
+are. A deployment that declares a storage medium (EPIC E, FR-27) and whose relocations to
+it keep failing now reports `DEGRADED`, with the age of the oldest failing move and the
+reason the engine recorded on it, and therefore reports Docker health `unhealthy`. The
+backups themselves are untouched in that state, which is exactly why it needed saying out
+loud: the copy the operator asked to be offsite is not offsite, the move engine has been
+retrying it every cycle, and every surface that carried that fact before was describing a
+single pass and was gone by the time anybody looked. A deployment that declares no
+storage medium reports nothing new at all.
+
 `container/compose.yaml` deliberately overrides that for the engine service, and asks
 `/health/live` instead. The reason is `web-ui`'s `depends_on: rclone-manager: condition:
 service_healthy`: whatever the engine's healthcheck asks is what stands between an operator
@@ -591,23 +601,25 @@ run, against the strongest ref the checkout has (`origin/main`, else `main`, els
 `HEAD`), so a manifest that drifts out of the history fails the build rather than being
 found by hand.
 
-The manifest checked in today was produced this way at `8ad3100`, and a second run from
-the same clean checkout reproduced its binary hashes exactly.
+The manifest checked in today names the commit it was produced at in its own `commit`
+field, and a second run from that same clean checkout reproduces its binary hashes
+exactly. The SHA is not repeated here on purpose: it moves with every release, and a
+copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backup-manager:0.2.0`, and the manifest carries a `registry_digest` of
+`ghcr.io/spdrman/backup-manager:0.3.0`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no
 published flag are both half-truths.
 
 They are filled in from a real push rather than from the push's own output. That is how
-`0.1.0` was recorded: `docker buildx imagetools inspect` read each architecture's digest
+`0.2.0` was recorded: `docker buildx imagetools inspect` read each architecture's digest
 back out of ghcr.io, because the push says what it believes it sent and the registry says
-what it holds, and the multi-architecture index those two sat under, `sha256:533e7540`,
+what it holds, and the multi-architecture index those two sat under, `sha256:0ba1fba4`,
 was keylessly signed through the release workflow's own OIDC identity with the SBOM
-attested beside it. `0.2.0` gets the same treatment once the workflow pushes it.
+attested beside it. `0.3.0` gets the same treatment once the workflow pushes it.
 `local_image_id_sha256` stays what it always was, the local Docker image ID the
 recording build produced, which resolves nowhere but the machine that built it and is
 never a stand-in for a digest.

@@ -39,10 +39,14 @@
 # to the workflow's own identity, the signature is recorded in Rekor, and
 # the certificate expires in minutes. There is no long-lived private key,
 # so there is nothing to rotate, nothing to leak and nothing to commit by
-# accident. The identity a verifier pins is the workflow path plus the tag
-# ref, which is recorded in provenance/release-provenance.json
-# under signing.identity so it is settled before the first signature rather
-# than discovered after it.
+# accident. The identity a verifier pins is the workflow path plus the ref
+# the run was triggered on, which for this workflow is refs/heads/release
+# because a push to `release` is what publishes. It is recorded in
+# provenance/release-provenance.json under signing.identity so it is settled
+# before the first signature rather than discovered after it, and
+# distribution/packaging/signing.go is the one place that string is built
+# (issue #510: this comment said "the tag ref", and the documented verify
+# command was pinned to refs/tags/ and could not match anything).
 #
 # For a release signed by hand off CI, cosign reads a key from the
 # environment (`--key env://COSIGN_PRIVATE_KEY`) and this script requires
@@ -141,9 +145,21 @@ fi
 #
 # A SHA comparison could never have answered the bytes half anyway. The
 # release cut necessarily adds a commit on top of the build it describes,
-# and .dockerignore excludes container/, provenance/, docs/, .github/ and
-# every *.md from the build context, so that commit provably cannot
-# change the image. Only a rebuild can say whether some other commit did.
+# and .dockerignore excludes container/, docs/, .github/, every *.md and
+# all of provenance/ but one file from the build context, so that commit
+# provably cannot change the image. Only a rebuild can say whether some
+# other commit did.
+#
+# The one exception is provenance/third-party-licenses.json, which the
+# runtime stage COPYs to /licenses so an image-only recipient can reach
+# the inventory LICENSE and NOTICE point at (#407). It does not weaken
+# the sentence above: that file is derived from the Go module graph and
+# ui/shared's lockfile, and a release cut changes neither, so it comes
+# out of `go run ./cmd/provenance -write` byte-identical. The rest of
+# provenance/ stays excluded, release-provenance.json and checksums.txt
+# among them, and those two do change on a cut, which is why the
+# exception in .dockerignore names one file rather than opening the
+# directory.
 manifest_commit="$(json_string "$MANIFEST" commit)"
 head_commit="$(git rev-parse HEAD)"
 if [ -z "$manifest_commit" ]; then

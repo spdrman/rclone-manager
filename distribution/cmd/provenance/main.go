@@ -27,6 +27,20 @@ import (
 	"github.com/spdrman/rclone-manager/distribution/packaging"
 )
 
+// The default is CHECK and -write is the opt-in, which is the wrong way
+// round for a generator and the right way round for this one. Everything
+// it produces is evidence about the tree, so the question worth asking on
+// every run is whether the checked-in evidence still describes the tree,
+// and a tool whose default regenerates answers that by making it true.
+// The same run is therefore usable as a gate step and by a person about
+// to cut a release, with the exit code carrying the whole contract: zero
+// when the artifacts match, one when they do not, and the message naming
+// the command that fixes it.
+//
+// Generation happens once, before either branch, so check and write
+// compare and write exactly the same bytes. Two passes would leave room
+// for a check that passes against output a subsequent write would not
+// reproduce.
 func main() {
 	write := flag.Bool("write", false, "regenerate the artifacts instead of only checking them")
 	flag.Parse()

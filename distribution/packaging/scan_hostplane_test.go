@@ -1,3 +1,15 @@
+// The controls for scan_hostplane.go, which is the one rule in this
+// package whose failure is a changed host rather than a wrong package.
+//
+// Two things are checked that a shorter suite would skip. There is a case
+// per marker rather than one case for the function, because a list of
+// fourteen patterns where one silently matches nothing is
+// indistinguishable, from the outside, from a list of fourteen that all
+// work; this package has shipped that exact defect twice. And the
+// Markdown handling is checked in both directions, because it is a rule
+// and not an exemption: prose describing what the profile does not do has
+// to pass, a fenced block that does it has to fail, and a suite that only
+// checked the first would let the exemption swallow the second.
 package packaging
 
 import (

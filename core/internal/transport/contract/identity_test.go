@@ -8,6 +8,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file unit-tests Capture and Changed, the two helpers the contract
+// suite's changed-object case leans on, against an in-memory transport
+// instead of a backend.
+//
+// The split is deliberate. The suite in contract.go proves these work
+// against a REAL backend, which is what a backend author needs; it cannot
+// easily produce the awkward inputs, because a real filesystem will not
+// hand you two different objects with the same path, size and modification
+// time on demand. So the table below builds those by hand, one attribute
+// at a time, which is the only way to show that Changed reaches for a hash
+// rather than stopping at a size and a timestamp that happen to agree.
+//
+// fakeTransport implements the whole Transport interface and panics in the
+// three methods Capture has no business calling, on purpose. A stub that
+// returned a zero value instead would let a future Capture start calling
+// List or DeleteRemote without anybody noticing; a panic makes that a
+// failure with a stack trace pointing straight at the new call.
+
 // fakeTransport is a minimal, in-memory transport.Transport used to unit test
 // Capture and Changed without touching a real backend. It only implements
 // enough behavior for those two functions.

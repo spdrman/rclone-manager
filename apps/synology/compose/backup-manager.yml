@@ -22,7 +22,7 @@ services:
   # backup scheduler, one process sharing one shutdown context. It holds
   # the state database and the credentials, and publishes no port at all.
   backup-manager:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.2.0}
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.0}
     command: ["/backup-manager-web", "serve", "--profile=synology"]
 
     user: "${PUID:-1026}:${PGID:-100}"
@@ -98,7 +98,7 @@ services:
   # operator ever opens. There is no DSM desktop launcher on this path,
   # which is one of the two things the .spk still does that this does not.
   backup-manager-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.2.0}
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.0}
     command: ["/backup-manager-web", "serve-ui", "--profile=synology"]
 
     depends_on:

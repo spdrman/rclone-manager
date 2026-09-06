@@ -1,3 +1,20 @@
+/**
+ * A fetched resource as a graph node: loading, resolved and failed, with
+ * one hook to read it and one function to drive it.
+ *
+ * This is the graph-backed successor to `useAsync`, and it keeps that
+ * hook's exact `AsyncState<T>` shape so a page could be moved across
+ * without touching the props it hands its children. What it adds is that
+ * the value now lives somewhere two surfaces can both read it, which is
+ * the whole reason a fetch moves here at all. State only one page cares
+ * about is better off staying in `useAsync`, and several pages still are.
+ *
+ * The two hardest things in the file are both about identity rather than
+ * data, and both were regressions once. A late response must not overwrite
+ * a newer one, and the object this hook returns must not change identity
+ * when nothing changed, or every consumer keyed on it churns. Each carries
+ * its own note where it is handled.
+ */
 import { useCallback, useEffect, useMemo } from "react";
 import type { InputNode } from "@causlts/core";
 import { BackupManagerError } from "@shared/api/contracts";

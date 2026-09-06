@@ -1,3 +1,28 @@
+// The controls for every rule in scan.go, scan_platform.go and rules.go,
+// plus the readers in metadata.go those rules stand on.
+//
+// The shape is the same throughout and is the reason this file is as long
+// as it is: one clean fixture, then one violation added to a copy of it
+// per rule. Every rule these files hold is a negative claim, and the way
+// a negative claim fails is by matching nothing, which reads exactly like
+// a clean tree. Running each rule against a package that is legitimate
+// except for the one thing under test is what tells those two apart, and
+// it is why the fixture is written here rather than pointed at a real
+// apps/<platform>/ directory: a real package changes for reasons that
+// have nothing to do with these rules, and a control whose baseline
+// drifts stops being a control.
+//
+// This is not a hypothetical discipline. Two of the patterns in this
+// package shipped unable to match the thing they were written for, both
+// for the same reason (\b does not match between an underscore and a
+// letter, so ADMIN_PASSWORD and OIDC_ISSUER went unseen), and in both
+// cases the code looked right and the control is what said otherwise.
+//
+// It is an internal test package because several of these controls drive
+// unexported helpers directly. That is deliberate here and not elsewhere:
+// the helpers are where the rules actually live, and a control that could
+// only reach them through an exported wrapper would be testing the
+// wrapper's dispatch as much as the rule.
 package packaging
 
 import (

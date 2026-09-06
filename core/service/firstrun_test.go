@@ -1,3 +1,26 @@
+// This file covers the very first start: an install with no config.yaml
+// at all, and the one write that turns it into a working deployment
+// (#176).
+//
+// Everything here is shaped by that write being unrepeatable in the
+// direction that matters. Setup runs before anybody is authenticated,
+// against a directory whose shape packaging decides, so a half-written
+// file is not an inconvenience: it is an install that is neither
+// unconfigured nor configured, and no later call can tell which. So the
+// refusals are all proved to leave nothing behind, an existing config is
+// never overwritten, and a failed write cleans up after itself.
+//
+// The state database path is deliberately not the caller's to choose, and
+// there is a test for that on its own. Setup is the one door that opens
+// before an instance has any configuration to authorise against, so a
+// path taken from the request is a file this process would create, and
+// keep writing, wherever the request pointed it.
+//
+// The distinction the first test draws is the one the whole feature rests
+// on: an absent configuration is an invitation to set up, an invalid one
+// is a mistake to report, and reading the second as the first would offer
+// to overwrite an operator's broken file instead of telling them it is
+// broken.
 package service
 
 import (

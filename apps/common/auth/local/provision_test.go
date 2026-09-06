@@ -10,6 +10,20 @@ import (
 	"testing"
 )
 
+// The command-line path has to produce a record indistinguishable from the
+// one the browser flow writes, because everything downstream reads only
+// the file and has no idea which route created it.
+//
+// So the first test compares the hash format rather than just checking a
+// record appeared: a CreateAdmin that used different Argon2id parameters,
+// or a different encoding, would write a record that Store.Admin loads
+// happily and handleLogin can never verify against, and the operator would
+// discover it at their first login attempt.
+//
+// The two refusals pin that this path enforces the same input rules the
+// HTTP route does. A shorter password accepted here would be a way to
+// bypass a check that exists in one place and is skipped in the other.
+
 // TestCreateAdmin_ProvisionsAnAdminRecordWithNoHTTPInvolvedAtAll is issue
 // #322's RED case made concrete: before this package had a CreateAdmin
 // entry point, the ONLY way to put an AdminRecord into a store was

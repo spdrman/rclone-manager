@@ -15,6 +15,24 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 )
 
+// Bundle resolution, tested mostly through its refusals.
+//
+// The rule this file defends is that a resolution which cannot honour what
+// it was asked for fails rather than falls back. That is worth testing
+// explicitly because a fallback is the friendlier-looking behaviour and
+// would produce a UI that starts, renders and works, while running a
+// different provider's bridge from the one the package was built to ship.
+// Nothing downstream would notice, which is how that defect shipped once
+// already.
+//
+// The precedence test is the ordering half, and the serving test is what
+// keeps the other two from being a unit test of a string: it drives a real
+// NewUI handler and asks for a file, so a resolution that returned the
+// right name for a directory nothing can be read out of still fails.
+//
+// The package is serve_test because bundle selection is entirely an
+// external contract, decided by what a caller passes in.
+
 // embedded stands in for the compile-time go:embed bundle every build of
 // the canonical binary carries. The point of the whole mechanism is that
 // this never has to change to serve a different bridge.

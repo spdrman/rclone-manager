@@ -7,26 +7,101 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
-// runChecks runs whatever cfg enables against rec's local final file and
-// reports a combined verdict.
+// This file is the checking half: given one artifact that scheduling picked,
+// go and find out whether its durable copy is still good.
 //
-// checked is false only when nothing cfg enables could actually produce a
-// verdict for this specific artifact: cfg.Command is nil, and cfg.Hash is
-// set but rec has no recorded hash baseline to compare a fresh read
-// against (it was originally verified without hash: sha256, so
-// rec.LocalHash is empty). That is not itself a failure and not a pass;
-// see checkArtifact, the only caller, for why it must never be turned into
-// a same-state "passed" journal write, which would silently reset
-// SelectDue's due-ness clock for an artifact nothing here actually
-// re-verified.
+// The organising idea is a distinction the rest of the package leans on
+// everywhere, between CHECKED and PASSED. Three outcomes are possible, not
+// two, and collapsing the third into either of the others causes real harm
+// in opposite directions. An artifact nothing was configured to check is not
+// a pass: recording one would reset its due-ness clock and it would drift
+// for ever, looking freshly verified. It is also not a failure: quarantining
+// a backup because nobody asked for a check on it would destroy an operator's
+// trust in the feature within a cycle. So runChecks returns checked
+// separately, and only checkArtifact's checked branch ever writes to the
+// journal.
+//
+// The second idea is that a verdict is only as strong as what it actually
+// did. Since EPIC E a durable copy can be a local file or an object on a
+// storage medium, and those are different checks, not one check with a
+// different path: re-reading a local file proves the bytes, HEADing an
+// object proves an object of the right size is at that key. Both are
+// legitimate, and reporting the second as if it were the first would be a
+// lie an operator only discovers during a restore. Every path out of here
+// carries the class it achieved for that reason.
+//
+// The third is that money is a correctness concern here. This pass runs
+// unattended on a schedule an operator set when everything was free, so
+// anything that would download an artifact is refused rather than
+// configured, and the refusal is a check on Class.CostsEgress at the moment
+// the request is about to be made rather than a rule written in a comment.
+
+// automaticMediumClass is the strongest verification class a scheduled,
+// unattended pass will ever run against a copy on a storage medium, and it
+// is now the only statement of that rule in the product.
+//
+// It was a const inside checkMediumPlacements and it is here so a test can
+// read it. internal/placement carried a second statement of the same rule,
+// AutomaticClass, which nothing consulted. #438 deleted it: it answered
+// this same constant for every access state a copy this pass would look at
+// can be in, and reaching it would have cost a restore-status probe per
+// archive-class copy per cycle to learn nothing that could change what
+// runs, because an existence check is a HEAD and a HEAD works on an
+// archived object.
+//
+// Existence rather than Attested, which also costs no egress and is the
+// rung between them. An attestation is the endpoint's own word about the
+// bytes, which is why it is opt-in per medium, and this function runs ONE
+// class against EVERY ACTIVE medium copy without ever reading that opt-in.
+// So an automatic pass that attested would be trusting an endpoint on
+// behalf of an operator who never said it could, which also means "the
+// strongest rung that does not download" is the wrong derivation of this
+// constant and always was.
+//
+// The properties, and their reasons, are asserted by
+// TestTheAutomaticCeilingIsAClassThisPassMayRunAgainstEveryMedium; the
+// behaviour they describe is asserted against a real pass, by request
+// count, in TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo.
+const automaticMediumClass = placement.Existence
+
+// runChecks runs whatever cfg enables against rec's durable copy and
+// reports a combined verdict, plus the verification CLASS it achieved.
+//
+// # Which copy it checks, and why that is a fork rather than a parameter
+//
+// An artifact's durable copy used to be one thing: a local file. Since
+// EPIC E it can be a local file, an object on a storage medium, or both
+// at once during a move. The two are not the same check with a different
+// path, they are different checks with different costs and different
+// strengths, so this function forks on where the copy actually is rather
+// than pretending one code path covers both.
+//
+//   - a local copy is re-read and re-hashed, exactly as before, which is
+//     placement.Content;
+//   - a medium copy is HEADed, which is placement.Existence, and that is
+//     the CEILING for an automatic pass rather than a starting point.
+//     Anything stronger costs egress, and silent egress is a surprise
+//     bill; FR-31 makes content and attested re-verification of a medium
+//     placement operator-initiated, and Class.CostsEgress is what this
+//     function refuses on rather than a rule written in a comment.
+//
+// checked is false only when nothing enabled could actually produce a
+// verdict for this specific artifact: cfg.Command is nil and cfg.Hash is
+// unset or has no recorded baseline, or the artifact's copy is on a medium
+// this deployment cannot reach. That is not a failure and not a pass; see
+// checkArtifact, the only caller, for why it must never be turned into a
+// same-state "passed" journal write, which would silently reset SelectDue's
+// due-ness clock for an artifact nothing here actually re-verified.
 //
 // err is non-nil only for an infrastructure problem this function cannot
 // safely turn into a business verdict for this one artifact: the outer
@@ -38,37 +113,244 @@ import (
 // touching this artifact's journal row. Neither is grounds to quarantine a
 // possibly-perfectly-good backup over what might be a misconfigured
 // operator hook, not a corrupt artifact.
-func runChecks(ctx context.Context, cfg config.Revalidation, rec state.Record) (checked, passed bool, reason string, err error) {
+func runChecks(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (checked, passed bool, class placement.Class, reason string, err error) {
+	// The medium copies are only consulted when there is no active LOCAL
+	// placement, which is the ordering FR-31 asks for: local placements
+	// keep today's behaviour exactly, and an artifact mid-move that still
+	// has its local copy is checked the way it was checked yesterday.
+	//
+	// state.Record.ActiveMediumPlacements used to be a private loop here,
+	// and this package was the only one of FR-29's four swept callers
+	// that asked it. The other three read "no readable local path" as "no
+	// durable copy" and quarantined every moved artifact; the loop now
+	// lives beside ReadableLocalPath so every caller of the one is held
+	// to asking the other.
+	if _, local := rec.LocalPlacement(); !local {
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			return checkMediumPlacements(ctx, deps, cfg, mediums)
+		}
+	}
+	return checkLocalCopy(ctx, deps, cfg, rec)
+}
+
+// checkMediumPlacements runs the automatic ceiling, placement.Existence,
+// against every ACTIVE copy the artifact has on a storage medium.
+//
+// The class is not configurable here and that is deliberate. cfg.Hash asks
+// for a content check, and honouring it against a medium would download
+// the artifact on a schedule the operator set for something that used to
+// be free. FR-31 says so directly, and the assertion below turns it from a
+// rule into a fact: whatever class this function is about to run, it
+// refuses if that class costs egress.
+//
+// cfg.Command is skipped for the same reason and said out loud for a
+// different one. A restore test opens the artifact, so running one against
+// a bucket means downloading the artifact, which is the egress this
+// function refuses. But an operator who configured a restore test and gets
+// back a green pass has been told less than they asked for, and a check
+// that quietly stops running is how a safety feature becomes decorative.
+// So the pass names the tier that did not run.
+//
+// A failing check is a verdict about ONE placement, and quarantine is a
+// verdict about the artifact. FR-31 keeps them apart: the artifact enters
+// QUARANTINED only when no other ACTIVE verified placement remains. So a
+// pass here needs one placement to pass, and a failure needs every one of
+// them to have been asked AND to have failed. A placement that could not
+// be asked leaves the question open, which is an error rather than a
+// verdict: an unreachable bucket is not evidence that a backup is gone.
+func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidation, ps []state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
+	if deps.Store == nil || deps.Mediums == nil {
+		return false, true, "", fmt.Sprintf(
+			"this artifact's durable copies are on storage mediums (%s), and this deployment has no way to reach one, so nothing was checked", mediumIDs(ps)), nil
+	}
+
+	const automatic = automaticMediumClass
+	if automatic.CostsEgress() {
+		// Unreachable today, and here on purpose: this is the line that
+		// has to fail if somebody ever raises the automatic ceiling, so
+		// the decision is made by editing this refusal rather than by
+		// changing a constant and discovering the bill later.
+		return false, true, "", "", fmt.Errorf(
+			"revalidate: the automatic class %s costs egress, and FR-31 makes anything that costs egress operator-initiated", automatic)
+	}
+
+	var (
+		details       []string
+		anyPassed     bool
+		didNotAnswer  error
+		notConfigured string
+	)
+	for _, p := range ps {
+		medium, ok := deps.Mediums.MediumFor(p.Medium)
+		if !ok {
+			if notConfigured == "" {
+				notConfigured = p.Medium
+			}
+			continue
+		}
+
+		result, verifyErr := placement.Verify(ctx, deps.Store, medium, p, automatic, deps.now())
+		if verifyErr != nil {
+			if isCancelled(verifyErr) {
+				return false, false, "", "", verifyErr
+			}
+			// A class that could not be attempted is not a verdict about
+			// the artifact, and it is not a configuration fact either: the
+			// medium was there to ask and did not answer. So it is routed
+			// the way this package already routes a restore-test hook that
+			// fails to start, as a per-artifact ERROR rather than as an
+			// unchecked finding.
+			//
+			// The distinction is worth the extra branch. An unchecked
+			// finding says "nothing here was configured to check", which an
+			// operator reads past; an error says "this backup could not be
+			// checked and somebody should find out why", which is the true
+			// statement when a bucket does not answer. Either way the
+			// journal is untouched and the due-ness clock does not move, so
+			// the artifact stays selectable next cycle rather than looking
+			// freshly verified.
+			if didNotAnswer == nil {
+				didNotAnswer = fmt.Errorf("medium %q: %w", p.Medium, verifyErr)
+			}
+			continue
+		}
+		details = append(details, result.Detail)
+		if result.Passed {
+			anyPassed = true
+		}
+	}
+
+	// One good copy is enough to say the artifact is still there, and
+	// saying so does not depend on the placements that could not be asked.
+	// Everything below is the case where none passed, where the two ways a
+	// placement can go unasked matter, because each of them leaves "no
+	// verified copy remains" unproven and quarantine is what that would
+	// otherwise mean.
+	if !anyPassed {
+		switch {
+		case len(details) > 0 && (didNotAnswer != nil || notConfigured != ""):
+			// A copy was asked and FAILED, and another copy could not be
+			// asked at all. Neither existing branch tells that truthfully
+			// (issue #435 found it while writing the operator-triggered
+			// twin of these checks): the unconfigured branch below said
+			// "none of them is in the configuration, so nothing was
+			// checked", which is two false statements at once when a
+			// medium answered and its copy is gone.
+			//
+			// Quarantine is still out of the question, and that part was
+			// always right: the copy nobody could ask may be perfectly
+			// fine, and FR-31 quarantines only when no other ACTIVE
+			// verified placement remains. What changes is where this
+			// lands and what it says. A copy proved missing is the
+			// definition of "somebody should find out why", so it goes to
+			// the error channel, naming the copy that is gone AND the
+			// copy nobody could ask, rather than to an unchecked finding
+			// an operator reads past.
+			open := append([]string(nil), details...)
+			if didNotAnswer != nil {
+				open = append(open, didNotAnswer.Error())
+			}
+			if notConfigured != "" {
+				open = append(open, fmt.Sprintf(
+					"the copy on storage medium %q was not checked, because that medium is not in the configuration", notConfigured))
+			}
+			return false, false, "", "", fmt.Errorf(
+				"no copy of this artifact could be verified, and not every copy could be asked, so it is not established that no verified copy remains: %s",
+				strings.Join(open, "; "))
+		case didNotAnswer != nil:
+			// A medium that was there to ask and did not answer: an error,
+			// because somebody should find out why.
+			return false, false, "", "", didNotAnswer
+		case notConfigured != "":
+			// A medium this deployment was never configured to reach, with
+			// nothing asked anywhere, so there is no evidence in either
+			// direction: a configuration fact rather than a backup nobody
+			// could check, and an unchecked finding rather than an error.
+			return false, true, "", fmt.Sprintf(
+				"this artifact's durable copies are on storage mediums (%s), and none of them is in the configuration, so nothing was checked", mediumIDs(ps)), nil
+		}
+	}
+
+	detail := strings.Join(details, "; ")
+	// A pass that another copy carried has to say which copies it did not
+	// hear from, or an operator reads a green tick and never learns that
+	// one of their two buckets went quiet. The pass itself stands: a copy
+	// is there and was asked. What it must not do is imply that every copy
+	// was.
+	if didNotAnswer != nil {
+		detail += "; " + didNotAnswer.Error() + ", so that copy was not checked"
+	}
+	if notConfigured != "" {
+		detail += fmt.Sprintf("; the copy on storage medium %q was not checked, because that medium is not in the configuration", notConfigured)
+	}
+	if cfg.Command != nil {
+		detail += "; the restore-test hook did not run, because opening this artifact means downloading it and FR-31 makes anything that costs egress operator-initiated"
+	}
+	return true, anyPassed, automatic, detail, nil
+}
+
+// mediumIDs names the mediums a set of placements sits on, for the two
+// messages an operator reads when nothing could be checked at all. It
+// names every one of them rather than the first, because "your backup is
+// on a medium I cannot reach" is a sentence somebody has to act on and the
+// medium's id is the only part of it that says where to look.
+func mediumIDs(ps []state.Placement) string {
+	ids := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ids = append(ids, strconv.Quote(p.Medium))
+	}
+	return strings.Join(ids, ", ")
+}
+
+// checkLocalCopy is exactly the check this package always did, against the
+// artifact's local copy, reported as the class it has always achieved.
+func checkLocalCopy(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (checked, passed bool, class placement.Class, reason string, err error) {
 	var reasons []string
 	passed = true
 
+	localPath, hasLocal := rec.ReadableLocalPath()
+
 	if cfg.Hash && rec.LocalHashAlg == string(transport.SHA256) && rec.LocalHash != "" {
 		checked = true
-		sum, readErr := recomputeLocalHash(rec.LocalPath)
+		class = placement.Content
 		switch {
-		case readErr != nil:
+		case !hasLocal:
 			passed = false
-			reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", rec.LocalPath, readErr))
-		case !strings.EqualFold(sum, rec.LocalHash):
-			passed = false
-			reasons = append(reasons, fmt.Sprintf(
-				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash,
-			))
+			reasons = append(reasons, "no local copy of this artifact is recorded, so its content cannot be re-read")
 		default:
-			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
+			sum, readErr := recomputeLocalHash(localPath)
+			switch {
+			case readErr != nil:
+				passed = false
+				reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", localPath, readErr))
+			case !strings.EqualFold(sum, rec.LocalHash):
+				passed = false
+				reasons = append(reasons, fmt.Sprintf(
+					"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
+					localPath, sum, rec.LocalHashAlg, rec.LocalHash,
+				))
+			default:
+				reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
+			}
 		}
 	}
 
 	if cfg.Command != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, localPath)
 		if hookErr != nil {
 			if isCancelled(hookErr) {
-				return false, false, "", hookErr
+				return false, false, "", "", hookErr
 			}
-			return false, false, "", fmt.Errorf("restore-test hook: %w", hookErr)
+			return false, false, "", "", fmt.Errorf("restore-test hook: %w", hookErr)
 		}
 		checked = true
+		// A restore-test hook opens the artifact and proves it restores,
+		// which is at least as strong a statement about the bytes as
+		// re-hashing them. It does not upgrade a class it did not reach,
+		// so it only sets one where the hash tier did not already.
+		if class == "" {
+			class = placement.Content
+		}
 		if !result.Passed {
 			passed = false
 			reasons = append(reasons, "restore-test hook failed: "+result.Detail)
@@ -78,13 +360,13 @@ func runChecks(ctx context.Context, cfg config.Revalidation, rec state.Record) (
 	}
 
 	if !checked {
-		return false, true, fmt.Sprintf(
+		return false, true, "", fmt.Sprintf(
 			"nothing to check for this artifact: no recorded hash baseline (local_hash_alg=%q) and no restore-test hook configured",
 			rec.LocalHashAlg,
 		), nil
 	}
 
-	return true, passed, strings.Join(reasons, "; "), nil
+	return true, passed, class, strings.Join(reasons, "; "), nil
 }
 
 // recomputeLocalHash reads path in full and returns its SHA-256, in hex.

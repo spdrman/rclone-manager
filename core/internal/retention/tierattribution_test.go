@@ -256,7 +256,7 @@ func TestPruneVerdictCarriesTheTierAttributionItWasGiven(t *testing.T) {
 		pruneWriteFile(t, rec.LocalPath, "payload")
 	}
 
-	verdicts, err := PruneDecide(now, cfg, bs, records)
+	verdicts, err := PruneDecide(now, cfg, bs, records, AllLocal)
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}

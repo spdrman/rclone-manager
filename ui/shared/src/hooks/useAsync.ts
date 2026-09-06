@@ -1,7 +1,28 @@
+/**
+ * Fetch-into-component-state, for the pages whose data nothing else reads.
+ *
+ * The graph-backed `useResource` (state/resource.ts) superseded this for
+ * anything shared, and deliberately kept the same `AsyncState<T>` shape so
+ * the two can sit side by side. What did not survive the move is the
+ * ownership question, and it is the only thing worth deciding when picking
+ * between them: a fetch belongs on the graph when a second surface needs
+ * the answer, and belongs here when it does not. Several pages still
+ * genuinely do not, and moving them would add a globally-named node for no
+ * reader.
+ *
+ * Both eslint suppressions below are the same underlying situation. This
+ * is a wrapper around a caller-supplied dependency list, and the newer
+ * rules want to see a literal array they can compare themselves, which a
+ * wrapper by definition cannot show them.
+ */
 import { useCallback, useEffect, useState } from "react";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
 
+/** A fetch in one of its three states, plus the way to run it again.
+ *  `data` survives a later failure on purpose: a poll that fails should
+ *  leave the last good answer on screen under an error, not blank the page
+ *  an operator was reading. */
 export interface AsyncState<T> {
   data: T | null;
   error: ApiError | null;
@@ -60,6 +81,20 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
   return { data, error, loading, reload: () => setNonce((n) => n + 1) };
 }
 
+/**
+ * Calls `reload` on an interval while `enabled`.
+ *
+ * `reload` is a dependency, so an unstable one restarts the timer on every
+ * render and the interval effectively never elapses. That is not
+ * hypothetical: it is the bug state/resource.ts's own identity memo exists
+ * to prevent, and it fails silently as "the dashboard stopped refreshing"
+ * rather than as anything a test would notice on its own.
+ *
+ * `enabled` gates the timer rather than the caller, so a page can express
+ * "not until the operator is signed in and this instance is configured"
+ * without arranging for the hook to be called conditionally, which React
+ * forbids anyway.
+ */
 export function usePolling(intervalMs: number, reload: () => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;

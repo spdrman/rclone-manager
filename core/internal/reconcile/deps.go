@@ -10,6 +10,17 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// This file is the seam between reconciliation and everything it needs,
+// drawn as narrowly as the work allows.
+//
+// Journal names the three methods this package actually calls instead of
+// taking a *state.Journal, which means there is no way to reach past it
+// into migrations or schema, and a test can substitute a fake without
+// standing up SQLite. Deps then owns the two conveniences that would
+// otherwise be repeated at every call site: resolving a clock that may be
+// nil, and assembling the lifecycle.Deps each transition needs out of
+// fields this package already holds.
+
 // Journal is the slice of internal/state that reconciliation needs: the
 // two methods every lifecycle.Advance call already requires, plus
 // ListByBackupSet to enumerate what to reconcile in the first place.

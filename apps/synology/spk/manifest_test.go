@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+// Loading the release manifest, including the real one in this
+// repository.
+//
+// That second test is the unusual one and it is deliberate. A parser
+// exercised only against fixtures written by the same person who wrote the
+// parser agrees with itself perfectly and can still be unable to read the
+// file that actually exists; pointing it at the checked-in manifest is
+// what catches a schema that moved.
+//
+// The malformed cases assert refusals rather than best-effort reads,
+// because every value in this file is a digest somebody later compares
+// bytes against, and a digest that was silently truncated or defaulted
+// turns a parity check into a check that cannot fail.
+
 // TestLoadReleaseManifest reads the shape 4.1's
 // scripts/release/record-release-hashes.sh actually writes, since that
 // file is the only source of the per-architecture SHA-256 §3.7 requires

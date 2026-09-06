@@ -6,6 +6,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The three system reads a client makes before it does anything else:
+// version, capabilities, and readiness.
+//
+// The version response is under a standing constraint that is not visible
+// from its field names: nothing it serves may spell "rclone" or "sqlite".
+// Those are implementation choices this product does not put on the wire,
+// and the rule is enforced at the source of the values as well as here, so
+// a new field cannot leak one by inheriting it.
+//
+// Ready is the field with a history worth knowing. It is asked of the
+// backend, which is the only thing that knows whether the startup
+// sequence completed. It used to be derived here from the config revision
+// being non-empty, which was true of every backend that could be
+// constructed at all, including ones that had run no startup sequence: a
+// readiness flag that could not report false, standing in front of the
+// precondition §36 makes destructive operations depend on.
+//
+// Capabilities is served straight from the platform adapter rather than
+// assembled here, so there is exactly one place a capability is declared
+// and no way for this surface to report something the adapter would deny.
+
 // versionResponse is GET /api/v1/system/version's response shape
 // (docs/EPIC-B-multi-nas.md §15.1). Field names are chosen so nothing here
 // ever spells "rclone" or "sqlite" — see
@@ -66,6 +87,12 @@ type versionResponse struct {
 	Configured bool `json:"configured"`
 }
 
+// systemVersion is GET /api/v1/system/version. It is the first call every
+// client makes, so it is also the one that has to answer on a
+// half-configured instance: a nil backend produces an empty config
+// revision and a not-ready flag rather than a panic, which is this
+// package's standing posture that "not fully wired yet" is a degraded
+// answer and never a crash.
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 	v := service.BuildVersion(h.binaryVersion, h.commit)
 	// h.backend can be nil the same way healthReady already allows for
@@ -115,6 +142,11 @@ type capabilitiesResponse struct {
 	AppStorePackaging   bool   `json:"app_store_packaging"`
 }
 
+// systemCapabilities is GET /api/v1/system/capabilities. It copies the
+// adapter's answer field for field and adds nothing of its own, which is
+// the point: a capability has exactly one place it is declared, and a
+// route that could enrich or override it would be a second one that
+// disagrees.
 func (h *handlers) systemCapabilities(w http.ResponseWriter, r *http.Request) {
 	c := h.platform.Capabilities()
 	writeJSON(w, http.StatusOK, capabilitiesResponse{

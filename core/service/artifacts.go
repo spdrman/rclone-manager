@@ -8,9 +8,43 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
+
+// This file is where an operator's judgement enters a pipeline that
+// otherwise decides for itself: reading the journal's own rows, and the
+// four things a person is allowed to do to a backup the pipeline has
+// stopped trusting.
+//
+// None of those four lets anybody declare an artifact good. Revalidate
+// re-runs the checks and writes nothing at all, reinstate returns an
+// artifact to a state it already held and only on evidence, retrying
+// ingestion sends it back to the front of the ordinary pipeline, and
+// retrying a failure just unsticks it. Nothing here is a way to overrule
+// a verdict, because a manager whose quarantine can be argued away by
+// clicking is a manager whose quarantine means nothing, and the cost of
+// being wrong is a restore that fails on the day it matters.
+//
+// The reinstatement path is safe to offer for one reason worth keeping in
+// view from here: an artifact returned to service permanently forfeits
+// its authority to have the remote source deleted. That trade is the
+// whole design. Reinstating cannot lose data because it never authorises
+// deleting any, so the worst outcome is a source copy this manager keeps
+// its hands off for good.
+//
+// The refusals get a sentinel each rather than one shared "no". They read
+// almost alike from in here and they are opposite instructions to the
+// person holding the mouse: not quarantined, not failed, nothing left to
+// re-ingest, and the evidence was not enough are four different next
+// actions, and the API layer turns each into its own code.
+//
+// Every error crossing out of this file is translated. A caller outside
+// core/ cannot name internal/app's or internal/lifecycle's types, so
+// passing one through would hand it an error it can only match on by
+// reading the text, which is how a message becomes an interface nobody
+// meant to publish.
 
 // ErrArtifactNotFound is returned when no journal row exists for the
 // artifact id a caller named.
@@ -21,6 +55,15 @@ var ErrArtifactNotFound = errors.New("service: artifact not found")
 // state. It exists so the API layer can answer a typed 409 rather than a
 // 500 for what is an ordinary, expected refusal.
 var ErrArtifactNotQuarantined = errors.New("service: artifact is not quarantined")
+
+// ErrArtifactNotFailed is returned when an artifact named for
+// RetryFailedArtifact is not in FAILED.
+//
+// Its own sentinel rather than a reuse of ErrArtifactNotQuarantined,
+// because the two say different things and the API layer gives them
+// different codes: one is "this backup is not waiting for your judgement",
+// the other is "this backup is not stuck".
+var ErrArtifactNotFailed = errors.New("service: artifact is not failed")
 
 // ErrArtifactIrrecoverable is returned by RetryArtifactIngestion for an
 // artifact whose remote source is already confirmed deleted, so nothing
@@ -39,6 +82,30 @@ var ErrArtifactIrrecoverable = errors.New("service: artifact has no remaining so
 // instead). Collapsing the two would leave an operator with no way to tell
 // "your backup is gone" from "run the validator".
 var ErrReinstatementRefused = errors.New("service: the evidence is not enough to trust this artifact again")
+
+// The two values Artifact.RetentionPolicy takes, and the reason it is a
+// string rather than a bool.
+//
+// A bool would name the state ("configured", "not configured") and leave
+// the consequence to be worked out by every surface separately, which is
+// how four surfaces end up saying four different things about the same
+// row. A string also leaves room for the answer this will eventually
+// want, the name of the chain a configured set is actually retained
+// under, as a value change rather than a schema change: exactly the
+// argument UnconfiguredBackupSet.RetentionPolicy already makes for its
+// own field (unconfigured.go).
+const (
+	// RetentionPolicyConfigured means a retention chain still selects
+	// this artifact and will age it out in its own time.
+	RetentionPolicyConfigured = "configured"
+
+	// RetentionPolicyNone means the artifact's backup set configuration
+	// was removed (issue #391) while the backup stayed on storage. No
+	// chain ever selects it, so nothing in this product will ever delete
+	// it and it holds the space it occupies until somebody removes it by
+	// hand.
+	RetentionPolicyNone = "none"
+)
 
 // Artifact is the plain, provider-agnostic shape of one journal row: what
 // this backup is, where it came from, whether it is trustworthy, and
@@ -117,11 +184,48 @@ type Artifact struct {
 	// RetentionTier is the tier that most recently selected this artifact
 	// for retention, or empty.
 	RetentionTier string
+
+	// RetentionPolicy is what decides when this artifact is deleted:
+	// RetentionPolicyConfigured or RetentionPolicyNone, and the second is
+	// the whole point of the field (issue #523). An artifact under no
+	// policy is one nothing will ever delete, so it accumulates until the
+	// disk fills, and until this existed the only surface that said so
+	// was a terminal.
+	//
+	// It is never empty on a value this package produced. That matters
+	// downstream: a caller must not be able to read a third, silent state
+	// as "governed", because the whole failure this field exists to
+	// prevent is a backup nothing will delete reading as a healthy one.
+	// toServiceArtifact always sets one of the two, and it takes the
+	// index it needs to decide as an argument rather than defaulting,
+	// so a new call site has to supply the answer instead of inheriting
+	// a zero value.
+	RetentionPolicy string
+
+	// Placements is every durable copy this artifact currently has, one
+	// entry per place (EPIC E, FR-29).
+	//
+	// Empty means this artifact has no durable copy anywhere yet, which is
+	// an ordinary answer for one still transferring and never a copy this
+	// read model failed to describe. LocalPath above keeps meaning what it
+	// always meant, the path ingestion landed on, and is NOT evidence that
+	// a readable file is sitting there: a caller asking where the bytes
+	// are asks this field. See placements.go.
+	Placements []Placement
 }
 
 // ArtifactFilter narrows ListArtifacts. An empty BackupSetID matches every
 // backup set; QuarantinedOnly restricts the result to the two quarantine
 // states.
+//
+// The two are not symmetric about a backup set whose configuration has
+// been removed (issue #391). An unfiltered read lists that set's
+// artifacts, because the confirmation an operator accepted says they
+// "remain listed under Backups". A QuarantinedOnly read does not: it
+// feeds the quarantine screen, whose three actions all need a configured
+// set behind the row, and every one of them refuses such a row by name
+// (RevalidateArtifact, ReinstateArtifact, RetryArtifactIngestion below).
+// Offering a row with three refusals on it is not a service to anyone.
 type ArtifactFilter struct {
 	// BackupSetID is a "source/set" id, matched exactly. An id that names
 	// no configured backup set is REFUSED with ErrBackupSetNotFound
@@ -142,7 +246,12 @@ type ArtifactFilter struct {
 func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]Artifact, error) {
 	st := b.state.Load()
 
-	appFilter := app.ArtifactFilter{}
+	// The unfiltered backups list is the one read that carries sets the
+	// configuration no longer has; see ArtifactFilter's own doc for why
+	// the quarantine read is not that read. The app layer honours this
+	// only for a filter that names nothing, so setting it whenever the
+	// caller did not ask for quarantine is exact rather than generous.
+	appFilter := app.ArtifactFilter{IncludeUnconfigured: !filter.QuarantinedOnly}
 	if filter.BackupSetID != "" {
 		source, set, ok := splitBackupSetID(filter.BackupSetID)
 		if !ok {
@@ -154,6 +263,14 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 		}
 		appFilter.Source, appFilter.Set = source, set
 	}
+
+	mediums := indexMediums(st.inner.Config)
+	// Which sets the configuration still names, read from the SAME
+	// snapshot the records are read under. Two separate Loads could
+	// straddle a config reload and answer "no policy governs this" about
+	// a set that had just been created again, which is the one wrong
+	// answer this field must never give.
+	configured := indexConfiguredSets(st.inner.Config)
 
 	records, err := st.inner.ListArtifacts(ctx, appFilter)
 	if err != nil {
@@ -171,7 +288,7 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 
 	out := make([]Artifact, 0, len(records))
 	for _, rec := range records {
-		a := toServiceArtifact(rec)
+		a := toServiceArtifact(rec, mediums, configured)
 		if a.Quarantined {
 			if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 				return nil, err
@@ -199,7 +316,8 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 		}
 		return Artifact{}, fmt.Errorf("service: loading artifact %s: %w", id, err)
 	}
-	a := toServiceArtifact(rec)
+	st := b.state.Load()
+	a := toServiceArtifact(rec, indexMediums(st.inner.Config), indexConfiguredSets(st.inner.Config))
 	if a.Quarantined {
 		if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 			return Artifact{}, err
@@ -217,10 +335,11 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 // cause uniformly: a hash mismatch caught at VERIFYING
 // (internal/lifecycle/verify.go), an application validator's rejection
 // (same file), a durable local copy internal/reconcile found invalid
-// after COMMITTED/REMOTE_DELETE_PENDING/COMPLETE, and Phase 4's scheduled
-// internal/revalidate checks. None of those attach a second copy of the
-// text anywhere else, so this is the one place quarantine_reason comes
-// from now, not a fallback alongside an older guess.
+// after COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED,
+// and Phase 4's scheduled internal/revalidate checks. None of those attach
+// a second copy of the text anywhere else, so this is the one place
+// quarantine_reason comes from now, not a fallback alongside an older
+// guess.
 //
 // a.QuarantineReason can still come back empty: that means the
 // transition itself carried no Detail, not that this call failed.
@@ -266,10 +385,45 @@ func (b *BackupService) RevalidateArtifact(ctx context.Context, id string) (Arti
 		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		return ArtifactCheck{}, fmt.Errorf("service: revalidating %s: %w", id, err)
 	}
 	return ArtifactCheck{Checked: result.Checked, Passed: result.Passed, Reason: result.Reason}, nil
+}
+
+// RetryFailedArtifact puts one FAILED artifact back into DISCOVERED so the
+// ordinary pipeline attempts it again (issue #419).
+//
+// FAILED declares two exits and nothing in this product had ever taken
+// either, so an artifact that reached it stopped being worked on
+// permanently. This is the first of the two, and it is deliberately
+// operator-triggered: see internal/lifecycle/retryfailed.go for why no
+// cycle takes it on its own.
+//
+// It touches no remote object and removes no durable copy. FAILED is
+// reachable only before COMMITTED, so the remote delete has never been
+// issued and the source is presumptively still there to re-fetch from,
+// which is what makes the edge safe from every lineage that reaches it.
+func (b *BackupService) RetryFailedArtifact(ctx context.Context, id, note string) error {
+	artifactID, err := app.ParseArtifactID(id)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	}
+
+	err = b.state.Load().inner.RetryFailedIngestion(ctx, artifactID, note)
+	switch {
+	case errors.Is(err, state.ErrArtifactNotFound):
+		return fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	case errors.Is(err, app.ErrNotFailed):
+		return fmt.Errorf("%w: %s", ErrArtifactNotFailed, id)
+	case isUnconfiguredSet(err):
+		return fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
+	case err != nil:
+		return fmt.Errorf("service: retrying %s: %w", id, err)
+	}
+	return nil
 }
 
 // ArtifactCheck is RevalidateArtifact's verdict. Checked is false when
@@ -327,6 +481,8 @@ func (b *BackupService) ReinstateArtifact(ctx context.Context, id, note string) 
 		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		// internal/lifecycle's own two refusals are business outcomes an
 		// operator reads and acts on, not infrastructure failures, so they
@@ -374,10 +530,23 @@ func (b *BackupService) RetryArtifactIngestion(ctx context.Context, id string) e
 		return fmt.Errorf("%w: %s", ErrArtifactIrrecoverable, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		return fmt.Errorf("service: retrying ingestion of %s: %w", id, err)
 	}
 	return nil
+}
+
+// isUnconfiguredSet reports whether err is internal/app's refusal for an
+// artifact whose backup set the configuration no longer names (issue
+// #391). The three quarantine actions translate it to ErrBackupSetNotFound,
+// the same sentinel every other surface answers for a removed set, so a
+// caller outside core/ sees one name for one condition rather than a
+// 500 with filesystem-shaped text in it.
+func isUnconfiguredSet(err error) bool {
+	var notFound *app.NotFoundError
+	return errors.As(err, &notFound)
 }
 
 // splitBackupSetID splits a "source/set" id into its two halves. A
@@ -391,7 +560,19 @@ func splitBackupSetID(id string) (source, set string, ok bool) {
 	return source, set, true
 }
 
-func toServiceArtifact(rec state.Record) Artifact {
+// toServiceArtifact projects one journal record onto the boundary shape.
+//
+// mediums is the running configuration's view of the places placements
+// name, which the journal cannot supply: whether this deployment can still
+// REACH a medium is a fact about config.yaml (see placements.go).
+//
+// configured is the same kind of fact one level up: whether the backup set
+// this row belongs to is still in config.yaml at all, which decides
+// whether any retention chain will ever look at it again. Both are
+// parameters rather than defaults, so a record alone cannot answer either
+// question and no call site can accidentally answer them with a zero
+// value.
+func toServiceArtifact(rec state.Record, mediums mediumIndex, configured configuredSetIndex) Artifact {
 	a := Artifact{
 		ID:                rec.Artifact.String(),
 		BackupSetID:       rec.Artifact.Set.String(),
@@ -407,6 +588,8 @@ func toServiceArtifact(rec state.Record) Artifact {
 		ChecksumAlgorithm: rec.LocalHashAlg,
 		ValidationDetail:  rec.ValidationDetail,
 		RetentionTier:     rec.RetentionTier,
+		RetentionPolicy:   configured.retentionPolicyFor(rec.Artifact.Set.String()),
+		Placements:        toServicePlacements(rec.Placements, mediums),
 	}
 
 	if rec.Remote.Size != nil {
@@ -439,4 +622,34 @@ func toServiceArtifact(rec state.Record) Artifact {
 	// both call attachQuarantineReason right after this returns, for
 	// every record where Quarantined ends up true.
 	return a
+}
+
+// configuredSetIndex is the ids of the backup sets the running
+// configuration names. It is the whole basis of Artifact.RetentionPolicy:
+// retention, reconcile and every processing cycle walk the configuration,
+// so a set that is not in it is a set none of them will ever visit again.
+type configuredSetIndex map[string]bool
+
+// indexConfiguredSets reads that index off one configuration snapshot.
+func indexConfiguredSets(cfg *config.Config) configuredSetIndex {
+	out := configuredSetIndex{}
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			out[bs.ID.String()] = true
+		}
+	}
+	return out
+}
+
+// retentionPolicyFor answers for one "source/set" id.
+//
+// The mapping is deliberately not "absent means fine". An id this index
+// does not hold is a backup set the configuration does not name, and the
+// honest answer about it is RetentionPolicyNone: nothing walks it, so
+// nothing will ever delete what it left behind.
+func (c configuredSetIndex) retentionPolicyFor(setID string) string {
+	if c[setID] {
+		return RetentionPolicyConfigured
+	}
+	return RetentionPolicyNone
 }

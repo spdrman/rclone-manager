@@ -10,6 +10,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/alert"
 )
 
+// The dispatcher's whole job is deciding when not to say anything, so every
+// case below is a way of getting that wrong in one of two directions.
+//
+// Too quiet is the expensive one. A condition is silenced by having been
+// delivered, never by having been seen, so a notifier that happened to be
+// restarting when a backup set went stale must not mean nobody is ever
+// told. The retry case walks that the whole way through, including the part
+// afterwards where a delivered alert does stay quiet. And a pass that could
+// not evaluate a condition reports a third answer rather than an absence,
+// because reading "I did not look" as "it is fine now" resolves an alert
+// that is still true.
+//
+// Too loud is the cheaper failure and still a real one. A condition that
+// persists, a duplicate inside a single pass, and a delivery that keeps
+// failing each get their own case, because a dispatcher that alerts once
+// per poll is a dispatcher an operator switches off, and then it is quiet
+// about everything.
+//
+// The last group is not about alerting at all. This pass is the tail of a
+// backup cycle, so a sink that hangs must not take the daemon with it. The
+// lock is not held across delivery and delivery is bounded anyway, and both
+// are needed: releasing the lock on its own just moves the stall out of the
+// dispatcher and into the cycle.
+
 var epoch = time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
 
 // recordingSink is the one delivery mechanism a test installs. It is a

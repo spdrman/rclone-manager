@@ -147,6 +147,13 @@ type firstRunStatusResponse struct {
 	Configured bool `json:"configured"`
 }
 
+// firstRunStatus is GET /api/v1/system/first-run: a single boolean saying
+// whether this instance has been configured yet.
+//
+// It stays registered on the configured router too, rather than
+// disappearing once setup is done, so a client asking always gets an
+// answer. A route that vanished would answer 404, which a client cannot
+// tell apart from a wrong URL or an older server.
 func (h *handlers) firstRunStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, firstRunStatusResponse{Configured: h.configured()})
 }

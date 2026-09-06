@@ -35,6 +35,11 @@ OUT=""
 SKIP_IMAGE=0
 IMAGE_PLATFORM="linux/$(go env GOARCH)"
 
+# The flags are documented here and nowhere else, so this text is the
+# reference. Each one says what the number means as well as what it sets,
+# because a baseline captured with the wrong repeat count or on the wrong
+# platform is not obviously wrong later: it is just a number that will not
+# reproduce.
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/perf/capture-baseline.sh [options]
@@ -91,6 +96,12 @@ fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-perf.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Neither capture below runs under -race, and neither ever may. Every other
+# `go test` in this repository does since #417, so this is the one place
+# where the consistent-looking edit is the wrong one: the race detector
+# slows an instrumented binary by several times, and a baseline captured
+# from one would set a number no uninstrumented run could ever be compared
+# against. scripts/perf/check-baseline.sh reads what these write.
 echo "==> runtime harness (apps/generic/tests/perfbaseline), ${REPEAT} capture(s)"
 runtime_files=()
 for i in $(seq 1 "$REPEAT"); do

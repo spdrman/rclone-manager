@@ -92,6 +92,15 @@ type trip struct {
 	reapWait     time.Duration
 }
 
+// String is the sentence a person reads when this tool kills a run, and it
+// is where the whole design either pays off or does not.
+//
+// A watchdog that says only "timed out" leaves the reader with the same
+// question a fixed -timeout leaves them: was this stuck, or just slow? So each
+// message names what was still running, how many events had been observed,
+// and what the bound was derived from. The overall case says outright that a
+// consistently slow run would have widened its own cap, because that is the
+// inference the reader has to make and it is not obvious from a number.
 func (tr trip) String() string {
 	running := "no test was reported as running, so the last thing observed at all is named above"
 	if len(tr.running) > 0 {

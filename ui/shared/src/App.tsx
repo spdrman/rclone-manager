@@ -1,3 +1,29 @@
+/**
+ * The routed application, and the four questions it answers before a page
+ * is allowed to render.
+ *
+ * Read top to bottom, the component is a sequence of gates and the order
+ * is the interesting part. Is the auth check still running, is anyone
+ * signed in, do we yet know whether this instance is configured, and is
+ * the configuration one that this process cannot serve. Each of the first
+ * three returns something other than the shell, and the fourth returns a
+ * screen with no navigation at all, because it is the single state where
+ * navigating anywhere is a lie: the configuration is on disk, this process
+ * is not running it, and only a restart changes that.
+ *
+ * This is also the one fetch owner for everything app-wide. Health,
+ * version, sets, quarantine and operations are all fetched here and read
+ * from the graph elsewhere, so a page cannot go and ask again and get a
+ * different answer from the panel next to it. The polling loop is the
+ * corollary, and it stays switched off until the instance is known to be
+ * configured, since every one of those five calls refuses on a fresh
+ * install and a refusal every thirty seconds is just noise in the log of
+ * whoever is mid-setup.
+ *
+ * Nothing platform-specific appears anywhere below. What varies between
+ * the seven builds arrives through the bridge, and the only trace of that
+ * here is the footer naming what it is running on.
+ */
 import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import "@shared/design-system/tokens.css";

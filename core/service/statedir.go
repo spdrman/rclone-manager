@@ -7,6 +7,25 @@ import (
 	"path/filepath"
 )
 
+// This file is one step of §46.1's startup sequence (startup.go drives
+// the rest): decide whether the directory that is about to hold the state
+// database can actually be used, before anything takes a lock in it,
+// snapshots it or migrates it.
+//
+// The step exists because of who reads the failure. state.Open would find
+// the same problems a moment later, but it would find them as a SQLite
+// driver error, and "unable to open database file" leaves an operator to
+// infer that the volume mount is read-only, or that a file is sitting
+// where a directory should be. Asking first costs a stat and a temp file,
+// and turns a guess into a sentence.
+//
+// The check is deliberately asymmetric about what it will fix. A missing
+// directory is created, because a fresh deployment's state directory not
+// existing yet is the normal first container start rather than a mistake.
+// A directory that exists and cannot be used is refused, because every
+// way that happens is somebody's configuration being wrong and none of
+// them is this process's to repair.
+
 // ErrStateDirInvalid is returned by validateStateDir when the state
 // database's parent directory cannot be used safely: it exists but is not
 // a directory, or exists but this process cannot write to it. Section

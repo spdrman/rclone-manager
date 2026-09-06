@@ -1,3 +1,15 @@
+/**
+ * The one backup set a detail page currently has open, its activity, and
+ * the staleness check an inline edit is allowed to rest on.
+ *
+ * Nothing outside that page reads either node, so moving these fetches
+ * onto the graph bought no de-duplication at all. What it bought is the
+ * commit counter: an edit form needs to know whether anything landed on
+ * the set between opening and saving, and a value sitting in `useAsync`'s
+ * `data` has no history to ask. The snapshot pair below is that question,
+ * asked with the graph's own clock rather than a revision field invented
+ * for `BackupSet`.
+ */
 import type { ActivityEvent } from "@shared/types/operation";
 import type { BackupSet } from "@shared/types/backup";
 import { graph } from "./graph";

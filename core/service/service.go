@@ -138,6 +138,23 @@ type BackupService struct {
 	// one would describe a transfer that no longer exists.
 	progress *liveProgress
 
+	// holds is issue #350's in-memory registry of the backup sets an
+	// operator currently has open for editing (edithold.go). It is
+	// deliberately NOT rebuilt by a configuration hot-reload the way
+	// state (above) is: an operator editing a set through the Web UI
+	// causes hot-reloads (that is what saving a box does), and a hold
+	// that vanished on the first per-box Save would release itself
+	// halfway through the very edit it exists to protect.
+	holds *editHolds
+
+	// cycleWatch is the one live reading of whatever run cycle is
+	// executing in this process, whether an API caller submitted it or
+	// the scheduler started it. progress (above) is keyed by operation
+	// id and therefore cannot see a scheduled tick, which has no
+	// operation row; see cycleWatch's own doc for why that gap matters
+	// to the edit-hold warning specifically.
+	cycleWatch *cycleWatch
+
 	// configPath is the YAML file this BackupService was opened from
 	// (Open), or "" for a BackupService built directly with New (every
 	// core/ test, which constructs its own *config.Config in memory and
@@ -243,10 +260,19 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 		cancel:         cancel,
 		retentionPlans: make(map[string]retentionPlanRecord),
 		progress:       newLiveProgress(),
+		holds:          newEditHolds(),
+		cycleWatch:     newCycleWatch(),
 	}
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
-	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
+	// The sweep skips actions whose work does not happen in this process.
+	// A restore runs at the storage provider for hours and is entirely
+	// unaffected by this process restarting, so marking its row failed
+	// would be this product recording a failure that did not happen about
+	// a job somebody else is still doing and still billing for (EPIC E,
+	// FR-34). Its real state is re-derived by asking the provider; see
+	// internal/archive.Restorer.Derive.
+	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart", externallyExecutedActions...); err != nil {
 		logger.Error(context.Background(), "sweep-interrupted-operations", err)
 	}
 

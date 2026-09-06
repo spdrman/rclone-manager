@@ -278,7 +278,38 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
   );
 }
 
-export interface HelpFieldProps extends FieldHelpProps {
+/** What HelpField hands its caller about the label it renders, for a
+ *  control that has to point at it by id rather than lean on the wrapping
+ *  <label>.
+ *
+ *  A <label> that wraps its control gives that control a name by walking
+ *  its own subtree, and per the accessible-name algorithm an embedded
+ *  control in that subtree contributes ITS text alternative too. So the
+ *  moment a field puts a second control inside this label (PasswordInput's
+ *  reveal toggle is the first), the field's name silently grows to include
+ *  the button's. Measured in Chromium: "Password Show password Minimum 12
+ *  characters." for one input. Pointing the control's aria-labelledby at
+ *  `id` fixes it, because aria-labelledby resolves before the algorithm
+ *  ever walks the label.
+ *
+ *  Handing the `label` string back too is not redundancy: it is the one
+ *  source a caller can name its own inner control from, instead of writing
+ *  the same string twice per call site and hoping the two never drift. */
+export interface HelpFieldLabel {
+  /** The id of the `.field__label` span, for aria-labelledby. */
+  id: string;
+  /** The same string that was passed in as `label`. */
+  label: string;
+}
+
+/** A HelpField's caller gets the same `helpId` FieldHelp gives, plus the
+ *  label it rendered. Ignoring the second argument is fine and is what most
+ *  call sites do: it only matters for a control that puts something else
+ *  inside the label alongside itself. */
+export type HelpFieldRender = (helpId: string, field: HelpFieldLabel) => ReactNode;
+
+export interface HelpFieldProps extends Omit<FieldHelpProps, "children"> {
+  children: HelpFieldRender;
   /** Forwarded to the <label>, matching the plain `.field` usage this
    *  replaces (several call sites need a grid span or a max width). */
   labelStyle?: CSSProperties;
@@ -294,12 +325,15 @@ export interface HelpFieldProps extends FieldHelpProps {
  * wrapper change rather than a rewrite of the control inside it.
  */
 export function HelpField({ label, help, children, style, labelStyle }: HelpFieldProps) {
+  const labelId = useId();
   return (
     <FieldHelp label={label} help={help} style={style}>
       {(helpId) => (
         <label className="field" style={labelStyle}>
-          <span className="field__label">{label}</span>
-          {children(helpId)}
+          <span className="field__label" id={labelId}>
+            {label}
+          </span>
+          {children(helpId, { id: labelId, label })}
         </label>
       )}
     </FieldHelp>

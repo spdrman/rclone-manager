@@ -1,7 +1,23 @@
+// The identity types, checked for the two properties everything above them
+// assumes: two different backup sets can never render as the same id, and a
+// name that came off a remote filesystem cannot become a path.
+//
+// Both are about consequences a long way from this package. A collision
+// here lets one backup set's retention pass delete another set's restore
+// points, and a name carrying "../" travels through the journal into a
+// delete. Neither would look like a bug in this file when it happened,
+// which is why the tests are written as the properties rather than as
+// coverage of each validation clause.
+
 package model
 
 import "testing"
 
+// String and ParseBackupSetID have to be exact inverses, because the
+// rendering is not only for display: it is the map key uniqueness is
+// checked on in config validation, and it is what an id looks like in an
+// API path. A round trip that lost a character would let two distinct sets
+// share a key.
 func TestBackupSetIDRoundTrips(t *testing.T) {
 	id, err := NewBackupSetID("production", "postgres-primary")
 	if err != nil {
@@ -55,6 +71,10 @@ func TestSeparatorInEitherHalfIsRefused(t *testing.T) {
 	}
 }
 
+// The cases here are the ones that survive a casual eye. Padding and a
+// trailing newline both render almost identically to the clean value in a
+// log line or a terminal, so an operator comparing what they typed against
+// what the product reports would see two strings that match.
 func TestBackupSetIDRejectsJunk(t *testing.T) {
 	for _, tc := range []struct{ name, source, set string }{
 		{"empty source", "", "s"},

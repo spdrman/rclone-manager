@@ -74,6 +74,9 @@ expect_check_fails() {
   fi
 }
 
+# The negative control. Every case below plants a violation and expects
+# the check to fail, and all of them pass equally against a check that
+# fails on everything, so the unmutated tree has to come back clean first.
 expect_check_passes() {
   local label=$1 dir=$2; shift 2
   if (cd "$dir" && "$@") >"$tmp/out" 2>&1; then

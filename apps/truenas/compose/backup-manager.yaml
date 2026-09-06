@@ -33,7 +33,7 @@ services:
   # all. Reachable only from backup-manager-ui, over this project's own
   # network.
   backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.2.0
+    image: ghcr.io/spdrman/backup-manager:0.3.0
     command: ["/backup-manager-web", "serve", "--profile=truenas"]
 
     user: "568:568"
@@ -120,7 +120,7 @@ services:
   # engine. The only container with a published port, and the only one
   # TrueNAS's Web Portal button should ever open.
   backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.2.0
+    image: ghcr.io/spdrman/backup-manager:0.3.0
     command: ["/backup-manager-web", "serve-ui", "--profile=truenas"]
 
     depends_on:

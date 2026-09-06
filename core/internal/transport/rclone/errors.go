@@ -9,7 +9,7 @@
 // rclone upgrade is allowed to reword, restructure or entirely replace any
 // error message it produces, on any release, without that being a breaking
 // change for this codebase, as long as this file is the only place that
-// would need to change in response. Classify is that seam.
+// would need to change in response. classify is that seam.
 //
 // Wherever rclone (or a library it embeds) exposes a typed error or an
 // exported sentinel value, this file matches on that, by identity, not by
@@ -50,6 +50,8 @@ import (
 	"os"
 	"strings"
 
+	"net"
+
 	rclonefs "github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
 	rclonehash "github.com/rclone/rclone/fs/hash"
@@ -69,7 +71,7 @@ import (
 // value.
 const integrityFailurePrefix = "corrupted on transfer"
 
-// Classify translates err, as returned by this package's Adapter, into the
+// classify translates err, as returned by this package's Adapter, into the
 // manager-owned transport.Category lifecycle code is allowed to switch on.
 // It never returns an error and never fails: a case it does not recognize
 // classifies as transport.Permanent, on purpose, because treating an
@@ -77,11 +79,24 @@ const integrityFailurePrefix = "corrupted on transfer"
 // safe-to-ignore (transport.UnsupportedCapability) would be the actual
 // failure-safety violation, not classifying it as narrowly as possible.
 //
-// Classify is idempotent: calling it on an error that already carries a
-// *transport.Error (for example, one Wrap already produced) returns that
+// classify is idempotent: calling it on an error that already carries a
+// *transport.Error (for example, one WrapCtx already produced) returns that
 // same Category rather than reclassifying, so wrapping twice by accident
 // cannot change the answer.
-func Classify(err error) transport.Category {
+//
+// classify judges the error and nothing else, so it can never return
+// Cancelled for a deadline: it has no way to know whose deadline expired.
+// ClassifyCtx is the entry point that does, and every call inside this
+// package goes through it.
+//
+// It is unexported for exactly that reason. On a caller's own expired
+// deadline it answers Transient, which is FR-22 pointed the wrong way: a
+// stop the operator asked for would be reported as a network hiccup and
+// retried. Nothing outside this package ever needed it, and an exported
+// spelling that is wrong on one input is an invitation to reach for it,
+// which is the same trap the context-free Wrap was before issue #388
+// deleted it. TestNoExportedContextFreeClassifier keeps it shut.
+func classify(err error) transport.Category {
 	if err == nil {
 		return transport.Unclassified
 	}
@@ -92,8 +107,13 @@ func Classify(err error) transport.Category {
 
 	// Cancellation is a program decision, not a judgement about the error's
 	// cause, so it takes priority over every category below (FR-22:
-	// "Cancellation SHALL propagate through Go contexts").
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// "Cancellation SHALL propagate through Go contexts"). Only something
+	// that was explicitly cancelled counts, and context.DeadlineExceeded is
+	// deliberately not checked: an expired deadline says nothing about whose
+	// deadline it was, and rclone sets several of its own that no caller
+	// asked for. ClassifyCtx is where a deadline gets decided, from the
+	// caller's context rather than from the error. See issue #388.
+	if errors.Is(err, context.Canceled) {
 		return transport.Cancelled
 	}
 
@@ -117,6 +137,28 @@ func Classify(err error) transport.Category {
 	// dependency-authored text rather than a Go value.
 	if strings.Contains(err.Error(), "unable to authenticate") {
 		return transport.Authentication
+	}
+
+	// The S3 verdicts (EPIC E, FR-28). They come first among the
+	// backend-specific checks because an S3 API error is a precise,
+	// documented statement about what went wrong, and every check below
+	// this one is a broader guess that would happily swallow it: a 403 on
+	// a HEAD looks like nothing in particular to fserrors.ShouldRetry, and
+	// "the bucket does not exist" would otherwise land in Permanent, which
+	// is this classifier's label for "I could not place this at all".
+	if code, ok := apiErrorCode(err); ok {
+		if category, known := s3Categories[code]; known {
+			return category
+		}
+	}
+
+	// An endpoint that does not resolve is a fact about the configuration,
+	// not about the network, when DNS says the name does not exist at all.
+	// A lookup that timed out or failed for any other reason is left to
+	// fserrors.ShouldRetry below, because that one genuinely can be a blip.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return transport.Configuration
 	}
 
 	// NotFound: rclone's own sentinels for the sftp/local backends
@@ -185,13 +227,204 @@ func Classify(err error) transport.Category {
 	return transport.Permanent
 }
 
-// Wrap classifies err and packages it as a *transport.Error tagged with op,
-// the transport operation that produced it (for example "stat" or
-// "copy_to_local"). It returns nil for a nil err, so it is safe to call
-// unconditionally on a call's returned error.
-func Wrap(op string, err error) error {
+// ClassifyCtx is classify with the caller's own context in hand, and it is
+// what everything inside this package uses. Prefer it anywhere a context is
+// available, because the context is the only thing that can tell a deadline
+// the caller set apart from a deadline rclone set for itself.
+//
+// rclone builds both of its dials with --contimeout: fs/fshttp's NewDialer
+// sets net.Dialer.Timeout from ci.ConnectTimeout, and backend/sftp sets
+// ssh.ClientConfig.Timeout from the same value. When one of those fires, the
+// *net.OpError underneath usually carries *net.timeoutError, whose Is method
+// answers true for context.DeadlineExceeded. A caller's own
+// context.WithTimeout expiring inside the same dial produces a byte-identical
+// error, down to the "i/o timeout" text, because net.Dialer applies whichever
+// deadline comes first and maps both through the same mapErr. So there is no
+// shape to tell them apart by, and issue #388 is what happens when you try:
+// rclone's own connect timeout came back as transport.Cancelled, which reads
+// everywhere as "the operator decided", and retry.DefaultIsTransient will not
+// retry it.
+//
+// So the context is a tiebreaker for an error that cannot say whose deadline
+// expired, not an override for one that already says something definite. An
+// expired deadline in the error plus a done context means the caller's
+// deadline, and that is Cancelled. The same error with a live context means
+// rclone's, and that is Transient. An error that says something else entirely,
+// a changed host key for instance, keeps saying it whatever the context is
+// doing, because a cancellation racing a refusal does not make the refusal
+// less true and app/halt.go needs to record it.
+//
+// The wider rule, "a done context outranks whatever the error was", was
+// considered and rejected (the panel is on issue #388). It would have bought a
+// little more of FR-22's "a cancellation must never become a verdict" than
+// this repository has today, and paid for it by silently losing a host-key or
+// authentication refusal to any caller working under a deadline. This
+// function's job is to say what the error was; deciding what a stopped caller
+// means is already the consumer's, in retry.Do, transfer.go's post-copy ctx
+// check, and verify.go's isCancellation.
+//
+// A nil ctx is treated as a caller that never asked for anything, the same as
+// context.Background().
+func ClassifyCtx(ctx context.Context, err error) transport.Category {
+	if err == nil {
+		return transport.Unclassified
+	}
+	if category, ok := transport.CategoryOf(err); ok {
+		return category
+	}
+	if ctx != nil && ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+		return transport.Cancelled
+	}
+	return classify(err)
+}
+
+// WrapCtx classifies err with ClassifyCtx and packages it as a
+// *transport.Error tagged with op, the transport operation that produced it
+// (for example "stat" or "copy_to_local"). It returns nil for a nil err, so
+// it is safe to call unconditionally on a call's returned error.
+//
+// ctx is the context the failed call was given. It takes a context rather
+// than classifying the error alone because that is the only way rclone's own
+// deadlines stay out of transport.Cancelled; see ClassifyCtx and issue #388.
+func WrapCtx(ctx context.Context, op string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return transport.NewError(Classify(err), op, err)
+	return transport.NewError(ClassifyCtx(ctx, err), op, err)
+}
+
+// apiErrorCode reports the S3 API error code err carries, if any.
+//
+// # Why this declares its own interface instead of importing the SDK
+//
+// FR-28 is explicit that no AWS SDK enters this repository, in Go or in
+// TypeScript: rclone's s3 backend is the entire S3 implementation, and the
+// aws-sdk-go-v2 packages under it are rclone's dependency, upgraded when
+// rclone is. Importing smithy-go here to reach its APIError type would put
+// an SDK import line in this repository's own go.mod, which is the thing
+// that FR forbids, for a value this file can obtain without it.
+//
+// So it matches on the SHAPE the SDK already exposes. Every S3 API error
+// the AWS SDK produces implements ErrorCode() string, and errors.As
+// against a locally-declared single-method interface finds it wherever it
+// sits in the chain. That is a match by Go type identity, not by parsed
+// text, which is exactly what this file's package comment asks for: it
+// survives a reworded message, and it breaks visibly (this function stops
+// matching, and errors_test.go's table fails) rather than silently if the
+// SDK ever renames the method.
+//
+// The CODES themselves are S3's own documented, wire-level API contract,
+// not an implementation detail of any SDK. "NoSuchBucket" is what the
+// service returns in the XML body, and every S3-compatible endpoint this
+// product can talk to returns the same string, which is why it is safe to
+// switch on where an error MESSAGE would not be.
+func apiErrorCode(err error) (string, bool) {
+	var coder interface{ ErrorCode() string }
+	if errors.As(err, &coder) {
+		if code := coder.ErrorCode(); code != "" {
+			return code, true
+		}
+	}
+	return "", false
+}
+
+// s3Categories is FR-28's error-classification table: S3's own API error
+// codes mapped into the manager-owned FR-22 vocabulary lifecycle code is
+// allowed to switch on.
+//
+// A code that is not in this table is not classified here at all; it falls
+// through to the generic checks below apiErrorCode's call site, and
+// ultimately to Permanent. That is deliberate. Guessing at an unlisted
+// code would produce a confident wrong answer, and the two answers that
+// matter most (is this retryable, is this safe to treat as absence) are
+// exactly the two that must never be guessed.
+var s3Categories = map[string]transport.Category{
+	// The request cannot succeed until a person edits the configuration.
+	// The bucket is named in config, and it is not there.
+	//
+	// PermanentRedirect, AuthorizationHeaderMalformed and the two
+	// location-constraint codes are all what a wrong REGION looks like
+	// from the outside, and none of them reads anything like "your region
+	// is wrong", which is exactly why they are worth naming here.
+	"NoSuchBucket":                       transport.Configuration,
+	"InvalidBucketName":                  transport.Configuration,
+	"PermanentRedirect":                  transport.Configuration,
+	"AuthorizationHeaderMalformed":       transport.Configuration,
+	"IllegalLocationConstraintException": transport.Configuration,
+	"InvalidLocationConstraint":          transport.Configuration,
+
+	// The caller is not who the endpoint will accept, or is not allowed to
+	// do this. S3 has no pre-session handshake, so a wrong key and a
+	// too-narrow policy are the same first-request failure; they share a
+	// category because there is no earlier moment at which they could have
+	// been told apart.
+	"AccessDenied":                transport.Authentication,
+	"InvalidAccessKeyId":          transport.Authentication,
+	"SignatureDoesNotMatch":       transport.Authentication,
+	"ExpiredToken":                transport.Authentication,
+	"InvalidToken":                transport.Authentication,
+	"TokenRefreshRequired":        transport.Authentication,
+	"InvalidSecurity":             transport.Authentication,
+	"AuthFailure":                 transport.Authentication,
+	"UnrecognizedClientException": transport.Authentication,
+	"MissingAuthenticationToken":  transport.Authentication,
+	"AccountProblem":              transport.Authentication,
+	// Forbidden and Unauthorized are not S3 codes at all, they are what
+	// the SDK synthesizes from the HTTP status when the response has no
+	// body to read a code out of. A HEAD is exactly that response, and a
+	// HEAD is how this adapter stats an object, so this is the code a
+	// wrong credential actually produces on the most common call: proved
+	// against MinIO in core/tests/miniointegration, and missing from an
+	// earlier version of this table that was written from the S3
+	// documentation alone.
+	"Forbidden":    transport.Authentication,
+	"Unauthorized": transport.Authentication,
+
+	// The object is not there. NotFound is what a HEAD returns; NoSuchKey
+	// is what a GET returns; both mean the same thing to this product.
+	// NoSuchUpload is a multipart upload id that has expired or been
+	// aborted, which is the same fact about a different handle.
+	"NoSuchKey":    transport.NotFound,
+	"NotFound":     transport.NotFound,
+	"NoSuchUpload": transport.NotFound,
+
+	// Throttling and the service's own 5xx family: the request may well
+	// succeed if it is made again, which is the whole meaning of
+	// Transient and the only category FR-22 lets retry.Do act on.
+	"SlowDown":                               transport.Transient,
+	"Throttling":                             transport.Transient,
+	"ThrottlingException":                    transport.Transient,
+	"RequestThrottled":                       transport.Transient,
+	"RequestThrottledException":              transport.Transient,
+	"TooManyRequests":                        transport.Transient,
+	"TooManyRequestsException":               transport.Transient,
+	"RequestLimitExceeded":                   transport.Transient,
+	"ProvisionedThroughputExceededException": transport.Transient,
+	"RequestTimeout":                         transport.Transient,
+	"RequestTimeoutException":                transport.Transient,
+	"InternalError":                          transport.Transient,
+	"InternalFailure":                        transport.Transient,
+	"ServiceUnavailable":                     transport.Transient,
+
+	// The bytes arrived and did not match what was declared. This is the
+	// one family where a retry is actively wrong: it would re-send the
+	// same corrupt payload, and FR-22 already forbids it by keeping
+	// IntegrityFailure out of Retryable.
+	"BadDigest":                 transport.IntegrityFailure,
+	"InvalidDigest":             transport.IntegrityFailure,
+	"XAmzContentSHA256Mismatch": transport.IntegrityFailure,
+
+	// InvalidObjectState is an object in an archive class that has to be
+	// restored before it can be read (FR-34). Nothing is wrong and no
+	// retry changes it, so UnsupportedCapability is the honest label until
+	// #241 lands the explicit restore that gives it a better one.
+	"InvalidObjectState": transport.UnsupportedCapability,
+	"NotImplemented":     transport.UnsupportedCapability,
+
+	// Somebody else got there first. This adapter never creates a bucket
+	// (see medium.go's package comment), so these two can only arrive from
+	// an endpoint doing something on its own, and Conflict is the category
+	// that says "a person decides".
+	"BucketAlreadyExists":     transport.Conflict,
+	"BucketAlreadyOwnedByYou": transport.Conflict,
 }

@@ -1,3 +1,21 @@
+// These cover QUARANTINED's operator exits and the reason string an
+// operator is shown when they get there.
+//
+// The file is organised around one distinction: a quarantine is either
+// recoverable or it is not, and that depends entirely on whether a source
+// still exists to re-fetch from. QUARANTINED means one does, so its exit
+// throws the local copy away and starts again. QUARANTINED_LOST means the
+// remote was already confirmed gone before the corruption was found, so the
+// same exit would ask the pipeline to re-fetch from nothing, fail, land in
+// FAILED, and be sent round again: a livelock that also mislabels an
+// irrecoverable loss as an ordinary retry. Every refusal test here is
+// defending one side of that line.
+//
+// QuarantineReason gets its own tests because it is a message rather than a
+// mechanism, and it is the message an operator reads before deciding which
+// exit to take. It has to say what was actually measured, which is why the
+// fixture stages the two shapes, a validator's rejection and a content
+// check, separately.
 package lifecycle
 
 import (
@@ -75,6 +93,15 @@ func quarantineLostFixture(t *testing.T, j *state.Journal, artifact model.Artifa
 
 // --- ReleaseFromQuarantine ---
 
+// TestReleaseFromQuarantine_MovesBackToDiscovered checks three things, and
+// only the state change is obvious.
+//
+// RetryCount is Phase 4's repeat-visibility requirement: an artifact that
+// has been quarantined, released and quarantined again has to be
+// distinguishable from a first-time failure, or it can be silently cycled
+// for ever. LastError carries the reason it was quarantined for, forward
+// onto the row it is being released into, so the next failure of the same
+// artifact arrives with the context of what was already tried.
 func TestReleaseFromQuarantine_MovesBackToDiscovered(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -98,6 +125,14 @@ func TestReleaseFromQuarantine_MovesBackToDiscovered(t *testing.T) {
 	}
 }
 
+// TestReleaseFromQuarantine_RefusesQuarantinedLost pins both halves of the
+// refusal: the typed error, which callers route on to show this differently
+// from an ordinary quarantine, and the journal being left exactly where it
+// was.
+//
+// The second half is what makes the refusal safe to retry. An operator who
+// clicks release on a lost artifact should be told no and find everything
+// unchanged, not discover that the attempt itself moved something.
 func TestReleaseFromQuarantine_RefusesQuarantinedLost(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -122,6 +157,14 @@ func TestReleaseFromQuarantine_RefusesQuarantinedLost(t *testing.T) {
 	}
 }
 
+// TestReleaseFromQuarantine_RefusesWhenNotQuarantined walks every state
+// that is not a quarantine, which is the stale-screen case: an operator
+// looking at a page rendered before the artifact moved on.
+//
+// Including the terminal states matters as much as the in-flight ones.
+// Releasing a COMPLETE artifact back to DISCOVERED would re-fetch from a
+// remote this manager has already deleted, which is the exact livelock
+// QUARANTINED_LOST exists to avoid, reached from a different direction.
 func TestReleaseFromQuarantine_RefusesWhenNotQuarantined(t *testing.T) {
 	for _, from := range []State{Discovered, Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Complete, Failed} {
 		t.Run(string(from), func(t *testing.T) {
@@ -243,6 +286,14 @@ func TestReleaseFromQuarantine_RepeatedQuarantineIsVisible(t *testing.T) {
 
 // --- QuarantineReason ---
 
+// TestQuarantineReason_ValidatorRejection asserts that the validator's own
+// words survive into the reason.
+//
+// The detail is the whole value here. "The validator rejected it" tells an
+// operator nothing they cannot infer from the state; "archive header
+// checksum mismatch" tells them whether to re-fetch or to go and look at the
+// producer. The assertion is on substrings rather than the full sentence so
+// the wording can improve without the test having to be rewritten.
 func TestQuarantineReason_ValidatorRejection(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -259,6 +310,14 @@ func TestQuarantineReason_ValidatorRejection(t *testing.T) {
 	}
 }
 
+// TestQuarantineReason_HashShape is the other shape the same function has
+// to distinguish, and having both is what makes either meaningful: a
+// reason builder that ignored its input and returned one fixed sentence
+// would pass whichever of these two tests happened to match it.
+//
+// The recorded hash is asserted to appear because it is the evidence. An
+// operator deciding whether to trust a copy again wants to see the digest
+// that was compared, not just that a comparison failed.
 func TestQuarantineReason_HashShape(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -275,6 +334,13 @@ func TestQuarantineReason_HashShape(t *testing.T) {
 	}
 }
 
+// containsAll is how the reason tests assert on a message without pinning
+// it.
+//
+// The reasons are prose an operator reads, so they are expected to be
+// reworded; what must not change is which FACTS they carry. Checking for
+// several substrings says exactly that, and it fails usefully, because the
+// test prints the whole reason when any one is missing.
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {

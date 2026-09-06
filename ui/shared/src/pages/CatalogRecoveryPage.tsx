@@ -1,3 +1,18 @@
+/**
+ * Rebuilding the catalog from artifacts already on storage, without ever
+ * feeling like it might destroy them.
+ *
+ * The flow is scan, then read what the scan found, then confirm. The scan
+ * is read-only and the copy says so at every step, because this is the
+ * screen an operator reaches when something has already gone wrong, and a
+ * recovery tool that looks risky does not get used.
+ *
+ * A refused scan is reported rather than swallowed. That is not
+ * hypothetical tidiness: every scan on an unconfigured instance is
+ * refused, and before that was handled the button simply re-enabled itself
+ * and the page sat there, which is exactly the silent no-op this product
+ * rules out.
+ */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";

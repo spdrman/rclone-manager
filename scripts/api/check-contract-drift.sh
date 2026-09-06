@@ -44,6 +44,10 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 fail=0
+# note prints and records in one call, which is what lets this script keep
+# checking after the first problem. A gate that exits on the first failure
+# tells you about one drifted binding per run, and the two bindings drift
+# together far more often than separately.
 note() { echo "$@" >&2; fail=1; }
 
 if [ ! -f "$API_CONTRACT" ]; then
@@ -66,6 +70,11 @@ if ! api::generate "$tmp/contract.gen.go" "$tmp/contract.ts" >"$tmp/gen.log" 2>&
 fi
 sed 's/^/    /' "$tmp/gen.log"
 
+# compare says which of the two mistakes was made, because they have
+# opposite fixes and the wrong guess undoes the change: a hand edit to the
+# generated file is reverted by regenerating, and a contract change is
+# completed by it. Both remedies are printed rather than the reader being
+# asked to work out which case they are in from a diff.
 compare() {
   local checked_in=$1 regenerated=$2 language=$3
   if [ ! -f "$checked_in" ]; then

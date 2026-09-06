@@ -1,3 +1,13 @@
+/**
+ * The little the add-backup-set wizard keeps outside its own component.
+ *
+ * Almost nothing qualifies, and the note below spends most of its length
+ * on what stayed local and why, because the tempting mistake in a
+ * graph-backed app is to move state onto the graph because it can be
+ * moved. The one fact that genuinely belongs to more than the wizard is a
+ * changed host key, which the dashboard also reports, from the same
+ * underlying event.
+ */
 import { graph, registerInput } from "./graph";
 import { readOnlyNode } from "./appNodes";
 

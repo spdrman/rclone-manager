@@ -9,6 +9,30 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/health"
 )
 
+// This file is FR-24's health report as anything outside core/ sees it:
+// one call that answers "are my backups healthy", for every configured
+// set, from durable evidence.
+//
+// It is a projection of internal/health rather than a second opinion, and
+// that is the property the whole file exists to hold. `backup-manager
+// status` and the Web UI run the same computation through the same call,
+// because two surfaces that each work health out for themselves will
+// eventually disagree, and the one that disagrees quietly is the one
+// nobody is looking at.
+//
+// The rule running through every field below is that no zero is ever
+// allowed to pass for a reading. internal/health says "not measured" with
+// a nil pointer; a boundary that cannot export its types has to flatten
+// those, and a flattened nil is a zero that looks exactly like a real
+// measurement of nothing. So free space carries its own known flag, an
+// empty storage level is not OK, and each age is readable only next to
+// the count it belongs to. Anywhere that pairing is missing, a full disk
+// and an unreadable mount become the same number.
+//
+// Nothing is cached, on purpose: a cached health verdict is precisely the
+// thing that keeps reporting green after a deployment has stopped backing
+// anything up.
+
 // BackupSetHealth is one configured backup set's FR-24 verdict, in plain
 // provider-agnostic terms.
 //
@@ -104,6 +128,18 @@ type BackupSetHealth struct {
 	// action, and this is a report of a refusal, not a control over it.
 	HaltReason string
 
+	// Placement is FR-24's medium half (issue #444): how far this set's
+	// artifacts are from the storage mediums its retention chain names,
+	// and whether the relocations meant to close that gap are getting
+	// anywhere.
+	//
+	// It is the same computation `backup-manager status` prints, reached
+	// through the same call, which is the property this whole type exists
+	// to hold: a CLI and a Web UI that compute health separately will
+	// eventually disagree about whether a deployment is healthy, and the
+	// one that disagrees quietly is the one nobody is looking at.
+	Placement PlacementHealth
+
 	// TotalBytes and StorageLevel come from the same FR-21 capacity
 	// assessment ListStorageStatus reports, read here so one call can
 	// answer "are my backups healthy" completely rather than leaving a
@@ -113,6 +149,75 @@ type BackupSetHealth struct {
 	// from OK and must not be collapsed into it.
 	TotalBytes   uint64
 	StorageLevel string
+}
+
+// PlacementHealth is where one backup set's artifacts actually are, as
+// opposed to how fresh they are (issue #444).
+//
+// All of it comes from durable state: the placements journal joined
+// against the set's resolved retention chain, and the move journal. None
+// of it is a statement about the last cycle. That distinction is the
+// whole reason this exists: a move's outcome was already visible on the
+// exit status, in the activity feed, in the event stream and on the
+// dashboard's last-run panel, and every one of those describes ONE PASS,
+// so an operator opening a status page on a deployment nobody has run a
+// cycle in front of saw none of it.
+//
+// The two ages here are plain durations rather than optionals, and they
+// are meaningful exactly when the count beside them is non-zero:
+// OldestAwayFromHomeAge with AwayFromHome, OldestFailedMoveAge with
+// FailedMoves. A zero age next to a zero count is not a reading, and
+// there is nothing for it to be a reading of.
+type PlacementHealth struct {
+	// AwayFromHome is how many of this set's artifacts have a durable
+	// copy somewhere other than where the chain says. On its own this is
+	// not a complaint: a retention pass that has just decided an artifact
+	// belongs offsite puts it here, and the move runs in the same cycle.
+	AwayFromHome int
+
+	// OldestAwayFromHomeAge is how long the oldest of those copies has
+	// existed on the medium it is sitting on. Read it for exactly that:
+	// it is an upper bound on how long the artifact has been in the wrong
+	// place, because nothing durable records when a chain last changed an
+	// artifact's home. OldestFailedMoveAge is the number measured from a
+	// moment this manager actually wrote down.
+	OldestAwayFromHomeAge time.Duration
+
+	// UnconfirmedLocation is how many artifacts this pass could not place
+	// at all: no durable copy recorded yet, or a move mid-flight leaving
+	// two answers to "where is this". They are not thereby at home, and
+	// reporting them as such is the collapse the away-from-home count
+	// exists to end.
+	UnconfirmedLocation int
+
+	// OpenMoves is how many relocations the move journal has not
+	// finished, in any non-terminal phase.
+	OpenMoves int
+
+	// OldestOpenMoveAge is how long the oldest of those has been open,
+	// whether or not anything has been recorded against it. It changes no
+	// State, because "open for a while" has no honest threshold: a single
+	// large copy can legitimately outlast a poll interval. It is here
+	// because not every way a move gets stuck leaves a reason on the row,
+	// so this is the number that keeps growing when FailedMoves cannot
+	// see the problem. See internal/health's own field doc.
+	OldestOpenMoveAge time.Duration
+
+	// FailedMoves is the subset of OpenMoves whose last attempt failed.
+	// This is the one number here that changes State, and it is what
+	// makes a week of failing moves reach a status page at all.
+	FailedMoves int
+
+	// OldestFailedMoveAge is how long the oldest failing relocation has
+	// been open, from when this manager planned it. It is the difference
+	// between a blip and a wedge.
+	OldestFailedMoveAge time.Duration
+
+	// FailedMoveReason is what the engine last recorded on that move.
+	// Never rendered on its own: a count without a reason sends an
+	// operator looking, and the reason is the only account of the failure
+	// that outlives the cycle that hit it.
+	FailedMoveReason string
 }
 
 // HealthReport is FR-24's backup-freshness half: every configured backup
@@ -180,6 +285,16 @@ func (b *BackupService) Health(ctx context.Context) (HealthReport, error) {
 	return out, nil
 }
 
+// toServiceBackupSetHealth is the one place internal/health's vocabulary
+// and this boundary's meet, and the nil checks at the bottom of it are
+// the load-bearing part.
+//
+// Every one of them turns an optional into a value plus a way to tell
+// that the value means something: a flag, or a count the age travels
+// with. A field added upstream and simply copied gets neither, and a
+// missing reading then arrives at an operator as a confident zero. That
+// is the failure this function is one edit away from at all times, so a
+// new optional needs its companion decided here before it is exported.
 func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 	out := BackupSetHealth{
 		BackupSetID:          bs.Set.String(),
@@ -197,6 +312,23 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 
 		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
 		ReadOnlyRetainedCount:         bs.ReadOnlyRetainedCount,
+
+		Placement: PlacementHealth{
+			AwayFromHome:        bs.Placement.AwayFromHome,
+			UnconfirmedLocation: bs.Placement.UnconfirmedLocation,
+			OpenMoves:           bs.Placement.OpenMoves,
+			FailedMoves:         bs.Placement.FailedMoves,
+			FailedMoveReason:    bs.Placement.FailedMoveReason,
+		},
+	}
+	if bs.Placement.OldestOpenMoveAge != nil {
+		out.Placement.OldestOpenMoveAge = *bs.Placement.OldestOpenMoveAge
+	}
+	if bs.Placement.OldestAwayFromHomeAge != nil {
+		out.Placement.OldestAwayFromHomeAge = *bs.Placement.OldestAwayFromHomeAge
+	}
+	if bs.Placement.OldestFailedMoveAge != nil {
+		out.Placement.OldestFailedMoveAge = *bs.Placement.OldestFailedMoveAge
 	}
 	if bs.NewestGoodBackupAt != nil {
 		out.NewestGoodBackupAt = *bs.NewestGoodBackupAt

@@ -13,6 +13,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// The two structural checks behind WP4.3's Tier B/C promise (see
+// canonical.go): a provider package is metadata and templates, and it
+// bundles no secrets.
+//
+// Both are stated in the negative, and both are read off the files
+// themselves rather than off anything the package says about itself.
+// That is the only version of this check that can fail. "No
+// provider-specific lifecycle implementation" asserted in a review is
+// satisfied by a template with a `sh -c` in it, because nobody reads a
+// template that way; asserted here it means no shebang, no executable
+// bit, no file type outside the allowlist, no `build:`, no entrypoint
+// override, no lifecycle key and no command that is not canonical argv.
+//
+// Two decisions run through the whole file. The file-type rule is an
+// ALLOWLIST, because a denylist of "no .sh, no .go" is defeated by a
+// .pl, a .rb or a file with no extension at all, and the person adding
+// the .rb is not being sneaky, they just have a problem to solve. And
+// the content rules read structure rather than prose: keys and argv, not
+// grep over the text, so a README that shows `docker buildx build` in a
+// fenced block is not a violation while a compose file that runs it is.
+//
+// Every rule has a positive control in scan_test.go driving this same
+// function against a fixture holding exactly one violation. The
+// credential regexp is the standing argument for that: it started with
+// a \b before the key name, which never matches between "_" and "p", so
+// it could not see ADMIN_PASSWORD, which is precisely the shape a
+// bundled credential takes in an env file. Nothing about the code said
+// so. The control did.
+
 // Violation is one thing a provider package did that WP4.3 forbids.
 type Violation struct {
 	// Path is relative to the scanned root, so failures read the same
@@ -23,6 +52,10 @@ type Violation struct {
 	Detail string
 }
 
+// String is the one line a failing gate prints. Path first, because the
+// reader's next action is opening that file; rule in the middle, because
+// it is what they search this file for; detail last, because it is the
+// only part that varies within a rule.
 func (v Violation) String() string {
 	return fmt.Sprintf("%s: %s (%s)", v.Path, v.Rule, v.Detail)
 }
@@ -79,6 +112,12 @@ var frontendExtensions = map[string]bool{
 	".md":   true,
 }
 
+// allowedBareNames are files the extension allowlist cannot admit,
+// because they have no extension: filepath.Ext returns "" for LICENSE
+// and ".gitignore" for .gitignore, and neither is in the map. They are
+// listed by exact name rather than by relaxing the extension rule, since
+// "a file with no extension is fine" is the hole the allowlist exists to
+// close.
 var allowedBareNames = map[string]bool{
 	"LICENSE":    true,
 	"NOTICE":     true,
@@ -280,6 +319,13 @@ func ScanSecrets(root string) ([]Violation, error) {
 	return out, nil
 }
 
+// scanFileType decides what a single file is allowed to be. The
+// executable-bit check runs before the name checks and independently of
+// them, because mode is a claim about the file that no extension can
+// excuse: a chmod +x YAML file is something a shell was expected to run.
+//
+// inFrontend picks which allowlist applies rather than switching the
+// check off, so a shell script under frontend/ is still a violation.
 func scanFileType(rel, path string, d fs.DirEntry, inFrontend bool) []Violation {
 	var out []Violation
 
@@ -308,6 +354,11 @@ func scanFileType(rel, path string, d fs.DirEntry, inFrontend bool) []Violation 
 	return out
 }
 
+// scanYAML walks the whole parsed document rather than a struct with
+// fields for the keys we thought of. A struct-shaped reader answers
+// "clean" for a `privileged: true` on a service nobody modelled, which
+// is failing open in the exact case the rule exists for. Unparseable
+// YAML is an error and not a pass, for the same reason.
 func scanYAML(rel string, data []byte) ([]Violation, error) {
 	var doc any
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -399,6 +450,10 @@ type xmlNode struct {
 	Children []xmlNode  `xml:",any"`
 }
 
+// scanXML is the Unraid template's half of the same rules. It reads
+// through xmlNode's catch-all shape, so an element or attribute nobody
+// anticipated is still visited; a template format that grows a new way
+// to run something would otherwise pass unread.
 func scanXML(rel string, data []byte) ([]Violation, error) {
 	var root xmlNode
 	if err := xml.Unmarshal(data, &root); err != nil {
@@ -463,6 +518,10 @@ func walkYAML(node any, visit func(key string, val any)) {
 	}
 }
 
+// isUnderDir asks whether a DIRECTORY component of rel is dir, which is
+// why the last element is dropped: a file literally named "frontend"
+// sitting in packaging metadata is not a bridge, and admitting it as one
+// would hand it the wider frontend allowlist.
 func isUnderDir(rel, dir string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	for _, p := range parts[:max(0, len(parts)-1)] {
@@ -473,6 +532,13 @@ func isUnderDir(rel, dir string) bool {
 	return false
 }
 
+// isBinary keeps the content rules off icons and other binary assets,
+// which the metadata allowlist already admits and which would otherwise
+// match the credential and shell patterns by accident. A NUL byte in the
+// first few KB is the same heuristic diff and grep use, and the failure
+// mode is the safe one: a text file misread as binary skips content
+// rules it would have passed, while the file-type and secret rules that
+// matter most still ran before this point.
 func isBinary(data []byte) bool {
 	limit := min(len(data), 8000)
 	for i := 0; i < limit; i++ {
@@ -502,6 +568,10 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// sortViolations makes the report deterministic. WalkDir order is stable
+// but the callers append from several rules per file, and a gate whose
+// output reorders between runs cannot be diffed, which is how people
+// stop reading it.
 func sortViolations(v []Violation) {
 	sort.Slice(v, func(i, j int) bool {
 		if v[i].Path != v[j].Path {

@@ -1,3 +1,19 @@
+// This file covers Open, the one entry point that turns a path on disk
+// into a working service, and it holds the config fixtures the rest of
+// this package builds on.
+//
+// Those fixtures are the reason to read it first. They write a real
+// config.yaml against real temp directories over the "local" transport,
+// so every test in this package that says "a real cycle" means a cycle
+// that actually lists, copies and journals files, with no network and no
+// Docker. A boundary tested through a mocked engine would prove the mock.
+//
+// The sweep case is the one that is easy to get wrong. An operation left
+// at queued or running by a process that died is not going to be picked
+// up by anybody, so Open fails it; and readiness is proved to be Open's
+// own answer rather than something re-derived from the configuration,
+// because a service that reports ready by reading a file is a service
+// that reports ready before it has opened anything.
 package service
 
 import (

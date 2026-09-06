@@ -13,9 +13,49 @@ import (
 // shipping unnoticed. Widening this list on purpose is the "explicit
 // feature/architecture decision" FR-4 asks for.
 
-// RequiredBackends are the backends FR-4 actually asks for. Each one has a
-// direct blank import in adapter.go.
-var RequiredBackends = []string{"local", "sftp"}
+// RequiredBackends are the backends this product actually asks for. Each
+// one has a direct blank import in adapter.go.
+//
+// s3 is EPIC E's addition (FR-28), and it is the FR-4 "explicit
+// feature/architecture decision" that FR asks for, recorded here rather
+// than left as an import line somebody has to notice. It is the whole S3
+// implementation: no AWS SDK is imported by any file in this repository,
+// in Go or in TypeScript, and the transitive one rclone's own backend
+// carries is rclone's dependency, upgraded when rclone is.
+//
+// # What it cost
+//
+// Measured the way the crypt precedent was measured, on a linux/arm64,
+// CGO_ENABLED=0 build of core/cmd/backup-manager, with this one blank
+// import as the only difference between the two builds, and with the
+// flags container/Dockerfile actually ships (-trimpath -buildvcs=false
+// -ldflags "-s -w"):
+//
+//	without backend/s3   20,185,248 bytes   19.25 MiB
+//	with backend/s3      29,622,432 bytes   28.25 MiB
+//	delta                 9,437,184 bytes    9.00 MiB, +46.8%
+//
+// The flags are part of the measurement, not a footnote. An earlier
+// version of this comment recorded 12.5 MiB against a ~42 MiB binary,
+// which is what the same two builds weigh UNSTRIPPED. That number is not
+// wrong about anything except what this product ships, and a size figure
+// nobody can reproduce from the Dockerfile is a size figure nobody will
+// re-take. So the command is written down with the result.
+//
+// It is still a big number, nineteen times crypt's ~470KB, and it is
+// worth saying plainly rather than burying: registering s3 pulls in the
+// AWS SDK for Go v2 (its S3 service client, signer, and the smithy
+// runtime under it), which is most of the delta. It buys the only
+// non-local storage medium this product has.
+//
+// The alternative was not "a smaller build", it was an AWS SDK dependency
+// of this repository's own, which costs the same binary space, adds a
+// second HTTP, credential and retry stack beside the one already embedded,
+// and puts a provider SDK inside the FR-3 boundary that exists to keep
+// upstream churn in exactly one adapter. What would genuinely shrink it is
+// not shipping S3 at all, and that is the decision FR-28 made the other
+// way, out loud, with this measurement attached.
+var RequiredBackends = []string{"local", "s3", "sftp"}
 
 // AcceptedTransitiveBackends maps the name of a backend that registers
 // itself even though nothing in this package imports it directly, to the

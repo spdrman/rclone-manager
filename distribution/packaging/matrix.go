@@ -581,6 +581,11 @@ func columnLabel(pr Provider) string {
 	return pr.DisplayName
 }
 
+// outcomeAbbrev is what a matrix cell prints. Abbreviated because these
+// render as a wide markdown table read at a glance, and a column of full
+// words wraps into unreadability; every abbreviation still says which
+// outcome it is rather than reducing to a symbol, because the difference
+// between BLOCKED and OPERATOR is what the reader is there for.
 var outcomeAbbrev = map[Outcome]string{
 	OutcomePass:            "PASS",
 	OutcomeFail:            "FAIL",
@@ -999,6 +1004,12 @@ type AncestryRef struct {
 // Asking origin/main is the same question the generator refuses on.
 var ancestryRefPreference = []string{"origin/main", "main", "HEAD"}
 
+// ancestryRefWhy and releaseAncestryRefWhy explain each ref the ancestry
+// check may have settled for, because the answer is only as strong as the
+// ref that produced it. "This commit is on origin/main" and "this commit
+// is on HEAD" are both green, and only one of them means anything, so the
+// reason travels with the verdict rather than being reconstructed from
+// which fallback happened to fire.
 var ancestryRefWhy = map[string]string{
 	"origin/main": "the branch a squash merge lands on, which is the question scripts/release/record-release-hashes.sh refuses on",
 	"main":        "origin/main is not in this checkout, so the local main is the strongest ref available",

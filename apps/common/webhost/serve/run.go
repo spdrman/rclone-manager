@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+// The process lifecycle: one HTTP server, optionally one scheduler, and
+// one shutdown that neither of them can subvert.
+//
+// §9.3's requirement reads like a small thing and is not: a failure of the
+// HTTP listener must not bypass lifecycle safety. Concretely, a bind error
+// must not tear down a scheduler mid-backup, and equally must not leave a
+// scheduler goroutine running past this function's return with nothing
+// able to stop it. Both directions have been wrong here before. The
+// resolution is the child context: the scheduler runs under a context
+// derived from the caller's, so this function can stop the scheduler on
+// every exit path without ever cancelling a context the caller still owns.
+//
+// The scheduler's own failure is handled symmetrically, and that symmetry
+// is the part that was missing. An earlier version raced only the caller's
+// context against the HTTP error, so a scheduler that died on its own was
+// invisible until something unrelated triggered shutdown, or forever if
+// nothing did.
+//
+// The server timeouts are here rather than left to each caller because the
+// gap they close is the classic one: a client that opens a connection and
+// trickles headers forever holds a goroutine indefinitely, and in a
+// process that also runs the scheduler the blast radius is wider than one
+// stuck request.
+
 // HTTP server timeouts NewHTTPServer applies to every caller: issue
 // #119's review flagged that the generic Web host's own http.Server
 // values set no request-level timeout at all - the standard Go

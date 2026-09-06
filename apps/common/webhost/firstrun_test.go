@@ -14,6 +14,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The setup surface of an instance that has no configuration yet.
+//
+// Two of the behaviours here are easy to get backwards and are worth
+// stating before reading the cases. A setup submission that writes the
+// configuration but cannot then open a service against it is reported as
+// needing a restart, not as a failed setup: the configuration is durably
+// on disk either way, and telling the operator it failed invites them to
+// run it again against a config that already exists. And once setup has
+// completed, the route keeps answering rather than disappearing, refusing
+// a late submission with a status that says why instead of a 404 that
+// looks like a wrong URL.
+//
+// The double records what it was asked to create, so a test can tell a
+// route that actually reached the first-run surface from one that returned
+// a plausible status on its own.
+
 // errActivationForTest stands in for whatever goes wrong when a
 // first-run install writes its configuration successfully but cannot then
 // open a service against it in-process (a state volume that turns out to

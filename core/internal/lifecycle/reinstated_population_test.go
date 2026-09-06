@@ -43,10 +43,25 @@ type multiArtifactSet struct {
 	untouched   model.ArtifactID
 }
 
+// all flattens the fixture into one slice, so a test can ask the delete
+// gate's own per-artifact question about every artifact in the set,
+// including the two that should NOT come back. Comparing only the expected
+// members would let a set-wide read that returned everything pass.
 func (m multiArtifactSet) all() []model.ArtifactID {
 	return append(append([]model.ArtifactID(nil), m.reinstated...), m.quarantined, m.untouched)
 }
 
+// buildMultiArtifactSet writes the fixture through real journal
+// transitions, edge by edge, rather than inserting rows.
+//
+// It has to: the fact under test lives only in the append-only transition
+// log, not on the artifacts row, since a reinstated artifact and one that
+// was never distrusted are both simply COMMITTED. A hand-built row would
+// have nothing for either reader to read.
+//
+// The two reinstatement shapes are both present because they enter through
+// different quarantine states, and the timestamps are fixed offsets from one
+// instant so the ordering in the log is deterministic.
 func buildMultiArtifactSet(t *testing.T, j *state.Journal) multiArtifactSet {
 	t.Helper()
 	ctx := context.Background()
@@ -172,6 +187,14 @@ type recordingLog struct {
 	err   error
 }
 
+// ArtifactsWithAnyTransition records the edges it was asked about and
+// answers nothing.
+//
+// Answering would be beside the point. The test using this is about the
+// QUESTION being derived from the same table the delete gate derives its
+// question from, and a fixture that returned artifacts would invite an
+// assertion about the answer instead, which the real-journal test above
+// already makes better.
 func (r *recordingLog) ArtifactsWithAnyTransition(_ context.Context, _ model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error) {
 	r.edges = edges
 	return nil, r.err

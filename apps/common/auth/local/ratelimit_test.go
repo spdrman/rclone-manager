@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+// Two things are under test here and they fail in different directions.
+//
+// The limiter itself has to refuse the attempt after the budget is spent,
+// track keys independently, and let a key back in once its window has
+// passed; the clock is injected for the last of those, because the
+// alternative is a test that sleeps for a minute. The sweep test is the
+// one that is not about correctness at all but about a process that stays
+// up for months: it proves idle keys are actually reclaimed rather than
+// merely that reclaiming code exists, by pushing more than sweepEvery
+// distinct one-shot keys through and then checking the map shrank.
+//
+// remoteIP's cases are where a wrong answer is a security bug rather than
+// a leak. Without trust, a forged X-Forwarded-For must be ignored
+// completely, or an attacker picks a fresh bucket per request and the limit
+// stops existing. With trust, two requests from the same proxy address and
+// different forwarded addresses must be different clients, or every client
+// in the world shares one bucket, which is the collapse this whole branch
+// was added to fix.
+
 func TestRateLimiter_AllowsUpToMaxAttempts(t *testing.T) {
 	r := NewRateLimiter(3, time.Minute)
 	for i := 0; i < 3; i++ {

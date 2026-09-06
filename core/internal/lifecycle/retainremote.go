@@ -120,6 +120,10 @@ type NotRemoteRetainedError struct {
 	Current  State
 }
 
+// Error names the current state alongside the expected one, for the same
+// reason NotFailedError does: the usual cause is an operator acting on a
+// stale view, and the answer to "what now" depends entirely on where the
+// artifact has actually got to.
 func (e *NotRemoteRetainedError) Error() string {
 	return fmt.Sprintf("lifecycle: refusing to release %s from retention: its journal state is %s, not %s", e.Artifact, e.Current, RemoteRetained)
 }

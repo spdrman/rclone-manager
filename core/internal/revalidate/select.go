@@ -9,6 +9,23 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
+// This file is the scheduling half of revalidation: which artifacts are due
+// for another look, and in what order.
+//
+// It is separated from the checking half because the two have opposite
+// natures. Checking touches the filesystem, runs an operator's hook and
+// talks to a bucket; scheduling is a pure function of the records, the
+// configuration and one instant. Keeping it pure is what lets the ordering
+// and the bound be tested exhaustively without a fixture, and it is the
+// same split internal/retention makes between GFSDecide and the code that
+// acts on its answer.
+//
+// The two policy decisions live here and nowhere else: which states are
+// worth re-checking at all, and what "due" means. Both are stated as data
+// or as one comparison rather than being spread through the pass, so a
+// future state added to the machine is a one-line question in this file
+// rather than a behaviour nobody notices is missing.
+
 // eligibleStates are the lifecycle states worth re-checking: a durable
 // local final file has to actually exist for there to be anything to
 // re-read. This is the same four-state set FR-19's last-known-good
@@ -44,7 +61,7 @@ var eligibleStates = map[lifecycle.State]bool{
 // An artifact is due when its current state is one of eligibleStates and
 // now.Sub(rec.UpdatedAt) >= cfg.Interval.Duration(). UpdatedAt stands in
 // for "when this artifact was last checked" because, once a record is
-// sitting in one of these three states, nothing touches its journal row
+// sitting in one of these four states, nothing touches its journal row
 // afterward except this package's own same-state pass/fail writes (Run)
 // and FR-17 reconciliation at startup, both of which are legitimate
 // "this was looked at" events: a pass leaves UpdatedAt where a fresh check

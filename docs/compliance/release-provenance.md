@@ -73,12 +73,53 @@ records no identity:
 ```
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/spdrman/rclone-manager/\.github/workflows/release\.yml@refs/tags/' \
-  ghcr.io/spdrman/backup-manager:0.1.0
+  --certificate-identity 'https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release' \
+  ghcr.io/spdrman/backup-manager:0.2.0
 ```
 
-The tag in that example is `0.1.0` rather than the `0.2.0` this tree declares, because
-`0.2.0` is not pushed yet and there is nothing at that tag to verify. Move it once the
+That command passes against the published image, and it is the whole point of this
+section that it does. It is checked by running it, not by reading it.
+
+The ref half of that identity is `refs/heads/release` because a push to `release` is
+what publishes (see the header of `.github/workflows/release.yml`). GitHub builds the
+certificate SAN out of the ref the run was triggered on, so the trigger decides the
+identity, and the two have to move together. Issue #510 is what happens when they do
+not: this printed a regexp anchored on `@refs/tags/` for long enough that the command
+above would answer
+
+```
+Error: no matching signatures: none of the expected identities matched what was in
+the certificate, got subjects
+[https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release]
+with issuer https://token.actions.githubusercontent.com
+```
+
+against a release that was signed correctly the whole time. A record that makes a real
+artifact look forged is worse than one that says nothing, so
+`TestSigningIdentityMatchesTheWorkflowTriggerThatPublishes` now reads the workflow's
+trigger and refuses an identity a run of that workflow could not produce, and
+`TestComplianceDocsPrintTheCommandThatPasses` refuses this file if it drifts from it.
+
+The identity is exact rather than a regexp. The ref is a single fixed branch, so there
+is nothing to match loosely, and an exact identity cannot be quietly widened by a
+missing anchor the way the old `@refs/tags/` pattern was: it had no `$`, so it would
+have accepted any tag ref at all.
+
+Nothing can be signed under a different ref, which is what makes one exact identity
+enough. `workflow_dispatch` can be aimed at any branch, so its `publish` input is
+treated as a request rather than as permission: the `decide` job checks the ref first
+and publishes only from `refs/heads/release`, whatever the input says. A dispatch from
+anywhere else still builds and still runs every check, and pushes, signs and attests
+nothing. `TestOnlyTheReleaseRefCanPublish` executes that decision, for each ref worth
+asking about, out of the workflow file itself.
+
+Without it, one dispatch from a feature branch would put an image in a public registry
+signed under that branch's ref: an artifact this record does not describe and this
+command rejects, which is #510's failure mode again except that a pushed image cannot
+be taken back the way a wrong sentence can.
+
+The tag in that example is `0.2.0` rather than the `0.3.0` this tree declares, because
+`0.3.0` is not pushed yet and there is nothing at that tag to verify. Move it once the
 release workflow has published, at the same time the digests are recorded back.
 
 The SBOM is attached as an attestation over the same digest
@@ -126,17 +167,18 @@ not hold where the script runs.
 
 ## Publishing
 
-`ghcr.io/spdrman/backup-manager:0.2.0` is cut and not pushed.
+`ghcr.io/spdrman/backup-manager:0.3.0` is cut and not pushed.
 `distribution/packaging/canonical.json` records `image.published: false`, and the release
 manifest records the same fact from the other side as a `registry_digest` of `null` per
 architecture and a null `index_digest`. The two are held together by
 `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag`, so neither can move
 alone, and the push below is what fills both in.
 
-`0.1.0` was pushed this way and remains published: its image index is `sha256:533e7540`,
+`0.2.0` was pushed this way and remains published: its image index is `sha256:0ba1fba4`,
 signed keylessly through the release workflow's own OIDC identity with the SBOM attested
 beside it, and each architecture's digest was read back with
-`docker buildx imagetools inspect` rather than taken from the push's own output.
+`docker buildx imagetools inspect` rather than taken from the push's own output. `0.1.0`
+before it was published the same way and stays where it is.
 
 The mechanism that did the push is not automatic, and a later release repeats it by
 hand:
@@ -191,7 +233,7 @@ the manifest is a claim about what the registry holds.
 binaries were stamped with, which is what `/backup-manager version` answers.
 `canonical.json`'s `image.tag` is the semantic version every provider package
 advertises. Those have to be the same string in a real release, and now they are:
-both record `0.2.0`, the tag cut for this release rather than the generator's
+both record `0.3.0`, the tag cut for this release rather than the generator's
 `git describe --tags --always` fallback that produced an abbreviated commit before
 this repository had any tags.
 
@@ -201,6 +243,24 @@ That parity is checked rather than assumed:
 direction. Cutting the real tag before the push is what closed the gap this section
 used to describe: a store advertising `:1.0.0` while the binary inside answered with a
 commit SHA was the failure a push before tagging would have shipped.
+
+## The links a store reviewer follows
+
+`compliance.json`'s `sourceRepository.visibility` is `public`, so every declared
+link resolves for anyone, and `links.publiclyReachable` in the bundle is derived
+from that one field rather than asserted per link. §73 WP5.2's link criterion is
+met.
+
+That value went stale once and the note above it claimed it had been measured,
+which is how issue #484 found it: the repository was made public and nothing came
+back to re-read the field, so the record said private for a repository anyone
+could open. Re-run `gh repo view spdrman/rclone-manager --json visibility` rather
+than trusting the note, and regenerate the bundle with
+`go run ./cmd/provenance -write` from `distribution/`.
+
+`docs/compliance/source-offer.md` stays either way. A link resolving is not the
+same as an offer having been made, and Apache-2.0 §4a is an obligation to whoever
+received a package, not to whoever visits the repository.
 
 ## Verifying a release by hand
 
@@ -217,11 +277,6 @@ digests, and the image additionally by its signature.
 
 Stated here rather than left to be discovered:
 
-- **The links are not publicly reachable.** Every link target exists and has
-  substance, and the repository is private, so a store reviewer following any of
-  them gets a 404. `links.publiclyReachable` is `false` and
-  `docs/compliance/source-offer.md` is the written offer that stands until the
-  repository is made public. Only the repository owner can change that.
 - **The performance evidence is pending.** The seven metric names #81 lists are
   pinned as a set so one cannot be dropped quietly, and every value is null,
   naming the issue that will produce it. #165, #167 and #170 have not merged.

@@ -37,7 +37,7 @@ questions:
           schema:
             type: string
             required: true
-            default: "ghcr.io/spdrman/backup-manager:0.2.0"
+            default: "ghcr.io/spdrman/backup-manager:0.3.0"
 
   - variable: storage
     label: Storage

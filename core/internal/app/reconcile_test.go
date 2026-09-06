@@ -8,6 +8,21 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
+// Reconciliation right after a clean cycle has to find nothing.
+//
+// The interesting assertion is the negative one. FR-17's whole value depends
+// on a reconciliation pass distinguishing a backup that is fine from one that
+// has rotted, and a pass that reported a change for a perfectly healthy
+// COMPLETE artifact would be indistinguishable, on the reports alone, from
+// one that had found real damage. So this drives an artifact all the way
+// through a real cycle first, and then asserts that the next pass changes
+// nothing.
+//
+// Doing it through a full RunCycle rather than by writing a COMPLETE row by
+// hand is the part worth keeping. A hand-built row proves reconciliation
+// agrees with the fixture; this proves it agrees with what the pipeline
+// actually produces.
+
 // TestReconcileAll_ReconcilesEveryConfiguredBackupSet proves ReconcileAll
 // visits every configured backup set and reports one Finding per journal
 // row it examined: drive one artifact all the way to COMPLETE through a

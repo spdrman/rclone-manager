@@ -1,3 +1,13 @@
+/**
+ * The app-wide nodes, checked for the things a type cannot state: the
+ * initial value a page renders against before any fetch resolves, and the
+ * derivations that turn version and revision facts into the two booleans
+ * the UI gates on.
+ *
+ * The retention staleness cases commit revisions by hand. That is not a
+ * shortcut around a producer, it is standing in for one that does not
+ * exist yet, which retentionRevisionsNode's own doc explains at length.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { graph, resetGraphForTests } from "./graph";
 import {
@@ -31,6 +41,7 @@ const OPERATION: Operation = {
     bytesDone: 42,
     bytesTotal: 100
   },
+  cycle: null,
   nonDestructive: false,
   startedAt: "2026-08-29T00:00:00+02:00"
 };
@@ -78,11 +89,27 @@ const PLAN: RetentionPlan = {
   expiresAt: "2026-08-29T06:09:48+02:00",
   keepCount: 1,
   deleteCount: 1,
+  // Issue #333: which policy decided these verdicts. Deliberately the
+  // set's OWN policy, and a chain that is not the product default, so a
+  // dialog that lost the attribution or fell back to a hardcoded chain
+  // shows something visibly wrong rather than something plausible.
+  retention: {
+    timezone: "Europe/Berlin",
+    weekStartsOn: "monday",
+    protectLastKnownGood: true,
+    tiers: [{ name: "daily", granularity: "day", keep: 4 }]
+  },
+  retentionIsOverride: true,
   reclaimBytes: 1024,
   verdicts: [
     { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }] },
     { artifact: "b.dump", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
-  ]
+  ],
+  // Issue #430: a medium-free deployment. Every plan in this file is
+  // about something other than placement, so this is the honest shape:
+  // the wire omits both fields and client.ts normalises them to [].
+  moves: [],
+  unconfirmedPlacements: []
 };
 
 /** B3.1 (#96) — issue's own required TDD case: "is this plan stale"

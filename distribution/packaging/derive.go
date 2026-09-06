@@ -43,6 +43,9 @@ type Drift struct {
 	Why     string
 }
 
+// String omits the service when the drift is about the adapter rather
+// than about one container, so "the platform declares no derivesFrom"
+// does not arrive attached to an arbitrary service name.
 func (d Drift) String() string {
 	if d.Service == "" {
 		return fmt.Sprintf("%s: %s", d.Field, d.Detail)
@@ -231,6 +234,11 @@ func CheckDerivation(a AdapterRuntime, c Canonical) []Drift {
 	return out
 }
 
+// services is the two roles as a list, skipping whichever is absent. The
+// per-service checks below run over this rather than over the raw service
+// list on purpose: a service that matched neither canonical command has
+// already been reported as a third container, and re-checking its image
+// and profile would add findings that all have the same one cause.
 func (a AdapterRuntime) services() []*Service {
 	var out []*Service
 	if a.Engine != nil {
@@ -242,6 +250,12 @@ func (a AdapterRuntime) services() []*Service {
 	return out
 }
 
+// checkContractVersion is the field that keeps the other six honest. A
+// missing contract version returns early rather than falling through to
+// the comparison, because comparing "" against the current contract would
+// report a version mismatch, which sends the reader off to re-derive an
+// adapter when the actual problem is that it never declared what it
+// derived from.
 func checkContractVersion(a AdapterRuntime, p Platform, c Canonical) []Drift {
 	why := DerivedFields[0].Why
 	var out []Drift
@@ -259,6 +273,10 @@ func checkContractVersion(a AdapterRuntime, p Platform, c Canonical) []Drift {
 	return out
 }
 
+// checkImage compares the reference as written, not a parsed name and
+// tag. A platform that pins a digest, points at its own registry mirror
+// or drops the tag has changed which bytes get run, and every one of
+// those spellings would survive a comparison that normalised first.
 func checkImage(svc *Service, c Canonical) []Drift {
 	if svc.Image == c.Image.Reference {
 		return nil
@@ -272,6 +290,12 @@ func checkImage(svc *Service, c Canonical) []Drift {
 // as part of "command and runtime profile".
 const profileArg = "--profile="
 
+// checkProfile reports three separate failures, in order of how badly
+// they mislead. No profile at all leaves platform identity and capability
+// reporting implicit. A profile the canonical definition does not declare
+// will not start. A profile that belongs to a different platform is the
+// one worth separating from the other two, because it starts cleanly and
+// behaves like somebody else's NAS.
 func checkProfile(svc *Service, p Platform, c Canonical) []Drift {
 	why := DerivedFields[2].Why
 	var got string
@@ -297,6 +321,12 @@ func checkProfile(svc *Service, p Platform, c Canonical) []Drift {
 	return nil
 }
 
+// checkMounts is asymmetric between the two roles, deliberately. The
+// engine is compared both ways, since a missing canonical role and an
+// extra mount are both drift. The Web UI is allowed no mounts at all, so
+// every mount it declares is a finding: it is the one container on the
+// LAN, and a mount there is attack surface rather than a configuration
+// choice.
 func checkMounts(a AdapterRuntime, c Canonical) []Drift {
 	why := DerivedFields[3].Why
 	var out []Drift
@@ -334,6 +364,16 @@ func checkMounts(a AdapterRuntime, c Canonical) []Drift {
 	return out
 }
 
+// checkPort reads the CONTAINER side of the published-port spec, which is
+// the last colon-separated field in every form compose accepts, so an
+// adapter that pins a host interface or lets the operator choose the host
+// port is not reported as drift. The host side is theirs; which port
+// inside the container is exposed is not.
+//
+// The count is checked before the value, because "publishes two ports"
+// and "publishes the wrong port" want different fixes and reporting the
+// second for a two-port adapter would name whichever one happened to be
+// first.
 func checkPort(a AdapterRuntime, c Canonical) []Drift {
 	why := DerivedFields[4].Why
 	var out []Drift
@@ -373,6 +413,13 @@ func SeamOf(svc *Service) HealthcheckSeam {
 	}
 }
 
+// checkHealth judges each role by which seam it used, and the same seam
+// means different things per role. The long comments inside are the
+// reasoning for the two cases that are not obvious: an engine that
+// inherits the image's check is only a defect once something waits on it
+// (issue #206), and a Web UI that inherits it is always a defect, because
+// that check reads a config file and a state database the Web UI
+// container does not have.
 func checkHealth(a AdapterRuntime, c Canonical) []Drift {
 	why := DerivedFields[5].Why
 	var out []Drift
@@ -455,6 +502,9 @@ func sameTest(got, want []string) bool {
 	return strings.Join(stripCMD(got), " ") == strings.Join(stripCMD(want), " ")
 }
 
+// stripCMD drops compose's optional CMD / CMD-SHELL prefix. It matters
+// which one was written, but not here: this comparison is about what runs,
+// and the seam checks above have already decided whether a check exists.
 func stripCMD(test []string) []string {
 	if len(test) > 0 && (test[0] == "CMD" || test[0] == "CMD-SHELL") {
 		return test[1:]
@@ -486,6 +536,10 @@ func CheckArchitectureDerivation(platform string, claimed []string, c Canonical)
 	return nil
 }
 
+// sortDrift groups by field first so a failure reads as "here is what
+// went wrong with the image reference, here is what went wrong with the
+// mounts" rather than as a per-service walk that mentions the same field
+// three times.
 func sortDrift(d []Drift) {
 	sort.Slice(d, func(i, j int) bool {
 		if d[i].Field != d[j].Field {

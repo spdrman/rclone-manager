@@ -12,6 +12,24 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// The command dispatch and the flag surface, tested through run() rather
+// than through the process.
+//
+// The refusals are what most of this file is. A binary that starts with a
+// misconfiguration and discovers it later is a binary an operator finds
+// broken at the worst moment, so an unsupported auth mode and a
+// configuration that does not validate both have to stop the process
+// before it binds anything.
+//
+// One case is the opposite, and it is the one that changed the shape of
+// the fixture: a missing configuration file is no longer a refusal at all.
+// It is the first-run state, and serve is expected to start, listen and
+// offer the setup flow. That is why the invalid-config fixture writes a
+// file that parses and fails validation rather than pointing at a path
+// that does not exist, and why it also redirects the auth store: with the
+// store opened before the configuration, leaving it at the container
+// default would make a failure ambiguous between the two.
+
 // invalidConfigArgs is the "serve refuses and exits" fixture every test
 // below that drives cmdServe needs, and it changed shape with issue #176.
 //

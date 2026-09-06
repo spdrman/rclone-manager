@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+// A truth table for one question: when may this process believe a header
+// that says the connection was secure?
+//
+// The four cases exist because the answer depends on two independent
+// inputs, real TLS and the trust flag, and three of the four combinations
+// must come back false. The one that would be easiest to get wrong by
+// accident is plaintext-plus-forged-header-without-trust: that is a caller
+// who set X-Forwarded-Proto themselves, and a Secure cookie issued on the
+// strength of it would be a claim of protection nothing is providing.
+
 func TestRequestIsSecure_RealTLSIsAlwaysSecureRegardlessOfTrust(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.TLS = &tls.ConnectionState{}

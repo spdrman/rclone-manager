@@ -69,6 +69,35 @@ const redacted = "[REDACTED]"
 // asserts the raw bytes never appear in any rendering, rather than trusting
 // this comment.
 //
+// # The one rendering path this does NOT cover: an unexported field
+//
+// The list above used to say it covered every rendering path the standard
+// library offers. That was wrong, and it was wrong in the direction that
+// costs something, so it is corrected here rather than quietly narrowed.
+//
+// fmt cannot take an interface value out of an UNEXPORTED struct field:
+// reflect.Value.CanInterface is false for one, so fmt never gets to ask
+// whether the value implements Formatter, Stringer or anything else. It
+// falls back to printing the field's own contents, which for this type is
+// the wrapped string. Measured:
+//
+//	type holder struct{ s Secret }   // unexported field
+//	fmt.Sprintf("%+v", holder{NewSecret("hunter2")})  =>  {s:{v:hunter2}}
+//
+//	type Holder struct{ S Secret }   // exported field
+//	fmt.Sprintf("%+v", Holder{NewSecret("hunter2")})  =>  {S:[REDACTED]}
+//
+// So a Secret in an unexported field is protected only for as long as
+// nothing formats the STRUCT THAT HOLDS IT. Any type with an unexported
+// Secret field has to reassert redaction itself, by implementing the same
+// interfaces this type does; internal/transport/rclone's
+// resolvedCredentials and keyEncryptionSecretCacheEntry both do, and both
+// say why.
+//
+// TestSecretInAnUnexportedFieldStillLeaks pins this limitation rather than
+// the behaviour anyone wants, and says in its own doc to delete itself if a
+// future Go closes the hole.
+//
 // # What this does not claim to defend against
 //
 // Reveal itself, called by a caller that then does log it anyway. Nothing

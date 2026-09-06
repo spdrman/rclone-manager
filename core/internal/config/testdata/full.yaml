@@ -16,6 +16,7 @@ sources:
           key_file: /run/secrets/backup_ssh_key
           known_hosts: /etc/backup-manager/known_hosts
           sensitive_endpoint: true
+          max_connections: 2
 
         remote_path: /backups/postgres
         local_path: /backups/production/postgres
