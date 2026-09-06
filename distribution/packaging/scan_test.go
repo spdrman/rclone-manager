@@ -248,6 +248,38 @@ post_install: /usr/local/bin/seed-state.sh
 	}
 }
 
+// TestScanLifecycleSkipsTheTscBuildCache proves a built frontend tree
+// does not red the gate. `tsc -b` drops a tsconfig.tsbuildinfo next to
+// the sources, and apps/ugos/frontend/upk-proof is a real Vite app whose
+// normal build produces one; the local gate builds that frontend and
+// then scans the same tree. The cache is a build output like dist/, so
+// it is skipped, and a genuine disallowed file sitting right beside it is
+// still reported, so the skip is a skip of one generated name and not a
+// hole a real violation can hide in.
+func TestScanLifecycleSkipsTheTscBuildCache(t *testing.T) {
+	root := cleanFixture(t)
+	mustWrite(t, filepath.Join(root, "frontend", "tsconfig.tsbuildinfo"),
+		`{"program":{"fileNames":[],"version":"5.6.2"}}`)
+	got, err := ScanLifecycle(root)
+	if err != nil {
+		t.Fatalf("ScanLifecycle: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a tsconfig.tsbuildinfo build cache was reported as a violation:\n%s", format(got))
+	}
+
+	// The skip is by exact suffix, not a blanket pass for the directory:
+	// a .go file next to the cache is still a disallowed file type.
+	mustWrite(t, filepath.Join(root, "frontend", "helper.go"), "package frontend\n")
+	got, err = ScanLifecycle(root)
+	if err != nil {
+		t.Fatalf("ScanLifecycle: %v", err)
+	}
+	if !hasRule(got, RuleDisallowedFileType) {
+		t.Fatalf("a .go file beside the build cache was not reported; the skip is too broad:\n%s", format(got))
+	}
+}
+
 // TestScanLifecycleAcceptsACanonicalUnraidCommand is the other half of
 // the two PostArgs controls above: the rule has to accept the one value
 // that is correct, or it would just be a ban on Unraid templates.
