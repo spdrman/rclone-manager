@@ -249,8 +249,8 @@ func TestAnEngineAttachedWriteIsStillRefusedWithNoRouteToTheEngine(t *testing.T)
 	stderr := captureStderr(t, func() {
 		code = captureStdoutCode(t, func() int { return run(args) })
 	})
-	if code == 0 {
-		t.Errorf("backup-set patch exited 0 beside an engine this command has no route to\nstderr: %s", stderr)
+	if code != exitEngineHoldsDeployment {
+		t.Errorf("backup-set patch exited %d beside an engine this command has no route to, want %d: this is the refusal an operator's script waits on and runs again, so it has to be told apart from an ordinary failure (#551)\nstderr: %s", code, exitEngineHoldsDeployment, stderr)
 	}
 	if after := readFile(t, cliConfig); after != before {
 		t.Errorf("backup-set patch changed config.yaml beside an engine this command has no route to")

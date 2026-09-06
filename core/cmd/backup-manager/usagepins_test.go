@@ -202,18 +202,41 @@ func TestUsage_NamesEveryMediumVerb(t *testing.T) {
 // command, which is the index an operator scans to find out what they can
 // run.
 //
-// An entry line is exactly two spaces then a non-space. Everything else in
-// that block is either a continuation line, which is indented much further
-// so a description sits in its own column, or one of the trailing
-// paragraphs, which start at column zero. Both are pinned as of their last
-// capture and neither names a verb, so neither is this function's business.
+// It reads the run of lines under the "commands:" header and stops at the
+// first line that starts back at column zero, which is where that index
+// ends and the trailing paragraphs begin. Inside the run, an entry line is
+// exactly two spaces then a non-space; a continuation line is indented much
+// further so a description sits in its own column.
+//
+// Bounding it to the index is the whole point rather than a tidiness. This
+// used to take any two-space-indented line anywhere in the block, and #551
+// then added an exit-code table to a trailing paragraph, indented exactly
+// that far:
+//
+//	0   the command did what it was asked
+//	1   an ordinary failure: ...
+//
+// which this read as four commands named 0, 1, 2 and 3 that nothing
+// dispatches. Neither change was wrong on its own and neither lane could
+// see the other, which is the kind of thing that only shows up once both
+// are in one tree. An indentation is a rendering detail and a header is a
+// structure, so key off the structure.
 func usageEntryLines(text string) []string {
 	var out []string
+	inIndex := false
 	for _, line := range strings.Split(text, "\n") {
-		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
+		if !inIndex {
+			inIndex = strings.HasPrefix(line, "commands:")
 			continue
 		}
-		if strings.TrimSpace(line) == "" {
+		if trimmed := strings.TrimSpace(line); trimmed == "" {
+			continue
+		}
+		// Back at column zero: the index is over.
+		if !strings.HasPrefix(line, " ") {
+			break
+		}
+		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
 			continue
 		}
 		out = append(out, line)
