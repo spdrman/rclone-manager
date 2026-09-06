@@ -135,6 +135,15 @@ func TestContract_EveryCallThisClientMakesIsAnOperationTheContractDeclares(t *te
 			}
 			engine.reset()
 
+			// A call takes a context; an accessor does not. That is the
+			// rule this check separates them by, rather than a list of
+			// method names to ignore, because a list is a place to hide a
+			// method somebody did not want checked. It cuts both ways: a
+			// method with no context has to make no request, so an
+			// "accessor" that quietly talked to the engine would fail here
+			// rather than escape the check.
+			isCall := method.Type.NumIn() > 1 && method.Type.In(1) == ctxType
+
 			fn := method.Func
 			args := make([]reflect.Value, 0, method.Type.NumIn())
 			args = append(args, reflect.ValueOf(client))
@@ -157,6 +166,12 @@ func TestContract_EveryCallThisClientMakesIsAnOperationTheContractDeclares(t *te
 			fn.Call(args)
 
 			seen := engine.requests()
+			if !isCall {
+				if len(seen) != 0 {
+					t.Fatalf("%s takes no context and still made %d request(s). Every call this client makes has to be cancellable, and a request that is not is one no command can abandon.", method.Name, len(seen))
+				}
+				return
+			}
 			if len(seen) == 0 {
 				t.Fatalf("%s made no request at all. A client method whose path this check cannot read is not checked, which is the one outcome it must never produce silently.", method.Name)
 			}

@@ -102,14 +102,14 @@ func TestClient_ReusesAnExistingSessionRatherThanSigningInAgain(t *testing.T) {
 		}
 	}
 
-	var logins int
-	for _, op := range engine.operations() {
-		if op == "login" {
-			logins++
-		}
-	}
-	if logins != 1 {
-		t.Errorf("three calls produced %d logins, want 1: a client that signs in per call spends an Argon2id hash per call and burns the login rate limit", logins)
+	// The whole sequence, not just the login count. Counting logins alone
+	// misses the version of this bug that costs a round trip rather than a
+	// password hash: a client that re-asks GET /auth/session before every
+	// call doubles its traffic and still logs in exactly once, so the
+	// weaker assertion passes on it.
+	want := []string{"getSession", "login", "listBackupSets", "listBackupSets", "listBackupSets"}
+	if got := engine.operations(); !reflect.DeepEqual(got, want) {
+		t.Errorf("three calls produced %v, want %v", got, want)
 	}
 }
 

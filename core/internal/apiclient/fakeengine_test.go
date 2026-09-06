@@ -181,9 +181,13 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ep, known := lookupRoute(r.Method, r.URL.Path)
+	// EscapedPath, not Path. A backup set whose id contains a slash or a
+	// space arrives percent-encoded, and reading the decoded form would
+	// route /backup-sets/a%2Fb as if it named two segments.
+	escaped := r.URL.EscapedPath()
+	ep, known := lookupRoute(r.Method, escaped)
 
-	seen := seenRequest{Method: r.Method, Path: r.URL.Path, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName)}
+	seen := seenRequest{Method: r.Method, Path: escaped, Operation: ep.ID, CSRFHeader: r.Header.Get(csrfHeaderName)}
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		seen.CSRFCookie = c.Value
 	}
