@@ -26,6 +26,12 @@
         "name": "X-CSRF-Token",
         "description": "The double-submit CSRF token (apps/common/csrf). Required on every state-changing operation, and on the two read-only-in-effect operations that still open an outbound connection to a caller-supplied host."
       },
+      "csrfCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "bm_csrf",
+        "description": "The other half of the double-submit pair above, and the half a client has to READ. The runtime issues this cookie on any response that does not already carry one, and a caller echoes its value back in X-CSRF-Token; the two are compared byte for byte. It is declared here because a client cannot implement the csrf requirement from this document without knowing which cookie to echo, and until it was, the only place that name existed was the two implementations."
+      },
       "bootstrapToken": {
         "type": "apiKey",
         "in": "header",
@@ -3035,7 +3041,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -3448,7 +3455,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "parameters": [
@@ -3671,7 +3679,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -3794,7 +3803,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4041,7 +4051,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4136,7 +4147,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4300,7 +4312,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4408,7 +4421,8 @@
         ],
         "security": [
           {
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4509,6 +4523,7 @@
         "security": [
           {
             "csrf": [],
+            "csrfCookie": [],
             "bootstrapToken": []
           }
         ],
@@ -4611,7 +4626,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
@@ -4712,7 +4728,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "responses": {
@@ -4837,7 +4854,8 @@
         "security": [
           {
             "session": [],
-            "csrf": []
+            "csrf": [],
+            "csrfCookie": []
           }
         ],
         "requestBody": {
