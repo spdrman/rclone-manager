@@ -2100,6 +2100,7 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 ```text
 core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
+  apiclient/     the CLI's client for a running engine's own /api/v1 (built, and no command calls it yet)
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
