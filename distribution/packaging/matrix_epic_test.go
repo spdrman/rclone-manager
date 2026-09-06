@@ -111,14 +111,25 @@ func TestAnotherEpicsColumnCannotMovePhaseFoursVerdict(t *testing.T) {
 		t.Fatalf("Phase 4 already has %d failing cell(s), so this test cannot tell a new one from an old one: %v", len(before.Failures), before.Failures)
 	}
 
-	// The flip. UGOS's state-persistence is declared blocked on #83
-	// because there is no UPK and therefore no compose to read a mount
-	// out of. Declaring it supported is the worst thing a UGOS cell can
-	// say: the check still fails, so the cell resolves FAIL, and before
-	// this change a FAIL anywhere in the matrix reddened the one run that
-	// stood for Phase 4.
-	flipped := runMatrix(withCell(base, "ugos", "state-persistence", Cell{Declared: DeclSupported}))
-	if got := flipped.Results["ugos"]["state-persistence"].Outcome; got != OutcomeFail {
+	// The flip. UGOS's native-auth is declared blocked on #180: the
+	// bridge declares the capability and the artifact the UPK installs
+	// serves the bundle compiled into the binary, which is somebody
+	// else's bridge. Declaring it supported is the worst thing a UGOS
+	// cell can say: the check still fails, so the cell resolves FAIL, and
+	// before this change a FAIL anywhere in the matrix reddened the one
+	// run that stood for Phase 4.
+	//
+	// It used to be state-persistence, and that stopped being a flip the
+	// day #83 shipped the UPK and the cell started passing honestly. The
+	// replacement is chosen to be blocked on the thing #83 could NOT fix:
+	// the canonical image has no room for a sixth per-provider bundle, so
+	// this one does not quietly become true either.
+	const flippable = "native-auth"
+	if got := base.Providers["ugos"].Cells[flippable].Declared; got != DeclBlocked {
+		t.Fatalf("ugos/%s is declared %q rather than blocked, so flipping it to supported proves nothing; pick a cell that is still blocked", flippable, got)
+	}
+	flipped := runMatrix(withCell(base, "ugos", flippable, Cell{Declared: DeclSupported}))
+	if got := flipped.Results["ugos"][flippable].Outcome; got != OutcomeFail {
 		t.Fatalf("the flipped UGOS cell resolved %s, not %s, so nothing was proved", got, OutcomeFail)
 	}
 	after := flipped.Verdict(PhaseFourEpic)

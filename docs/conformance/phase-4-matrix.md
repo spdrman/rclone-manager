@@ -125,17 +125,17 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Capability | UGOS Pro (EPIC D) | CasaOS (P6) | Portainer CE (P6) | Synology DSM | TrueNAS | Unraid | ZimaOS (P6) | Dockge (P6) | Generic Docker | OpenMediaVault | Proxmox VE |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Provider identified correctly | PASS | N/A | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS | PASS |
-| Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Uses the exact canonical image | BLOCKED | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
+| Provider package metadata present | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Uses the exact canonical image | PASS | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
 | Release manifest well-formed and reachable (repository-wide) | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
-| State path persists outside the container | BLOCKED | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Backup root constrained | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| This provider's own architecture claim matches the build | PASS | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
+| State path persists outside the container | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Backup root constrained | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Auth mode explicit and honest | PASS | N/A | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS | PASS |
 | No bundled secrets | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | No provider-specific lifecycle implementation | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| API reachable only through the intended path | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| API reachable only through the intended path | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Provider removal does not alter core | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
 | Host management plane not modified | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Install / update / remove semantics | BLOCKED | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
@@ -152,11 +152,11 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 | Outcome | Cells |
 |---|---|
-| PASS | 119 |
+| PASS | 125 |
 | PENDING_OPERATOR | 36 |
 | UNSUPPORTED | 43 |
-| NOT_APPLICABLE | 39 |
-| BLOCKED | 16 |
+| NOT_APPLICABLE | 40 |
+| BLOCKED | 9 |
 | FAIL | 0 |
 
 ### Phase 6 release qualification (issue #170)
@@ -176,7 +176,7 @@ cannot be cited afterwards.
 
 **UGOS Pro is EPIC D's column** (work package 4.2).
 All 23 of its cells are decided by the same runner, on the same terms as every
-other column, and reported in full below; 16 are blocked today, on #83.
+other column, and reported in full below; 9 are blocked today, on #177 and #180.
 None of them is in either verdict above. A capability EPIC D owns cannot hold
 EPIC B's Phase 4 or its Phase 6 release qualification open, and an EPIC D
 column that goes green cannot close either of them.
@@ -191,22 +191,16 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Provider package metadata present | BLOCKED | #83 — Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. apps/ugos/ contains the frontend bridge and nothing else: no project.yaml, no compose, no icon, no image tar. Until #83 lands, UGOS is the one Phase 4 Exit Gate provider with no package in this repository. |
-| Uses the exact canonical image | BLOCKED | #83 — Nothing in apps/ugos/ references an image yet, so there is no reference to compare. |
-| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | #83 — The UPK is what would carry the architecture image tars (section 41), and there is no UPK, so there is no shipped byte to hash. Unlike the six providers that consume the OCI image by reference, this one is not not-applicable: UGOS is meant to ship its own artifact, so the cell stays blocked until #83 produces one. |
-| This provider's own architecture claim matches the build | BLOCKED | #83 — The UPK declares the architecture image tars (section 41); no UPK, no claim of its own to check. |
-| State path persists outside the container | BLOCKED | #83 — The UPK's compose declares the storage mapping (section 22); it does not exist yet. |
-| Backup root constrained | BLOCKED | #83 — BACKUP_ROOT comes from the UPK's install parameters (section 20); they do not exist yet. |
-| API reachable only through the intended path | BLOCKED | #83 — The UPK's compose decides which container publishes a port; it does not exist yet. |
-| Install / update / remove semantics | BLOCKED | #83 — docs/acceptance/ugos-local-notification.md covers notifications only. The install/update/disable/uninstall/reinstall procedure is work package 4.2's, and belongs with #83. |
-| UI launches | BLOCKED | #83 — The UI an operator would launch is the UPK's, and docs/acceptance/ugos-local-notification.md covers notifications only. Section 12's embedded provider window is delivered by the UPK too, which is why embedded-window below is blocked on the same issue rather than declared supported: both cannot be true at once. |
-| Upgrade preserves state | BLOCKED | #83 — Section 46's upgrade behaviour needs the package that gets upgraded. |
-| Removal does not delete retained backups | BLOCKED | #83 — Section 48's uninstall behaviour needs the package that gets uninstalled. |
-| Native authentication | BLOCKED | #83 — The bridge opts in, but nothing this repository produces loads the UGOS bridge: there is no UPK (#83), and even once there is one, serve-ui embeds a single bundle chosen at build time (#180). A capability flag is a statement of intent until an installed artifact runs it. |
-| Native notifications | BLOCKED | #83 — Same as native-auth: the flag is set in apps/ugos/frontend/platform.ts and no artifact loads that file. |
-| Embedded window | BLOCKED | #83 — Section 12's embedded provider window is delivered by the UPK, which is exactly what ui-launch above says. Declaring this supported while blocking ui-launch on the same sentence was a contradiction: both rows are the same missing package. |
-| App-store packaging | BLOCKED | #83 — The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse. |
-| Storage picker | BLOCKED | #83 — Same as native-auth: declared in a bridge no shipped artifact loads. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | The UPK does carry its own copy of the bytes, and the comparison this row demands is real and does run, just not from a file checked into this repository. rootfs_<arch>/images holds an image tar fetched from the canonical release and gitignored, because committing an exported image would put a stale copy of a release in git; distribution/packaging's VerifyUPKStage extracts every canonical binary out of that archive's own layers and holds it to container/release-manifest.json before ugcli pack is allowed to run, and it is watched refusing a locally rebuilt image, a binary replaced one layer up and a binary whited out one layer up. This cell records where the comparison happens rather than pretending to hash a file that is deliberately not here. |
+| Install / update / remove semantics | BLOCKED | #177 — The procedure exists now, at apps/ugos/docs/upk-acceptance-procedure.md, and its lifecycle steps are the ones that could not be executed: the App Center install needs a person at the UGOS desktop and the account available is SSH-only, /ugreen/@appstore/ is root-owned, sudo wants a password and ugcli has no install subcommand. §6 of that procedure is the standing record. This column keeps pointing at the notification procedure, which is what docs/acceptance/ holds for UGOS, so the cell stays blocked for the honest reason rather than passing on document coverage for a step nobody ran. |
+| UI launches | BLOCKED | #177 — The UPK exists and its Web UI was brought up and answered on real hardware (apps/ugos/docs/upk-acceptance-procedure.md §7.4). What is unproven is the launch itself: opening the tile from the UGOS desktop is downstream of the App Center install click, which is the same blocker install-update-remove carries. |
+| Upgrade preserves state | BLOCKED | #177 — The package that gets upgraded now exists, and an App Center upgrade is not what was run: container replacement was (down without -v, then up), and state and backups survived it. An App Center upgrade is a different operation with a different failure mode, and it is behind the same install click. |
+| Removal does not delete retained backups | BLOCKED | #177 — Same shape as upgrade-preserves-state. The package exists; what an App Center uninstall does to /volume1/backups/backup-manager is behind the install click. The layout is chosen so the answer can only be good news, the backup root being a dedicated child of a user share rather than anything under the app's own directory, but chosen is not observed. |
+| Native authentication | BLOCKED | #180 — Half of this is now proven and the half this row measures is not, and they are worth keeping apart. The SERVER side runs: the UPK selects --profile=ugos, and on real hardware a request through the gateway address authenticates on a forged-header-rejecting boundary while the same header from a direct peer gets 401 (apps/ugos/docs/upk-acceptance-procedure.md §7.4). This row measures the BRIDGE, and the UPK serves the bundle compiled into the binary because the canonical image carries five per-provider bundles and has no room for a sixth. Putting the UGOS bundle in the image is a change to the image, which is the one artifact this package may not change. |
+| Native notifications | BLOCKED | #180 — Same as native-auth: the flag is set in apps/ugos/frontend/platform.ts, and the artifact the UPK installs serves the bundle compiled into the binary rather than that file. |
+| Embedded window | BLOCKED | #180 — The UPK declares open_type: inner, so UGOS would open the app inside the desktop, and the bridge that would use the embedded window is not the bridge the installed artifact loads. Two different blockers now sit under what used to be one: the install click for ui-launch, bundle carriage for this. |
+| App-store packaging | BLOCKED | #180 — The store artifacts exist now and the bridge claims store packaging, which is two of this check's three conditions. The third is the one that decides it: nothing installed loads the UGOS bridge, so a user who installed from the App Center is still told by the running UI that this is a container deployment. |
+| Storage picker | BLOCKED | #180 — Same as native-auth: declared in a bridge the installed artifact does not load. |
 
 #### CasaOS (Tier B, gated by EPIC B's Phase 6)
 

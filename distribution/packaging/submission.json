@@ -1066,6 +1066,20 @@
       }
     },
     "ugos": {
+      "_comment": [
+        "Every row here was not-applicable until #83, on the honest grounds that",
+        "there was no UGREEN artifact to preflight. There is one now: apps/ugos/upk",
+        "is a ugcli project whose runtime half is the Compose wrapper named in",
+        "artifactFiles, so the same checks that decide every other store decide this",
+        "one, which is what submission.go's own doc comment said would happen the day",
+        "the package landed.",
+        "",
+        "What has NOT changed is that this column cannot block Phase 5. It never",
+        "could, and the reason was never the missing artifact: the .UPK's acceptance",
+        "runs on hardware this repository does not own, and a gate that waits on it",
+        "is a gate that cannot close. Being decided and being gating are two",
+        "different things, and only the first one moved."
+      ],
       "store": {
         "kind": "catalog",
         "name": "UGREEN App Center",
@@ -1073,55 +1087,45 @@
         "reference": "https://www.ugreen.com/pages/nas-developer",
         "screenshots": 4
       },
-      "artifactFiles": [],
+      "artifactFiles": [
+        "apps/ugos/upk/rootfs_common"
+      ],
       "cells": {
         "no-self-update": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "no-floating-tag": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "no-privileged-mode": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "no-mandatory-telemetry": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-image-reference": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-required-mounts": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-expected-ports": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-health-check": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-runtime-profile": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-architecture-support": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-forbidden-privileges": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "drift-api-compatibility": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-description": {
           "declared": "supported"
@@ -1130,8 +1134,7 @@
           "declared": "supported"
         },
         "materials-screenshots": {
-          "declared": "not-applicable",
-          "reason": "The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of."
+          "declared": "supported"
         },
         "materials-release-notes": {
           "declared": "supported"
@@ -1143,22 +1146,19 @@
           "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "supported",
-          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+          "declared": "supported"
         },
         "materials-submission-checklist": {
           "declared": "supported"
         },
         "proactive-alert-delivery": {
-          "declared": "not-applicable",
-          "reason": "Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet."
+          "declared": "supported"
         },
         "recovery-docs-no-terminal": {
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         }
       }
     }
