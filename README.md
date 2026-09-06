@@ -85,10 +85,16 @@ uses, writes, and exits; an engine started afterwards reads the new file when it
 something serving this deployment and an address for it, `backup-set create`, `patch` and
 `remove` and `settings patch` hand the change to that process over its own API, so it is made
 by the engine that will go on serving it and there is nothing to restart. With something
-serving and no address, the write is refused with nothing written and a non-zero exit, naming
+serving and no address, the write is refused with nothing written and exit 3, naming
 what was found and where the change can be made instead: there is still no config watcher and
 no SIGHUP reload in this build, so a change left in the file is one the serving process would
 never read.
+
+Exit 3 is that refusal and nothing else (issue #551). It is the one failure this binary has
+that is both expected and worth retrying, so a script that provisions backup sets can wait on
+3 and abort on everything else, without matching on the message to tell "somebody is serving
+this" apart from "your config.yaml is malformed". 1 is an ordinary failure, 2 is a wrong
+command line, and `backup-manager` with no arguments prints the whole table.
 
 Two writes have no route and are refused beside a serving engine. A `backup-set retention`
 that sets or clears a policy is one, and the API is not what stops it: the endpoints for
@@ -134,7 +140,9 @@ and the others, with the `settings` read and a `backup-set retention` that only 
 them. The one command a running engine refuses is a second `daemon`, or a second web host,
 against a state database something else is already serving. Two of them would run two schedules
 over one set of backups and hold two independent copies of one configuration, which is the
-divergence everything above exists to close.
+divergence everything above exists to close. A `daemon` refused that way exits 3 as well: it is
+the same fact as a refused configuration write, met from the other end, and the answer a
+supervisor wants for it is the same one, wait and try again.
 
 All of it is here because of what issue #535 cost a real install: a `create` through
 `docker exec` against a live server succeeded, `sources` listed both new sets, and the Web UI

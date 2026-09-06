@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/service"
 )
 
 // FR-35 clause 4, the CLI: build backup-manager from this working tree,
@@ -76,6 +77,13 @@ type cliCase struct {
 // (which grows a line for every new subcommand). `retention` is not here;
 // it is its own cell below, for the clock reason in this package's doc.
 //
+// It runs twice over, in two worlds. The table above is a deployment
+// nothing is serving, which is where this package started and for a while
+// was all it had. captureBesideAServingProcess below is the other one, and
+// it is there because #551 made the exit status something a wrapper script
+// branches on: see its own doc for what it drives and why four rows rather
+// than one.
+//
 // What is left out, said out loud rather than quietly missing, because a
 // surface nobody mentions is indistinguishable from one nobody thought of:
 //
@@ -114,6 +122,12 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 		}
 		lines = append(lines, res...)
 	}
+
+	held, err := captureBesideAServingProcess(ctx, bin, cfgPath, root)
+	if err != nil {
+		return Cell{}, Cell{}, err
+	}
+	lines = append(lines, held...)
 
 	// The two invocations whose whole output is the usage block are their
 	// own cell, compared additively.
@@ -155,7 +169,7 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	}
 
 	return Cell{
-		Certifies: "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
+		Certifies: "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way, with nothing serving this deployment and with something serving it. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
 		Rule:      RuleIdentical,
 		Lines:     lines,
 	}, Cell{
@@ -163,6 +177,75 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 		Rule:      RuleAdditiveOnly,
 		Lines:     usage,
 	}, nil
+}
+
+// captureBesideAServingProcess is the same binary against the same
+// deployment with another process serving it, which is where the exit
+// status stops being a footnote (issue #551).
+//
+// # Why an exit code belongs in this corpus at all
+//
+// FR-35 clause 4 is about what an operator sees in a terminal, and this
+// package has always recorded the status beside the two streams for that
+// reason (runCLI's own doc). #551 made the status something a WRAPPER
+// reads rather than something a person glances at: the refusal a
+// configuration write gets beside a serving engine now exits 3 and
+// nothing else does, so a provisioning script can wait on that one and
+// abort on the rest. A number a script branches on is operator-visible
+// surface in exactly the way a printed line is, and it was not pinned
+// anywhere until here: every case above runs on a deployment nothing is
+// serving, so the whole engine-attached half of this binary's behaviour
+// was outside the gate.
+//
+// # The table, and why it is four rows rather than one
+//
+// A cell that only recorded the 3s could not tell this binary from one
+// that exits 3 for everything while an engine is up. So the two refusals
+// are here with two things that are not refusals: a usage mistake typed
+// beside the same serving process, which is still a usage mistake and
+// still 2, and an ordinary read-only command, which is unaffected and
+// still 0. Between them the cell fails if the refusal loses its code and
+// fails if the code spreads.
+//
+// # How the engine is faked, and why it is not faked
+//
+// It is not. service.AnnounceServing is the exact call `daemon` and the
+// web host make to say they serve a deployment, and the CLI child probes
+// for it through the same kernel lock a real deployment is found by. What
+// this process does NOT do is open the journal or serve anything, which
+// is fine: the fact under test is the announcement, and every command
+// below is refused or answered before anything would have talked to an
+// engine. The announcement is given back before this returns, so nothing
+// after it sees a deployment that is still held.
+func captureBesideAServingProcess(ctx context.Context, bin, cfgPath, root string) ([]string, error) {
+	release, err := service.AnnounceServing(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("announcing a serving process over %s: %w", cfgPath, err)
+	}
+
+	// A header rather than a comment in this file, because the corpus is
+	// read by whoever meets a red cell and two identical `check` lines
+	// with different meanings would be unreadable. It is a pinned line
+	// like any other, so the section cannot quietly move either.
+	lines := []string{"# and the same binary with another process serving this deployment:"}
+	for _, c := range []cliCase{
+		{"a settings patch, refused", []string{"settings", "--config", cfgPath, "patch", "--timezone", "America/Toronto"}},
+		{"a backup-set patch, refused", []string{"backup-set", "--config", cfgPath, "patch", "production/postgres-primary", "--stale-after", "48h"}},
+		{"a usage mistake, which is still a usage mistake", []string{"settings", "--config", cfgPath, "patch"}},
+		{"a read-only command, which is unaffected", []string{"check", "--config", cfgPath}},
+	} {
+		res, runErr := runCLI(ctx, bin, c.args, root)
+		if runErr != nil {
+			_ = release()
+			return nil, runErr
+		}
+		lines = append(lines, res...)
+	}
+
+	if err := release(); err != nil {
+		return nil, fmt.Errorf("giving back the serving announcement over %s: %w", cfgPath, err)
+	}
+	return lines, nil
 }
 
 // captureCLIRetention pins `retention --dry-run` against a second

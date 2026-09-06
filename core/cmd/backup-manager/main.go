@@ -34,7 +34,7 @@ func main() {
 func run(args []string) int {
 	if len(args) == 0 {
 		usage()
-		return 2
+		return exitUsage
 	}
 
 	name, rest := args[0], args[1:]
@@ -42,7 +42,7 @@ func run(args []string) int {
 	if !ok {
 		fmt.Fprintf(os.Stderr, "backup-manager: unknown command %q\n\n", name)
 		usage()
-		return 2
+		return exitUsage
 	}
 	return cmd(rest)
 }
@@ -104,7 +104,9 @@ var commands = map[string]func([]string) int{
 // actually goes now that it can go two places, and how to tell this
 // binary where the engine is, which is the only place those three
 // environment variables are written down for somebody who is not reading
-// route.go.
+// route.go, and the exit codes, which #551 put here for the same reason:
+// a status a wrapper script branches on is a contract, and a contract read
+// off setup.go by whoever thought to look is not one.
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
 
@@ -238,5 +240,21 @@ answers its question differently, and then nothing at all is printed (#544)
 everything else is ordinary beside a running engine and announces no mode at all: run, fetch,
 check, validate and the rest, settings and a backup-set retention that only reports included.
 The one command a running engine refuses is daemon, for the reason its entry above gives
+
+exit codes, so a script can branch on what happened rather than on the sentence it happened
+to print:
+
+  0   the command did what it was asked
+  1   an ordinary failure: a configuration that will not load, a state database that will
+      not open, a cycle that backed nothing up, a set or an artifact that is not there, a
+      status short of HEALTHY
+  2   the command line was wrong: an unknown command, an unknown flag, a missing or surplus
+      argument
+  3   another process is serving this deployment, so nothing was done: a configuration write
+      refused because it would never reach that process, or a daemon refused rather than
+      started beside one. It is the one failure here worth waiting on and running again.
+      Everything that only looks like it is 1, including a probe that could not be performed
+      at all and a route that was named and did not answer, because neither of those gets
+      better by waiting (#551)
 `)
 }
