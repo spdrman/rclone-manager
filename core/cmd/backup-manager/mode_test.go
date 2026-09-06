@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +46,8 @@ import (
 // written against read the shared journal lock, which every `status`,
 // every `sources` and every cron `run` takes, so `mode: engine-attached`
 // fired for a plain reader. It now reads a lock only a serving process
-// takes, so the announcement can say serving without over-claiming.
+// takes, and TestAPlainJournalReaderIsNeverAnnouncedAsAnEngine is what
+// holds the announcement to that.
 
 // directLine and engineAttachedLine are the two announcements an operator
 // greps for, built from the product's own constants so a reworded mode
@@ -203,6 +206,63 @@ func TestTheFirstConfigurationWriteSaysWhichModeItRan(t *testing.T) {
 	})
 }
 
+// TestAPlainJournalReaderIsNeverAnnouncedAsAnEngine is the review finding
+// that changed what this announcement means, kept from coming back.
+//
+// The detection this was first built on read the SHARED journal lock,
+// which is taken by every process that opens the journal at all: a
+// `backup-manager status` an operator left in another terminal, a
+// `sources`, a cron `run` for the length of a whole backup cycle.
+// lock_unix.go's own doc calls that ordinary use of this CLI. So every
+// configuration write on such a host printed `mode: engine-attached` and
+// refused, and the announcement made that wrong answer the
+// operator-visible face of the tool: not a bad message, a bad contract.
+//
+// The holder below is exactly that shape, and nothing more: the journal
+// is opened and held, and nothing announces itself as serving anything.
+// The mode has to come out direct, and the write has to land, or the CLI
+// is stranded on a host with no engine on it.
+func TestAPlainJournalReaderIsNeverAnnouncedAsAnEngine(t *testing.T) {
+	for _, m := range configMutations {
+		t.Run(m.name, func(t *testing.T) {
+			configPath := writeTestConfigWithDeploymentPolicy(t)
+			keyPath := writeTestPrivateKey(t)
+			if m.prepare != nil {
+				m.prepare(t, configPath)
+			}
+			before := readFile(t, configPath)
+
+			// A `status` or a cron `run`, in as few lines as the thing
+			// can be built from: open the journal, hold it, do nothing
+			// else. This is core/service's own door, so what it takes is
+			// what every reading command takes.
+			_, journal, releaseJournal, err := service.OpenConfigAndJournal(context.Background(), configPath)
+			if err != nil {
+				t.Fatalf("opening the journal as a plain reader would: %v", err)
+			}
+			defer func() {
+				_ = journal.Close()
+				_ = releaseJournal()
+			}()
+
+			code, out := runCapturingBothStreams(t, m.args(configPath, keyPath))
+
+			if strings.Contains(out, engineAttachedLine) {
+				t.Errorf("%s announced %q because another process merely had the journal open; a reader is not an engine, and this strands the CLI on a host with nothing serving it\n%s", m.name, engineAttachedLine, out)
+			}
+			if !strings.Contains(out, directLine) {
+				t.Errorf("%s did not announce %q beside a plain journal reader; want it, got:\n%s", m.name, directLine, out)
+			}
+			if code != 0 {
+				t.Errorf("%s exited %d beside a plain journal reader, want 0\n%s", m.name, code, out)
+			}
+			if after := readFile(t, configPath); after == before {
+				t.Errorf("%s left config.yaml unchanged beside a plain journal reader, so the direct mode it announced did nothing", m.name)
+			}
+		})
+	}
+}
+
 // TestAModeThatCannotBeDecidedIsRefusedRatherThanAssumedDirect is the
 // "briefly unreachable" half of #542, in the only form this build can
 // actually produce: a probe that fails.
@@ -254,6 +314,68 @@ func TestAModeThatCannotBeDecidedIsRefusedRatherThanAssumedDirect(t *testing.T) 
 				t.Errorf("%s wrote config.yaml after a probe that could not answer\nbefore:\n%s\nafter:\n%s", m.name, before, after)
 			}
 		})
+	}
+}
+
+// TestTheModeIsDecidedInsideTheClaimThatKeepsItTrue is the other half of
+// "decided once", and the half that only became sayable when the
+// detection was rewritten.
+//
+// Asking once is worth nothing if the answer can go stale before it is
+// acted on. #538's review demonstrated exactly that: the check ran at the
+// top of openBackupService, and the startup sequence, an SSH host-key
+// probe over the network, a key import and a blocking read of standard
+// input all happened afterwards with nothing held, so an engine that
+// started in the gap was written straight over. A mode announced from a
+// sample would be a label on the same defect.
+//
+// So the decision is made from inside service.BeginConfigWrite's claim,
+// which is the same `.startup-lock` every engine start has to take, and
+// the claim is held until the command is done. What that buys is
+// asserted here rather than described: while a configuration write is in
+// flight, an engine cannot finish starting.
+//
+// Both directions again. The second half is what stops this passing
+// against a build where nothing can ever start: the identical call has to
+// succeed the moment the write is finished with its claim.
+func TestTheModeIsDecidedInsideTheClaimThatKeepsItTrue(t *testing.T) {
+	configPath := writeTestConfigWithDeploymentPolicy(t)
+	ctx := context.Background()
+
+	var (
+		cleanup func()
+		openErr error
+	)
+	// Captured because entering the mode announces it, and this test is
+	// about the claim rather than about the line.
+	captureStdout(t, func() {
+		_, cleanup, openErr = openBackupService(ctx, configPath, writesConfig)
+	})
+	if openErr != nil {
+		t.Fatalf("openBackupService(writesConfig) with nothing serving this deployment: %v", openErr)
+	}
+
+	_, closeFn, err := service.Open(ctx, configPath)
+	if err == nil {
+		_ = closeFn()
+		cleanup()
+		t.Fatalf("an engine finished starting while a configuration write held its claim, so the mode that write announced was a sample rather than a decision: an engine that arrives in that gap is written straight over, which is #535 through the guard meant to stop it")
+	}
+	if !errors.Is(err, service.ErrStartupLocked) {
+		cleanup()
+		t.Fatalf("a start attempted underneath a configuration write failed with %v, not %v; the refusal has to come from the write's claim rather than from something else being wrong", err, service.ErrStartupLocked)
+	}
+
+	cleanup()
+
+	// And the claim is given back, or the assertion above would be
+	// satisfied by a deployment nothing can ever start.
+	_, closeFn, err = service.Open(ctx, configPath)
+	if err != nil {
+		t.Fatalf("an engine could not start after the configuration write was done with its claim: %v", err)
+	}
+	if err := closeFn(); err != nil {
+		t.Errorf("closing the journal: %v", err)
 	}
 }
 
