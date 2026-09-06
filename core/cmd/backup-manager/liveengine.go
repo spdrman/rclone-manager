@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spdrman/rclone-manager/core/service"
@@ -168,9 +169,62 @@ const (
 // an operator who reaches this refusal from one of the others is not sent
 // to set a variable that will not help them.
 func engineRefusal(engine *service.RunningEngine, because string) error {
-	return fmt.Errorf(
+	return engineHeld{fmt.Errorf(
 		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $%s (with $%s and $%s) to the address it serves",
-		engine.StateDatabase, because, apiURLEnv, apiUsernameEnv, apiPasswordEnv)
+		engine.StateDatabase, because, apiURLEnv, apiUsernameEnv, apiPasswordEnv)}
+}
+
+// errEngineHoldsDeployment is the fact exit code 3 reports, carried on the
+// error so `fail` can recognise it (issue #551).
+//
+// A sentinel rather than a string match on the sentence above. Matching
+// the sentence would work, because core/tests/compat pins it byte for
+// byte, and it would be wrong for exactly that reason: the whole point of
+// giving this refusal a code of its own is that a script branching on it
+// never has to read the prose, and a binary that read its own prose to
+// decide the code would be teaching the habit it exists to remove.
+//
+// It is deliberately not IN the sentence either. Wrapping with %w would
+// append a clause an operator reads, which is a compatibility break under
+// FR-35 clause 4 for a change nobody asked for, so engineHeld below
+// attaches it without printing it.
+var errEngineHoldsDeployment = errors.New("another process is serving this deployment")
+
+// engineHeld marks an error as this refusal without altering a word of it.
+//
+// Unwrap returns both the error it was given and the sentinel, so the
+// error keeps whatever chain it arrived with (which matters for the
+// `daemon` path, where service.ErrAlreadyServing is underneath) and gains
+// the one the exit code is read from.
+type engineHeld struct{ err error }
+
+func (e engineHeld) Error() string   { return e.err.Error() }
+func (e engineHeld) Unwrap() []error { return []error{e.err, errEngineHoldsDeployment} }
+
+// asEngineHeld marks the refusal a process gets when something else is
+// already serving the deployment it was about to serve, and leaves every
+// other error alone.
+//
+// It exists because `daemon` meets this fact from the other end. The
+// configuration writes above find a serving process by probing for it;
+// `daemon` finds one by trying to become it and being told no
+// (service.AnnounceServing, which returns ErrAlreadyServing). That is the
+// same news to a script, and the more retryable half of it: a supervisor
+// replacing a container meets it whenever the outgoing process has not let
+// go of the lock yet, and waiting is the right answer. The usage block
+// already tells an operator a `daemon` is refused rather than started
+// beside a serving process, so leaving it on the ordinary failure code
+// while a configuration write refused for the identical reason exits 3
+// would make that table wrong about the one command it names.
+//
+// Marked at the call site rather than inside `fail`, so `fail` keeps one
+// rule (does this error carry the sentinel) rather than growing a list of
+// other packages' sentinels that nobody would think to update.
+func asEngineHeld(err error) error {
+	if errors.Is(err, service.ErrAlreadyServing) {
+		return engineHeld{err}
+	}
+	return err
 }
 
 // cannotTellError is the refusal for a check that could not be performed,

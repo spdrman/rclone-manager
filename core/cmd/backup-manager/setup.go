@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -519,11 +520,77 @@ func moveExit(w io.Writer, report app.CycleReport) int {
 	return code
 }
 
+// The exit statuses this binary promises, in one place, because they are
+// a contract a script branches on rather than an implementation detail
+// (issue #551). The table an operator reads is in main.go's usage block,
+// and exitcodes_test.go holds the two against each other.
+//
+// # Why there is a third failure code at all
+//
+// There were two for a long time and that was enough while every failure
+// meant roughly "something went wrong, read the message". EPIC #536 ended
+// it. The refusal it added, another process is serving this deployment so
+// nothing was written, is the first failure here that is both EXPECTED
+// and RETRYABLE: a provisioning script wants to wait on that one and
+// abort on every other, and with one failure code its only way to tell
+// them apart is to match on the sentence, which is precisely the coupling
+// core/tests/compat exists to stop people relying on.
+//
+// # What deliberately did NOT get its own code
+//
+// Naming these is the point of the list, because each is a refusal
+// somebody could reasonably have expected to be 3 and each is a different
+// piece of news:
+//
+//   - a probe that could not be performed (cannotTellError). "I could not
+//     tell" is a broken host, not a busy one. EACCES on a lock file owned
+//     by another uid does not resolve itself, and a script that waited on
+//     it would wait forever.
+//   - a route that was named and did not answer (route.go). The operator
+//     set an address and it is wrong or the engine is down; that is a
+//     deployment to go and look at.
+//   - another process on this host starting this deployment or changing
+//     its configuration right now (service.ErrStartupLocked). This one is
+//     genuinely retryable and is the closest call on the list. It stays
+//     at 1 because it is a different fact from the one 3 names, it clears
+//     itself in the time a startup sequence takes rather than needing
+//     somebody to stop an engine, and a code that meant two things would
+//     be the same problem this issue is fixing, one level down.
+const (
+	// exitOK: the command did what it was asked.
+	exitOK = 0
+
+	// exitFailure: an ordinary failure. Everything from a configuration
+	// that will not load to a cycle that backed nothing up.
+	exitFailure = 1
+
+	// exitUsage: the command line was wrong. An unknown command, an
+	// unknown flag, a missing or surplus argument.
+	exitUsage = 2
+
+	// exitEngineHoldsDeployment: another process is serving this
+	// deployment, so nothing was done. A configuration write refused
+	// because it would never reach that process, or a `daemon` refused
+	// rather than started beside one. The one failure here worth waiting
+	// on and running again.
+	exitEngineHoldsDeployment = 3
+)
+
 // fail prints err to stderr in a consistent shape and returns the exit
 // code every subcommand's own failure path returns.
+//
+// The one thing it looks at is whether this failure is the engine holding
+// the deployment, which it asks with errors.Is rather than by reading the
+// message. A string match would work today, because the sentence is
+// pinned, and it would be wrong for the same reason it is pinned: the
+// exit code is what a script is supposed to branch on so that nothing has
+// to parse the prose.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "backup-manager:", err)
-	return 1
+	if errors.Is(err, errEngineHoldsDeployment) {
+		return exitEngineHoldsDeployment
+	}
+	return exitFailure
 }
 
 // usageError prints a usage complaint straight to stderr (flag.Parse
@@ -533,5 +600,5 @@ func fail(err error) int {
 // argument-error exit code.
 func usageError(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "backup-manager: "+format+"\n", args...)
-	return 2
+	return exitUsage
 }

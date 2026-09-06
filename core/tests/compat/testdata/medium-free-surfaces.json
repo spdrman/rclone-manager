@@ -109,7 +109,7 @@
       ]
     },
     "06-cli-surfaces": {
-      "certifies": "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
+      "certifies": "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way, with nothing serving this deployment and with something serving it. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
       "rule": "identical",
       "lines": [
         "$ backup-manager version -\u003e exit 0",
@@ -216,7 +216,19 @@
         "  out| config OK: 1 source(s), 1 backup set(s)",
         "  out| state database OK: \u003cROOT\u003e/state.db",
         "$ backup-manager check --config \u003cROOT\u003e/absent.yaml -\u003e exit 1",
-        "  err| backup-manager: config: reading config \"\u003cROOT\u003e/absent.yaml\": open \u003cROOT\u003e/absent.yaml: no such file or directory"
+        "  err| backup-manager: config: reading config \"\u003cROOT\u003e/absent.yaml\": open \u003cROOT\u003e/absent.yaml: no such file or directory",
+        "# and the same binary with another process serving this deployment:",
+        "$ backup-manager settings --config \u003cROOT\u003e/config.yaml patch --timezone America/Toronto -\u003e exit 3",
+        "  err| mode: engine-attached. Another process is serving this deployment (state database \u003cROOT\u003e/state.db) and this build has no route to it, so the change is refused here rather than downgraded to a direct write it would never see.",
+        "  err| backup-manager: another process is already serving this deployment (state database \u003cROOT\u003e/state.db), so nothing was written: a configuration change made here would never reach it, because that process read \u003cROOT\u003e/config.yaml when it started and nothing re-reads that file. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $BACKUP_MANAGER_API_URL (with $BACKUP_MANAGER_API_USERNAME and $BACKUP_MANAGER_API_PASSWORD) to the address it serves",
+        "$ backup-manager backup-set --config \u003cROOT\u003e/config.yaml patch production/postgres-primary --stale-after 48h -\u003e exit 3",
+        "  err| mode: engine-attached. Another process is serving this deployment (state database \u003cROOT\u003e/state.db) and this build has no route to it, so the change is refused here rather than downgraded to a direct write it would never see.",
+        "  err| backup-manager: another process is already serving this deployment (state database \u003cROOT\u003e/state.db), so nothing was written: a configuration change made here would never reach it, because that process read \u003cROOT\u003e/config.yaml when it started and nothing re-reads that file. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $BACKUP_MANAGER_API_URL (with $BACKUP_MANAGER_API_USERNAME and $BACKUP_MANAGER_API_PASSWORD) to the address it serves",
+        "$ backup-manager settings --config \u003cROOT\u003e/config.yaml patch -\u003e exit 2",
+        "  err| backup-manager: settings patch: name at least one setting to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect",
+        "$ backup-manager check --config \u003cROOT\u003e/config.yaml -\u003e exit 0",
+        "  out| config OK: 1 source(s), 1 backup set(s)",
+        "  out| state database OK: \u003cROOT\u003e/state.db"
       ]
     },
     "06b-cli-usage-block": {
@@ -356,6 +368,22 @@
         "  err| everything else is ordinary beside a running engine and announces no mode at all: run, fetch,",
         "  err| check, validate and the rest, settings and a backup-set retention that only reports included.",
         "  err| The one command a running engine refuses is daemon, for the reason its entry above gives",
+        "  err| ",
+        "  err| exit codes, so a script can branch on what happened rather than on the sentence it happened",
+        "  err| to print:",
+        "  err| ",
+        "  err|   0   the command did what it was asked",
+        "  err|   1   an ordinary failure: a configuration that will not load, a state database that will",
+        "  err|       not open, a cycle that backed nothing up, a set or an artifact that is not there, a",
+        "  err|       status short of HEALTHY",
+        "  err|   2   the command line was wrong: an unknown command, an unknown flag, a missing or surplus",
+        "  err|       argument",
+        "  err|   3   another process is serving this deployment, so nothing was done: a configuration write",
+        "  err|       refused because it would never reach that process, or a daemon refused rather than",
+        "  err|       started beside one. It is the one failure here worth waiting on and running again.",
+        "  err|       Everything that only looks like it is 1, including a probe that could not be performed",
+        "  err|       at all and a route that was named and did not answer, because neither of those gets",
+        "  err|       better by waiting (#551)",
         "$ backup-manager definitely-not-a-command -\u003e exit 2",
         "  err| backup-manager: unknown command \"definitely-not-a-command\"",
         "  err| ",
@@ -490,7 +518,23 @@
         "  err| ",
         "  err| everything else is ordinary beside a running engine and announces no mode at all: run, fetch,",
         "  err| check, validate and the rest, settings and a backup-set retention that only reports included.",
-        "  err| The one command a running engine refuses is daemon, for the reason its entry above gives"
+        "  err| The one command a running engine refuses is daemon, for the reason its entry above gives",
+        "  err| ",
+        "  err| exit codes, so a script can branch on what happened rather than on the sentence it happened",
+        "  err| to print:",
+        "  err| ",
+        "  err|   0   the command did what it was asked",
+        "  err|   1   an ordinary failure: a configuration that will not load, a state database that will",
+        "  err|       not open, a cycle that backed nothing up, a set or an artifact that is not there, a",
+        "  err|       status short of HEALTHY",
+        "  err|   2   the command line was wrong: an unknown command, an unknown flag, a missing or surplus",
+        "  err|       argument",
+        "  err|   3   another process is serving this deployment, so nothing was done: a configuration write",
+        "  err|       refused because it would never reach that process, or a daemon refused rather than",
+        "  err|       started beside one. It is the one failure here worth waiting on and running again.",
+        "  err|       Everything that only looks like it is 1, including a probe that could not be performed",
+        "  err|       at all and a route that was named and did not answer, because neither of those gets",
+        "  err|       better by waiting (#551)"
       ]
     },
     "07-cli-retention-preview": {
