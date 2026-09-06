@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,7 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/apicontract"
+	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -42,7 +43,8 @@ import (
 // statement about the tree as it was.
 
 // contractBinding ties one contract operation to the concrete handler
-// types and router pattern that implement it in this package.
+// types that implement it in this package, and to a concrete path it can
+// be driven at.
 //
 // It is hand-written, and that is a hole a stale entry could hide in, so
 // three tests below close it from three directions: every operation the
@@ -50,96 +52,100 @@ import (
 // registers has an entry, and every entry names an operation the contract
 // declares. A binding cannot be forgotten, and one cannot be left behind.
 type contractBinding struct {
-	// routerPattern is chi's own registered pattern, which is not always
-	// the contract's path: getBackupSet is registered as a catch-all
-	// ("/backup-sets/*") because a backup set's id is a two-part
-	// source/name identity that spans a path segment, while the contract
-	// spells the same thing as "{id}". That difference is a Go routing
-	// detail, so it is recorded here rather than pushed into the contract.
-	routerPattern string
-	request       any
-	response      any
+	request  any
+	response any
 	// url is a concrete path this operation can be driven at, with every
 	// parameter filled in.
+	//
+	// It used to sit beside a hand-written routerPattern, because six
+	// operations spelled a two- or three-part identity as one "{id}" that
+	// no router can match per segment, and the map was where the two
+	// spellings met. That was recorded as a Go routing detail; it was a
+	// contract defect, and it made those six operations unbuildable by
+	// any client that fills a path parameter from the document (PR #546
+	// review). The contract now publishes the paths the router serves,
+	// chi's pattern is looked up rather than written down, and
+	// TestContract_ThePublishedTemplateIsTheShapeTheseRoutesAreDrivenAt
+	// holds this url to the published template so the two cannot part
+	// again.
 	url string
 }
 
 var contractBindings = map[string]contractBinding{
-	"getSystemVersion":        {"/api/v1/system/version", nil, versionResponse{}, "/api/v1/system/version"},
-	"getSystemCapabilities":   {"/api/v1/system/capabilities", nil, capabilitiesResponse{}, "/api/v1/system/capabilities"},
-	"getFirstRunStatus":       {"/api/v1/system/first-run", nil, firstRunStatusResponse{}, "/api/v1/system/first-run"},
-	"completeFirstRun":        {"/api/v1/system/first-run", backupSetSpec{}, completeFirstRunResponse{}, "/api/v1/system/first-run"},
-	"listStorageStatus":       {"/api/v1/system/storage", nil, listStorageStatusResponse{}, "/api/v1/system/storage"},
-	"submitOperation":         {"/api/v1/operations", submitOperationRequest{}, operationResponse{}, "/api/v1/operations"},
-	"getOperation":            {"/api/v1/operations/{id}", nil, operationResponse{}, "/api/v1/operations/op_1"},
-	"previewRetention":        {"/api/v1/backup-sets/{source}/{set}/retention/preview", nil, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/preview"},
-	"applyRetention":          {"/api/v1/backup-sets/{source}/{set}/retention/apply", applyRetentionRequest{}, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/apply"},
-	"listBackupSets":          {"/api/v1/backup-sets", nil, listBackupSetsResponse{}, "/api/v1/backup-sets"},
-	"createBackupSet":         {"/api/v1/backup-sets", backupSetRequest{}, createBackupSetResponse{}, "/api/v1/backup-sets"},
-	"testCandidateConnection": {"/api/v1/backup-sets/test-connection", testConnectionRequest{}, testConnectionResponse{}, "/api/v1/backup-sets/test-connection"},
-	"getBackupSet":            {"/api/v1/backup-sets/*", nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
-	"listValidators":          {"/api/v1/validators", nil, listValidatorsResponse{}, "/api/v1/validators"},
-	"importSSHKey":            {"/api/v1/ssh-keys", importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
-	"probeHostKey":            {"/api/v1/ssh/host-key-probe", hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
-	"getSettings":             {"/api/v1/settings", nil, settingsResponse{}, "/api/v1/settings"},
-	"updateSettings":          {"/api/v1/settings", settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
+	"getSystemVersion":        {nil, versionResponse{}, "/api/v1/system/version"},
+	"getSystemCapabilities":   {nil, capabilitiesResponse{}, "/api/v1/system/capabilities"},
+	"getFirstRunStatus":       {nil, firstRunStatusResponse{}, "/api/v1/system/first-run"},
+	"completeFirstRun":        {backupSetSpec{}, completeFirstRunResponse{}, "/api/v1/system/first-run"},
+	"listStorageStatus":       {nil, listStorageStatusResponse{}, "/api/v1/system/storage"},
+	"submitOperation":         {submitOperationRequest{}, operationResponse{}, "/api/v1/operations"},
+	"getOperation":            {nil, operationResponse{}, "/api/v1/operations/op_1"},
+	"previewRetention":        {nil, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/preview"},
+	"applyRetention":          {applyRetentionRequest{}, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/apply"},
+	"listBackupSets":          {nil, listBackupSetsResponse{}, "/api/v1/backup-sets"},
+	"createBackupSet":         {backupSetRequest{}, createBackupSetResponse{}, "/api/v1/backup-sets"},
+	"testCandidateConnection": {testConnectionRequest{}, testConnectionResponse{}, "/api/v1/backup-sets/test-connection"},
+	"getBackupSet":            {nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
+	"listValidators":          {nil, listValidatorsResponse{}, "/api/v1/validators"},
+	"importSSHKey":            {importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
+	"probeHostKey":            {hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
+	"getSettings":             {nil, settingsResponse{}, "/api/v1/settings"},
+	"updateSettings":          {settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
 
-	// Issue #211. Four of these spell their path parameter as one {id}
-	// that spans segments, the way getBackupSet already does, because
-	// that is what the identity IS: a backup set is "source/name" and an
-	// artifact is "source/set/name". chi matches a parameter per path
-	// segment, so the router registers two or three named segments
-	// instead, and routerPattern is where the two spellings meet. Named
-	// segments rather than getBackupSet's catch-all, because each of
-	// these has a FIXED arity and three of them need a literal tail
-	// ("/enabled", "/revalidate", "/retry") that a catch-all would
-	// swallow.
-	"getSystemHealth":        {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
-	"listOperations":         {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
-	"listArtifacts":          {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
-	"getArtifact":            {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
-	"listActivity":           {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
-	"listQuarantine":         {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
-	"revalidateArtifact":     {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
-	"retryArtifactIngestion": {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
+	// Issue #211. A backup set is "source/name" and a backup is
+	// "source/set/name", so both identities span path segments and the
+	// contract declares one parameter per segment: a parameter matches
+	// exactly one segment in chi and in every client that escapes what it
+	// is given, so a single "{id}" spanning two is a path nothing can
+	// build. The router registers named segments rather than a catch-all
+	// for each of these, because each has a FIXED arity and several need
+	// a literal tail ("/enabled", "/revalidate", "/retry") that a
+	// catch-all would swallow.
+	"getSystemHealth":        {nil, healthResponse{}, "/api/v1/system/health"},
+	"listOperations":         {nil, listOperationsResponse{}, "/api/v1/operations"},
+	"listArtifacts":          {nil, listArtifactsResponse{}, "/api/v1/backups"},
+	"getArtifact":            {nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
+	"listActivity":           {nil, listActivityResponse{}, "/api/v1/activity"},
+	"listQuarantine":         {nil, listArtifactsResponse{}, "/api/v1/quarantine"},
+	"revalidateArtifact":     {nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
+	"retryArtifactIngestion": {nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
 	// Issue #419's route out of FAILED. It binds a request type and no
 	// response type: the note is the only thing a caller can send, and a
 	// 204 leaves no resource to describe.
-	"retryFailedIngestion": {"/api/v1/backups/{source}/{set}/{name}/retry", retryFailedIngestionRequest{}, nil, "/api/v1/backups/src/set-1/backup.dump/retry"},
-	"reinstateArtifact":    {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
+	"retryFailedIngestion": {retryFailedIngestionRequest{}, nil, "/api/v1/backups/src/set-1/backup.dump/retry"},
+	"reinstateArtifact":    {nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
 	// Issue #443's medium preflight. Its path parameter is a single
 	// segment, unlike the artifact routes above, because a medium id is a
 	// single segment: config refuses one carrying a separator.
-	"preflightStorageMedium": {"/api/v1/storage-mediums/{id}/preflight", nil, mediumPreflightResponse{}, "/api/v1/storage-mediums/offsite_s3/preflight"},
-	"setBackupSetEnabled":    {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":   {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	"preflightStorageMedium": {nil, mediumPreflightResponse{}, "/api/v1/storage-mediums/offsite_s3/preflight"},
+	"setBackupSetEnabled":    {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":   {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 
 	// Issue #333. Three operations on one path, which is the point of a
 	// sub-resource: the method is what says whether the policy is being
 	// read, replaced or removed, and none of the three is a field on the
 	// backup set itself.
-	"getBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
-	"setBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention", retentionOverrideBody{}, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
-	"clearBackupSetRetention": {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
-	// Issue #350's edit route. It shares its path template with
-	// getBackupSet's "/api/v1/backup-sets/*" catch-all and does not
-	// collide with it, because chi routes on the method too.
-	"updateBackupSet": {"/api/v1/backup-sets/{source}/{set}", updateBackupSetRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1"},
+	"getBackupSetRetention":   {nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"setBackupSetRetention":   {retentionOverrideBody{}, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"clearBackupSetRetention": {nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	// Issue #350's edit route. It shares its path with getBackupSet,
+	// which the router serves through a "/backup-sets/*" catch-all, and
+	// does not collide with it, because chi routes on the method too.
+	"updateBackupSet": {updateBackupSetRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1"},
 	// Issue #391's removal, on the same path template and telling itself
 	// apart from the PATCH by method in the same way. It binds neither a
 	// request nor a response type: there is no body to send, and a 204
 	// leaves no resource to describe.
-	"removeBackupSet": {"/api/v1/backup-sets/{source}/{set}", nil, nil, "/api/v1/backup-sets/src/set-1"},
+	"removeBackupSet": {nil, nil, "/api/v1/backup-sets/src/set-1"},
 	// Issue #350's edit hold. The release has no response body at all
 	// (204), so it binds no response type; the contract declares no
 	// response schema for it either, which is what keeps the two in step.
-	"getBackupSetEditHold":      {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"takeBackupSetEditHold":     {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"releaseBackupSetEditHold":  {"/api/v1/backup-sets/{source}/{set}/edit-hold/release", nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
-	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
-	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
-	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},
-	"getConfigRevisionStale":    {"", nil, configRevisionStaleResponse{}, ""},
+	"getBackupSetEditHold":      {nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"takeBackupSetEditHold":     {nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"releaseBackupSetEditHold":  {nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
+	"scanCatalog":               {nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
+	"rebuildCatalog":            {nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
+	"getRetentionErrorEnvelope": {nil, errorResponse{}, ""},
+	"getConfigRevisionStale":    {nil, configRevisionStaleResponse{}, ""},
 }
 
 // nonRoutedBindings are the two entries above that describe a body shape
@@ -380,9 +386,11 @@ func TestContract_RouterAndContractDeclareTheSameOperations(t *testing.T) {
 		Commit:        "test",
 	})
 
+	routable := routableFor(t, router)
+
 	// What chi actually serves, as method+pattern.
 	registered := map[string]bool{}
-	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+	err := chi.Walk(routable, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if route == "/health/live" || route == "/health/ready" {
 			// Deliberately outside /api/v1 and outside this contract: they
 			// are unauthenticated infrastructure probes for an
@@ -407,7 +415,18 @@ func TestContract_RouterAndContractDeclareTheSameOperations(t *testing.T) {
 			t.Errorf("the contract declares operation %q (%s %s) which no entry in contractBindings implements. Bind it, or remove it from api/v1/openapi.json.", e.ID, e.Method, e.Path)
 			continue
 		}
-		declared[e.Method+" "+b.routerPattern] = e.ID
+		// chi's own pattern for this operation, asked of the router
+		// rather than written down beside the binding. Looking it up is
+		// what lets the contract publish "/backup-sets/{source}/{set}"
+		// while the router serves it through a catch-all, without a
+		// hand-written map that could record any spelling at all and be
+		// believed.
+		rctx := chi.NewRouteContext()
+		if !routable.Match(rctx, e.Method, b.url) {
+			t.Errorf("the contract declares %s %s (operation %q), and this router does not route %s %s at all. Either the contract's path is not the one the engine serves, or the route is missing.", e.Method, e.Path, e.ID, e.Method, b.url)
+			continue
+		}
+		declared[e.Method+" "+rctx.RoutePattern()] = e.ID
 	}
 
 	for key := range registered {
@@ -1062,5 +1081,248 @@ func TestContract_CapabilitiesAreDataAboutThePlatform(t *testing.T) {
 		if len(body) != len(apicontract.CapabilityFields)+1 {
 			t.Errorf("%s: the response carries %d fields; the contract declares %d capabilities plus platform. An undeclared field on this endpoint is drift.", tc.wantPlatform, len(body), len(apicontract.CapabilityFields)+1)
 		}
+	}
+}
+
+// ------------------------------------------------------ composite paths ---
+
+// contractPathParameter matches one `{name}` in a contract path template.
+var contractPathParameter = regexp.MustCompile(`\{[^}]*\}`)
+
+// clientPath builds a request path out of one operation's PUBLISHED path
+// template the way any client driven by the document has to: one supplied
+// value per declared parameter, each escaped on its own so that a value
+// can never introduce a path segment the template did not declare.
+//
+// The per-parameter escape is not an implementation detail to work
+// around. It is the correct default, and core/internal/apiclient's
+// fillPath does exactly this: a parameter is data, and data that can
+// invent structure is an injection. What it means here is that a template
+// spelling a two-part identity as ONE parameter cannot build the two
+// segments the router matches, because "production/postgres" escapes to
+// "production%2Fpostgres" and goes somewhere else entirely.
+//
+// identity is what the resource is really called. It is split across the
+// declared parameters in order, and a template that declares a single
+// parameter is handed the whole thing, because that is all a caller
+// holding one id can do with it.
+func clientPath(t *testing.T, opID, template, identity string) string {
+	t.Helper()
+	parameters := contractPathParameter.FindAllString(template, -1)
+	if len(parameters) == 0 {
+		t.Fatalf("%s: the contract's path %q declares no parameter, so it names no resource identity", opID, template)
+	}
+	parts := strings.Split(identity, "/")
+	if len(parameters) == 1 {
+		parts = []string{identity}
+	} else if len(parameters) != len(parts) {
+		t.Fatalf("%s: the contract publishes %q, which declares %d parameter(s), and this resource's identity %q has %d part(s). A caller holding that identity cannot fill this template at all, which is what core/internal/apiclient's fillPath refuses outright.",
+			opID, template, len(parameters), identity, len(parts))
+	}
+	filled := template
+	for i, p := range parameters {
+		filled = strings.Replace(filled, p, url.PathEscape(parts[i]), 1)
+	}
+	return apicontract.BasePath + filled
+}
+
+// templateMatchesConcretePath reports whether concrete is an instance of
+// the contract path template: same literal segments, and exactly one
+// segment per declared parameter.
+func templateMatchesConcretePath(template, concrete string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	b.WriteString(regexp.QuoteMeta(apicontract.BasePath))
+	last := 0
+	for _, m := range contractPathParameter.FindAllStringIndex(template, -1) {
+		b.WriteString(regexp.QuoteMeta(template[last:m[0]]))
+		b.WriteString(`[^/]+`)
+		last = m[1]
+	}
+	b.WriteString(regexp.QuoteMeta(template[last:]))
+	b.WriteString("$")
+	return regexp.MustCompile(b.String()).MatchString(concrete)
+}
+
+// TestContract_ThePublishedTemplateIsTheShapeTheseRoutesAreDrivenAt closes
+// the one hole every other check here is blind to: a path template that no
+// caller can fill.
+//
+// The shapes match, the router is walked, the refusals are declared, and a
+// client generated from the document still builds a URL nothing serves,
+// because a path parameter matches exactly one segment everywhere it is
+// consumed (chi, this package's own tests, and any client that escapes its
+// parameters) while the document spelled a two- or three-part identity as
+// one.
+func TestContract_ThePublishedTemplateIsTheShapeTheseRoutesAreDrivenAt(t *testing.T) {
+	checked := 0
+	for _, e := range endpointsForThisRouter() {
+		b, ok := contractBindings[e.ID]
+		if !ok {
+			continue // TestContract_RouterAndContractDeclareTheSameOperations reports this.
+		}
+		checked++
+		if !templateMatchesConcretePath(e.Path, b.url) {
+			t.Errorf("%s: the contract publishes the path %q, and this operation is driven at %q, which is not an instance of it. A path parameter matches one segment, so a client that fills %q with this resource's identity does not build %q.",
+				e.ID, e.Path, b.url, e.Path, b.url)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no operation's path template was compared against a concrete path; this test would pass vacuously")
+	}
+}
+
+// TestContract_APathBuiltFromTheContractReachesTheResourceItNames drives
+// the real chi router with a path built the way a contract-driven client
+// builds one, for every operation whose resource identity spans more than
+// one segment.
+//
+// The other contract tests in this file cannot see this failure and never
+// could: they drive concrete URLs written out by hand, so they exercise
+// the path the ROUTER serves rather than the path the DOCUMENT publishes.
+// The same blind spot is structural in core/internal/apiclient's own
+// suite, whose fake engine compiles the contract's parameters into
+// one-segment patterns, making the fake's fidelity ceiling the contract's
+// own defect. Only a request built from the template and served by the
+// real router closes it.
+func TestContract_APathBuiltFromTheContractReachesTheResourceItNames(t *testing.T) {
+	const (
+		setID      = "production/postgres"
+		artifactID = "production/postgres/backup.dump"
+	)
+
+	cases := []struct {
+		operation string
+		identity  string
+		body      string
+		csrf      bool
+		arrange   func(*backupSetFakeBackend)
+		// reached says what it looks like, from outside, for the request
+		// to have been served by this operation's handler with the
+		// identity intact.
+		reached func(*testing.T, *backupSetFakeBackend, *httptest.ResponseRecorder)
+	}{
+		{
+			operation: "getBackupSet",
+			identity:  setID,
+			arrange: func(b *backupSetFakeBackend) {
+				b.sets[setID] = service.BackupSet{ID: setID, SourceName: "production", Name: "postgres", Host: "nas.local", RemotePath: "/srv", LocalPath: "/data"}
+			},
+			reached: func(t *testing.T, _ *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				var body struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(rec.Body.Bytes(), &body)
+				if rec.Code != http.StatusOK || body.ID != setID {
+					t.Errorf("reading the backup set %q answered %d %q, want 200 and that id back", setID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			operation: "getArtifact",
+			identity:  artifactID,
+			arrange: func(b *backupSetFakeBackend) {
+				b.artifacts = []service.Artifact{testArtifactFixture}
+			},
+			reached: func(t *testing.T, _ *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				var body struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(rec.Body.Bytes(), &body)
+				if rec.Code != http.StatusOK || body.ID != artifactID {
+					t.Errorf("reading the backup %q answered %d %q, want 200 and that id back", artifactID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			operation: "retryFailedIngestion",
+			identity:  artifactID,
+			body:      "{}",
+			csrf:      true,
+			arrange:   func(*backupSetFakeBackend) {},
+			reached: func(t *testing.T, b *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				if got := b.lastRetriedFailed; got != artifactID {
+					t.Errorf("the retry reached the backend for %q, want %q (response %d %q)", got, artifactID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			operation: "revalidateArtifact",
+			identity:  artifactID,
+			csrf:      true,
+			arrange:   func(*backupSetFakeBackend) {},
+			reached: func(t *testing.T, b *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				if got := b.lastRevalidated; got != artifactID {
+					t.Errorf("the revalidation reached the backend for %q, want %q (response %d %q)", got, artifactID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			operation: "retryArtifactIngestion",
+			identity:  artifactID,
+			csrf:      true,
+			arrange:   func(*backupSetFakeBackend) {},
+			reached: func(t *testing.T, b *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				if got := b.lastRetried; got != artifactID {
+					t.Errorf("the retry reached the backend for %q, want %q (response %d %q)", got, artifactID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			operation: "reinstateArtifact",
+			identity:  artifactID,
+			csrf:      true,
+			arrange:   func(*backupSetFakeBackend) {},
+			reached: func(t *testing.T, b *backupSetFakeBackend, rec *httptest.ResponseRecorder) {
+				if got := b.lastReinstated; got != artifactID {
+					t.Errorf("the reinstatement reached the backend for %q, want %q (response %d %q)", got, artifactID, rec.Code, rec.Body.String())
+				}
+			},
+		},
+	}
+
+	endpoints := contractEndpoints()
+
+	// The case list is hand-written, so a route added later could miss it
+	// and this test would still read green. Every operation whose path
+	// names an artifact, which is every three-parameter path this router
+	// serves, has to be here: those are the ones a composite identity is
+	// built into, and they are the six that were unbuildable.
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[tc.operation] = true
+	}
+	for _, e := range endpointsForThisRouter() {
+		if len(contractPathParameter.FindAllString(e.Path, -1)) >= 3 && !covered[e.ID] {
+			t.Errorf("%s (%s %s) names a resource whose identity spans three segments and has no case here. Add one: a path built from its template has to be shown reaching the resource it names, because no other test in this package builds a path the way a client does.", e.ID, e.Method, e.Path)
+		}
+	}
+	if len(cases) == 0 {
+		t.Fatal("no composite-identity operation was driven at all; this test would pass vacuously")
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.operation, func(t *testing.T) {
+			e, ok := endpoints[tc.operation]
+			if !ok {
+				t.Fatalf("the contract no longer declares %q", tc.operation)
+			}
+			backend := newBackupSetFakeBackend()
+			tc.arrange(backend)
+			router := NewRouter(RouterConfig{
+				Platform: allowingPlatform("alice"), Backend: backend, Gate: alwaysPassGate{},
+				BinaryVersion: "test", Commit: "test",
+			})
+
+			req := httptest.NewRequest(e.Method, clientPath(t, e.ID, e.Path, tc.identity), strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.csrf {
+				attachValidCSRF(req)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			tc.reached(t, backend, rec)
+		})
 	}
 }

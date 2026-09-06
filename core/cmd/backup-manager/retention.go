@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
@@ -73,6 +74,18 @@ func cmdRetention(args []string) int {
 	}
 	defer cleanup()
 
+	// Issue #544, and the order here is load-bearing: the mode is decided
+	// against the configuration as LOADED, before the override flags below
+	// are folded onto it. The revision this comparison rests on is a hash
+	// of the configuration's content, so deciding after the fold would
+	// make `retention --daily-days 5` refuse beside every engine, for the
+	// difference the operator asked for.
+	overrides := resolveRetentionFlags(rf)
+	mode, err := enterReadMode(ctx, *cfgPath, cfg, os.Stderr)
+	if err != nil {
+		return fail(err)
+	}
+
 	// Issue #111 (B3.6): fold in whichever of the six FR-18/FR-19 flags
 	// the operator actually passed, validated through the identical
 	// config.ValidateRetention path the YAML file's own retention block
@@ -83,7 +96,6 @@ func cmdRetention(args []string) int {
 	// svc was built from (see openService's doc), so this mutation is
 	// this command's own, one-time, explicit preview-input step, not
 	// ambient state Service itself ever reads or writes.
-	overrides := resolveRetentionFlags(rf)
 	if err := applyRetentionOverrides(&cfg.Retention, overrides); err != nil {
 		return fail(fmt.Errorf("retention flags: %w", err))
 	}
@@ -112,6 +124,40 @@ func cmdRetention(args []string) int {
 	reports, err := svc.RetentionPreviewAll(ctx)
 	if err != nil {
 		return fail(err)
+	}
+
+	// A preview under flags this command supplied is a hypothetical, and
+	// asking the serving process to agree with a hypothetical it was never
+	// told about would refuse every overridden preview. So the engine is
+	// asked about the verdicts only when the policy in force is the
+	// deployment's own, and when it is not, the reader is told once that
+	// nothing checked these.
+	//
+	// The configuration itself was still compared, above, before the fold:
+	// an overridden preview beside an engine holding a different
+	// configuration is refused like any other read.
+	hypothetical := overridden(overrides)
+	if hypothetical && mode.attached() {
+		fmt.Fprintln(os.Stderr, "note: these verdicts are under a retention policy this command line supplied, not the one this deployment is configured with, so the process serving it was not asked to agree with them.")
+	}
+	if !hypothetical {
+		for _, r := range reports {
+			var mine []string
+			for _, v := range r.Verdicts {
+				action := "DELETE"
+				if v.Keep {
+					action = "KEEP"
+				}
+				// The artifact's NAME, not its full id: a retention plan
+				// is scoped to one backup set and the wire spells its
+				// verdicts that way (core/service's summarizeRetentionPlan),
+				// which is also how the line printed below spells them.
+				mine = append(mine, v.Artifact.Name+" "+action)
+			}
+			if err := mode.agreeOnRetention(ctx, r.Set, mine); err != nil {
+				return fail(err)
+			}
+		}
 	}
 
 	for _, r := range reports {

@@ -49,7 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -73,6 +73,77 @@ DIRECTORY rather than a file mounted on its own, because #196 made the directory
 writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
 pass the directory and it resolves `config.yaml` inside it. `backup-manager` with no
 arguments prints that same list and exits 2.
+
+**Eight invocations in that table reach the API now, and only when there is an engine to
+reach.** Four of them change the configuration through it, `backup-set create`, `patch` and
+`remove` and `settings patch`, and four put their own question to it before they print
+anything, `status`, `sources`, `artifacts` and `retention`. Which of three things a
+configuration write does is a property of the deployment rather than of a flag, and the
+command says which one it did on a `mode:` line. With nothing serving,
+`backup-manager` opens its own service over the same `config.yaml` and state database an engine
+uses, writes, and exits; an engine started afterwards reads the new file when it starts. With
+something serving this deployment and an address for it, `backup-set create`, `patch` and
+`remove` and `settings patch` hand the change to that process over its own API, so it is made
+by the engine that will go on serving it and there is nothing to restart. With something
+serving and no address, the write is refused with nothing written and a non-zero exit, naming
+what was found and where the change can be made instead: there is still no config watcher and
+no SIGHUP reload in this build, so a change left in the file is one the serving process would
+never read.
+
+Two writes have no route and are refused beside a serving engine. A `backup-set retention`
+that sets or clears a policy is one, and the API is not what stops it: the endpoints for
+setting, clearing and reporting a set's policy all exist. What was not wanted was routing the
+write while the report beside it went on reading this host's own file, which would leave one
+verb answering out of two worlds, so the whole verb stays on the direct path until both halves
+move together. The other is the first `config.yaml` a `create` writes on an instance that does
+not have one yet: finding a process serving the journal `--state-database` names says that
+deployment is already configured, which is not a deployment to send a first-run request to.
+
+The address is three environment variables, which are the whole of the configuration this
+needs:
+
+| variable | what it is |
+| --- | --- |
+| `BACKUP_MANAGER_API_URL` | the engine's address: `http://127.0.0.1:8080` from inside its own container, or the published Web UI port from a shell on the host, which reverse-proxies `/api/v1/*` to the same engine |
+| `BACKUP_MANAGER_API_USERNAME` | the local administrator account, the same one the Web UI's login page takes |
+| `BACKUP_MANAGER_API_PASSWORD` | that account's password, held in memory for one invocation and written nowhere |
+
+Environment rather than flags, because a password on a command line is in every process listing
+on the host and in the shell history of whoever typed it, and because the address belongs to
+the host a command is typed on rather than to the deployment: loopback from inside the
+container, a published port from a NAS shell. One field does not survive the trip, and the
+routed command says so rather than making something up: the API's backup set carries no
+`stale_after`, so a routed `create` or `patch` prints it as not reported where a direct one
+prints the value.
+
+Reads work differently, because a read that cannot reach the engine still has to answer.
+`status`, `sources`, `artifacts` and `retention` are never refused for want of an address; they
+say which world the answer is about instead, on a `mode:` line on stderr. `engine-attached` is
+a serving process that holds the same configuration and was asked the same question.
+`direct` is nothing serving. `unconfirmed` is an answer taken from `config.yaml` that could not
+be checked against the process serving this deployment, because there was no address, or the
+engine did not answer, or the probe could not be performed, and it can disagree with what that
+process serves. A read does refuse in two cases, and they are the same fact twice: the serving
+process turns out to be holding a *different* configuration, or it answers the command's own
+question differently. Either way nothing at all is printed and the exit is non-zero, because an
+answer from here would describe a deployment nobody is running.
+
+Nine invocations announce a mode, those four reads and the five configuration writes. The rest
+say nothing about one and are ordinary beside a live engine: `run`, `fetch`, `check`, `validate`
+and the others, with the `settings` read and a `backup-set retention` that only reports among
+them. The one command a running engine refuses is a second `daemon`, or a second web host,
+against a state database something else is already serving. Two of them would run two schedules
+over one set of backups and hold two independent copies of one configuration, which is the
+divergence everything above exists to close.
+
+All of it is here because of what issue #535 cost a real install: a `create` through
+`docker exec` against a live server succeeded, `sources` listed both new sets, and the Web UI
+showed nothing until the engine was restarted. The help text used to describe these commands
+as "the same operation `POST /api/v1/backup-sets` performs", which is true inside one process
+and reads as a promise about the running one. Issue #536 is the campaign that made the two
+surfaces one live system: phase 1 finds the serving process and refuses a write that cannot
+reach it, and phase 2 built the route, so those four writes and those four reads now reach the
+engine rather than being turned away.
 
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, last-known-good protection, local prune,
@@ -267,10 +338,14 @@ goes through at boot and written through the same atomic replace.
 One thing to be plain about, because it is the same for `settings patch` and is easy to
 assume otherwise: the hot reload is in-process. A change made through the API takes effect
 immediately in the engine that served it, because that engine is also the thing running the
-schedule. A change made by a separate `backup-manager backup-set patch` invocation writes
-`config.yaml` and reloads that invocation's own view of it, and a `daemon` already running
-in another process keeps using the configuration it loaded at start until it is restarted.
-There is no config watcher and no SIGHUP reload in this build.
+schedule. A separate `backup-manager backup-set patch` invocation is a different process, and
+there is no config watcher and no SIGHUP reload in this build, so a `daemon` already running
+would never see what that process wrote into the file. Which is why it does not write into the
+file while one is serving. Given `BACKUP_MANAGER_API_URL` it sends the patch to that process
+instead, and the hot reload is then the serving engine's own; without one it is refused,
+`config.yaml` is left byte for byte as it was, and the command says so. With nothing serving,
+it writes the file, reloads its own view of it, exits, and an engine started afterwards reads
+the new file at startup.
 
 A set's name and source are deliberately not patchable: they key every journal row, artifact
 id and recovery manifest the set has ever produced, so renaming one is a migration rather
@@ -334,7 +409,8 @@ deployment or the hundredth edit of an existing one. Write the file, run `check`
 wizard's route calls, and `--state-database` names the journal that first configuration
 points at (defaulting to `/data/state/state.db`, the packaged mount). An operator standing
 at a freshly installed NAS therefore has one command to type, not a wizard to open, and the
-two surfaces still reach the same code.
+two surfaces still reach the same code. Same code, two processes: see the note under the
+command table above for what that does and does not mean against a server already running.
 
 **Enabling or disabling a backup set is a config-file field.** `POST
 /backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`
@@ -2074,6 +2150,7 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 ```text
 core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
+  apiclient/     the CLI's client for a running engine's own /api/v1 (built, and no command calls it yet)
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
