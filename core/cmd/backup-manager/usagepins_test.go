@@ -105,7 +105,8 @@ const (
 //
 // It is also narrower than "this repository's operator-facing text is
 // pinned", because it reads one binary's dispatch map by name. There are
-// six package main binaries in this tree and apps/synology/cmd/spkctl is
+// six package main binaries in this tree and the Synology packaging one
+// (spkctl) is
 // the other one an operator types, with a command table of its own that
 // nothing in here can see: this test lives in package main precisely
 // because that is the only place the map is readable, so a second binary
