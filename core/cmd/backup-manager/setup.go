@@ -251,11 +251,23 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	// claim is for. mode.go holds the reasoning; enterConfigWriteMode
 	// claims, asks, announces and refuses, and gives the claim back
 	// itself when it refuses.
-	guard, err := enterConfigWriteMode(configPath, os.Stdout, os.Stderr)
+	// nil rather than attachToEngine, deliberately. This door is what
+	// `settings patch` and `backup-set retention` come through, and
+	// `backup-set retention` is not routed: setBackupSetRetention and
+	// clearBackupSetRetention are on the client, but the policy the CLI
+	// builds is a whole chain read from flags or from stdin and the
+	// preview beside it is #544's, so routing half of that command would
+	// be worse than routing none of it. openConfigWriteRoute below is the
+	// door that can hand a change over, and the two are separate
+	// functions precisely so that "this write can be routed" is a
+	// property of the call site rather than of a flag somebody might get
+	// wrong.
+	write, err := enterConfigWriteMode(configPath, nil, os.Stdout, os.Stderr)
 	if err != nil {
 		cleanup()
 		return nil, func() {}, err
 	}
+	guard := write.guard
 	return svc, func() {
 		cleanup()
 		// After the journal, so the claim outlives everything this
@@ -266,6 +278,83 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 		if err := guard.Release(); err != nil {
 			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
 		}
+	}, nil
+}
+
+// openConfigWriteRoute is openBackupService for the configuration writes
+// that can now be handed to a running engine (#543): it answers "where
+// does this change go", not "which service do I open".
+//
+// # Why it is a separate function rather than an argument
+//
+// The difference between the two doors is which writes may be routed, and
+// that is a fact about the command rather than a value it passes. An
+// argument would be one more thing a new subcommand could get wrong in the
+// permissive direction, which is the failure mode configIntent's own doc
+// spends its length on: `validate` once passed withTransport=false at the
+// neighbouring call and thereby never reached a storage medium. Here the
+// wrong value would be a settings patch quietly aimed at an engine through
+// a route that does not carry it.
+//
+// # The order, and why the local service is opened either way
+//
+// service.Open, then claim, then ask, exactly as openBackupService does,
+// and for a reason that is not a preference: service.Open's own startup
+// sequence takes the same `.startup-lock` the claim is, so claiming first
+// and opening second would wait on this process's own lock. What that
+// costs in engine-attached mode is one journal open that turns out not to
+// be needed, which is what this binary already did before it could route
+// at all, and what every CLI read beside a live engine still does.
+//
+// It buys something too. The configuration has to be readable for the mode
+// to be decided from it at all (that is where the journal path comes from),
+// and a deployment whose config.yaml does not load is told so in the words
+// core/service uses for it rather than through a failure against an engine.
+//
+// In engine-attached mode the local service is closed before the route is
+// handed back, so the change and the process making it never touch this
+// deployment's own files. The claim outlives it, for the same reason it
+// does on the direct path: nothing else may finish starting while this
+// command is deciding and acting on one answer.
+//
+// The returned cleanup func closes whatever was opened and gives the claim
+// back; callers should always `defer cleanup()` immediately.
+func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRoute, func(), error) {
+	svc, closeFn, err := service.Open(ctx, configPath)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeLocal := func() {
+		if err := closeFn(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+	}
+
+	write, err := enterConfigWriteMode(configPath, attachToEngine, os.Stdout, os.Stderr)
+	if err != nil {
+		closeLocal()
+		return nil, func() {}, err
+	}
+	releaseClaim := func() {
+		// Reported and not fatal, exactly as on the direct path: the
+		// change has already happened by the time this runs.
+		if err := write.guard.Release(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+		}
+	}
+
+	if write.route != nil {
+		// The engine is the authority for this change, so this process's
+		// own service has no part in it and is given back before the first
+		// request goes out. Holding it open would be holding a second
+		// view of a deployment this command has just agreed it does not
+		// own, which is the belief #535 was made of.
+		closeLocal()
+		return write.route, releaseClaim, nil
+	}
+	return svc, func() {
+		closeLocal()
+		releaseClaim()
 	}, nil
 }
 

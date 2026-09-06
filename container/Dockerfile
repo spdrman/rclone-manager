@@ -69,6 +69,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # accidental `git status`-dirty file (tests/.run scratch, etc.) that isn't
 # excluded by .dockerignore from ever reaching the build context for these
 # paths.
+#
+# apicontract is on this list because the CLI now speaks to a running
+# engine (#543): core/internal/apiclient resolves every path, status and
+# error code out of core/apicontract, so leaving it out builds a tree in
+# which `go build ./cmd/backup-manager` fails with "cannot find module
+# providing package .../core/apicontract" and nothing in the Go suite says
+# so, because a `go test` from a checkout has the whole module. It is
+# listed in the build-web stage too, for the same reason one step ahead:
+# apps/common already reads the contract from its own tests, and the day a
+# handler imports it that stage would fail the same way.
+COPY core/apicontract/ ./apicontract/
 COPY core/cmd/ ./cmd/
 COPY core/internal/ ./internal/
 COPY core/service/ ./service/
@@ -191,6 +202,7 @@ COPY apps/generic/go.mod apps/generic/go.sum ./apps/generic/
 RUN --mount=type=cache,target=/go/pkg/mod \
     cd apps/generic && go mod download
 
+COPY core/apicontract/ ./core/apicontract/
 COPY core/cmd/ ./core/cmd/
 COPY core/internal/ ./core/internal/
 COPY core/service/ ./core/service/

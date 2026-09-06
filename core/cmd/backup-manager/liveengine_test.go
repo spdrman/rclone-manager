@@ -146,6 +146,21 @@ type mutation struct {
 // declares the wrong thing is exactly the defect this table exists to
 // catch: the same shape as `validate` once passing withTransport=false
 // and thereby never reaching a medium.
+//
+// # What it proves after #543, which is less than it used to and still the
+// thing that matters
+//
+// Four of these six can now be handed to a running engine, so the refusal
+// they get here is the one for an engine this command was told nothing
+// about. That is exactly the condition under test: nothing in this file
+// sets $BACKUP_MANAGER_API_URL, and TestMain clears it, so what every case
+// below asserts is that finding an engine and having no way to reach it
+// still refuses and still leaves the file alone. It is the case a
+// `backup-manager daemon` is always in, since a daemon serves no HTTP at
+// all, and the one an operator who has set nothing up is in.
+//
+// The other half, that a routed write reaches the engine and does not
+// touch this file, is engineroute_test.go's.
 var configMutations = []mutation{
 	{
 		name: "backup-set create",

@@ -133,10 +133,20 @@ const (
 // the process is the one answer that is true on every deployment, so it
 // is the one stated plainly, and the other is offered as the conditional
 // it actually is.
+//
+// #543 added a third, and it is last for the same reason the second one is
+// conditional. Four configuration writes can now be handed to a serving
+// process that speaks HTTP, and the way to say where that process is is
+// $BACKUP_MANAGER_API_URL (route.go). It is offered rather than instructed
+// because it is not true everywhere: a `daemon` has no listener to point
+// at, and `backup-set retention` and the first-configuration write have no
+// route even when one does. The four are named rather than summarised, so
+// an operator who reaches this refusal from one of the others is not sent
+// to set a variable that will not help them.
 func engineRefusal(engine *service.RunningEngine, because string) error {
 	return fmt.Errorf(
-		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead",
-		engine.StateDatabase, because)
+		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $%s (with $%s and $%s) to the address it serves",
+		engine.StateDatabase, because, apiURLEnv, apiUsernameEnv, apiPasswordEnv)
 }
 
 // cannotTellError is the refusal for a check that could not be performed,
