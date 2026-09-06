@@ -103,19 +103,20 @@ commands:
                     --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
                     --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
                     [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
-                                                  create a backup set, the same operation POST /api/v1/backup-sets
-                                                  performs and through the same service layer. On an instance with
+                                                  create a backup set, through the same service layer POST
+                                                  /api/v1/backup-sets uses, not by calling it. On an instance with
                                                   no config.yaml yet this writes the first one (#176), and
                                                   --state-database names the journal it points at
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                                                   change one configured backup set in place; only the flags you pass are
-                                                  changed, and the change is persisted and hot-reloaded (#350)
-  backup-set remove <source/backup-set>          take one backup set out of the configuration, the same operation
-                                                  DELETE /api/v1/backup-sets/{source}/{set} performs. Configuration
-                                                  only: the backups it collected stay on storage and stay listed by
-                                                  artifacts, and creating the set again with the same source and
-                                                  name takes them back (#391)
+                                                  changed, and the change is persisted and reloaded in this process,
+                                                  not in one already running (#350)
+  backup-set remove <source/backup-set>          take one backup set out of the configuration, through the same
+                                                  service layer DELETE /api/v1/backup-sets/{source}/{set} uses, not
+                                                  by calling it. Configuration only: the backups it collected stay on
+                                                  storage and stay listed by artifacts, and creating the set again
+                                                  with the same source and name takes them back (#391)
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
@@ -182,5 +183,10 @@ commands:
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
 a directory resolves to config.yaml inside it, which is what packaging mounts)
+
+no command here calls the API. backup-manager opens its own service over the same config.yaml
+and state database an engine uses, so a create, patch or remove made here reaches an engine
+that is already running only when that engine restarts: there is no config watcher and no
+SIGHUP reload in this build (#535)
 `)
 }

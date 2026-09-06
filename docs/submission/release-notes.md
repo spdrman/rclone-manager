@@ -39,7 +39,9 @@ worth saying here rather than leaving to be found.
   a set with the same source and name again takes those backups back, along with their
   retention history. Nothing this operation can reach deletes a byte of backup data.
 - The same operation is on the API (`DELETE /api/v1/backup-sets/{source}/{set}`) and on the
-  command line (`backup-manager backup-set remove <source/backup-set>`).
+  command line (`backup-manager backup-set remove <source/backup-set>`). The command line
+  reaches the same code rather than that route, which is a difference against a server that
+  is already running; see the limitation below.
 - The Backups list now includes the backups of sets whose configuration has been removed.
   Narrowing that list to one set is over configured sets only, so a removed set is refused
   there like an unknown name. The Quarantine screen lists quarantined backups under
@@ -62,6 +64,12 @@ installing, not after.
   administrator's path to an alert is the app's own dashboard.
 - Native platform sign-on is not wired up on these targets; the app uses its own local
   account.
+- The command line does not talk to a running engine. `backup-manager` opens its own
+  service over the same configuration file and catalog, so a backup set created, changed or
+  removed from a terminal is written to the file, and an engine that is already running
+  keeps serving the configuration it loaded until it is restarted. Restart the engine after
+  a command-line change, or make the change in the web interface, where it takes effect at
+  once.
 
 ### Upgrading
 

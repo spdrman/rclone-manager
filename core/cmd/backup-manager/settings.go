@@ -13,14 +13,23 @@ import (
 // cmdSettings is `backup-manager settings` (report the live retention and
 // capacity settings FR-18/FR-19/FR-21 are currently deciding with) and
 // `backup-manager settings patch [flags]` (change one of them in place,
-// hot-reloaded into a running process exactly as `PATCH /api/v1/settings`
-// already does -- see core/service.BackupService.UpdateSettings's own
-// doc). Issue #277's own investigation confirmed this is not fully
-// covered by "edit config.yaml and validate", the answer that already
-// covers creating a backup set: GET is a discovery surface a config file
-// has no equivalent of, since it reports the RESOLVED policy (defaults
-// included) rather than the file's own possibly-omitted keys, and PATCH
-// hot-reloads a running daemon without a restart.
+// through the same core/service.BackupService.UpdateSettings that `PATCH
+// /api/v1/settings` is built on, called in this process rather than over
+// that route; see that method's own doc). Issue #277's own investigation
+// confirmed this is not fully covered by "edit config.yaml and validate",
+// the answer that already covers creating a backup set: GET is a
+// discovery surface a config file has no equivalent of, since it reports
+// the RESOLVED policy (defaults included) rather than the file's own
+// possibly-omitted keys, and the API's PATCH hot-reloads the process that
+// served it without a restart.
+//
+// This command does not. It hot-reloads this process, which then exits,
+// and a daemon already running keeps the settings it loaded until it is
+// restarted: there is no watcher over config.yaml. The sentence this
+// replaces said a patch here was hot-reloaded "into a running process
+// exactly as PATCH /api/v1/settings already does", which is the claim
+// issue #535 cost a real install, and #539 corrects everywhere it is
+// made.
 //
 // PATCH deliberately does not expose a full retention tier-chain
 // replacement (core/service.RetentionUpdate.Tiers): replacing the whole

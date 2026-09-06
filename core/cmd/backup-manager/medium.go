@@ -14,7 +14,12 @@ import (
 //
 // It is the CLI half of POST /api/v1/storage-mediums/{id}/preflight and
 // goes through the same internal/app use case, so the two surfaces cannot
-// disagree about what a medium is doing (FR-34). One command with a verb,
+// disagree about what a probe found (FR-34). They can still disagree about
+// which mediums are declared, because this command reads config.yaml for
+// itself and an engine that is already running is serving whatever it
+// loaded; see the process-boundary note in backupset.go, and #539 for why
+// that distinction is now spelled out rather than left to be inferred.
+// One command with a verb,
 // like `catalog rebuild` and `quarantine <verb>`, because "preflight" will
 // not be the only thing this product ever wants to do to a named medium.
 //
