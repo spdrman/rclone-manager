@@ -42,7 +42,7 @@ core/internal/transport/contract	contract	54361c9464ca489b23fb1541cd2bcf996aac34
 core/internal/transport/rclone	rclone	b38df09536da87c55d10d3661c0671ebe1e18f67a1be6fb24c92d39e6824fff0	adapter.go,errors.go,hostkeyprobe.go,keyencryption.go,keysource.go,medium.go,mediumcreds.go,mediumrestore.go,passphrase.go,ssh.go
 core/internal/transport/retry	retry	35b9b6c6336cf45798df7f6a74b33a9bb964dcffd4b825faff7a8d95ba19122c	retry.go
 core/migrations	migrations	1dc27c69791196ce0cbbf3b395c49124a60ac26c459824930b0a97129b3e0f66	embed.go
-core/service	service	c3e90330b42e1437d455bc47f81525f058f07f0d36cef6b1ea8df37920b25211	backupsetremove.go,backupsetrepoint.go,backupsetretention.go,backupsets.go,backupsetupdate.go,edithold.go,firstrun.go,managerstorage.go,placements.go,service.go,settings.go,startup.go,storage.go,unconfigured.go,validator.go
+core/service	service	be39064586ac46cce131177d441274812150fa221798e519496a553d72d66af6	backupsethostkey.go,backupsetremove.go,backupsetrepoint.go,backupsetretention.go,backupsets.go,backupsetupdate.go,edithold.go,firstrun.go,managerstorage.go,placements.go,service.go,settings.go,startup.go,storage.go,unconfigured.go,validator.go
 core/tests/bwlimit	bwlimit	8b2e3da96ac0ffdca5149d1c9b7450e68e14d305557d1918af1df208ef549f39	bwlimit.go
 core/tests/classifytransport	classifytransport	b861babb16c08e237893908786f73e83d787e321fa75ad57e7ceb67f75635f39	classify_transport.go
 core/tests/compat	compat	44f7f5cec9f9a692a8292b79c2a0a1bbff09d3d9502113b7dd40fc5ffd2b9280	doc.go

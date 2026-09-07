@@ -773,6 +773,15 @@ describe("ApiErrorCode covers every code apps/common/webhost actually emits", ()
     "CONFIG_REVISION_STALE",
     "SSH_KEY_NOT_FOUND",
     "HOST_KEY_PROBE_FAILED",
+    // The three refusals a backup-set write can answer with rather than
+    // fail on. The first two predate issue #572 and were simply never
+    // added here, which is exactly the hole this list exists to close:
+    // BackupSetDetailPage branches on all three by literal, and a literal
+    // compared against a union that does not carry it is a branch nothing
+    // can reach.
+    "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
     "DESTRUCTIVE_OPERATIONS_DISABLED",
     "INVALID_REQUEST",
     "UNAUTHENTICATED",
@@ -1651,6 +1660,59 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     vi.restoreAllMocks();
   });
 
+  /**
+   * A live browser spec against a real deployment saw a set that had just
+   * committed three artifacts render a Healthy badge with "Newest
+   * known-good: never" directly underneath it. One card, two contradictory
+   * answers about the same set, seconds after a successful cycle.
+   *
+   * It is not a stale read and it shares no cause with a refetch problem.
+   * `newest_good_backup_at` is computed all the way through
+   * (internal/health aggregates it, core/service carries it,
+   * handlers_health serialises it), it is on the wire, this very join
+   * already fetches it, and the mapper threw it away. So the badge was
+   * reading real data and the field beside it was reading a literal null,
+   * which `relativeAge` renders as "never".
+   *
+   * "never" is not a placeholder on a screen, it is a statement, and it is
+   * the single worst statement this product can make wrongly: it says a
+   * backup set has no restore point. The mapper's own note used to argue
+   * that taking this field would leave two real dates beside one invented
+   * null and was therefore its own change; that argument was about tidiness
+   * and this one is about a card contradicting itself in front of an
+   * operator, so this field is taken and the rest still are not.
+   */
+  it("takes the newest known-good backup the health report carries, rather than rendering never beside a Healthy badge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/postgres", "postgres")],
+        [wireHealth("production/postgres", { newest_good_backup_at: "2026-08-30T09:40:00Z" })]
+      )
+    );
+
+    const sets = await httpApi.listSets();
+
+    expect(sets[0].state).toBe("healthy");
+    expect(sets[0].newestKnownGoodAt).toBe("2026-08-30T09:40:00Z");
+  });
+
+  it("still reports no known-good backup when the report genuinely carries none", async () => {
+    // The negative control, and it is the reason the field above is read
+    // rather than defaulted. A set that really has never produced a
+    // restore point must still say so: "never" is correct here and only
+    // here, and a mapper that invented a date to avoid the word would be
+    // the same defect pointing the other way.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([wireSet("production/postgres", "postgres")], [wireHealth("production/postgres")])
+    );
+
+    const sets = await httpApi.listSets();
+
+    expect(sets[0].newestKnownGoodAt).toBeNull();
+  });
+
   it("carries a refused connection through as haltReason, and leaves it absent on a set that is fine", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1711,6 +1773,63 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     // Zero is a real reading here, not an absent one: it must actually be
     // 0, not undefined or dropped.
     expect(postgres?.readOnlyRetainedCount).toBe(0);
+  });
+
+  // Issue #572's RED case for the other half of the same defect. Six
+  // fields on every mapped backup set were literals here that no wire
+  // field fed: hostFingerprint "", fingerprintTrustedAt null,
+  // lastValidation "not-run", expectedIntervalHours 0, retainedCount 0 and
+  // retainedBytes 0. Every one of them renders somewhere as a value
+  // nobody chose, and the two host-key ones rendered under a hardcoded
+  // "ssh-ed25519" on the page the host-key halt banner links to.
+  it("reports the host keys the server actually says are trusted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          {
+            ...wireSet("production/postgres", "postgres"),
+            trusted_host_keys: [
+              { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+              { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+            ],
+            trusted_host_key_recorded_at: "2026-08-02T10:14:00Z"
+          }
+        ],
+        [wireHealth("production/postgres")]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.trustedHostKeys).toEqual([
+      { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+      { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+    ]);
+    expect(set.trustedHostKeyRecordedAt).toBe("2026-08-02T10:14:00Z");
+  });
+
+  it("says it does not know rather than inventing a value the server never sent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([wireSet("production/postgres", "postgres")], [wireHealth("production/postgres")])
+    );
+
+    const [set] = await httpApi.listSets();
+    // An engine that reports no trusted host key leaves the list empty,
+    // which every render site has to say out loud. It is NOT an empty
+    // fingerprint string under a confident algorithm, which is what this
+    // mapper used to produce for every set on every deployment.
+    expect(set.trustedHostKeys).toEqual([]);
+    expect(set.trustedHostKeyRecordedAt).toBeNull();
+    // And the four that have no wire field at all. Null and "unknown"
+    // rather than 0 and "not-run": "Not run" reads as reassuring beside a
+    // validator that may have been failing for a month, and a zero
+    // retained count is what the remove-configuration dialog was printing
+    // in the same breath as promising that removal deletes nothing.
+    expect(set.lastValidation).toBe("unknown");
+    expect(set.expectedIntervalHours).toBeNull();
+    expect(set.retainedCount).toBeNull();
+    expect(set.retainedBytes).toBeNull();
   });
 
   it("carries a rejected login through under its own reason", async () => {
@@ -1775,5 +1894,49 @@ describe("listSets joins the per-set health report (issue #245)", () => {
 
     const set = await httpApi.getSet("production/auth-config");
     expect(set.haltReason).toBe("host-key-changed");
+  });
+});
+
+describe("updateBackupSet: the key and trust fields (issue #572)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends ssh_key_id, known_hosts_line and acknowledge_host_key_change in the contract's own spelling", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", {
+      sshKeyId: "key-2",
+      knownHostsLine: "example.internal ssh-ed25519 AAAA",
+      acknowledgeHostKeyChange: true
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({
+      ssh_key_id: "key-2",
+      known_hosts_line: "example.internal ssh-ed25519 AAAA",
+      acknowledge_host_key_change: true
+    });
+  });
+
+  it("drops all three when the caller left them undefined, so an ordinary save is never a re-trust", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", { host: "elsewhere.internal" });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({ host: "elsewhere.internal" });
   });
 });

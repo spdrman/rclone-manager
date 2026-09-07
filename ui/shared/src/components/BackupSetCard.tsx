@@ -145,6 +145,12 @@ export function BackupSetCard({
           label="Retention"
           value={set.retentionIsOverride ? "This set's own policy" : "Deployment policy"}
         />
+        {/* "Not reported" is a fourth answer, and it is the one every real
+            deployment gets: nothing on the wire carries a validation
+            verdict, a retained count or a cadence for a backup set, and
+            api/client.ts used to supply "not-run", 0 and 0 for them. "Not
+            run" reads as reassuring, and it was being printed for sets
+            whose validator may have been failing for a month. */}
         <Field
           label="Last validation"
           value={
@@ -152,11 +158,25 @@ export function BackupSetCard({
               ? "Passed"
               : set.lastValidation === "failed"
                 ? "Failed"
-                : "Not run"
+                : set.lastValidation === "not-run"
+                  ? "Not run"
+                  : "Not reported"
           }
         />
-        <Field label="Retained" value={set.retainedCount + " \u00b7 " + bytes(set.retainedBytes)} mono />
-        <Field label="Expected every" value={set.expectedIntervalHours + "h"} mono />
+        <Field
+          label="Retained"
+          value={
+            set.retainedCount === null || set.retainedBytes === null
+              ? "Not reported"
+              : set.retainedCount + " \u00b7 " + bytes(set.retainedBytes)
+          }
+          mono
+        />
+        <Field
+          label="Expected every"
+          value={set.expectedIntervalHours === null ? "Not reported" : set.expectedIntervalHours + "h"}
+          mono
+        />
       </dl>
 
       <div

@@ -543,7 +543,34 @@ func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
+		// Issue #572: what the set's known_hosts actually pins. Carried
+		// for the reason the guard below states, and the guard is what
+		// made me carry it: a fixture engine that reports no host key is
+		// one no routed test can catch dropping it.
+		TrustedHostKeys:          toContractTrustedHostKeys(s.TrustedHostKeys),
+		TrustedHostKeyRecordedAt: contractTimeOrEmpty(s.TrustedHostKeyRecordedAt),
 	}
+}
+
+// toContractTrustedHostKeys mirrors toBackupSetResponse's own loop,
+// including its nil-for-none: absent on the wire is "this deployment could
+// not report what this set trusts", and a fixture that sent [] instead
+// would be answering a different question from production.
+func toContractTrustedHostKeys(keys []service.TrustedHostKey) []apicontract.TrustedHostKey {
+	var out []apicontract.TrustedHostKey
+	for _, k := range keys {
+		out = append(out, apicontract.TrustedHostKey{Algorithm: k.Algorithm, Fingerprint: k.Fingerprint})
+	}
+	return out
+}
+
+// contractTimeOrEmpty renders a moment the way toBackupSetResponse does,
+// and the zero time as the empty string the omitempty tag drops.
+func contractTimeOrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // TestTheFixtureCarriesEveryFieldTheContractHas is the control that makes
@@ -584,6 +611,10 @@ func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
 		Disabled:            true,
 		ReadOnly:            true,
 		RetentionIsOverride: true,
+		TrustedHostKeys: []service.TrustedHostKey{
+			{Algorithm: "control-algorithm", Fingerprint: "SHA256:controlfingerprint"},
+		},
+		TrustedHostKeyRecordedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
 	}
 
 	// Nothing is exempt today, and that is the point of writing the list

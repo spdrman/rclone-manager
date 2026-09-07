@@ -253,9 +253,9 @@ export const FIELD_HELP = {
   // produced, so renaming one is a migration rather than an edit.
   editSetHost: {
     what: "The hostname or address Backup Manager connects to for this backup set's source.",
-    example: "prod-db-01.internal",
     effect:
-      "Saving this box writes only the host, and the next cycle connects to the new one. The trusted host key is NOT re-fetched: pointing a set at a different machine without re-verifying its fingerprint would be trusting a host nobody looked at, so a genuinely different server needs its host key re-trusted through the wizard."
+      "Saving this box writes only the host, and the next cycle connects to the new one. The trusted host key is NOT re-fetched: pointing a set at a different machine without re-verifying its fingerprint would be trusting a host nobody looked at. The Trusted host key box below is where a genuinely different server's key goes, and it asks before it replaces one.",
+    example: "prod-db-01.internal"
   },
   editSetPort: {
     what: "The SSH port on that host. 0 means the default, which is 22.",
@@ -299,6 +299,22 @@ export const FIELD_HELP = {
     example: "300",
     effect:
       "Saving this box writes only the window. Too short and a slow write can be copied half-finished; too long and every backup waits that much longer before it is collected. This is the setting that makes the stable-size method usable at all, which is why it appears the moment you choose that method."
+  },
+
+  // Issue #572: the two SSH-facing boxes. Both are write-only, and both
+  // say so, because an empty box that means "leave it alone" is the one
+  // shape on this form an operator can misread as "there is nothing set".
+  editSetSSHKey: {
+    what: "The id of a private key this Backup Manager has already imported, replacing the key this backup set signs in with. Leave it empty to keep the current key.",
+    example: "key_9f3c1ab2",
+    effect:
+      "Saving this box writes only the key reference, and the next cycle authenticates with the new key. Nothing is checked against the source first, so a key the source account does not accept shows up as a failed connection on the next cycle rather than as a refusal here. The box is empty because a key is a reference to material this page never sees, not a value to show back."
+  },
+  editSetKnownHostsLine: {
+    what: "The known_hosts line pinning the host key this backup set trusts, exactly as ssh-keyscan prints it. Leave it empty to keep trusting the key it trusts now.",
+    example: "prod-db-01.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...",
+    effect:
+      "Saving this box replaces this set's trust anchor, which is what a server rebuild or a migration needs. If the line pins a DIFFERENT key from the one on record, the save is refused first and you are shown both fingerprints, because a changed host key looks identical whether the server was rebuilt or something else is answering in its place. Compare the new fingerprint against the host itself before confirming."
   },
 
   // ------------------------------------------------------------- wizard

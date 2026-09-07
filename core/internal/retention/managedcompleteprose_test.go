@@ -113,6 +113,23 @@ var notTheManagedCompleteSet = []proseException{
 		run:  "COMMITTED/REMOTE_DELETE_PENDING/COMPLETE",
 		why:  "the same crash points, named by the harness that reaches them.",
 	},
+	{
+		path: "ui/shared/src/pages/ActivityStrip.tsx",
+		run:  "COMMITTED, COMPLETE, REMOTE_RETAINED",
+		why: "the transitions the per-set activity log paints green (issue #573's " +
+			"SETTLED_STATES), which is a colour in a scrolling log rather than FR-18 " +
+			"eligibility, and differs from this set at BOTH ends. The run above is only its " +
+			"tail: the set opens with VERIFIED, which gfsIsManagedComplete refuses because a " +
+			"verified artifact is still in flight, and which belongs there because " +
+			"verification passing is the strongest good news the pipeline produces. " +
+			"REMOTE_DELETE_PENDING is left out on purpose: it is the only member of this map " +
+			"that is not a resting place, it is the inside of FR-15's delete window, and the " +
+			"deletion itself already gets an uncoloured line of its own, so colouring the " +
+			"intention would leave the panel greener about the intent than about the act. " +
+			"Nothing in that set reaches the progress bar, which counts rows the engine " +
+			"drove forward, so widening it here would satisfy this guard with a list the " +
+			"renderer does not use.",
+	},
 }
 
 // proseException is one run of state names that is deliberately not this

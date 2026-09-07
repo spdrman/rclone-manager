@@ -409,11 +409,13 @@ func TestAnUnusableRouteIsRefusedAndNeverPrinted(t *testing.T) {
 // acquire a route by accident.
 //
 // `backup-set create` against a path with no config.yaml writes a whole
-// FIRST configuration. Finding a process serving the journal it names
-// means that deployment is already configured, which is what makes this
-// case a refusal in the first place, and POST /system/first-run is not an
-// operation an already-configured engine has any business being sent. So
-// naming a route must change nothing here.
+// FIRST configuration, and the only request that could carry it is POST
+// /system/first-run, which an engine accepts once and only while it is
+// still unconfigured. A process found serving the journal it names is
+// either past that moment (this test's arrangement, and the mistyped
+// --config it stands for) or is the setup flow an operator can finish
+// themselves (#571). Neither is a request to send, so naming a route must
+// change nothing here.
 func TestAFirstConfigurationIsNotRouted(t *testing.T) {
 	cliConfig := writeTestConfig(t)
 	keyPath := writeTestPrivateKey(t)

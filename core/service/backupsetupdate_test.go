@@ -765,3 +765,101 @@ func walkIsolationFixture(t *testing.T, prefix string, rv reflect.Value, seen ma
 	}
 	return checked
 }
+
+// The completion strategy and its window are one setting spelled as two
+// fields, and issue #572's follow-up is what happens when a caller moves
+// only one of them. A live browser spec against a real engine found both
+// halves: moving to "stable" alone is refused, and naming the window alone
+// answers 200 for a value the file never keeps.
+//
+// Every assertion here reads the persisted file rather than the returned
+// set, because the returned set is what was lying.
+
+// TestUpdateBackupSet_AWindowThatWouldNotSurviveIsRefused is the sharper
+// half. A set on "rename" that is sent a stable_for gets that value
+// cleared on the way in, because a window means nothing off the "stable"
+// strategy, and until now the caller was told 200 for it. A discarded
+// write reported as a success is the kind of answer other things get built
+// on: the Web UI re-reads the server's answer, so the operator watched the
+// 45 they typed come back as 0 with nothing to explain it.
+func TestUpdateBackupSet_AWindowThatWouldNotSurviveIsRefused(t *testing.T) {
+	svc, configPath := openTestService(t)
+	before := readFileOrFail(t, configPath)
+
+	window := 45 * time.Second
+	_, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		StableFor: &window,
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrInvalidRequest for a window the file would not keep", err)
+	}
+	// The message has to name the way through, because the caller's
+	// mistake is not the value: it is that the strategy has to travel
+	// with it.
+	if msg := err.Error(); !strings.Contains(msg, "completion_strategy") {
+		t.Errorf("the refusal does not say the strategy has to come with it:\n%s", msg)
+	}
+	if got := readFileOrFail(t, configPath); got != before {
+		t.Error("the configuration file changed on a refused edit")
+	}
+}
+
+// TestUpdateBackupSet_TheStablePairTravelsTogether is the control on the
+// refusal above, and the case the edit surface has to be able to reach:
+// the two fields sent as one edit move a set onto the stable strategy and
+// keep the window it was given.
+func TestUpdateBackupSet_TheStablePairTravelsTogether(t *testing.T) {
+	svc, configPath := openTestService(t)
+
+	window := 45 * time.Second
+	if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		CompletionStrategy: strPtr("stable"),
+		StableFor:          &window,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet: %v", err)
+	}
+
+	onDisk := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
+	if onDisk.Completion.Strategy != "stable" {
+		t.Errorf("completion.strategy = %q, want %q", onDisk.Completion.Strategy, "stable")
+	}
+	if onDisk.Completion.StableFor.Duration() != window {
+		t.Errorf("completion.stable_for = %s, want %s", onDisk.Completion.StableFor, window)
+	}
+}
+
+// TestUpdateBackupSet_AWindowOfZeroBesideAMoveOffStableIsFine is the
+// negative control on the same rule, and the reason it is written as "the
+// file would not keep what you sent" rather than "you may not send a
+// window off the stable strategy". A caller moving a set off "stable" and
+// spelling out that the window goes to zero has asked for exactly what
+// happens, so there is nothing to refuse. Refusing it would be a rule
+// about the field's presence rather than about the outcome, and it would
+// turn a redundant request into a failed one.
+func TestUpdateBackupSet_AWindowOfZeroBesideAMoveOffStableIsFine(t *testing.T) {
+	svc, configPath := openTestService(t)
+
+	window := 90 * time.Second
+	if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		CompletionStrategy: strPtr("stable"),
+		StableFor:          &window,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet(stable): %v", err)
+	}
+
+	var zero time.Duration
+	if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		CompletionStrategy: strPtr("rename"),
+		StableFor:          &zero,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet(rename, stable_for 0): %v", err)
+	}
+
+	onDisk := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
+	if onDisk.Completion.Strategy != "rename" {
+		t.Errorf("completion.strategy = %q, want %q", onDisk.Completion.Strategy, "rename")
+	}
+	if onDisk.Completion.StableFor.Duration() != 0 {
+		t.Errorf("completion.stable_for = %s, want it cleared", onDisk.Completion.StableFor)
+	}
+}

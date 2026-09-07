@@ -100,11 +100,17 @@ var contractBindings = map[string]contractBinding{
 	// for each of these, because each has a FIXED arity and several need
 	// a literal tail ("/enabled", "/revalidate", "/retry") that a
 	// catch-all would swallow.
-	"getSystemHealth":        {nil, healthResponse{}, "/api/v1/system/health"},
-	"listOperations":         {nil, listOperationsResponse{}, "/api/v1/operations"},
-	"listArtifacts":          {nil, listArtifactsResponse{}, "/api/v1/backups"},
-	"getArtifact":            {nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
-	"listActivity":           {nil, listActivityResponse{}, "/api/v1/activity"},
+	"getSystemHealth": {nil, healthResponse{}, "/api/v1/system/health"},
+	"listOperations":  {nil, listOperationsResponse{}, "/api/v1/operations"},
+	"listArtifacts":   {nil, listArtifactsResponse{}, "/api/v1/backups"},
+	"getArtifact":     {nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
+	"listActivity":    {nil, listActivityResponse{}, "/api/v1/activity"},
+	// Issue #573. Every parameter this operation takes is a query
+	// parameter, so the url below carries none: the route is reached at
+	// its bare path and a client that sends nothing gets the whole feed,
+	// which is exactly what a dashboard drawing one strip per set asks
+	// for.
+	"getLiveActivity":        {nil, liveActivityResponse{}, "/api/v1/activity/live"},
 	"listQuarantine":         {nil, listArtifactsResponse{}, "/api/v1/quarantine"},
 	"revalidateArtifact":     {nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
 	"retryArtifactIngestion": {nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},

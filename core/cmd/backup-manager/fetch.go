@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -16,13 +17,61 @@ import (
 // verify/commit/delete sequence RunCycle would for this one backup set).
 func cmdFetch(args []string) int {
 	fs, cfgPath := newFlagSet("fetch")
-	sourceFlag := fs.String("source", "", "the source to fetch (required)")
-	setFlag := fs.String("backup-set", "", "the backup set to fetch (required)")
+	sourceFlag := fs.String("source", "", "the source to fetch (required unless --backup-set names it)")
+	setFlag := fs.String("backup-set", "", "the backup set to fetch, named <source/backup-set> or with --source (required)")
 	dryRun := fs.Bool("dry-run", false, "list what discovery would find, without transferring or recording anything")
-	if err := fs.Parse(args); err != nil {
+	// parseFlagsAroundOperands rather than a bare fs.Parse, and then a
+	// refusal, because this command takes no operand at all: both of its
+	// subjects arrive in flags. fs.Parse stops at the first argument that
+	// is not a flag and leaves it in fs.Args() for somebody to read, and
+	// nobody read it, so `fetch --source S --backup-set B prod/db` ran a
+	// real cycle against S/B, moved real bytes and exited 0 without a word
+	// about the third of the command line it dropped. That is issue #568's
+	// defect one command over, and sharper here, because this one writes.
+	operands, err := parseFlagsAroundOperands(fs, args)
+	if err != nil {
 		return 2
 	}
-	if *sourceFlag == "" || *setFlag == "" {
+	if len(operands) > 0 {
+		return usageError("fetch takes no arguments; name the backup set with --backup-set %s", operands[0])
+	}
+
+	// Issue #569 was reported against `artifacts`, and this is the same
+	// flag on the same binary: --backup-set takes the "source/backup-set"
+	// id every surface that prints a backup set prints, so an operator can
+	// paste the id they were just shown rather than splitting it by hand
+	// and getting "no configured backup set named
+	// production/production/nightly" for their trouble.
+	//
+	// The ambiguity half of #569 cannot arise here and nothing resolves
+	// anything: this command has always needed a source, so the pair it
+	// looks a backup set up by is exact either way. All that changes is
+	// which of the two flags the source is allowed to arrive in, and a
+	// --source naming a different one than the id does is refused as the
+	// contradiction it is rather than one of them quietly winning.
+	//
+	// A value carrying a separator is either that id or it is not an id at
+	// all, and the second one is a 2 here for the same reason the
+	// contradiction below is: nothing about this deployment has to be read
+	// to know it. It used to be cut at the FIRST separator and the
+	// remainder handed to the service as a set name, so pasting an
+	// artifact id in refused with "no configured backup set named
+	// api-server/var-backups/alternatives.tar", about a deployment that
+	// configures api-server/var-backups perfectly well, and an id with an
+	// empty half fell through to "fetch requires --source and
+	// --backup-set", told to an operator who had just passed --backup-set.
+	// splitBackupSetID is the same shape rule `artifacts`, `retention`,
+	// `backup-set` and `unconfigured clear` read this id with.
+	source, set := *sourceFlag, *setFlag
+	if named, bare, ok := splitBackupSetID(set); ok {
+		if source != "" && source != named {
+			return usageError("fetch: --backup-set %s names source %s, which --source %s contradicts", set, named, source)
+		}
+		source, set = named, bare
+	} else if strings.Contains(set, "/") {
+		return usageError("fetch: --backup-set %q is not a backup set id; a backup set id is exactly source/name, and an artifact id pasted whole has the file name on the end of it", set)
+	}
+	if source == "" || set == "" {
 		return usageError("fetch requires --source and --backup-set")
 	}
 
@@ -37,7 +86,7 @@ func cmdFetch(args []string) int {
 		logStartup(ctx, svc.Logger, app.BuildVersionInfo(version, commit))
 	}
 
-	result, err := svc.Fetch(ctx, *sourceFlag, *setFlag, *dryRun)
+	result, err := svc.Fetch(ctx, source, set, *dryRun)
 	if err != nil {
 		return fail(err)
 	}

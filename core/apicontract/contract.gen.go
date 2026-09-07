@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd"
+const ContractSHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -85,6 +85,7 @@ const (
 	ErrorCodeReinstatementRefused                   ErrorCode = "REINSTATEMENT_REFUSED"
 	ErrorCodeBackupSetRepointNotAcknowledged        ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged ErrorCode = "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged  ErrorCode = "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
 	ErrorCodeMediumDisclosureRequired               ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
 	ErrorCodeRestoreRefused                         ErrorCode = "RESTORE_REFUSED"
 	ErrorCodeRestoreUnavailable                     ErrorCode = "RESTORE_UNAVAILABLE"
@@ -123,6 +124,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -185,6 +187,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -198,7 +201,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeArtifactNotFailed},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -236,6 +239,17 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getLiveActivity", Method: "GET", Path: "/activity/live",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "LiveActivityResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -352,11 +366,11 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
-			409: {ErrorCodeBackupSetRepointNotAcknowledged},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -828,22 +842,24 @@ type AuthErrorResponse struct {
 
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
-	CompletionStrategy  string   `json:"completion_strategy"`
-	Disabled            bool     `json:"disabled"`
-	Host                string   `json:"host"`
-	ID                  string   `json:"id"`
-	Include             []string `json:"include"`
-	LocalPath           string   `json:"local_path"`
-	Name                string   `json:"name"`
-	Port                int      `json:"port"`
-	ReadOnly            bool     `json:"read_only"`
-	RemotePath          string   `json:"remote_path"`
-	RetentionIsOverride bool     `json:"retention_is_override"`
-	SourceName          string   `json:"source_name"`
-	StableForSeconds    int      `json:"stable_for_seconds"`
-	StaleAfterSeconds   int      `json:"stale_after_seconds"`
-	User                string   `json:"user"`
-	ValidatorID         string   `json:"validator_id"`
+	CompletionStrategy       string           `json:"completion_strategy"`
+	Disabled                 bool             `json:"disabled"`
+	Host                     string           `json:"host"`
+	ID                       string           `json:"id"`
+	Include                  []string         `json:"include"`
+	LocalPath                string           `json:"local_path"`
+	Name                     string           `json:"name"`
+	Port                     int              `json:"port"`
+	ReadOnly                 bool             `json:"read_only"`
+	RemotePath               string           `json:"remote_path"`
+	RetentionIsOverride      bool             `json:"retention_is_override"`
+	SourceName               string           `json:"source_name"`
+	StableForSeconds         int              `json:"stable_for_seconds"`
+	StaleAfterSeconds        int              `json:"stale_after_seconds"`
+	TrustedHostKeyRecordedAt string           `json:"trusted_host_key_recorded_at,omitempty"`
+	TrustedHostKeys          []TrustedHostKey `json:"trusted_host_keys,omitempty"`
+	User                     string           `json:"user"`
+	ValidatorID              string           `json:"validator_id"`
 }
 
 // BackupSetEditHold is POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
@@ -1171,6 +1187,76 @@ type ListStorageStatusResponse struct {
 // would be an arbitrary-command surface.
 type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
+}
+
+// LiveActivityEvent is one line of the live feed. It carries the engine's own event name,
+// the engine's own severity and the event's own fields, because what
+// a moment is worth calling is presentation and belongs to whichever
+// client is presenting: a severity invented on the way to the wire
+// would freeze one screen's display decision for every other client.
+// The level is not such a decision, it is what the emitter chose
+// when it decided a line was a warning rather than a note, so it is
+// carried through rather than re-derived.
+type LiveActivityEvent struct {
+	At       string              `json:"at"`
+	Event    string              `json:"event"`
+	Fields   []LiveActivityField `json:"fields"`
+	Level    string              `json:"level"`
+	Message  string              `json:"message"`
+	Scope    string              `json:"scope"`
+	Sequence int64               `json:"sequence"`
+}
+
+// LiveActivityField is one field of an event, rendered as a string and already redacted.
+// A pair rather than a map because the order the event logged its
+// fields in is the order that reads best, and because a client
+// rendering a line wants them in that order without sorting.
+type LiveActivityField struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// LiveActivityResponse is one reading of the live feed. It is a snapshot a client polls, not
+// a stream: this product runs on a NAS behind whatever reverse proxy
+// the operator already had, and behind the UI container's own proxy
+// in the two-container topology, so a held-open response is at the
+// mercy of every buffering and idle-timeout default in that path. A
+// plain GET works through all of them, needs no reconnection logic,
+// and is exactly as readable from a terminal as from a browser. The
+// cursor on the request is what keeps polling cheap.
+type LiveActivityResponse struct {
+	Epoch       string            `json:"epoch"`
+	ObservedAt  string            `json:"observed_at"`
+	PollAfterMs int               `json:"poll_after_ms"`
+	Sets        []LiveActivitySet `json:"sets"`
+}
+
+// LiveActivitySet is what one backup set is doing right now, and the tail of events
+// behind it. Every configured set appears whether or not anything
+// has happened to it: a panel that shows up only during activity
+// teaches an operator to hunt for it, and its absence then means
+// either nothing is running or nothing is reporting, with no way to
+// tell which.
+type LiveActivitySet struct {
+	Active             bool                `json:"active"`
+	Artifact           string              `json:"artifact,omitempty"`
+	ArtifactsCompleted int                 `json:"artifacts_completed"`
+	ArtifactsTotal     *int                `json:"artifacts_total,omitempty"`
+	BackupSetID        string              `json:"backup_set_id"`
+	BytesPerSecond     *int64              `json:"bytes_per_second,omitempty"`
+	BytesTotal         *int64              `json:"bytes_total,omitempty"`
+	BytesTransferred   *int64              `json:"bytes_transferred,omitempty"`
+	Dropped            bool                `json:"dropped"`
+	Events             []LiveActivityEvent `json:"events"`
+	Failures           int                 `json:"failures"`
+	FinishedAt         string              `json:"finished_at,omitempty"`
+	LatestSequence     int64               `json:"latest_sequence"`
+	OldestSequence     int64               `json:"oldest_sequence"`
+	Outcome            string              `json:"outcome,omitempty"`
+	ProgressBasis      string              `json:"progress_basis"`
+	Stage              string              `json:"stage,omitempty"`
+	StartedAt          string              `json:"started_at,omitempty"`
+	Truncated          bool                `json:"truncated"`
 }
 
 // ManagerStorage is the one manager-wide storage reading: what the backup root's
@@ -1604,29 +1690,46 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// TrustedHostKey is ONE host key a backup set actually pins, named the way an operator
+// compares it: the algorithm and the SHA256 fingerprint, the form
+// `ssh-keygen -lf` prints and the wizard's verify step shows. Never
+// the key material, which is a wall of base64 nobody checks by eye.
+type TrustedHostKey struct {
+	Algorithm   string `json:"algorithm"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 // UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
 // already-persisted backup set (issue #350): every property is
 // optional, and a property this body omits is left exactly as it is
 // rather than cleared. That is what lets the Web UI's per-box Save
 // persist only the box it belongs to. It deliberately carries no
-// name/source_name (a backup set's identity keys every journal row,
+// name/source_name: a backup set's identity keys every journal row,
 // artifact id and recovery manifest it has ever produced, so a
-// rename is a migration rather than an edit) and no
-// ssh_key_id/known_hosts_line (those are the results of the import
-// and probe steps, and re-trusting a host is a trust decision rather
-// than an edit).
+// rename is a migration rather than an edit. It does carry
+// ssh_key_id and known_hosts_line (issue #572), because a key
+// replaced on the source host and a host key that changes when a
+// server is rebuilt are both ordinary events a set has to be able to
+// be told about, and until they were here the only route was to
+// remove the set and create it again. Both are still references
+// produced by the import and probe steps rather than material typed
+// here, and re-trusting a host is still a trust decision, which is
+// what acknowledge_host_key_change is for.
 type UpdateBackupSetRequest struct {
-	AcknowledgeRepoint bool      `json:"acknowledge_repoint"`
-	CompletionStrategy *string   `json:"completion_strategy"`
-	Host               *string   `json:"host"`
-	Include            *[]string `json:"include"`
-	LocalPath          *string   `json:"local_path"`
-	Port               *int      `json:"port"`
-	RemotePath         *string   `json:"remote_path"`
-	StableForSeconds   *int      `json:"stable_for_seconds"`
-	StaleAfterSeconds  *int      `json:"stale_after_seconds"`
-	User               *string   `json:"user"`
-	ValidatorID        *string   `json:"validator_id"`
+	AcknowledgeHostKeyChange bool      `json:"acknowledge_host_key_change"`
+	AcknowledgeRepoint       bool      `json:"acknowledge_repoint"`
+	CompletionStrategy       *string   `json:"completion_strategy"`
+	Host                     *string   `json:"host"`
+	Include                  *[]string `json:"include"`
+	KnownHostsLine           *string   `json:"known_hosts_line"`
+	LocalPath                *string   `json:"local_path"`
+	Port                     *int      `json:"port"`
+	RemotePath               *string   `json:"remote_path"`
+	SSHKeyID                 *string   `json:"ssh_key_id"`
+	StableForSeconds         *int      `json:"stable_for_seconds"`
+	StaleAfterSeconds        *int      `json:"stale_after_seconds"`
+	User                     *string   `json:"user"`
+	ValidatorID              *string   `json:"validator_id"`
 }
 
 // UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the
@@ -1734,6 +1837,10 @@ var SchemaTypes = map[string]any{
 	"ListOperationsResponse":      ListOperationsResponse{},
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
+	"LiveActivityEvent":           LiveActivityEvent{},
+	"LiveActivityField":           LiveActivityField{},
+	"LiveActivityResponse":        LiveActivityResponse{},
+	"LiveActivitySet":             LiveActivitySet{},
 	"ManagerStorage":              ManagerStorage{},
 	"MediumPreflightCheck":        MediumPreflightCheck{},
 	"MediumPreflightResponse":     MediumPreflightResponse{},
@@ -1764,6 +1871,7 @@ var SchemaTypes = map[string]any{
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"TrustedHostKey":              TrustedHostKey{},
 	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},

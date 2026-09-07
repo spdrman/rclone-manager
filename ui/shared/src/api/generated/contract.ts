@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd";
+export const CONTRACT_SHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -48,6 +48,7 @@ export const WIRE_ERROR_CODES = [
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
   "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -114,6 +115,7 @@ export const API_ERROR_CODES = [
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
   "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -129,7 +131,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -184,6 +186,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getLiveActivity",
+    method: "GET",
+    path: "/activity/live",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "LiveActivityResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -388,11 +409,11 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "BackupSet",
     successStatus: 200,
     errorCodes: {
-      400: ["INVALID_REQUEST"],
+      400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
-      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
     }
   },
@@ -1139,6 +1160,8 @@ export interface WireBackupSet {
   source_name: string;
   stable_for_seconds: number;
   stale_after_seconds: number;
+  trusted_host_key_recorded_at?: string;
+  trusted_host_keys?: WireTrustedHostKey[];
   user: string;
   validator_id: string;
 }
@@ -1466,6 +1489,76 @@ export interface WireListStorageStatusResponse {
  *  would be an arbitrary-command surface. */
 export interface WireListValidatorsResponse {
   validators: WireValidator[];
+}
+
+/** One line of the live feed. It carries the engine's own event name,
+ *  the engine's own severity and the event's own fields, because what
+ *  a moment is worth calling is presentation and belongs to whichever
+ *  client is presenting: a severity invented on the way to the wire
+ *  would freeze one screen's display decision for every other client.
+ *  The level is not such a decision, it is what the emitter chose
+ *  when it decided a line was a warning rather than a note, so it is
+ *  carried through rather than re-derived. */
+export interface WireLiveActivityEvent {
+  at: string;
+  event: string;
+  fields: WireLiveActivityField[];
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  scope: "deployment" | "set";
+  sequence: number;
+}
+
+/** One field of an event, rendered as a string and already redacted.
+ *  A pair rather than a map because the order the event logged its
+ *  fields in is the order that reads best, and because a client
+ *  rendering a line wants them in that order without sorting. */
+export interface WireLiveActivityField {
+  key: string;
+  value: string;
+}
+
+/** One reading of the live feed. It is a snapshot a client polls, not
+ *  a stream: this product runs on a NAS behind whatever reverse proxy
+ *  the operator already had, and behind the UI container's own proxy
+ *  in the two-container topology, so a held-open response is at the
+ *  mercy of every buffering and idle-timeout default in that path. A
+ *  plain GET works through all of them, needs no reconnection logic,
+ *  and is exactly as readable from a terminal as from a browser. The
+ *  cursor on the request is what keeps polling cheap. */
+export interface WireLiveActivityResponse {
+  epoch: string;
+  observed_at: string;
+  poll_after_ms: number;
+  sets: WireLiveActivitySet[];
+}
+
+/** What one backup set is doing right now, and the tail of events
+ *  behind it. Every configured set appears whether or not anything
+ *  has happened to it: a panel that shows up only during activity
+ *  teaches an operator to hunt for it, and its absence then means
+ *  either nothing is running or nothing is reporting, with no way to
+ *  tell which. */
+export interface WireLiveActivitySet {
+  active: boolean;
+  artifact?: string;
+  artifacts_completed: number;
+  artifacts_total?: number;
+  backup_set_id: string;
+  bytes_per_second?: number;
+  bytes_total?: number;
+  bytes_transferred?: number;
+  dropped: boolean;
+  events: WireLiveActivityEvent[];
+  failures: number;
+  finished_at?: string;
+  latest_sequence: number;
+  oldest_sequence: number;
+  outcome?: "ok" | "failed" | "stopped";
+  progress_basis: "artifacts" | "unknown";
+  stage?: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
+  started_at?: string;
+  truncated: boolean;
 }
 
 /** The one manager-wide storage reading: what the backup root's
@@ -1899,25 +1992,42 @@ export interface WireTestConnectionResponse {
   ok: boolean;
 }
 
+/** ONE host key a backup set actually pins, named the way an operator
+ *  compares it: the algorithm and the SHA256 fingerprint, the form
+ *  `ssh-keygen -lf` prints and the wizard's verify step shows. Never
+ *  the key material, which is a wall of base64 nobody checks by eye. */
+export interface WireTrustedHostKey {
+  algorithm: string;
+  fingerprint: string;
+}
+
 /** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
  *  already-persisted backup set (issue #350): every property is
  *  optional, and a property this body omits is left exactly as it is
  *  rather than cleared. That is what lets the Web UI's per-box Save
  *  persist only the box it belongs to. It deliberately carries no
- *  name/source_name (a backup set's identity keys every journal row,
+ *  name/source_name: a backup set's identity keys every journal row,
  *  artifact id and recovery manifest it has ever produced, so a
- *  rename is a migration rather than an edit) and no
- *  ssh_key_id/known_hosts_line (those are the results of the import
- *  and probe steps, and re-trusting a host is a trust decision rather
- *  than an edit). */
+ *  rename is a migration rather than an edit. It does carry
+ *  ssh_key_id and known_hosts_line (issue #572), because a key
+ *  replaced on the source host and a host key that changes when a
+ *  server is rebuilt are both ordinary events a set has to be able to
+ *  be told about, and until they were here the only route was to
+ *  remove the set and create it again. Both are still references
+ *  produced by the import and probe steps rather than material typed
+ *  here, and re-trusting a host is still a trust decision, which is
+ *  what acknowledge_host_key_change is for. */
 export interface WireUpdateBackupSetRequest {
+  acknowledge_host_key_change?: boolean;
   acknowledge_repoint?: boolean;
   completion_strategy?: "rename" | "marker" | "stable";
   host?: string;
   include?: string[];
+  known_hosts_line?: string;
   local_path?: string;
   port?: number;
   remote_path?: string;
+  ssh_key_id?: string;
   stable_for_seconds?: number;
   stale_after_seconds?: number;
   user?: string;

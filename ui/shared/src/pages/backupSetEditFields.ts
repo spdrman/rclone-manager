@@ -27,6 +27,18 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * produced, so renaming one is a migration rather than a field on a form
  * (core/service/backupsetupdate.go's own package doc). The detail page
  * shows the name as its heading, which is what it has always been.
+ *
+ * # The two write-only boxes (issue #572)
+ *
+ * `sshKeyId` and `knownHostsLine` do not read anything back, and that is
+ * the one place this table breaks its own "read and parse are inverses"
+ * shape. There is nothing to read: the API answers with the set, and the
+ * set carries a reference to a key and a path to a trust anchor, neither
+ * of which is a value an operator typed or could act on. So both `read`
+ * as "", both are dirty only once something is typed into them, and a
+ * save that never touched them cannot carry them. That is also what makes
+ * them safe to sit beside six ordinary boxes: SAVE ALL walks the dirty
+ * ones, and an untouched empty box is not dirty.
  */
 export type EditFieldKey =
   | "host"
@@ -36,7 +48,9 @@ export type EditFieldKey =
   | "localPath"
   | "include"
   | "completion"
-  | "stableFor";
+  | "stableFor"
+  | "sshKeyId"
+  | "knownHostsLine";
 
 export interface ParsedField {
   /** The patch this field contributes, or undefined when `error` is set. */
@@ -67,6 +81,12 @@ export interface EditField {
    *  The draft rather than the persisted set, so choosing a completion
    *  method reveals its window immediately instead of after a save. */
   shownWhen?(draft: Record<EditFieldKey, string>): boolean;
+  /** Fields this one cannot be persisted without, added to any save that
+   *  carries it (withCompanions below). Only for boxes that are really one
+   *  setting the server takes as two; see the completion pair for the
+   *  whole argument. Companions are added only while they are on screen,
+   *  so this can never resurrect a hidden box. */
+  savesWith?: EditFieldKey[];
   read(set: BackupSet): string;
   parse(raw: string): ParsedField;
 }
@@ -77,6 +97,56 @@ export interface EditField {
  *  so a hidden field can never be part of a patch. */
 export function visibleEditFields(draft: Record<EditFieldKey, string>): EditField[] {
   return EDIT_FIELDS.filter((f) => !f.shownWhen || f.shownWhen(draft));
+}
+
+/**
+ * The keys a save of `keys` actually has to carry.
+ *
+ * The completion method and its window are one setting the server takes as
+ * two fields, and either one sent alone is a save that cannot work. The
+ * method alone is refused, because a stable set with a zero window is
+ * invalid on this path exactly as it is at creation, and there is no
+ * default for core to invent: too short a window copies a half-written
+ * file, so the number has to come from the operator. The window alone is
+ * refused too, because core clears the window of any set not on the stable
+ * strategy, and it used to answer 200 for the value it had just thrown
+ * away. Between those two, the pair was reachable only through SAVE ALL,
+ * which is a thing an operator finds out by failing twice.
+ *
+ * The expansion happens here, in the one place every save goes through,
+ * rather than on the per-box button, for two reasons that are not the same
+ * one. SAVE ALL walks the dirty fields, so a set already on stable-size
+ * whose window alone was edited would send the window on its own. And
+ * expanding in one place is what keeps the acknowledgement retry, which
+ * re-sends the keys a refused save carried, from re-splitting a pair the
+ * first attempt had joined.
+ *
+ * What it also buys, which is worth saying because it looks like a
+ * regression until you see it: a save of the method now parses the window
+ * too, so choosing stable-size on a set whose window is still 0 fails
+ * locally, on the window box, instead of making a request core answers
+ * with a sentence about stable_for rendered under the method box.
+ *
+ * A companion that is not on screen is never added, which is the same rule
+ * dirty-checking already follows: a hidden box must not be able to reach a
+ * patch. The key asked for is always kept, companion or not.
+ */
+export function withCompanions(
+  keys: EditFieldKey[],
+  draft: Record<EditFieldKey, string>
+): EditFieldKey[] {
+  const onScreen = new Set(visibleEditFields(draft).map((f) => f.key));
+  const out: EditFieldKey[] = [];
+  const add = (key: EditFieldKey) => {
+    if (!out.includes(key)) out.push(key);
+  };
+  for (const key of keys) {
+    add(key);
+    for (const companion of EDIT_FIELDS.find((f) => f.key === key)?.savesWith ?? []) {
+      if (onScreen.has(companion)) add(companion);
+    }
+  }
+  return out;
 }
 
 const COMPLETION_OPTIONS: { value: CompletionMethod; label: string }[] = [
@@ -167,6 +237,14 @@ export const EDIT_FIELDS: EditField[] = [
     help: FIELD_HELP.editSetCompletion,
     control: "select",
     options: COMPLETION_OPTIONS,
+    // The window rides with it whenever it is on screen. Core refuses a
+    // set whose strategy is "stable" and whose window is zero, exactly as
+    // it refuses one at creation, so a save carrying the method alone is
+    // one that can only fail on every set not already on stable-size:
+    // moving TO stable-size means arriving with a window, and there is no
+    // default for core to invent, because too short a window copies a
+    // half-written file.
+    savesWith: ["stableFor"],
     read: (s) => s.completionMethod,
     parse: (raw) => ({ patch: { completionMethod: raw as CompletionMethod } })
   },
@@ -183,6 +261,13 @@ export const EDIT_FIELDS: EditField[] = [
     // without this one is a control whose "Stable file size" option is
     // unusable on every set that is not already on it.
     shownWhen: (draft) => draft.completion === "stable-size",
+    // And the method rides back, which is the other half of the same
+    // defect. Core clears the window of any set not on "stable", so a save
+    // carrying the window alone, made while the DRAFT says stable-size but
+    // the persisted set still says rename, is a write the file discards.
+    // It used to answer 200 for that; it now refuses, and this is what
+    // keeps the box from having to be refused at all.
+    savesWith: ["completion"],
     read: (s) => String(s.stableForSeconds),
     parse: (raw) => {
       const trimmed = raw.trim();
@@ -191,6 +276,46 @@ export const EDIT_FIELDS: EditField[] = [
         return { error: "Stable for must be a whole number of seconds greater than zero." };
       }
       return { patch: { stableForSeconds: value } };
+    }
+  },
+  {
+    key: "sshKeyId",
+    label: "SSH key",
+    help: FIELD_HELP.editSetSSHKey,
+    control: "text",
+    // Write-only: see this file's own doc. "" is not the key's value, it
+    // is the absence of an instruction, and the dirty check is what keeps
+    // those two from being confused.
+    read: () => "",
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      // Caught here rather than left to the server for the reason the
+      // port is: there is no request that expresses it. An empty
+      // ssh_key_id is refused by core, so sending one would spend a round
+      // trip to be told what this box already knows.
+      if (trimmed === "") {
+        return { error: "Paste the id of an imported key, or leave the box empty to keep the key this set already uses." };
+      }
+      return { patch: { sshKeyId: trimmed } };
+    }
+  },
+  {
+    key: "knownHostsLine",
+    label: "Trusted host key",
+    help: FIELD_HELP.editSetKnownHostsLine,
+    control: "text",
+    read: () => "",
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      if (trimmed === "") {
+        return { error: "Paste the known_hosts line to trust, or leave the box empty to keep trusting the key this set already trusts." };
+      }
+      // Nothing beyond emptiness is checked here. Whether the line parses,
+      // and whether it pins a key different from the one on record, are
+      // both decided by the service against what is actually persisted,
+      // and a second opinion about a host key formed in a browser would be
+      // one that can be wrong in the permissive direction.
+      return { patch: { knownHostsLine: trimmed } };
     }
   }
 ];

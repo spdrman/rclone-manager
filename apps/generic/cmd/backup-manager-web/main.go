@@ -76,16 +76,15 @@ var (
 // it; --config also accepts that directory.
 const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
 
-// defaultStateDatabase is where a FIRST-RUN configuration will point its
-// SQLite journal (issue #176). It matches what
-// scripts/deploy/deploy_generic.py's render_config_yaml has always
-// written and what container/compose.yaml already mounts (STATE_DIR ->
-// /data/state), so an instance an administrator sets up through the web
-// UI lands in exactly the same place as one deployed by that script.
-//
-// It is a deployment fact, never something an API caller supplies: see
-// core/service.FirstRunDefaults' own doc for why that boundary matters.
-const defaultStateDatabase = "/data/state/state.db"
+// Where a FIRST-RUN configuration points its SQLite journal (issue #176)
+// is deliberately NOT a constant here. It is
+// core/service.StateDatabaseDefault, which core/cmd/backup-manager's own
+// --state-database also takes its default from, because #571 rests on
+// this process and a `backup-set create` typed on the same host naming
+// the same journal: this one announces about it before it serves the
+// setup flow, and that one finds the announcement by asking about it.
+// Two copies of one path, one of which read $STATE_DATABASE and one of
+// which did not, is how that guarantee came apart.
 
 // defaultAuthStorePath lives inside the SAME already-writable state
 // volume container/compose.yaml already mounts for the SQLite journal
@@ -368,7 +367,7 @@ func cmdServe(args []string) int {
 		"trust X-Forwarded-For/X-Forwarded-Proto from the immediate caller - only safe behind serve-ui's own reverse proxy over an isolated network (see this command's own --help)")
 	publicBaseURL := fset.String("public-base-url", envOrDefault("PUBLIC_BASE_URL", ""),
 		"externally-reachable base URL for the one-time enrollment link (default: print just the raw token, since this process's own --listen address is never externally reachable)")
-	stateDatabase := fset.String("state-database", envOrDefault("STATE_DATABASE", defaultStateDatabase),
+	stateDatabase := fset.String("state-database", service.StateDatabaseDefault(),
 		"SQLite journal path written into a first-run configuration; ignored once a config file exists, which names its own")
 	if err := fset.Parse(args); err != nil {
 		return exitUsage
@@ -514,13 +513,35 @@ func cmdServe(args []string) int {
 	// liveengine.go has the whole arrangement.
 	//
 	// On a first-run instance there is no configuration to name a journal
-	// yet, so this is a no-op and the announcement happens in Activate
-	// below instead, once setup has written one.
-	stopServing, err := service.AnnounceServing(*configPath)
+	// yet, and that used to mean no announcement at all until setup had
+	// written one. Issue #571 is what that cost: an operator who installed
+	// fresh, enrolled an administrator and then typed `backup-set create`
+	// got a set written into a config.yaml the process below will never
+	// read, exit 0, and a Web UI still answering 503. So the journal
+	// --state-database names is handed over as well, because it is what
+	// this process is going to serve either way: the configuration setup
+	// writes names exactly that path, and the CLI's own --state-database
+	// carries the same packaged default, which is what makes the
+	// announcement something a `backup-set create` on this host can find.
+	serving, err := service.AnnounceServingFirstRun(*configPath, *stateDatabase)
 	if err != nil {
 		return failServing(err)
 	}
-	defer func() { _ = stopServing() }()
+	defer func() { _ = serving.Release() }()
+	// A first install that cannot announce itself yet still comes up, and
+	// that is PR #581's review rather than a looseness. Announcing means
+	// creating a lock file in the state directory, and a read-only bind
+	// mount, a volume mounted after this service starts, or a uid that
+	// cannot write /data/state made a fresh install exit here and be
+	// restarted forever by its supervisor, diagnosable only through
+	// `docker logs`. That is the one start where the operator has nothing
+	// but a browser, so the setup flow is served and told to say why,
+	// while setup itself stays refused (gateFirstRunOnServing below) until
+	// the announcement can really be made. core/service's FirstRunServing
+	// has the whole argument, including which failures still stop a start.
+	if blocked := serving.Blocked(); blocked != nil {
+		fmt.Fprintf(os.Stderr, "backup-manager-web: this deployment's state directory cannot be used yet, so nothing has been announced and the setup flow will refuse to complete until it can be: %v\n", blocked)
+	}
 
 	backend, cleanup, err := service.Open(ctx, *configPath)
 	switch {
@@ -562,37 +583,35 @@ func cmdServe(args []string) int {
 		if frErr != nil {
 			return fail(frErr)
 		}
-		engineConfig.FirstRun = firstRun
+		engineConfig.FirstRun = gateFirstRunOnServing(firstRun, serving)
 		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
-			// The announcement the branch above could not make: there was
-			// no configuration to name a journal when this process
-			// started, and setup has just written one. From here on this
-			// instance is a running engine like any other, and a CLI
-			// write aimed at it has to be able to find it.
+			// There is no announcement here any more, and its absence is
+			// the fix for #571 rather than an omission. This used to be
+			// the first moment this process could say what it served,
+			// which left the whole of the setup flow invisible to a
+			// `backup-set create` on the same host. The announcement is
+			// now made before the setup flow is served at all, for the
+			// journal --state-database names, and CreateInitialConfig
+			// writes that same path into state.database (FirstRunDefaults
+			// is where both read it from), so what this process serves
+			// from here on is the deployment it already announced.
 			//
-			// No failServing here, and it is not an oversight: this
-			// process is not exiting. It is serving a setup flow, and a
-			// refusal here is reported to the operator through the API
-			// as restart_required (FirstRunEngine.activate), with the
-			// configuration already durably written. There is no exit
-			// status to carry #551's news on, and inventing one would
-			// mean tearing down a server for a fact the person in front
-			// of it can already read.
-			stopActivated, serveErr := service.AnnounceServing(*configPath)
-			if serveErr != nil {
-				return nil, nil, serveErr
-			}
+			// Announcing a second time would not be harmless either: the
+			// serving lock is taken EXCLUSIVELY and flock attaches to the
+			// open file description, so a second acquire in this process
+			// is a second description, and it would wait out the lock
+			// timeout and then be refused as ErrAlreadyServing by the
+			// announcement this process is already holding.
+			//
+			// A failure below is returned rather than fatal, and that is
+			// not an oversight: this process is not exiting. It is serving
+			// a setup flow, and a refusal here reaches the operator through
+			// the API as restart_required (FirstRunEngine.activate), with
+			// the configuration already durably written, so a restart
+			// genuinely does finish the job.
 			opened, closeFn, openErr := service.Open(ctx, *configPath)
 			if openErr != nil {
-				_ = stopActivated()
 				return nil, nil, openErr
-			}
-			closeBoth := func() error {
-				closeErr := closeFn()
-				if stopErr := stopActivated(); stopErr != nil && closeErr == nil {
-					closeErr = stopErr
-				}
-				return closeErr
 			}
 			// Alerting is decided from the configuration setup just
 			// wrote, exactly as it is for a process that started with
@@ -600,7 +619,7 @@ func cmdServe(args []string) int {
 			// deployment shape where the alerts block does nothing until
 			// a restart.
 			enableAlerts(opened, platformAdapter)
-			return opened, closeBoth, nil
+			return opened, closeFn, nil
 		}
 
 		engine, engErr := serve.NewFirstRunEngine(engineConfig)
@@ -988,6 +1007,43 @@ func failServing(err error) int {
 		return exitEngineHoldsDeployment
 	}
 	return fail(err)
+}
+
+// gateFirstRunOnServing puts one refusal in front of the one write a
+// first-run instance exposes: this deployment has to be announced before
+// its first configuration is written.
+//
+// Everything else about the setup surface is left alone. Importing a key,
+// probing a host key and testing a connection all work on a deployment
+// whose state volume is broken, and refusing them would take the wizard
+// away from the operator instead of telling them what to fix.
+//
+// The refusal is re-decided per submission rather than fixed at startup,
+// which is the half that makes this a fix rather than a nicer error.
+// FirstRunServing.Blocked retries the announcement, so an operator who
+// remounts the volume read-write, or corrects the ownership of
+// /data/state, finishes setup in the wizard already on their screen. And
+// because the announcement is made in that same call, "this deployment is
+// announced" and "this deployment may be configured" become one instant:
+// a `backup-set create` typed on the host either finds this process or
+// gets here first, and never lands in the gap #571 was reported for.
+func gateFirstRunOnServing(firstRun webhost.FirstRunClient, serving *service.FirstRunServing) webhost.FirstRunClient {
+	return firstRunGate{FirstRunClient: firstRun, serving: serving}
+}
+
+// firstRunGate is that refusal. It embeds the surface it guards so a
+// method added to webhost.FirstRunClient reaches the real one rather than
+// silently going missing here.
+type firstRunGate struct {
+	webhost.FirstRunClient
+	serving *service.FirstRunServing
+}
+
+func (g firstRunGate) CreateInitialConfig(ctx context.Context, req service.CreateBackupSetRequest) (service.BackupSet, error) {
+	if err := g.serving.Blocked(); err != nil {
+		return service.BackupSet{}, err
+	}
+	return g.FirstRunClient.CreateInitialConfig(ctx, req)
 }
 
 // envOrDefault returns the environment variable key's value if set and

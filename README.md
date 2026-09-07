@@ -50,7 +50,7 @@ the way its predecessor did.
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
 | `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
-| `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
+| `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set`. `--backup-set` takes the `source/backup-set` id `sources`, `status` and `retention` name a backup set by, and a plain set name where one source configures it. Not this list's own first column, which is the whole artifact id and a field longer; a name two sources share is refused with both ids rather than answered for one of them (issue #569) |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
 | `reconcile` | run FR-17 reconciliation for every backup set |
@@ -117,8 +117,10 @@ setting, clearing and reporting a set's policy all exist. What was not wanted wa
 write while the report beside it went on reading this host's own file, which would leave one
 verb answering out of two worlds, so the whole verb stays on the direct path until both halves
 move together. The other is the first `config.yaml` a `create` writes on an instance that does
-not have one yet: finding a process serving the journal `--state-database` names says that
-deployment is already configured, which is not a deployment to send a first-run request to.
+not have one yet: the only request that could carry it is `POST /system/first-run`, which an
+engine accepts once and only while it is still unconfigured, so a process found serving the
+journal `--state-database` names is either past that moment or is the setup flow the operator
+can finish themselves.
 
 The address is three environment variables, which are the whole of the configuration this
 needs:
@@ -382,7 +384,11 @@ backup-manager backup-set --config ./config.yaml patch production/postgres-prima
 
 Only the flags you pass are changed; anything you leave out is left exactly as it is, which
 is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
-one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+one the Web UI's per-box Save rests on. The one pair that has to travel together is
+`--completion-strategy stable` and `--stable-for`: a set on the stable strategy with a zero
+window is refused, there is no default to supply for it because too short a window copies a
+half-written file, and a `--stable-for` the resulting file would not keep is refused rather
+than accepted and cleared. Both surfaces call the same service method, so they
 cannot drift. The change is validated against the same `config.Validate` a hand-edited file
 goes through at boot and written through the same atomic replace.
 
@@ -422,6 +428,36 @@ has been read. If the new location holds a *different* dataset, make it a separa
 set instead. `--port` and `--user` are not in that list: neither changes which directory on
 which machine holds the data.
 
+**The SSH key and the trusted host key are patchable too, and one of them asks first.**
+Until issue #572 neither was, on any surface: a key replaced on the source host, or a server
+rebuilt with a new host key, left removing the backup set and creating it again as the only
+route. `--ssh-key-file` imports a replacement key and rotates onto it, `--ssh-key-id` reuses
+one this deployment already has, and both are ordinary edits that ask nothing.
+
+`--known-hosts-line` (or `--trust-host-key`, which probes the host and offers you what
+answers) is the one that asks. A host key changes when a server is rebuilt or migrated, and
+it changes in exactly the same way when something else is answering in its place, so nothing
+here can tell those apart and it will not guess. The refusal names the fingerprint on record
+and the fingerprint being offered, because those two strings are the whole of what there is
+to compare. Check the new one against the host itself, the way the wizard's verify step did
+the first time, then add `--acknowledge-host-key-change` (or
+`"acknowledge_host_key_change": true` on the API, or **Save anyway** in the Web UI).
+Changing `--port` in the same edit does not exempt it: a port is how you reach the same
+machine. It is a separate acknowledgement from `--acknowledge-repoint` on purpose: one says
+"this is the same data at a new address" and the other says "this is the same host with a
+new key", and one flag for both would let an operator who meant one of them quietly grant
+the other.
+
+The line pins one plain host key for this set's own host, so three things are refused
+outright rather than acknowledged: a marker such as `@cert-authority` (trusting whatever a
+key vouches for is a different decision from trusting a server, and the fingerprint this
+prints cannot describe it), a line naming some other host (it would leave the set unable to
+check its own), and, unless you acknowledge it, a line that would drop a key the set is
+already pinning. That last one is the ordinary shape of a host answering with two key
+algorithms: `ssh-keyscan` writes a line each, this field carries one, and narrowing the set
+to that one is something to mean rather than to discover later as a key mismatch.
+Re-sending the only line on record changes no trust and is never refused.
+
 **`backup-set create` asks the same question, for the same reason.** A backup set is
 identified by its source and its name, so `backup-set remove` frees that id up and a set
 created over it again takes every artifact the removed one left on record. That is what
@@ -458,10 +494,20 @@ deployment or the hundredth edit of an existing one. Write the file, run `check`
 `backup-set create` holds that line rather than breaking it. On a machine with no
 `config.yaml` it writes the first one, through the same `FirstRun.CreateInitialConfig` the
 wizard's route calls, and `--state-database` names the journal that first configuration
-points at (defaulting to `/data/state/state.db`, the packaged mount). An operator standing
-at a freshly installed NAS therefore has one command to type, not a wizard to open, and the
-two surfaces still reach the same code. Same code, two processes: see the note under the
-command table above for what that does and does not mean against a server already running.
+points at (defaulting to `$STATE_DATABASE`, or `/data/state/state.db`, the packaged mount).
+That default is the same one the web host serves under, read out of one definition, so moving
+the journal with `$STATE_DATABASE` moves both surfaces or neither. So an operator on a
+host where no engine is up has one command to type rather than a wizard to open, and the two
+surfaces still reach the same code.
+
+What decides whether that command writes is the same thing that decides it for every other
+configuration write, and it is worth reading before typing it at a packaged install (issue
+#571). A container serving the first-run setup flow is serving this deployment: it announces
+the journal `--state-database` names before it serves a request, so a `create` typed beside
+it is refused with exit 3 and nothing written, exactly as the second create on that machine
+would be. Finish setup in the browser, or stop the engine and run the command. It is only a
+host with nothing serving that journal, which is a bare machine or one whose container is
+down, where the first configuration is written from the command line.
 
 **Enabling or disabling a backup set is a config-file field.** `POST
 /backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`
@@ -578,7 +624,7 @@ The image is published, which is the other thing this section used to deny, and 
 version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
 `ghcr.io/spdrman/backup-manager`, v0.3.0 followed them there, all three are still
 keyless-signed with the SBOM attested beside them, and `0.3.0`'s image index is
-`sha256:95e0bd37`. `0.3.1` is cut and not pushed, which is what a release looks like
+`sha256:95e0bd37`. `0.3.2` is cut and not pushed, which is what a release looks like
 between the cut and the push: `distribution/packaging/canonical.json` records
 `published: false` and `container/release-manifest.json` is back to a null `index_digest`
 and a null `registry_digest` per architecture. That flag and those digests move together,
@@ -1377,8 +1423,11 @@ is a different instant: that one is when the artifact finished committing locall
 field matching the discovery timestamp is `retention_timestamp`.)
 
 Two ways to see what a policy would do before it does it:
-`backup-manager retention --dry-run`, which also takes per-run overrides for the timezone,
-the week start and each tier so you can compare policies without editing config; and
+`backup-manager retention --dry-run`, over every configured set or over the one you name
+(`backup-manager retention <source/backup-set> --dry-run`, which refuses an id that names
+no configured set rather than answering about a different one), and which also takes
+per-run overrides for the timezone, the week start and each tier so you can compare
+policies without editing config; and
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 
@@ -1691,9 +1740,12 @@ branches, is [`docs/recovery.md`](docs/recovery.md); this is the part you should
 click through to get.
 
 Start with `backup-manager status --config <path>` and `backup-manager artifacts --config
-<path> --backup-set <set>`, which is faster than a query and does not need you to know the
-schema. When you want the raw truth, or the binary is not to hand: **the SQLite journal at
-`state.database` is the truth, and it's a plain SQLite file.** Query it directly:
+<path> --backup-set <source/backup-set>`, which is faster than a query and does not need you
+to know the schema. The set name on its own works too, as long as only one source configures
+it: where two hosts follow one naming convention, name the whole id, since the same name
+under two sources is refused rather than answered for one of them (issue #569). When you
+want the raw truth, or the binary is not to hand: **the SQLite journal at `state.database`
+is the truth, and it's a plain SQLite file.** Query it directly:
 
 ```bash
 sqlite3 /path/to/state.db "
@@ -1808,15 +1860,26 @@ holds the tree to it rather than a convention.
 
 ### The local gate
 
-`scripts/ci-local.sh` is the gate for this repository. `.github/workflows/ci.yml`,
-`rclone-upgrade-gate.yml` and `nightly-e2e.yml` are all `workflow_dispatch`-only, so
-**nothing runs on push or on a pull request**, and `.husky/pre-commit` runs this script on
-every commit instead. It mirrors those workflows job for job, which makes it slow: the whole
+`scripts/ci-local.sh` is the gate for everything bound for `main`. `rclone-upgrade-gate.yml`
+and `nightly-e2e.yml` are `workflow_dispatch`-only and `ci.yml` runs only on a pull request
+into `release`, so **nothing on a `main`-bound branch runs on push or on a pull request**,
+and `.husky/pre-commit` runs this script on every commit instead. It mirrors those
+workflows job for job, which makes it slow: the whole
 `core/` suite including the crash matrix, the SFTP and MinIO integration suites and the
 machine tier, both cross-compiles, every Go module's build/vet/test/lint, the frontend
 lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, EPIC E's
 FR-35 compatibility corpus, and the repository-structure dependency proofs. About
 twenty-five minutes.
+
+The one branch that does gate on GitHub is `release`, because merging into it publishes a
+signed image to a public registry (issue #575). A pull request there runs `ci.yml` in full,
+including `scripts/e2e/two-machine-backup.sh` in all four of its cases, and the
+`release gate` check has to be green before the merge. About fourteen minutes on hosted
+runners, measured on a rehearsal rather than estimated, and it is the only automatic check
+in this repository. The repository-structure proofs are the long pole at just over
+thirteen of those minutes, because each one deletes a directory in a throwaway worktree and
+rebuilds and retests what is left; the two-machine proof is four and a half and finishes
+well inside them.
 
 It opens with the cheap checks that can invalidate everything after them, because a control
 that turns out to have been planting nothing is worth knowing about in second one rather

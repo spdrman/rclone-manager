@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "Backup Manager 0.3.1",
-  "documentNamespace": "https://github.com/spdrman/rclone-manager/spdx/f6077d6c6508a34f4114dd91094b34db1fedb5c2",
+  "name": "Backup Manager 0.3.2",
+  "documentNamespace": "https://github.com/spdrman/rclone-manager/spdx/572dffc6326ab0e1c1cb61bc137d3b10768e241b",
   "creationInfo": {
-    "created": "2026-09-06T22:24:21Z",
+    "created": "2026-09-07T19:09:08Z",
     "creators": [
       "Tool: backup-manager-provenance",
       "Organization: The Backup Manager Authors"

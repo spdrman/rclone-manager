@@ -125,6 +125,12 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
 
     const banner = await screen.findByRole("alert");
     expect(banner.textContent).toMatch(/SSH host key/i);
+    // "Review fingerprint", because the destination holds one again. It
+    // briefly did not: the panel showed an algorithm literal beside an
+    // empty digest, and a label naming evidence the page does not hold is
+    // the same defect as an action naming the wrong remedy, one word
+    // further in. #572 made the service report the keys a set really pins,
+    // so the label and the destination agree again.
     expect(screen.getByRole("button", { name: "Review fingerprint" })).toBeTruthy();
   });
 
@@ -137,7 +143,7 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
   });
 
   // Second defect in the same report (issue #285): DashboardPage.tsx used
-  // to pass one hardcoded action, "Review fingerprint", regardless of
+  // to pass one hardcoded action, the host-key one, regardless of
   // haltReason, so a rejected-credential halt offered a button for a
   // problem it did not have. A fingerprint has nothing to do with a
   // rejected login, and HaltBanner's own doc is the rule this breaks:

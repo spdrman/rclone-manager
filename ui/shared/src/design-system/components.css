@@ -170,3 +170,97 @@
   font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
 }
 .fieldhelp__close:hover { background: var(--surface-3); color: var(--text); }
+
+/* ---- activity strip (issue #573) -------------------------------------
+   The strip pinned at the foot of the dashboard, one per backup set.
+
+   The animations are the only part of this that could not be an inline
+   style, and they are the part that carries meaning rather than
+   decoration: the sweep across the fill says the process is alive,
+   separately from the percentage, which can legitimately sit still for a
+   long time on a large artifact. A percentage alone cannot tell "slow"
+   from "stuck", and that distinction is the whole reason an operator is
+   looking at this panel.
+
+   Every one of them is switched off under prefers-reduced-motion, where
+   the same fact is carried by the word beside the bar instead. */
+.activity-bar {
+  height: 8px; border-radius: var(--radius-pill);
+  background: var(--surface-3); overflow: hidden; position: relative;
+}
+.activity-bar__fill {
+  height: 100%; border-radius: var(--radius-pill);
+  position: relative; overflow: hidden; background: var(--accent);
+}
+.activity-bar__fill--ok { background: var(--ok); }
+.activity-bar__fill--danger { background: var(--danger); }
+.activity-bar__fill--busy::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.55) 45%, transparent 90%);
+  background-size: 220% 100%;
+  animation: activity-sweep 1.5s linear infinite;
+}
+@keyframes activity-sweep {
+  from { background-position: 180% 0; }
+  to { background-position: -80% 0; }
+}
+.activity-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.activity-dot--pulse { animation: activity-pulse 1.4s ease-in-out infinite; }
+@keyframes activity-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* The log pane. It scrolls with a visible track, so the affordance is not
+   a surprise on a panel whose whole job is to be scrolled back through. */
+.activity-log {
+  background: var(--term-bg); color: var(--term-text);
+  font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.75;
+  padding: var(--space-3) var(--space-5);
+  max-height: 132px; overflow-y: scroll;
+  border-top: 1px solid var(--border);
+  scrollbar-width: thin; scrollbar-color: var(--term-scroll) var(--term-bg);
+}
+.activity-log::-webkit-scrollbar { width: 9px; }
+.activity-log::-webkit-scrollbar-track { background: var(--term-bg); }
+.activity-log::-webkit-scrollbar-thumb {
+  background: var(--term-scroll); border-radius: var(--radius-pill);
+  border: 2px solid var(--term-bg);
+}
+.activity-log__time { color: var(--term-time); }
+.activity-log__line--info { color: var(--term-info); }
+.activity-log__line--ok { color: var(--term-ok); }
+.activity-log__line--warn { color: var(--term-warn); }
+.activity-log__line--error { color: var(--term-danger); }
+
+.activity-toolbar {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-top: 1px solid var(--border); background: var(--surface-2);
+  font-size: var(--text-xs); color: var(--text-2);
+}
+.activity-toolbar__spacer { flex: 1; }
+.activity-toolbar__toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 2px 4px;
+  font: inherit; font-size: var(--text-xs); color: var(--text-2);
+  cursor: pointer; border-radius: var(--radius-sm);
+}
+.activity-toolbar__toggle:hover { background: var(--surface-3); color: var(--text); }
+.activity-toolbar__button {
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.activity-toolbar__button:hover { background: var(--surface-3); color: var(--text); }
+
+.activity-spinner {
+  width: 11px; height: 11px; flex: none;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent);
+  border-radius: 50%; animation: activity-spin 0.7s linear infinite;
+}
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-bar__fill--busy::after,
+  .activity-dot--pulse,
+  .activity-spinner { animation: none; }
+}

@@ -865,19 +865,61 @@ run_case() {
   fi
 
   # ------------------------------------ create the set, through the CLI
-  step "  creating a backup set through the CLI"
-  bm "$mgr" "$prefix" backup-set create e2e/source \
-    --config /etc/backup-manager/config \
-    --host "$source_ip" \
-    --user "$sftp_user" \
-    --ssh-key-file /etc/backup-manager/id_ed25519 \
-    --trust-host-key \
-    --remote-path /upload \
-    --local-path /data/backups/source \
-    --completion-strategy rename \
-    --read-only \
-    --state-database /data/state/state.db \
+  #
+  # Two steps rather than one, and issue #571 is the reason. A packaged
+  # install that has never been configured is still SERVING: the engine
+  # container announces the journal `--state-database` names before it
+  # puts up the first-run setup flow, so a create typed beside it is
+  # refused with nothing written, exactly as the second create on this
+  # machine would be. This used to be the one configuration write that got
+  # through, and what it left behind was a CLI holding a backup set the
+  # running engine had never heard of, which is #535 on a fresh install.
+  #
+  # So the refusal is asserted first, because it is the property, and then
+  # the create is performed the way the refusal tells an operator to
+  # perform it: with the engine down. That is the same shape `auth
+  # create-admin` needs in run_lifecycle below, for the same kind of
+  # reason, and it is the honest worked example for a packaged install.
+  local create_argv=(backup-set create e2e/source
+    --config /etc/backup-manager/config
+    --host "$source_ip"
+    --user "$sftp_user"
+    --ssh-key-file /etc/backup-manager/id_ed25519
+    --trust-host-key
+    --remote-path /upload
+    --local-path /data/backups/source
+    --completion-strategy rename
+    --read-only
+    --state-database /data/state/state.db)
+
+  step "  a create typed beside the serving engine is refused (#571)"
+  local refusal="" refused=0
+  refusal="$(bm "$mgr" "$prefix" "${create_argv[@]}" 2>&1)" || refused=$?
+  [ "$refused" = "3" ] \
+    || die "a first \`backup-set create\` typed beside the engine exited $refused, want 3." \
+           "3 is the status #551 reserves for a write refused because another process is serving this deployment," \
+           "and #571 is the case where that process is a fresh install still on its setup flow. A 0 here means the" \
+           "configuration was written underneath an engine that will never read it, which is #535." \
+           "the command said: $refusal"
+  # And nothing was written. `sources` needs a configuration to read, so on
+  # an installation that still has none it refuses, and a zero here would
+  # mean the refused create left one behind after all.
+  if bm "$mgr" "$prefix" sources --config /etc/backup-manager/config >/dev/null 2>&1; then
+    die "the refused create left a configuration behind, so \"nothing was written\" is not true on a real install."
+  fi
+  note "refused with exit 3, and this installation still has no configuration"
+
+  step "  creating a backup set through the CLI, with the engine stopped"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager "${create_argv[@]}" \
     || die "creating the backup set through the CLI failed."
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  # On the engine answering, not on the file existing: `run --rm` wrote it
+  # before this line was reached, so waiting on the file would wait for
+  # nothing and the next step would race the restart.
+  wait_or_die 180 "the engine to answer again after the backup set was created" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
 
   # ------------------------------------------------------ run it
   step "  running the backup set"

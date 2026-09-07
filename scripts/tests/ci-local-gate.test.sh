@@ -379,6 +379,20 @@ make_full_tree() {
   # gate's INCOMPLETE.
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/two-machine-exit-status.test.sh"
 
+  # The release gate's own three guards (#575), stubbed for the ninth,
+  # tenth and eleventh times and for the same reason as everything above.
+  # They are static steps, so a tree without them dies before Group D can
+  # measure anything, and the failure reads as this suite being broken
+  # rather than as a missing fixture. The real ones prove that a proof CI
+  # could not perform comes out red under the word INCOMPLETE, that the
+  # `release gate` job still waits on every job in ci.yml, and that
+  # release.yml refuses to publish a commit that gate never passed. None
+  # of the three has anything to say about a synthetic tree with no
+  # .github in it.
+  for guard in two-machine-ci-verdict release-gate-covers-every-job release-refuses-an-ungated-publish; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
+  done
+
   # The installer's unit tests (#262), which the gate runs by `cd`-ing into
   # scripts/install. Same reason as every stub above, and the same failure
   # mode without it: a `cd` into a directory this fixture does not have

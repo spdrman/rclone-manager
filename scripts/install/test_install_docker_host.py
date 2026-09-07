@@ -1258,7 +1258,7 @@ class TestVersionOrdering(unittest.TestCase):
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
         """A colon in a reference is not always a tag separator."""
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.1"), "0.3.1")
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.2"), "0.3.2")
 
     def test_ordering_is_numeric_and_not_lexical(self):
         self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
@@ -4347,7 +4347,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     to the identity container/release-manifest.json recorded (issue #484).
 
     A tag is a mutable pointer, which this project's own release tooling
-    says in as many words, so "install 0.3.1" is a claim about a name
+    says in as many words, so "install 0.3.2" is a claim about a name
     until something compares the name to a recorded identity. One
     anonymous HEAD does that, and it is the reason a previous release can
     be named at all: an installer that floated onto a future tag could

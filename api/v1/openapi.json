@@ -93,6 +93,7 @@
           "REINSTATEMENT_REFUSED",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
           "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+          "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
           "MEDIUM_DISCLOSURE_REQUIRED",
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
@@ -139,6 +140,7 @@
           "REINSTATEMENT_REFUSED": "wire",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
           "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED": "wire",
+          "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED": "wire",
           "MEDIUM_DISCLOSURE_REQUIRED": "wire",
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
@@ -174,6 +176,8 @@
             "ARTIFACT_IRRECOVERABLE",
             "REINSTATEMENT_REFUSED",
             "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+            "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+            "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
             "ARTIFACT_NOT_FAILED"
           ],
           "not-found": [
@@ -194,6 +198,25 @@
             "NOT_CONFIGURED"
           ]
         }
+      },
+      "TrustedHostKey": {
+        "type": "object",
+        "description": "ONE host key a backup set actually pins, named the way an operator compares it: the algorithm and the SHA256 fingerprint, the form `ssh-keygen -lf` prints and the wizard's verify step shows. Never the key material, which is a wall of base64 nobody checks by eye.",
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "description": "The host key algorithm, as an SSH implementation names it (\"ssh-ed25519\", \"ssh-rsa\", \"ecdsa-sha2-nistp256\"). Read off the key itself, never assumed: a panel that printed a fixed algorithm beside a fingerprint told an operator with an RSA anchor that they had trusted an ed25519 one."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The SHA256 fingerprint, \"SHA256:\" prefix included, byte for byte what `ssh-keygen -lf` prints for the same key. It is the whole of what an operator has to compare against the host."
+          }
+        },
+        "required": [
+          "algorithm",
+          "fingerprint"
+        ]
       },
       "VersionResponse": {
         "type": "object",
@@ -980,6 +1003,20 @@
           "retention_is_override": {
             "type": "boolean",
             "description": "Whether this backup set declares its own retention policy rather than being retained under the deployment's (issue #333). The policy itself is not here: read it from /backup-sets/{source}/{set}/retention, which serves the resolved chain, the deployment's chain beside it, and the raw override. A list of sets needs the attribution, not three numbers that only fit one shape of chain."
+          },
+          "trusted_host_keys": {
+            "type": "array",
+            "description": "Every host key this backup set's known_hosts actually pins for this set's own address, read from that file rather than restated from the configuration, because the file is what a connection checks. A LIST because a host legitimately answers with more than one key algorithm and OpenSSH writes a line for each, so a set pinning both an ed25519 and an RSA key is in ordinary shape and reporting one of them would show an operator a fingerprint the server in front of them may not present. ABSENT is \"this deployment could not report what this set trusts\", and it is what a local-transport set, an unreadable anchor and a file pinning nothing for this address all produce; a client must say that rather than render a blank where a fingerprint goes. An engine built before this field answers the same way, so a client cannot read absence as \"this set trusts nothing\".",
+            "items": {
+              "$ref": "#/components/schemas/TrustedHostKey"
+            },
+            "x-go-omitempty": true
+          },
+          "trusted_host_key_recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When THIS deployment last wrote the trust anchor above. Absent when the backup set points at a known_hosts file this deployment did not write: a file an operator maintains by hand is usually shared with other sets, so its timestamp is about whatever was last added to it rather than about this set's host, and reporting it would answer \"when was this host key trusted\" with something else.",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -2281,7 +2318,7 @@
       },
       "UpdateBackupSetRequest": {
         "type": "object",
-        "description": "PATCH /backup-sets/{source}/{set}. A SPARSE edit of one already-persisted backup set (issue #350): every property is optional, and a property this body omits is left exactly as it is rather than cleared. That is what lets the Web UI's per-box Save persist only the box it belongs to. It deliberately carries no name/source_name (a backup set's identity keys every journal row, artifact id and recovery manifest it has ever produced, so a rename is a migration rather than an edit) and no ssh_key_id/known_hosts_line (those are the results of the import and probe steps, and re-trusting a host is a trust decision rather than an edit).",
+        "description": "PATCH /backup-sets/{source}/{set}. A SPARSE edit of one already-persisted backup set (issue #350): every property is optional, and a property this body omits is left exactly as it is rather than cleared. That is what lets the Web UI's per-box Save persist only the box it belongs to. It deliberately carries no name/source_name: a backup set's identity keys every journal row, artifact id and recovery manifest it has ever produced, so a rename is a migration rather than an edit. It does carry ssh_key_id and known_hosts_line (issue #572), because a key replaced on the source host and a host key that changes when a server is rebuilt are both ordinary events a set has to be able to be told about, and until they were here the only route was to remove the set and create it again. Both are still references produced by the import and probe steps rather than material typed here, and re-trusting a host is still a trust decision, which is what acknowledge_host_key_change is for.",
         "additionalProperties": false,
         "properties": {
           "host": {
@@ -2314,6 +2351,7 @@
           },
           "completion_strategy": {
             "type": "string",
+            "description": "This and stable_for_seconds are one setting spelled as two properties, and a body moving to \"stable\" has to carry both: a backup set whose strategy is \"stable\" and whose window is zero is refused here exactly as it is at creation, and there is no default for the server to supply, because too short a window copies a half-written file.",
             "enum": [
               "rename",
               "marker",
@@ -2323,11 +2361,21 @@
           },
           "stable_for_seconds": {
             "type": "integer",
-            "description": "Required, and only meaningful, when the completion strategy in effect after this edit is \"stable\".",
+            "description": "Required, and only stored, when the completion strategy in effect after this edit is \"stable\"; an edit that leaves the strategy as anything else clears it, so that an operator's file never holds a number nothing reads. A body naming a window the resulting configuration would therefore NOT hold is refused with INVALID_REQUEST rather than accepted and cleared (issue #572): a 200 for a write that was discarded is an answer other things get built on. Sending 0 alongside a move off \"stable\" is not refused, because that asks for exactly what happens.",
             "x-go-pointer": true
           },
           "stale_after_seconds": {
             "type": "integer",
+            "x-go-pointer": true
+          },
+          "ssh_key_id": {
+            "type": "string",
+            "description": "The id of a key POST /ssh-keys has already imported, replacing whichever key this backup set authenticates with now (issue #572). A reference, never key material, exactly as on the create path. An id no import produced is refused with SSH_KEY_NOT_FOUND and nothing is written.",
+            "x-go-pointer": true
+          },
+          "known_hosts_line": {
+            "type": "string",
+            "description": "The exact known_hosts line this backup set should trust from now on, as POST /backup-sets/probe-host-key returns it (issue #572). Replacing it is how a set is told that its source host was legitimately rebuilt. It pins ONE plain host key: a line carrying a marker such as @cert-authority is refused as an invalid request, because trusting whatever a key vouches for is a different decision from trusting a server and the fingerprint comparison this edit shows cannot describe it. The line must also name this backup set's own host, at the port this edit leaves it on, or it is refused: one naming a different host parses and fingerprints exactly like one naming this one, and pinning it would leave the set unable to verify its host at all. A line that changes what the set trusts for its own address is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED unless acknowledge_host_key_change is set, in both directions: a different key being pinned, and a key on record that this one line would stop pinning (a host answering with more than one key algorithm has a known_hosts line each). Re-sending the line already trusted, when it is the only one on record, changes no trust and is never refused.",
             "x-go-pointer": true
           },
           "validator_id": {
@@ -2338,6 +2386,10 @@
           "acknowledge_repoint": {
             "type": "boolean",
             "description": "Confirms that this edit is meant to point the backup set at different data. Required only when the body actually changes host, remote_path or local_path on a set that already has artifacts on record; without it such an edit is refused with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and nothing is written. It is not a property of the backup set and nothing persists it: it answers one refusal, for one request."
+          },
+          "acknowledge_host_key_change": {
+            "type": "boolean",
+            "description": "Confirms that this edit is meant to change what host keys this backup set trusts for its own address (issue #572). Required when known_hosts_line pins a different key from the one on record, and equally when it would stop pinning one that IS on record; without it the edit is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, naming the fingerprint on record and the one being offered, and nothing is written. Changing remote.port does not exempt an edit from this: a port is how you reach the same machine, so a set that pins a key for host:22 is still having its trust changed by a line that pins something else for host:2222. Separate from acknowledge_repoint on purpose: that one answers \"this is the same data at a new address\" and this one answers \"this is the same host with a new key\", and one flag for both would let an operator who meant one of them quietly grant the other."
           }
         }
       },
@@ -2878,6 +2930,239 @@
             "description": "An operator's own explanation for why this retry is worth making (\"replaced the failing credential\", \"the NAS came back\")."
           }
         }
+      },
+      "LiveActivityField": {
+        "type": "object",
+        "description": "One field of an event, rendered as a string and already redacted. A pair rather than a map because the order the event logged its fields in is the order that reads best, and because a client rendering a line wants them in that order without sorting.",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      },
+      "LiveActivityEvent": {
+        "type": "object",
+        "description": "One line of the live feed. It carries the engine's own event name, the engine's own severity and the event's own fields, because what a moment is worth calling is presentation and belongs to whichever client is presenting: a severity invented on the way to the wire would freeze one screen's display decision for every other client. The level is not such a decision, it is what the emitter chose when it decided a line was a warning rather than a note, so it is carried through rather than re-derived.",
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Strictly increasing across every event this process has emitted, so a client can order a set's own lines against the deployment-wide ones and resume from the last one it saw."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ],
+            "description": "The severity the engine emitted this event at, carried through unchanged."
+          },
+          "event": {
+            "type": "string",
+            "description": "The engine's own event name (discovery, lifecycle_transition, transfer_stats, retention, cycle_end and the rest). It is deliberately not an enum: the catalog grows, and a client that meets a name it has no special rendering for prints the message and the fields, which is a worse line rather than a broken one."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "deployment",
+              "set"
+            ],
+            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those reach every set's feed marked deployment, rather than being dropped (which would hide them) or pinned to one set (which would put them on the wrong screen)."
+          },
+          "message": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityField"
+            }
+          }
+        },
+        "required": [
+          "sequence",
+          "at",
+          "level",
+          "event",
+          "scope",
+          "message",
+          "fields"
+        ]
+      },
+      "LiveActivitySet": {
+        "type": "object",
+        "description": "What one backup set is doing right now, and the tail of events behind it. Every configured set appears whether or not anything has happened to it: a panel that shows up only during activity teaches an operator to hunt for it, and its absence then means either nothing is running or nothing is reporting, with no way to tell which.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether a cycle is inside this set in the serving process right now. It is a separate fact from the fraction below and both are needed: a large artifact holds the numbers still for a long time while everything is fine, so a fraction alone cannot tell slow from stuck. This is what a moving indicator is driven by."
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "discovering",
+              "transferring",
+              "verifying",
+              "committing",
+              "cleaning-remote"
+            ],
+            "x-go-omitempty": true,
+            "description": "The step the artifact below is at. Absent when nothing is in flight."
+          },
+          "artifact": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "The artifact the stage is about. Absent when nothing is in flight."
+          },
+          "artifacts_completed": {
+            "type": "integer",
+            "description": "How many artifacts this set's current or most recent pass has finished driving forward."
+          },
+          "artifacts_total": {
+            "type": "integer",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "How many artifacts that pass set out to drive forward. Absent until the pass has counted them, which is a different answer from zero: zero of zero draws as a finished cycle, and that is the reading an operator would act on wrongly."
+          },
+          "progress_basis": {
+            "type": "string",
+            "enum": [
+              "artifacts",
+              "unknown"
+            ],
+            "description": "What the fraction counts, said rather than left to be inferred. It counts artifacts: artifacts done over artifacts this pass will walk, which is a fraction of two numbers the engine actually holds. It jumps unevenly on a set mixing a 2GB dump with a 4KB text file, and that is honest; the smoother alternative is a byte total that does not exist until discovery has finished and that no remote reports reliably even then. unknown is the window before the pass has counted, and it is why artifacts_total is absent rather than zero."
+          },
+          "bytes_transferred": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_total": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "The three byte counters describe the ONE artifact named above, never the set, and are absent whenever no copy is in flight and reporting, which is a different fact from a measured zero. There is deliberately no time-remaining figure beside them: everything needed to work one out for the artifact in flight is here, and a figure the engine cannot check does not belong on a wire other clients then have to serve."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "How many of this set's artifacts ended this pass in a terminal failure state. It describes the pass, not the set's history, so it resets when a new pass begins: last night's two failures are not tonight's, and a strip carrying them forward would keep an operator looking at a problem already dealt with."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed",
+              "stopped"
+            ],
+            "x-go-omitempty": true,
+            "description": "How this set's last finished pass ENDED, which is a different fact from how many of its artifacts failed. A pass whose reconcile or discovery failed never reaches an artifact at all, so it leaves failures at zero and artifacts_total absent, and a strip reading only those two would draw it as a set that has nothing to do. stopped is a pass an operator stopped (an edit hold, a cancellation) and is deliberately not failed: in a product whose job is to be believed about backups, spelling an ordinary edit the same way as a source that has gone unreachable is a false alarm. Absent until a pass has ended here."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true,
+            "description": "When the pass this strip describes started and ended. Both absent until a pass has actually run here; finished_at is absent while one is running."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityEvent"
+            },
+            "description": "The tail, oldest first, filtered by whatever cursor the caller sent. Empty is an empty array, never an absent key."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether limit cut this reading short. The events above are the OLDEST held that are newer than the cursor, never the newest, because a cursor a client advances past a gap is a client that never sees the middle of a burst again. True means the rest is still held: ask again with the sequence this reading ends at."
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Whether lines this cursor had not reached yet fell out of the bounded buffer before this read did. True means the tail above is not continuous with what the caller already holds, and a client should say so rather than presenting a gap as continuity. The full record is the durable feed at GET /activity."
+          },
+          "oldest_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The bounds of what the server still holds for this set, NOT of the events array above. The buffer is bounded on purpose, so a client whose cursor has fallen below oldest_sequence knows it missed lines and can say so instead of presenting a gap as continuity. The full history is the durable record at GET /activity."
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "active",
+          "artifacts_completed",
+          "progress_basis",
+          "failures",
+          "events",
+          "truncated",
+          "dropped",
+          "oldest_sequence",
+          "latest_sequence"
+        ]
+      },
+      "LiveActivityResponse": {
+        "type": "object",
+        "description": "One reading of the live feed. It is a snapshot a client polls, not a stream: this product runs on a NAS behind whatever reverse proxy the operator already had, and behind the UI container's own proxy in the two-container topology, so a held-open response is at the mercy of every buffering and idle-timeout default in that path. A plain GET works through all of them, needs no reconnection logic, and is exactly as readable from a terminal as from a browser. The cursor on the request is what keeps polling cheap.",
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "epoch": {
+            "type": "string",
+            "description": "An opaque name for the process this reading came from. It changes on every start, and the sequence counter the cursor is built from starts again at zero with it, so a client that kept polling across a restart would otherwise ask for everything after a sequence the new process has not reached yet and be told, correctly and uselessly, that there is nothing new. Compare it with the one the last reading carried: a different value means drop the cursor and everything held behind it, because the cycle those lines described no longer exists."
+          },
+          "poll_after_ms": {
+            "type": "integer",
+            "description": "How long the server suggests waiting before asking again. The server decides because the server is the one that knows whether anything is moving: a client picking its own interval would either hammer a NAS holding a dozen idle sets or watch a transfer at a cadence that makes the bar jump."
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivitySet"
+            }
+          }
+        },
+        "required": [
+          "observed_at",
+          "epoch",
+          "poll_after_ms",
+          "sets"
+        ]
       }
     },
     "responses": {}
@@ -5901,7 +6186,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST.",
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5910,7 +6195,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "SSH_KEY_NOT_FOUND"
             ]
           },
           "401": {
@@ -5954,7 +6240,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED. The edit would move this set to different data while artifacts are already on record for it; re-send with acknowledge_repoint once the message has been read.",
+            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED. Either the edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host; re-send with the acknowledgement the message names, once the message has been read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5963,7 +6249,8 @@
               }
             },
             "x-error-codes": [
-              "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
             ]
           },
           "500": {
@@ -7265,6 +7552,120 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": null,
         "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/activity/live": {
+      "get": {
+        "operationId": "getLiveActivity",
+        "summary": "What every backup set is doing right now, with a bounded tail of the events behind it.",
+        "tags": [
+          "activity"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "backup_set",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Narrow the reading to one backup set, by its source/name id. Omitted means every configured set, which is what a dashboard drawing a strip per set wants: one request per tick rather than one per set, because a browser will not open more than a handful of concurrent connections to one origin. An id this deployment does not have is refused rather than answered with an empty feed, which would read like a quiet set."
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The highest sequence the caller has already seen. Only events after it come back, which is what makes polling this cheap, and they come back oldest first so this cursor is always safe to advance to the last one handed over. Omitted, unparseable or non-positive means whatever the server still holds. Compare the response's epoch before reusing a cursor: the sequence counter is per process and starts again at zero, so a cursor kept across a restart asks for what the new process has not reached yet."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does. It pages rather than truncates: the events returned are the OLDEST above the cursor and the response says whether it was cut short, so a caller that asks again from where the last one ended sees every line rather than skipping the middle of a burst."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveActivityResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
         "x-authenticated": true
       }
     }

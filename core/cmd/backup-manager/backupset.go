@@ -142,11 +142,13 @@ func backupSetVerbNames() []string {
 // one piece of work rather than two halves.
 //
 // The first configuration a create writes on an instance that has no
-// config.yaml yet has no route for a different reason: finding a process
-// serving the journal --state-database names says that deployment is
-// already configured, and POST /system/first-run is not an operation to
-// send an already configured engine. Both refuse beside a serving
-// process, exactly as every configuration write did before #543.
+// config.yaml yet has no route for a different reason: the only request
+// that would carry it is POST /system/first-run, which an engine accepts
+// once and only while it is still unconfigured, and a process found
+// serving the journal --state-database names is either past that moment or
+// standing in the setup flow the operator can finish themselves. Both
+// refuse beside a serving process, exactly as every configuration write did
+// before #543.
 //
 // That is issue #535: a `backup-set create` through docker exec against a
 // live server succeeded, `sources` listed both sets, and the Web UI showed
@@ -183,9 +185,11 @@ func backupSetVerbNames() []string {
 // refuses one: it would rewrite and hot-reload a whole configuration to
 // achieve nothing, and report success for it.
 //
-// What patch deliberately cannot change: the set's identity, its SSH key
-// reference and its trusted host-key line. See
-// core/service/backupsetupdate.go's own package doc for each.
+// What patch deliberately cannot change: the set's identity. Its SSH key
+// and its trusted host-key line it can, since issue #572, and the second
+// of those has a refusal in front of it. See
+// core/service/backupsetupdate.go's own package doc for the identity
+// argument and core/service/backupsethostkey.go for the refusal.
 func cmdBackupSet(args []string) int {
 	for _, a := range args {
 		if verb, ok := backupSetVerbs[a]; ok {
@@ -256,15 +260,20 @@ type backupSetFlags struct {
 	staleAfter         *time.Duration
 	validatorID        *string
 
-	// create only.
+	// Shared by create and patch since issue #572. Each settles one of
+	// the two SSH-facing things a backup set has: which key it
+	// authenticates with, and which host key it trusts. Within each pair
+	// the two flags are alternatives, never a preference order.
 	keyFile        *string
 	keyID          *string
 	knownHostsLine *string
 	trustHostKey   *bool
-	disabled       *bool
-	readOnly       *bool
-	runNow         *bool
-	stateDatabase  *string
+
+	// create only.
+	disabled      *bool
+	readOnly      *bool
+	runNow        *bool
+	stateDatabase *string
 
 	// Shared by create and patch, and not a field of the backup set: it
 	// answers one refusal, on either verb. Removing a set frees its id up
@@ -272,6 +281,13 @@ type backupSetFlags struct {
 	// on record is the same move an edit makes and asks the same question
 	// (issue #411).
 	acknowledgeRepoint *bool
+
+	// patch only, and not a field of the backup set either: it answers
+	// the OTHER refusal, that this edit means to trust a different host
+	// key for the same host. There is nothing on record for a set that
+	// does not exist yet, so it means nothing on create and is refused
+	// there rather than parsed and dropped.
+	acknowledgeHostKeyChange *bool
 }
 
 // create's and patch's own flags, by name, so each verb can refuse the
@@ -281,14 +297,19 @@ type backupSetFlags struct {
 // asked for. remove has no list of its own: it refuses everything but
 // --config by construction (refuseEveryFlagBut).
 var (
-	backupSetCreateOnlyFlags = []string{"ssh-key-file", "ssh-key-id", "known-hosts-line", "trust-host-key", "disabled", "read-only", "run", "state-database"}
+	// The four SSH-facing flags left this list in issue #572, which is
+	// what made a key rotation and a host-key re-trust reachable from a
+	// terminal at all. What stays is the set of things that only make
+	// sense while a set is being brought into existence: its initial
+	// posture, whether to run it straight away, and the journal path a
+	// FIRST configuration names.
+	backupSetCreateOnlyFlags = []string{"disabled", "read-only", "run", "state-database"}
 
-	// Empty since issue #411 made --acknowledge-repoint mean something on
-	// create too, and kept rather than deleted along with its call site:
-	// the guard is what makes a future patch-only flag refuse on create
-	// automatically instead of being silently ignored there, which is the
-	// failure this pair of lists exists to prevent.
-	backupSetPatchOnlyFlags []string
+	// Not empty since issue #572. The guard was kept through #411 with
+	// nothing in it precisely so that the next patch-only flag would
+	// refuse on create automatically rather than being silently ignored
+	// there, and this is that flag.
+	backupSetPatchOnlyFlags = []string{"acknowledge-host-key-change"}
 )
 
 func declareBackupSetFlags() *backupSetFlags {
@@ -306,18 +327,21 @@ func declareBackupSetFlags() *backupSetFlags {
 	f.staleAfter = fs.Duration("stale-after", 0, "create, patch: stale_after (FR-24's freshness budget); on create, unset takes the service's own default")
 	f.validatorID = fs.String("validator-id", "", `create, patch: validation.validator_id, an id the validator catalog lists, or "" for none`)
 
-	f.keyFile = fs.String("ssh-key-file", "", "create: path to the SSH PRIVATE KEY to import for this set. Read once, validated, and copied into this deployment's own key store; the original is left alone")
-	f.keyID = fs.String("ssh-key-id", "", "create: the id of a key this deployment has already imported, instead of importing another copy")
-	f.knownHostsLine = fs.String("known-hosts-line", "", "create: the exact known_hosts line to trust for this host, as `ssh-keyscan` prints it")
-	f.trustHostKey = fs.Bool("trust-host-key", false, "create: probe the host now and trust whatever key answers. Trust on first use, and a real trust decision: use --known-hosts-line when the key is already known")
+	f.keyFile = fs.String("ssh-key-file", "", "create, patch: path to the SSH PRIVATE KEY to use for this set. Read once, validated, and copied into this deployment's own key store; the original is left alone. On patch this is a key rotation")
+	f.keyID = fs.String("ssh-key-id", "", "create, patch: the id of a key this deployment has already imported, instead of importing another copy")
+	f.knownHostsLine = fs.String("known-hosts-line", "", "create, patch: the exact known_hosts line to trust for this host, as `ssh-keyscan` prints it. On patch, one that pins a different key from the one on record needs --acknowledge-host-key-change")
+	f.trustHostKey = fs.Bool("trust-host-key", false, "create, patch: probe the host now and trust whatever key answers. Trust on first use, and a real trust decision: use --known-hosts-line when the key is already known. On patch it needs --host to say what to probe")
 	f.disabled = fs.Bool("disabled", false, "create: save the set disabled, so no cycle runs it until it is enabled")
 	f.readOnly = fs.Bool("read-only", false, "create: this set's remote source must never be deleted from (issue #282)")
 	f.runNow = fs.Bool("run", false, "create: submit a run cycle immediately after the set is persisted")
-	f.stateDatabase = fs.String("state-database", defaultStateDatabase,
-		"create: the SQLite journal path a FIRST configuration names. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
+	f.stateDatabase = fs.String("state-database", service.StateDatabaseDefault(),
+		"create: the SQLite journal path a FIRST configuration names, and the deployment this command asks about when there is no config.yaml to read one out of. Defaults to $STATE_DATABASE, or the packaged /data/state/state.db, which is the same default the web host serves under. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
 
 	f.acknowledgeRepoint = fs.Bool("acknowledge-repoint", false,
 		"create, patch: confirm pointing this set at different data. On patch, needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; on create, only when this id already has artifacts on record and the set is being created somewhere other than where they came from. The refusal without it says what it costs")
+
+	f.acknowledgeHostKeyChange = fs.Bool("acknowledge-host-key-change", false,
+		"patch: confirm trusting a DIFFERENT host key for the same host. Needed only when the line being pinned is not the one on record. The refusal without it names both fingerprints, which is the whole of what there is to compare")
 
 	return f
 }
@@ -437,9 +461,29 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 // With a serving engine it cannot reach, it is refused with the file
 // untouched.
 func backupSetPatch(f *backupSetFlags, id string) int {
+	// The same "one of each pair, never both" rule create states, for the
+	// same reason: a caller who passed both has not said which one they
+	// meant, and picking one silently is how a set ends up trusting a key
+	// nobody looked at.
+	if *f.keyFile != "" && *f.keyID != "" {
+		return usageError("backup-set patch: --ssh-key-file and --ssh-key-id are alternatives; pass one")
+	}
+	if *f.knownHostsLine != "" && *f.trustHostKey {
+		return usageError("backup-set patch: --known-hosts-line and --trust-host-key are alternatives; pass one")
+	}
+	if *f.trustHostKey && *f.host == "" {
+		return usageError("backup-set patch: --trust-host-key needs a --host to probe; pass this set's own host to re-trust it where it is")
+	}
+
 	req, named := buildBackupSetPatch(f)
 	req.AcknowledgeRepoint = *f.acknowledgeRepoint
-	if !named {
+	req.AcknowledgeHostKeyChange = *f.acknowledgeHostKeyChange
+	// --ssh-key-file and --trust-host-key name a field to change just as
+	// surely as --ssh-key-id and --known-hosts-line do; they simply have a
+	// step to run first. Counted here rather than in buildBackupSetPatch,
+	// which reads flags into the request and has nothing to resolve them
+	// with.
+	if !named && *f.keyFile == "" && !*f.trustHostKey {
 		return usageError("backup-set patch: name at least one field to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
 	}
 
@@ -452,12 +496,60 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
+	// Import and probe happen against the same route the edit does, so a
+	// key imported for a routed patch lands in the key store of the
+	// process that will go on serving the set rather than this one's.
+	if *f.keyFile != "" {
+		keyID, err := importKeyFile(ctx, route, *f.keyFile)
+		if err != nil {
+			return fail(err)
+		}
+		req.SSHKeyID = &keyID
+	}
+	if *f.trustHostKey {
+		line, err := probeAndTrust(ctx, route, *f.host, *f.port)
+		if err != nil {
+			return fail(err)
+		}
+		req.KnownHostsLine = &line
+	}
+
 	updated, err := route.UpdateBackupSet(ctx, id, req)
 	if err != nil {
 		return fail(err)
 	}
 	printBackupSet(updated)
+	printPatchedKeyAndTrust(req)
 	return 0
+}
+
+// printPatchedKeyAndTrust says what the edit did to the two things the
+// backup set on the wire does not carry.
+//
+// printBackupSet reports every field it can read back, and neither the key
+// reference nor the trusted host key is one of them: both resolve to a
+// server-side path, and this package never prints one (service.SSHKeyRef's
+// own rule). So this reports them from what was SENT and accepted, which
+// is the honest version of the same confirmation, and reports the host key
+// as its fingerprint rather than as the line, because a fingerprint is
+// what an operator compares.
+func printPatchedKeyAndTrust(req service.UpdateBackupSetRequest) {
+	if req.SSHKeyID != nil {
+		fmt.Printf("  ssh_key_id: %s\n", *req.SSHKeyID)
+	}
+	if req.KnownHostsLine == nil {
+		return
+	}
+	algorithm, fingerprint, err := service.DescribeKnownHostsLine(*req.KnownHostsLine)
+	if err != nil {
+		// Unreachable: the service refuses a line it cannot parse, so a
+		// request that got this far carries one that parses. Said rather
+		// than swallowed, because a silent nothing here would read as
+		// "the host key was not changed".
+		fmt.Printf("  trusted_host_key: changed (this build could not describe the line it pinned: %v)\n", err)
+		return
+	}
+	fmt.Printf("  trusted_host_key: %s %s\n", algorithm, fingerprint)
 }
 
 // backupSetRemove is the `remove` verb: DELETE
@@ -551,16 +643,6 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 // inventing a username.
 const cliActor = "cli"
 
-// defaultStateDatabase is the SQLite journal path a FIRST configuration
-// names when --state-database is not given. It is the packaged mount from
-// container/compose.yaml, the same literal and for the same reason
-// defaultConfigPath above is: this is the value an operator on the
-// machine the installer just set up should never have to type.
-// apps/generic's own --state-database carries the same default, which is
-// what makes a config written from here and one written through the
-// first-run wizard name the same file.
-const defaultStateDatabase = "/data/state/state.db"
-
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST
 // /api/v1/backup-sets calls, in this process.
@@ -611,28 +693,28 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	// the configuration: there is no configuration here to read a journal
 	// path out of, which is the entire reason this branch was taken.
 	//
-	// Two ordinary mistakes land here against a LIVE deployment, and both
-	// used to exit 0 after writing a configuration nothing would ever
-	// read: a mistyped --config, and a config.yaml renamed out from under
-	// a running engine. --state-database is what still identifies the
-	// deployment in both, because it carries the same packaged default
-	// the first-run wizard writes, so a create that does not name one is
-	// still asking about the right journal.
+	// Three things land here against a LIVE deployment, and all three used
+	// to exit 0 after writing a configuration nothing would ever read: a
+	// mistyped --config, a config.yaml renamed out from under a running
+	// engine, and a genuinely fresh install whose engine is serving the
+	// first-run setup flow, which is #571. --state-database is what
+	// identifies the deployment in all three, because it carries the same
+	// packaged default apps/generic's own --state-database does, so a
+	// create that does not name one is still asking about the right
+	// journal, and a first-run engine is now announcing about exactly that
+	// journal (core/service's AnnounceServingFirstRun).
 	//
 	// A genuine first run is untouched by this, and that is the half that
-	// had to stay true: a bare host has no journal, a host serving the
-	// setup wizard has not opened one yet, and neither announces itself
-	// as serving anything. Both still write their first configuration
-	// from here.
+	// had to stay true: a bare host has no serving lock file beside a
+	// journal that does not exist, so the question comes back "nothing is
+	// serving" and the first configuration is written from here, which is
+	// the whole reason this path exists.
 	//
 	// It announces its mode too (#542), for the same reason it has to
 	// ask at all: this was the one configuration write in the binary with
 	// no route through openBackupService, so leaving it out would leave
 	// exactly one write that never says which world it believed it was
-	// in. What the decision can see here is narrower than elsewhere and
-	// liveengine.go says so out loud, but announcing the mode it did
-	// decide is the honest answer and is strictly more than the nothing
-	// this path said before.
+	// in.
 	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
 	if err != nil {
 		return fail(err)
@@ -660,11 +742,16 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	return 0
 }
 
-// backupSetCreatePrereqs is the pair of pre-create steps both create
-// paths need and both surfaces already expose: importing the private key,
-// and settling the host key. Naming them as an interface rather than
-// branching twice is what keeps the CLI from having a first-run-shaped
-// copy of either.
+// backupSetCreatePrereqs is the pair of steps both create paths need and
+// both surfaces already expose: importing the private key, and settling
+// the host key. Naming them as an interface rather than branching twice is
+// what keeps the CLI from having a first-run-shaped copy of either.
+//
+// Since issue #572 `patch` runs the same two, so the name is now narrower
+// than the thing: it is renamed nowhere because backupSetRoute embeds it
+// and the seam it exists for (making the awkward failures drivable in a
+// test) is unchanged. What patch does with them differs only in what it
+// puts the answers into.
 type backupSetCreatePrereqs interface {
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
@@ -673,45 +760,73 @@ type backupSetCreatePrereqs interface {
 // resolveKeyAndTrust turns --ssh-key-file into an imported key id and
 // --trust-host-key into a real known_hosts line, filling both into req.
 // Either may already be settled by --ssh-key-id / --known-hosts-line, in
-// which case the corresponding step does nothing.
+// which case the corresponding step does nothing. This is create's half;
+// backupSetPatch runs the same two steps through the same functions.
 //
-// The key file is read here and handed straight to ImportSSHKey, which is
-// the only thing that reads key material anywhere in this binary. It is
-// never logged, never echoed and never written anywhere but the key store
-// ImportSSHKey owns.
+// The key file is read by importKeyFile below and handed straight to
+// ImportSSHKey, which is the only thing that reads key material anywhere
+// in this binary. It is never logged, never echoed and never written
+// anywhere but the key store ImportSSHKey owns.
 func resolveKeyAndTrust(ctx context.Context, svc backupSetCreatePrereqs, keyFile string, trustHostKey bool, req *service.CreateBackupSetRequest) error {
 	if keyFile != "" {
-		raw, err := os.ReadFile(keyFile)
-		if err != nil {
-			return fmt.Errorf("reading the SSH key at %s: %w", keyFile, err)
-		}
-		ref, err := svc.ImportSSHKey(ctx, raw, "")
+		id, err := importKeyFile(ctx, svc, keyFile)
 		if err != nil {
 			return err
 		}
-		// The fingerprint, never the path: what an operator needs to
-		// confirm is which key was adopted, and where this deployment
-		// keeps its copy is not theirs to have to know (SSHKeyRef's own
-		// doc makes the same distinction for the HTTP layer).
-		fmt.Printf("imported %s key %s\n", ref.Algorithm, ref.Fingerprint)
-		req.SSHKeyID = ref.ID
+		req.SSHKeyID = id
 	}
 
 	if trustHostKey {
 		if req.Host == "" {
 			return errors.New("--trust-host-key needs a --host to probe")
 		}
-		probe, err := svc.ProbeHostKey(ctx, req.Host, probePortFor(req.Port))
+		line, err := probeAndTrust(ctx, svc, req.Host, req.Port)
 		if err != nil {
-			return fmt.Errorf("probing %s for its host key: %w", req.Host, err)
+			return err
 		}
-		// Printed, always, and before the set is written. Trust on first
-		// use is only defensible if the thing being trusted is stated
-		// where somebody can compare it afterwards.
-		fmt.Printf("trusting %s host key %s on first use\n", probe.Algorithm, probe.Fingerprint)
-		req.KnownHostsLine = probe.KnownHostsLine
+		req.KnownHostsLine = line
 	}
 	return nil
+}
+
+// importKeyFile reads a private key off disk, hands it to the import step,
+// and reports the id the set will carry. Split out of resolveKeyAndTrust
+// so `patch` performs the identical step rather than a rotation-shaped
+// copy of it (issue #572).
+func importKeyFile(ctx context.Context, svc backupSetCreatePrereqs, keyFile string) (string, error) {
+	raw, err := os.ReadFile(keyFile)
+	if err != nil {
+		return "", fmt.Errorf("reading the SSH key at %s: %w", keyFile, err)
+	}
+	ref, err := svc.ImportSSHKey(ctx, raw, "")
+	if err != nil {
+		return "", err
+	}
+	// The fingerprint, never the path: what an operator needs to
+	// confirm is which key was adopted, and where this deployment
+	// keeps its copy is not theirs to have to know (SSHKeyRef's own
+	// doc makes the same distinction for the HTTP layer).
+	fmt.Printf("imported %s key %s\n", ref.Algorithm, ref.Fingerprint)
+	return ref.ID, nil
+}
+
+// probeAndTrust asks host:port what key it is offering and reports the
+// known_hosts line for it.
+//
+// The fingerprint is printed, always, and before anything is written. On
+// create that is trust on first use, which is only defensible if the thing
+// being trusted is stated where somebody can compare it afterwards. On
+// patch there is already a key on record, so this line is a candidate
+// rather than a decision: the service refuses to pin it over a different
+// one until the operator has acknowledged the change, and this print is
+// what they read while deciding.
+func probeAndTrust(ctx context.Context, svc backupSetCreatePrereqs, host string, port int) (string, error) {
+	probe, err := svc.ProbeHostKey(ctx, host, probePortFor(port))
+	if err != nil {
+		return "", fmt.Errorf("probing %s for its host key: %w", host, err)
+	}
+	fmt.Printf("trusting %s host key %s on first use\n", probe.Algorithm, probe.Fingerprint)
+	return probe.KnownHostsLine, nil
 }
 
 // probePortFor resolves the port a host-key probe should dial.
@@ -810,12 +925,18 @@ func buildBackupSetPatch(f *backupSetFlags) (service.UpdateBackupSetRequest, boo
 		case "validator-id":
 			v := service.ValidatorID(*f.validatorID)
 			req.ValidatorID = &v
-		case "acknowledge-repoint":
-			// Read by the caller straight off its own flag, because it is
-			// not a field of the backup set: it answers a refusal about
-			// the fields above. Naming only this one changes nothing, so
-			// it must not make an otherwise-empty patch look like a
-			// patch.
+		case "ssh-key-id":
+			v := *f.keyID
+			req.SSHKeyID = &v
+		case "known-hosts-line":
+			v := *f.knownHostsLine
+			req.KnownHostsLine = &v
+		case "acknowledge-repoint", "acknowledge-host-key-change":
+			// Read by the caller straight off their own flags, because
+			// neither is a field of the backup set: each answers a
+			// refusal about the fields above. Naming only these changes
+			// nothing, so they must not make an otherwise-empty patch
+			// look like a patch.
 			return
 		default:
 			// --config, or one of create's own flags, which this verb has

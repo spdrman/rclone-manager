@@ -105,21 +105,16 @@ installing, not after.
   nothing written and the command says what it found, so there is nothing to restart into.
   Make the change in the web interface, where it takes effect at once, or stop the server, run
   the command, and start it again.
-- An installation that has been unpacked but not set up is the one place a running process
-  cannot be found at all. Until setup has written a configuration there is no catalog for the
-  web host to announce itself against, so a `backup-set create` typed at a terminal writes the
-  first configuration underneath the setup wizard, and the wizard goes on offering setup until
-  it is restarted. Restarting it picks that configuration up.
 - Two of the command line's readings are answered from the configuration file on the machine
   it runs on and are not checked against a running server: the deployment's retention and
   capacity settings, and which retention policy one backup set is retained under. On an
   installation whose configuration file was hand-edited under a running server, those two
   answers can differ from what the web interface shows.
-- A change sent to a running server goes to the address it was given, and nothing checks that
-  the address belongs to this deployment. Where two of them run on one machine, an address
-  with one character wrong lands the change in the other one and both report success. The
-  packaged installation is a single deployment, so reaching this needs a second one stood up
-  by hand.
+- A change sent to a running server is checked against the installation it was typed at
+  before anything is sent, so an address with one character wrong, on a machine running two
+  of them, is refused rather than landed in the other one. The one arrangement that check
+  cannot see through is a whole state directory copied to seed a second installation: the
+  copy carries the original's identity, and the two then claim to be each other.
 - One engine per deployment. Starting a second `backup-manager daemon`, or a second web host,
   against a state database another one is already serving is refused rather than started. Two
   of them would run two schedules over one set of backups and hold two independent copies of

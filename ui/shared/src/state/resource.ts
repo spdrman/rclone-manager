@@ -90,14 +90,37 @@ export function fetchResource<T>(node: InputNode<ResourceState<T>>, fetchFn: () 
     });
 }
 
-/** Reads a resource node reactively and fetches it on mount / whenever
- *  `deps` changes — the graph-backed replacement for useAsync. `deps`
- *  works exactly like useAsync's: it is NOT allowed to change on every
- *  render (pass `[api]`, not an inline arrow function's own identity). */
+/**
+ * Reads a resource node reactively and fetches it on mount, whenever
+ * `deps` changes, and whenever `enabled` turns on. The graph-backed
+ * replacement for useAsync.
+ *
+ * `deps` works exactly like useAsync's: it is NOT allowed to change on
+ * every render (pass `[api]`, not an inline arrow function's own
+ * identity).
+ *
+ * `enabled` is the precondition for asking at all, and it is deliberately
+ * NOT something a caller can express through `deps`. A precondition put in
+ * `deps` still issues the request once on mount, before it is met, and a
+ * request issued before its precondition is met is a refusal: that is the
+ * defect this parameter exists to close. Every app-wide read in App.tsx is
+ * issued above the authenticated branch, so on a browser with no session
+ * all of them were refused, and because `[api]` never changes not one of
+ * them was ever re-issued once somebody signed in. The operator was left
+ * on a page telling them to sign in, on the far side of signing in, with
+ * nothing but a full page load to get out of it.
+ *
+ * While `enabled` is false the node keeps its initial value, which reads
+ * as still loading. That is the honest answer: nobody has asked yet, which
+ * is a different thing from having asked and got nothing. `reload()` is
+ * ungated and always fetches, because a caller reaching for it after a
+ * mutation is stating that the precondition holds.
+ */
 export function useResource<T>(
   node: InputNode<ResourceState<T>>,
   fetchFn: () => Promise<T>,
-  deps: unknown[] = []
+  deps: unknown[] = [],
+  enabled = true
 ): ResourceState<T> & { reload(): void } {
   const state = useCausl(node);
   // This wrapper's whole job is forwarding a caller-supplied deps array
@@ -110,8 +133,9 @@ export function useResource<T>(
   const reload = useCallback(() => fetchResource(node, run), [node, run]);
 
   useEffect(() => {
+    if (!enabled) return;
     reload();
-  }, [reload]);
+  }, [reload, enabled]);
 
   // `state` (useCausl) and `reload` (useCallback above) are both already
   // referentially stable when nothing changed — useCausl caches its read

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -37,11 +38,19 @@ import (
 
 // ArtifactFilter narrows ListArtifacts to a subset of configured backup
 // sets. An empty Source matches every source; an empty Set matches every
-// backup set within whatever sources match Source. This mirrors config's
-// own source-then-set nesting (FR-7: identity is source-plus-set, never
-// set alone), so a Set filter with no Source is deliberately not a
-// shortcut across sources: two different sources may each have a set
-// with the same name.
+// backup set within whatever sources match Source.
+//
+// Set is spelled either way round (issue #569). "api-server/var-backups"
+// is the id every surface that PRINTS a backup set prints: `sources`,
+// `status`, and the heading `retention` puts over each set, which is also
+// the operand it takes. It is NOT the id in this listing's own first
+// column, which is a whole artifact id and one field longer.
+// "var-backups" is the older spelling and still works, but only
+// while exactly one source configures that name; FR-7 makes identity
+// source-plus-set, so a name two sources share names neither of them and
+// resolve refuses it rather than picking one or answering with both.
+// That collision is not exotic: one naming convention applied across a
+// fleet of hosts produces it on the first host that joins.
 //
 // A non-empty Source or Set that names nothing in the loaded config is a
 // mistake rather than a filter, and resolve refuses it. See ListArtifacts.
@@ -59,50 +68,132 @@ type ArtifactFilter struct {
 	IncludeUnconfigured bool
 }
 
-// resolve reports whether this filter names anything in sources, and
-// returns the *NotFoundError describing what it does not name otherwise.
+// resolve turns this filter into the one whose Source and Set are the
+// configured names it selects, and returns the refusal describing what it
+// does not select otherwise.
+//
+// Returning a filter rather than answering yes or no is what lets Set be
+// spelled either way round: matches below compares plain names, so the
+// source half of a composite id has to come off somewhere, and doing it
+// once here keeps every caller of matches reading the same rule. The
+// resolved filter is also where the single backup set a filter names can
+// be read back (ResolvedSetID), so the CLI and this listing cannot drift
+// into two different answers about which set was asked for.
 //
 // It answers with an explicit lookup rather than by counting how many
 // backup sets matched, because those two questions have different
 // answers: a source configured with no backup sets of its own also
 // matches nothing, and calling that "no configured source" would name the
 // wrong thing.
-func (f ArtifactFilter) resolve(sources []config.Source) error {
-	if f.Source == "" && f.Set == "" {
-		return nil
+func (f ArtifactFilter) resolve(sources []config.Source) (ArtifactFilter, error) {
+	source, set := f.Source, f.Set
+
+	// Issue #569. A Set carrying the separator is the composite id, and
+	// it is parsed by the same function that reads every other rendering
+	// of one back, so "a/b/c" and "var-backups/" are refused here rather
+	// than silently becoming a filter over something else.
+	if strings.Contains(set, "/") {
+		id, err := model.ParseBackupSetID(set)
+		if err != nil {
+			return f, fmt.Errorf("app: backup set %q: %w", set, err)
+		}
+		source, set = id.Source, id.Set
+		// Two names for the source, and they disagree. The CLI refuses
+		// this on the command line before anything is opened, since it
+		// is wrong on every deployment rather than on this one; this is
+		// the answer for a caller that built the pair by hand.
+		//
+		// Deliberately not a *NotFoundError. Both halves of this pair
+		// can name real, configured things, and reporting it as one of
+		// them missing would print "no configured backup set named
+		// cicd-pipeline/var-backups" about a set that is configured,
+		// which is the exact untruth #569 was reported for.
+		if f.Source != "" && f.Source != source {
+			return f, fmt.Errorf("app: backup set %s names source %s, and this filter also names source %s", f.Set, source, f.Source)
+		}
+	}
+
+	if set == "" {
+		if source == "" {
+			return f, nil
+		}
+		for _, src := range sources {
+			if src.Name == source {
+				return f, nil
+			}
+		}
+		return f, &NotFoundError{Kind: "source", Name: source}
 	}
 
 	sourceFound := false
+	var found []ArtifactFilter
 	for _, src := range sources {
-		if f.Source != "" && f.Source != src.Name {
+		if source != "" && source != src.Name {
 			continue
 		}
 		sourceFound = true
-		if f.Set == "" {
-			return nil
-		}
 		for _, bs := range src.BackupSets {
-			if bs.Name == f.Set {
-				return nil
+			if bs.Name == set {
+				found = append(found, ArtifactFilter{Source: src.Name, Set: bs.Name, IncludeUnconfigured: f.IncludeUnconfigured})
 			}
 		}
 	}
+
+	switch {
+	case len(found) == 1:
+		return found[0], nil
+
+	// More than one only happens for a bare name with no source to narrow
+	// it, since a source may not configure the same set name twice. The
+	// candidates go back with the refusal because retyping one of them is
+	// the whole remedy, and an operator cannot retype what they were not
+	// shown.
+	case len(found) > 1:
+		candidates := make([]string, 0, len(found))
+		for _, c := range found {
+			candidates = append(candidates, c.Source+"/"+c.Set)
+		}
+		return f, &AmbiguousSetError{Name: set, Candidates: candidates}
 
 	// Only a Source that was actually given can be the thing that is
 	// missing. With no Source, sourceFound is false only for a config
 	// carrying no sources at all, which config.Validate already refuses
 	// (FR-5), and reporting an unnamed source for it would name nothing.
-	if !sourceFound && f.Source != "" {
-		return &NotFoundError{Kind: "source", Name: f.Source}
+	case !sourceFound && source != "":
+		return f, &NotFoundError{Kind: "source", Name: source}
 	}
+
 	// The set is what is missing. Name it the way FR-7 spells identity,
 	// source-plus-set, whenever a source was given to spell it with: the
 	// same string fetch reports for the same mistake.
-	name := f.Set
-	if f.Source != "" {
-		name = f.Source + "/" + f.Set
+	name := set
+	if source != "" {
+		name = source + "/" + set
 	}
-	return &NotFoundError{Kind: "backup set", Name: name}
+	return f, &NotFoundError{Kind: "backup set", Name: name}
+}
+
+// ResolvedSetID is the "source/set" id this filter names, or the empty
+// string when it names none or more than one.
+//
+// It exists for the caller that has to tell a running engine which backup
+// set a listing is about (GET /backups filters on one such id and on
+// nothing else), and it is a method on the filter rather than a second
+// walk over the configuration in that caller specifically because there
+// used to be two walks. The one over there predated the composite id and
+// silently returned "" for a bare name two sources shared, which is how
+// an ambiguous filter came to be compared against the whole journal
+// instead of being refused (#569).
+//
+// A refusal comes back as the empty id rather than as an error, because
+// every caller reaches this after ListArtifacts has already refused the
+// same filter with the same rule and a message written for the operator.
+func (f ArtifactFilter) ResolvedSetID(sources []config.Source) string {
+	resolved, err := f.resolve(sources)
+	if err != nil || resolved.Set == "" {
+		return ""
+	}
+	return resolved.Source + "/" + resolved.Set
 }
 
 func (f ArtifactFilter) matches(sourceName, setName string) bool {
@@ -162,7 +253,11 @@ func (f ArtifactFilter) matches(sourceName, setName string) bool {
 // identity source-plus-set, so a name that appears nowhere in config is
 // not an identity this can be a filter over.
 func (s *Service) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]state.Record, error) {
-	if err := filter.resolve(s.Config.Sources); err != nil {
+	// The resolved filter, not the one that came in: matches compares
+	// plain source and set names, and the Set an operator typed may be
+	// the whole "source/set" id (#569).
+	resolved, err := filter.resolve(s.Config.Sources)
+	if err != nil {
 		return nil, err
 	}
 
@@ -171,7 +266,7 @@ func (s *Service) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]s
 	for _, src := range s.Config.Sources {
 		for _, bs := range src.BackupSets {
 			configured[bs.ID.String()] = true
-			if !filter.matches(src.Name, bs.Name) {
+			if !resolved.matches(src.Name, bs.Name) {
 				continue
 			}
 			records, err := s.Journal.ListByBackupSet(ctx, bs.ID)

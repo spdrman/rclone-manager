@@ -53,40 +53,39 @@ import (
 // caller acquiring the claim without deciding a mode, or deciding one
 // without holding the claim.
 //
-// # The one shape this cannot see, said out loud
+// # The shape that used to get through, and what closed it
 //
 // A host serving the FIRST-RUN flow (issue #176: an install with no
 // config.yaml serves a setup wizard rather than refusing to start) holds
-// no journal and serves no deployment yet. apps/generic announces itself
-// only in its Activate callback, after its own POST has written the
-// configuration, so until then there is nothing to find and no lock-based
-// detector can find it. A CLI `backup-set create` on such a host takes
-// createFirstConfig's path, writes the first configuration underneath the
-// wizard, and the wizard goes on serving setup until it is restarted.
+// no configuration, so it has nothing to read a journal path out of.
+// apps/generic used to announce itself only in its Activate callback,
+// after its own POST had written that configuration, so for the whole of
+// the setup flow there was nothing to find and no lock-based detector
+// could find it. A CLI `backup-set create` on such a host took
+// createFirstConfig's path, wrote the first configuration underneath the
+// wizard, exited 0 and printed the set, and the wizard went on serving
+// setup and answering 503 until it was restarted. That is #571, found on
+// a real NAS on the ordinary path an operator installing fresh and
+// configuring from the command line walks down.
 //
-// That is genuinely the wizard's shape, and it is narrow: it is not "any
-// host with no config.yaml", because a create against an absent
-// configuration path now asks about the journal --state-database names
-// before it writes anything (backupset.go's createFirstConfig). A
-// mistyped --config against a live deployment, and a config.yaml renamed
-// out from under a running engine, both used to land here and are both
-// refused now. What remains is a host where nothing has ever been
-// configured and something is waiting to be, which is the same family as
-// #535 and is not detectable here: there is no journal, no port this
-// binary knows about, and no credential it holds.
+// It is closed from the other end, which is where the missing fact was. A
+// process about to serve does not need a configuration to know which
+// deployment it is going to serve: --state-database names the journal, it
+// is the same value the configuration setup writes will carry, and it is
+// the same packaged default this binary's own --state-database has. So
+// apps/generic announces about that journal BEFORE it serves the setup
+// flow (core/service's AnnounceServingFirstRun), and the question
+// createFirstConfig already asked, about the journal rather than about a
+// configuration that is not there, now has something to find.
 //
-// Phase 2 did not close it, and this is the place to say so rather than
-// leave the old sentence promising that it would. A route only helps a
-// command that takes one, and the first-configuration write deliberately
-// takes none (mode.go's enterFirstConfigWriteMode): finding a process
-// serving the journal `--state-database` names says the deployment is
-// already configured, and POST /system/first-run is not an operation to
-// send an already configured engine. On a wizard host there is nothing to
-// find in the first place, because `AnnounceServing` on an instance with
-// no configuration is a no-op and the announcement only happens in
-// `Activate`, once setup has written one. So the shape survives EPIC #536
-// intact, and closing it needs something this file cannot offer: an
-// address for a process that has not yet decided what it serves.
+// The refusal is the answer here rather than a route, and that is
+// deliberate rather than a limitation left standing. A route only helps a
+// command that takes one, and the first-configuration write takes none
+// (mode.go's enterFirstConfigWriteMode): the request it would carry is
+// POST /system/first-run, which two of the three shapes that reach here
+// are already past, and the third is a setup flow the operator is
+// standing in front of. Refusing leaves config.yaml untouched and leaves
+// that flow up, which is a deployment somebody can still finish.
 //
 // # And why reads are left alone
 //
@@ -135,7 +134,8 @@ const (
 // when they find a serving process, so the two cannot drift into telling
 // an operator different things about the same situation. Its two callers
 // are mode.go's enterConfigWriteMode and enterFirstConfigWriteMode, which
-// differ only in whether they can name the file the engine read.
+// differ in whether they can name the file the engine read and in which
+// remedy is true for them.
 //
 // Three things have to be in it, and each is there because leaving it out
 // was worse.
@@ -156,23 +156,49 @@ const (
 // serves", which on a host running `backup-manager daemon` names two
 // things that are not there: the daemon serves no HTTP at all. Stopping
 // the process is the one answer that is true on every deployment, so it
-// is the one stated plainly, and the other is offered as the conditional
-// it actually is.
+// is the one every remedy below starts with, and the rest is offered as
+// the conditional it actually is.
 //
-// #543 added a third, and it is last for the same reason the second one is
-// conditional. Four configuration writes can now be handed to a serving
-// process that speaks HTTP, and the way to say where that process is is
-// $BACKUP_MANAGER_API_URL (route.go). It is offered rather than instructed
-// because it is not true everywhere: a `daemon` has no listener to point
-// at, and `backup-set retention` and the first-configuration write have no
-// route even when one does. The four are named rather than summarised, so
-// an operator who reaches this refusal from one of the others is not sent
-// to set a variable that will not help them.
-func engineRefusal(engine *service.RunningEngine, because string) error {
+// The remedy is the caller's rather than this function's, and #571 is why.
+// It used to be one sentence for both, ending in $BACKUP_MANAGER_API_URL
+// and the four verbs an address can carry, and that reads as an
+// instruction to somebody who has just been refused. On a first
+// configuration it is an instruction into a loop: no address carries a
+// first configuration, so an operator who set all three variables and ran
+// the command again got this identical refusal. That path was rare before
+// #571 and is now the one every fresh install takes, so the two remedies
+// are separated and each is true where it is printed. What stays shared is
+// the head, which is the part that must not drift: what was found, and that
+// nothing was written.
+func engineRefusal(engine *service.RunningEngine, because, remedy string) error {
 	return engineHeld{fmt.Errorf(
-		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $%s (with $%s and $%s) to the address it serves",
-		engine.StateDatabase, because, apiURLEnv, apiUsernameEnv, apiPasswordEnv)}
+		"another process is already serving this deployment (state database %s), so nothing was written: a configuration change made here would never reach it, because %s. %s",
+		engine.StateDatabase, because, remedy)}
 }
+
+// routableRemedy is what an operator can do about a write an address could
+// have carried: the three mutating backup-set verbs and `settings patch`
+// (#543, route.go).
+//
+// The four are named rather than summarised, so an operator who reaches
+// this refusal from one of the others is not sent to set a variable that
+// will not help them. It is offered rather than instructed because it is
+// not true everywhere either: a `daemon` has no listener to point at.
+var routableRemedy = fmt.Sprintf(
+	"Stop that process and run this command again; if it serves this deployment's Web UI or HTTP API, the change can be made there instead, and `backup-set create`, `backup-set patch`, `backup-set remove` and `settings patch` can be handed to it directly by setting $%s (with $%s and $%s) to the address it serves",
+	apiURLEnv, apiUsernameEnv, apiPasswordEnv)
+
+// firstConfigRemedy is what an operator can do about the one configuration
+// write no address can carry.
+//
+// It says so out loud rather than leaving the variable unmentioned. An
+// operator who has met the routable remedy once, or read it in the usage
+// block, will reach for $BACKUP_MANAGER_API_URL here, and being told
+// plainly that it is not the answer for this one write is shorter than
+// finding out by setting it.
+var firstConfigRemedy = fmt.Sprintf(
+	"Stop that process and run this command again; if it is a fresh install still serving its setup flow, that flow writes this deployment's first configuration and is the place to do it. $%s cannot carry this one: a first configuration is the one write with no route, so setting it and running this again gets this same refusal",
+	apiURLEnv)
 
 // errEngineHoldsDeployment is the fact exit code 3 reports, carried on the
 // error so `fail` can recognise it (issue #551).

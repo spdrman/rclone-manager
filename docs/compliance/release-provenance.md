@@ -118,8 +118,8 @@ signed under that branch's ref: an artifact this record does not describe and th
 command rejects, which is #510's failure mode again except that a pushed image cannot
 be taken back the way a wrong sentence can.
 
-The tag in that example is `0.3.0` rather than the `0.3.1` this tree declares, because
-`0.3.1` is not pushed yet and there is nothing at that tag to verify. Move it once the
+The tag in that example is `0.3.0` rather than the `0.3.2` this tree declares, because
+`0.3.2` is not pushed yet and there is nothing at that tag to verify. Move it once the
 release workflow has published, at the same time the digests are recorded back.
 
 The SBOM is attached as an attestation over the same digest
@@ -167,7 +167,7 @@ not hold where the script runs.
 
 ## Publishing
 
-`ghcr.io/spdrman/backup-manager:0.3.1` is cut and not pushed.
+`ghcr.io/spdrman/backup-manager:0.3.2` is cut and not pushed.
 `distribution/packaging/canonical.json` records `image.published: false`, and the release
 manifest records the same fact from the other side as a `registry_digest` of `null` per
 architecture and a null `index_digest`. The two are held together by
@@ -233,7 +233,7 @@ the manifest is a claim about what the registry holds.
 binaries were stamped with, which is what `/backup-manager version` answers.
 `canonical.json`'s `image.tag` is the semantic version every provider package
 advertises. Those have to be the same string in a real release, and now they are:
-both record `0.3.1`, the tag cut for this release rather than the generator's
+both record `0.3.2`, the tag cut for this release rather than the generator's
 `git describe --tags --always` fallback that produced an abbreviated commit before
 this repository had any tags.
 

@@ -54,7 +54,6 @@ const STEPS = [
  *  a completely blank fingerprint while that request is in flight.
  *  Never what "Trust host" actually trusts: that always reads the real
  *  probedKnownHostsLine state, never this constant. */
-const FINGERPRINT_PLACEHOLDER = "SHA256:…probing…";
 
 function errorMessage(e: unknown, fallback: string): string {
   return e instanceof BackupManagerError ? e.api.message : fallback;
@@ -719,10 +718,19 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                   </WarningBanner>
                 </div>
               ) : null}
+              {/* Before the probe answers there is no key, and that is now
+                  an empty list rather than a placeholder digest under a
+                  guessed "ssh-ed25519": the panel says it has nothing to
+                  show, which is what is true until the host has been
+                  asked. After it answers, both values are the probe's own. */}
               <FingerprintDisplay
                 host={source.host + ":" + source.port}
-                algorithm={probedAlgorithm ?? "ssh-ed25519"}
-                fingerprint={probedFingerprint ?? FINGERPRINT_PLACEHOLDER}
+                keys={
+                  probedFingerprint && probedAlgorithm
+                    ? [{ algorithm: probedAlgorithm, fingerprint: probedFingerprint }]
+                    : []
+                }
+                emptyNote="Verify the server to fetch the host key it presents."
                 trustedAt={hostTrusted && !hostKeyChanged ? new Date().toISOString() : null}
               />
               <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>

@@ -689,3 +689,245 @@ describe("issue #350: repointing a set that already has history", () => {
     await screen.findByRole("button", { name: "Edit" });
   });
 });
+
+/**
+ * Issue #572: rotating the key and re-trusting the host, from the page
+ * that already edits everything else about a set.
+ *
+ * Both boxes start empty and stay empty, which is the one thing here that
+ * is not like the other seven. There is nothing to prefill them with: the
+ * API answers with the set, and the set carries a reference to a key and a
+ * path to a trust anchor, neither of which is a value an operator typed or
+ * could usefully be shown back. So they are write-only boxes, and the
+ * tests below pin that: an untouched one contributes nothing to any save,
+ * and a filled one contributes exactly its own key.
+ */
+describe("issue #572: changing a set's SSH key and its trusted host key", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
+  it("offers a box for each, and a per-box Save that sends only that box", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("SSH key"), { target: { value: "key_9f3c" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save ssh key" }));
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ sshKeyId: "key_9f3c" });
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({ knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" });
+  });
+
+  it("leaves both out of a save that did not touch them", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("User"), { target: { value: "backup-agent-2" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save user" }));
+    });
+    expect(update.mock.calls[0][2]).toEqual({ username: "backup-agent-2" });
+  });
+
+  it("asks before re-trusting a changed host key, and the retry carries the acknowledgement", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+        message:
+          "service: this backup set trusts ssh-ed25519 SHA256:oldoldoldold and the line offered is ssh-ed25519 SHA256:newnewnewnew",
+        correlationId: "cid_hostkey"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAnew" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+
+    // Both fingerprints, from the service's own sentence: they are the
+    // whole content of the decision being asked for.
+    expect(screen.getByText(/SHA256:oldoldoldold/)).toBeTruthy();
+    expect(screen.getByText(/SHA256:newnewnewnew/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeTruthy();
+    expect(update.mock.calls[0][2].acknowledgeHostKeyChange).toBeUndefined();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({
+      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAnew",
+      acknowledgeHostKeyChange: true
+    });
+  });
+
+  it("acknowledges the line it showed, not whatever the box holds when Save anyway is pressed", async () => {
+    // The banner prints a fingerprint and asks the operator to compare it
+    // against the host. That takes a minute, the boxes stay editable
+    // underneath it, and the retry used to re-read them: compare
+    // fingerprint A, change the box, press "Save anyway", pin B. The
+    // acknowledgement is an answer about one value, so it travels with
+    // that value.
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+        message: "service: the line offered pins ssh-ed25519 SHA256:theonecompared",
+        correlationId: "cid_hostkey_swap"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAcompared" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+    expect(screen.getByText(/SHA256:theonecompared/)).toBeTruthy();
+
+    // Somebody types over the box while the question is on screen.
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAsomethingelse" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({
+      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAcompared",
+      acknowledgeHostKeyChange: true
+    });
+  });
+});
+
+/**
+ * The completion method and its window are one setting the server takes as
+ * two fields, and a live browser spec against a real engine found that
+ * neither box could be saved on its own. Saving the method alone was
+ * refused (core will not have a stable set with a zero window, and there
+ * is no default for it to invent); saving the window alone answered 200
+ * and dropped the value, so the operator watched the number they typed
+ * come back as 0. Between the two, the pair was reachable only through
+ * SAVE ALL, which is a thing you find out by failing twice.
+ *
+ * These drive the buttons rather than the handler, because "the pair
+ * travels together" is a claim about what each control sends.
+ */
+describe("issue #572: the completion method and its window save as one setting", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
+  it("carries the window when the method's own Save is pressed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+    expect(target.completionMethod).not.toBe("stable-size");
+
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    fireEvent.change(await screen.findByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save completion method" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("carries the method when the window's own Save is pressed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    fireEvent.change(await screen.findByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save stable for (seconds)" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("carries the method on SAVE ALL when only the window was touched", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await stableSizeSet();
+    await openEditMode(api, target);
+
+    // A set already on stable-size, with only its window edited. The
+    // method is not dirty, so SAVE ALL, which walks the dirty ones, would
+    // send the window alone.
+    fireEvent.change(screen.getByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("says which box is missing rather than sending a pair core would refuse", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    // Choosing stable-size reveals the window holding this set's current
+    // value, which for one that has never been on stable-size is 0. Both
+    // halves of the pair are now in the save, and the window's own parse
+    // refuses a zero before any request is made, so the operator is told
+    // what is missing on the box that is missing it rather than reading a
+    // server refusal about stable_for under the method box. Both controls
+    // behave the same way, because both expand to the same pair.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    expect(((await screen.findByLabelText("Stable for (seconds)")) as HTMLInputElement).value).toBe("0");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save completion method" }));
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByText(/Stable for must be a whole number of seconds greater than zero/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/** The fixture's set that is already on the stable-size method, read
+ *  through its own mock instance for the reason firstSet is. */
+async function stableSizeSet(): Promise<BackupSet> {
+  const sets = await createMockApi().listSets();
+  const found = sets.find((s) => s.completionMethod === "stable-size");
+  if (!found) throw new Error("the mock fixture has no stable-size set, so this suite cannot cover the pair");
+  return found;
+}

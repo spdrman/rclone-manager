@@ -43,6 +43,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -560,4 +561,28 @@ type NotFoundError struct {
 
 func (e *NotFoundError) Error() string {
 	return "app: no configured " + e.Kind + " named " + e.Name
+}
+
+// AmbiguousSetError reports that a bare backup set name is configured
+// under more than one source, so it names no single backup set (issue
+// #569).
+//
+// It is a refusal rather than a pick because FR-7 makes a backup set's
+// identity source-plus-set: two hosts backing up their /var under one
+// naming convention have a set called var-backups each, and answering
+// "var-backups" with one of them, or with both merged, hands an operator
+// who asked about one host another host's backups with nothing in the
+// answer to doubt.
+//
+// Candidates carries the ids that matched, in configuration order,
+// because retyping one of them is the whole remedy and an operator cannot
+// retype what they were not shown.
+type AmbiguousSetError struct {
+	Name       string
+	Candidates []string
+}
+
+func (e *AmbiguousSetError) Error() string {
+	return "app: backup set " + e.Name + " is configured under more than one source (" +
+		strings.Join(e.Candidates, ", ") + "); name the one you mean"
 }

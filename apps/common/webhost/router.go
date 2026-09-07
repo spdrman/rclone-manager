@@ -356,6 +356,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// before COMMITTED.
 		r.With(requireCSRF).Post("/backups/{source}/{set}/{name}/retry", h.retryFailedIngestion)
 		r.Get("/activity", h.listActivity)
+		// Issue #573: what each backup set is DOING right now, as
+		// opposed to the durable record of what happened that the route
+		// immediately above serves. Read-only (§50), so neither CSRF nor
+		// the destructive gate, exactly like its neighbour.
+		//
+		// Registered as a static child of "/activity" rather than as a
+		// sub-path of a param route, so there is no shape it could be
+		// confused with: "/activity" has no wildcard, and chi matches a
+		// static segment before anything else, so the two coexist
+		// whichever order they are registered in.
+		r.Get("/activity/live", h.getLiveActivity)
 		r.Get("/quarantine", h.listQuarantine)
 
 		// The three operator actions a quarantined backup has. All carry

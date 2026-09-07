@@ -83,6 +83,14 @@ type BackupService struct {
 	journal *state.Journal
 	logger  *obs.Logger
 
+	// activity is the live, in-memory feed of what each backup set is
+	// doing right now (issue #573, liveactivity.go). It is wired as the
+	// logger's obs.Sink in New below, so it follows every event this
+	// process emits without any call site knowing it exists, and it is
+	// installed as a progress observer on every cycle this package runs
+	// (operations.go, scheduler.go) for the numbers no event carries.
+	activity *liveActivity
+
 	// pollInterval is cfg.PollInterval.Duration(), copied out at
 	// construction time so PollInterval() (scheduler.go) can report it
 	// without exposing *config.Config itself, which a caller outside
@@ -261,9 +269,18 @@ type configState struct {
 // move it out of that state otherwise.
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
+	activity := newLiveActivity()
+	// The tap goes on before anything is built from this logger, so the
+	// feed and the log line come from one Logger rather than two: the
+	// inner app.Service below derives its own from this value, and so
+	// does every hot reload (configreload.go). Attaching it later, or
+	// only to b.logger, would leave the cycle's own events invisible to
+	// the one thing built to follow them.
+	logger = logger.WithSink(activity)
 	b := &BackupService{
 		journal:        journal,
 		logger:         logger,
+		activity:       activity,
 		pollInterval:   cfg.PollInterval.Duration(),
 		ctx:            ctx,
 		cancel:         cancel,

@@ -9,7 +9,7 @@ outside, with nothing but a browser and a built artefact.
 This directory is what replaced it, and the replacement had to land in the
 same change as the removal. Issue #197 is why: before it, the suite had no
 automated execution anywhere. `nightly-e2e.yml`'s schedule was commented
-out, every workflow here is `workflow_dispatch`-only, and
+out, no workflow here triggered on anything at all, and
 `scripts/ci-local.sh` never invoked Playwright. So it ran when somebody
 remembered to run it, and a deterministically red spec sat on `main`
 through four merges and was dismissed twice as an ordering flake.
@@ -79,6 +79,8 @@ change there and the pin bump in the same PR.
   the same pin and runs the full Suite B including the seven-provider
   matrix, still `workflow_dispatch`-only. It exists for a run on a clean
   machine with a downloadable trace, not as a gate: nothing triggers it.
+  `ci.yml` is the one workflow here that does trigger on its own, on a
+  pull request into `release` (#575), and Suite B is not in it.
 - **`rclone-manager-tests` pins a build of this repository**, in its own
   `build-under-test.json`. The two pins point opposite ways on purpose. A
   new test cannot break in-flight work here until someone bumps this one,
@@ -132,6 +134,30 @@ perform this proof: the script says CANNOT RUN and exits 3, and
 `ci-local.sh` ledgers that, so the run ends INCOMPLETE and names the proof
 it could not perform. `CI_LOCAL_SKIP_TWO_MACHINE=1` is the out-loud
 opt-out, and it ledgers too.
+
+### Where it runs besides here
+
+All four cases run on every pull request into `release`, as the
+`two-machine-e2e` job in `.github/workflows/ci.yml` (issue #575). Merging
+into that branch publishes a signed image to a public registry, and this
+is the only test in the tree that says the thing being published works.
+
+CI calls it through `two-machine-ci.sh` rather than directly, because the
+three outcomes above have to survive a workflow step, which has two. A
+runner that cannot perform the proof comes out red under the word
+INCOMPLETE, not green under no word at all: green there would be a
+published release resting on a run that never happened.
+`scripts/tests/two-machine-ci-verdict.test.sh` is what holds that in
+place.
+
+A GitHub-hosted `ubuntu-latest` runner does carry it, established by
+running it rather than by reading the documentation: privileged containers
+are allowed so docker-in-docker starts, `xt_connlimit` loads so the
+connection-cap case can impose its rule, and the runner has around 87 GiB
+free against the installer's 2048 MiB refusal. The whole job, image build
+and all four cases, is about four and a half minutes there, against
+roughly a minute per case plus the build on the machine this was written
+on.
 
 Run one case on its own with `--case`, and add `--keep-on-failure` to
 leave a failing case's containers up for reading. Everything else is torn

@@ -414,14 +414,17 @@ func TestAConfigurationWriteIsRefusedWhenTheEngineArrivesWhileStdinIsStillBeingR
 // there, writes a whole FIRST configuration through core/service.FirstRun
 // instead. That path never opens the journal and never went past the
 // engine check, so against a live deployment it exited 0, printed the set,
-// and wrote a configuration nothing would ever read. Two shapes reach it,
-// and both are ordinary mistakes rather than exotic ones: a mistyped
-// --config, and a config.yaml renamed out from under a running engine.
+// and wrote a configuration nothing would ever read. Three shapes reach
+// it, and none of them is exotic: a mistyped --config, a config.yaml
+// renamed out from under a running engine, and (since #571 gave a
+// first-run engine something to announce) a genuinely fresh install whose
+// engine is still serving its setup flow.
 //
 // What identifies the deployment in that state is the journal, because
-// --state-database names it and carries the same packaged default the
-// first-run wizard writes. So the refusal has to be decided from the
-// journal, not from a configuration file that is not there.
+// --state-database names it and carries the same packaged default
+// apps/generic's own --state-database does. So the refusal has to be
+// decided from the journal, not from a configuration file that is not
+// there.
 func TestAFirstConfigurationIsRefusedWhileAnEngineServesThatJournal(t *testing.T) {
 	configPath := writeTestConfigWithDeploymentPolicy(t)
 	keyPath := writeTestPrivateKey(t)
@@ -451,17 +454,30 @@ func TestAFirstConfigurationIsRefusedWhileAnEngineServesThatJournal(t *testing.T
 	if !strings.Contains(stderr, "nothing was written") {
 		t.Errorf("the refusal does not say the file was left alone:\n%s", stderr)
 	}
+	// #571: the remedy has to be one that exists for THIS write. The
+	// shared sentence used to end by naming $BACKUP_MANAGER_API_URL and
+	// the four verbs an address can carry, which sends an operator to set
+	// three variables and run a command that refuses identically, because
+	// a first configuration is the one write with no route.
+	if !strings.Contains(stderr, "cannot carry this one") {
+		t.Errorf("the refusal does not say that an address cannot carry a first configuration, so an operator is sent round the loop it describes:\n%s", stderr)
+	}
 }
 
 // TestAFirstConfigurationIsWrittenWhenNothingServesThatJournal is the
 // other arm, and the reason the refusal above has to be decided from the
 // journal rather than from "is there a config file".
 //
-// A host running the first-run setup wizard holds no journal: apps/generic
-// opens one only after its own POST has written the configuration. So a
-// bare host, and a wizard host, must both still be able to write a first
-// configuration from the command line. A guard that refused here would
-// take the direct path away from exactly the deployment it exists for.
+// A bare host has never had a process serve this journal, so there is no
+// serving lock file beside it and the question comes back "nothing is
+// serving". That host must still be able to write a first configuration
+// from the command line, because it is the deployment the direct path
+// exists for, and a guard that refused here would take it away.
+//
+// A host running the first-run setup wizard used to be in this arm too,
+// and #571 moved it into the one above: a wizard now announces about the
+// journal --state-database names before it serves anything, so a create
+// typed at it is refused rather than written underneath it.
 func TestAFirstConfigurationIsWrittenWhenNothingServesThatJournal(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := writeTestPrivateKey(t)

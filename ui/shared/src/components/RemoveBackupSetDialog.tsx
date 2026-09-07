@@ -128,8 +128,16 @@ export function RemoveBackupSetDialog({
       <p style={{ margin: 0 }}>
         {"Backup Manager will stop collecting backups for " + set.name + "."}
       </p>
+      {/* The count is named only when there is one. This sentence used to
+          open "0 retained backups (0 B)" on every real deployment, because
+          api/client.ts filled both numbers with a literal zero, and it is
+          the one sentence on this dialog somebody might act on: an
+          operator reading that nothing is retained has been told the
+          opposite of what the paragraph goes on to promise. */}
       <p style={{ margin: 0, color: "var(--text-2)" }}>
-        {set.retainedCount + " retained backups (" + bytes(set.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
+        {set.retainedCount === null || set.retainedBytes === null
+          ? "Retained backups stay on NAS storage and remain listed under Backups. Backup Manager cannot say how many there are for this set."
+          : set.retainedCount + " retained backups (" + bytes(set.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
       </p>
       <p style={{ margin: 0, color: "var(--text-2)" }}>
         {"Creating a backup set with this source and name again takes those backups back, along with their retention history."}

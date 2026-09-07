@@ -59,12 +59,37 @@ import (
 // declares its own (issue #333) is not moved by them: see the
 // re-resolution step below for why that is a decision rather than an
 // accident.
+//
+// # The operand, and what happens when it names nothing (issue #568)
+//
+// With no argument this previews every configured backup set, which is
+// what it has always done. With one <source/backup-set> it previews that
+// one set, and an id that names no configured set is refused with nothing
+// printed at all.
+//
+// The refusal is the half that matters most. Previewing the wrong set is
+// a wrong answer an operator can catch, because the heading names a set
+// they did not ask about; answering about a configured set for an id that
+// resolved to nothing is a wrong answer with nothing in it to catch. This
+// is the command somebody reads to decide whether a deletion is safe, so
+// an id it cannot place is a refusal rather than a best effort.
 func cmdRetention(args []string) int {
 	fs, cfgPath := newFlagSet("retention")
 	dryRun := fs.Bool("dry-run", false, "accepted and inert: this command previews in both modes, and says so on its own output")
 	rf := registerRetentionFlags(fs)
-	if err := fs.Parse(args); err != nil {
+	// The operand may be written on either side of the flags, exactly
+	// like every other command's (see parseFlagsAroundOperands in
+	// setup.go for why). A plain fs.Parse stops at the first argument
+	// that is not a flag and leaves it in fs.Args() for a caller to read,
+	// which is how this command came to accept an id and then quietly
+	// preview something else (issue #568).
+	operands, err := parseFlagsAroundOperands(fs, args)
+	if err != nil {
 		return 2
+	}
+	only, code := retentionOperand(operands)
+	if code != exitOK {
+		return code
 	}
 
 	ctx := context.Background()
@@ -121,7 +146,7 @@ func cmdRetention(args []string) int {
 		return fail(fmt.Errorf("retention flags: %w", err))
 	}
 
-	reports, err := svc.RetentionPreviewAll(ctx)
+	reports, err := retentionReports(ctx, svc, only)
 	if err != nil {
 		return fail(err)
 	}
@@ -212,7 +237,13 @@ func cmdRetention(args []string) int {
 	// output is pinned by the black-box contract suite in
 	// spdrman/rclone-manager-tests (suites/cli/cases/retention/), and
 	// every case there is a configured-sets-only deployment.
-	unconfigured, err := svc.UnconfiguredSets(ctx)
+	//
+	// Only for the whole-deployment form. An operator who named one set
+	// asked about that set, and a list of other sets nothing governs is
+	// an answer to a question they did not ask; the form with no operand
+	// is where that list belongs, and `unconfigured` is the command that
+	// is entirely about it.
+	unconfigured, err := unconfiguredForPreview(ctx, svc, only)
 	if err != nil {
 		return fail(err)
 	}
@@ -224,10 +255,146 @@ func cmdRetention(args []string) int {
 			fmt.Printf("    Create %s again to put them back under a policy: `backup-manager unconfigured` explains the rest.\n", u.Set)
 		}
 	}
+
+	// The other side of that decision, which the decision on its own left
+	// open. Keeping the list off the one-set form is right, and it means
+	// an operator who types `retention prod/db` out of habit and never
+	// types it bare never meets the list at all. What the list is about is
+	// backups nothing retains, reconciles or expires, which are the ones
+	// most worth knowing about and the least likely to announce
+	// themselves, so silence here is a worse answer than a line.
+	//
+	// A pointer rather than the list, so the shape of the answer still
+	// matches the shape of the question: it says the list exists, says how
+	// many are on it and says how to see it, and names none of them.
+	//
+	// Printed only when there is something behind it, which is the rule
+	// the appendix above already follows and for the same reason: a
+	// deployment that has never removed a backup set prints exactly what
+	// it printed before this line existed.
+	ungoverned, err := ungovernedElsewhere(ctx, svc, only)
+	if err != nil {
+		return fail(err)
+	}
+	if ungoverned > 0 {
+		fmt.Printf("\nthis preview is about one backup set, so it leaves out %d backup set(s) whose configuration was removed and which no retention policy governs at all. `backup-manager retention` with no argument lists those (issue #418).\n", ungoverned)
+	}
 	if !*dryRun {
 		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed.")
 	}
 	return 0
+}
+
+// retentionOperand reads the optional <source/backup-set> this command
+// takes, returning the zero id when there is none and an exit code when
+// what was typed is not one (issue #568).
+//
+// Two refusals, and they are different failures on purpose. Two ids, or
+// one thing that is not shaped like an id at all, is a usage mistake and
+// exits 2: nothing ran and what has to change is the command line. A
+// well-formed id that names no configured backup set is a set that is not
+// there, which the usage block's own exit-code table gives to 1, so that
+// one is left to the service a step later and arrives in the same
+// sentence every other command refuses an unknown set with. `backup-set
+// retention` splits the two the same way, which matters because it is the
+// same operand, spelled the same way, on a command an operator moves to
+// and from.
+//
+// # The rule the split comes from
+//
+// Two rows of a published table are not enough on their own: 2 is
+// "nothing ran, the command line was wrong" and 1 is "an ordinary
+// failure", and read as prose those overlap. The line between them is
+// whether this deployment had to be consulted to know. A string that is
+// not shaped like a backup set id is wrong on every deployment there will
+// ever be, so it is answered here, before a configuration is loaded or a
+// journal is opened, and it is a 2. A set the configuration does not have
+// is only wrong on this one, so it is a 1 and it waits for the service. An
+// answer that is true and empty is a 0 and always was: a configured set
+// with no finished backups under it yet prints that it has none and exits
+// 0, which is what keeps "there are none yet" from reading as "they are
+// gone".
+//
+// Two places that rule is applied narrowly rather than literally, and both
+// times because the narrow reading is what the majority of this binary's
+// other commands already do. A malformed ARTIFACT id is a 1: `validate`,
+// `retry`, `quarantine`, `restore` and `artifacts <id>` have all answered
+// that way since long before the table existed, and moving five commands
+// is a bigger change than settling this one. A flag VALUE that parses and
+// then fails validation is a 1 too, which is what --daily-days -1 and
+// --timezone Mars/Phobos get here: they go through the identical
+// config.ValidateRetention the YAML file's own retention block goes
+// through, and `settings patch --timezone Mars/Phobos` and `backup-set
+// retention --daily-days -1` both answer with whatever that validation
+// says, on the same row.
+//
+// An exit code returned rather than an error, like buildRetentionOverride
+// (backupsetretention.go): these are argument problems this package owns
+// and prints itself, not service refusals for fail() to render.
+func retentionOperand(operands []string) (model.BackupSetID, int) {
+	switch len(operands) {
+	case 0:
+		return model.BackupSetID{}, exitOK
+	case 1:
+		source, name, ok := splitBackupSetID(operands[0])
+		if !ok {
+			return model.BackupSetID{}, usageError("retention: %q is not a backup set id; a backup set id is exactly source/name", operands[0])
+		}
+		return model.BackupSetID{Source: source, Set: name}, exitOK
+	default:
+		return model.BackupSetID{}, usageError("retention takes at most one argument: <source/backup-set>")
+	}
+}
+
+// retentionReports is the preview this invocation is about: every
+// configured backup set, or the one the operand named.
+//
+// The single-set path goes through the same RetentionPreview
+// RetentionPreviewAll calls for each of its own sets, so one set's report
+// is computed the identical way whether it was asked for by name or
+// reached by walking the configuration. It is also what refuses an id
+// naming no configured set, with the *app.NotFoundError every other
+// command's unknown-set refusal already carries, so this command grows no
+// second vocabulary for the same fact.
+func retentionReports(ctx context.Context, svc *app.Service, only model.BackupSetID) ([]app.RetentionSetReport, error) {
+	if only.IsZero() {
+		return svc.RetentionPreviewAll(ctx)
+	}
+	report, err := svc.RetentionPreview(ctx, only)
+	if err != nil {
+		return nil, err
+	}
+	return []app.RetentionSetReport{report}, nil
+}
+
+// unconfiguredForPreview is the issue #418 appendix, and nothing at all
+// when this invocation is about one named backup set.
+func unconfiguredForPreview(ctx context.Context, svc *app.Service, only model.BackupSetID) ([]app.UnconfiguredSet, error) {
+	if !only.IsZero() {
+		return nil, nil
+	}
+	return svc.UnconfiguredSets(ctx)
+}
+
+// ungovernedElsewhere is how many backup sets the appendix above would
+// have listed, for the one invocation shape that does not get the
+// appendix, and zero for the one that does.
+//
+// The mirror image of the function above rather than a widening of it, so
+// each shape asks the journal exactly one question and the two cannot
+// both run. Keeping them apart is also what keeps #418's decision legible:
+// that one decides what the LIST is, this one decides what the pointer at
+// the list is, and the reason the one-set form gets a pointer instead of a
+// list is unchanged by having one.
+func ungovernedElsewhere(ctx context.Context, svc *app.Service, only model.BackupSetID) (int, error) {
+	if only.IsZero() {
+		return 0, nil
+	}
+	sets, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(sets), nil
 }
 
 // printVerdictLine renders one artifact's verdict.
