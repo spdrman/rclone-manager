@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 # Full local mirror of .github/workflows/ci.yml and rclone-upgrade-gate.yml,
-# run entirely on this machine. GitHub Actions no longer auto-triggers on
-# this repo (see the "on:" blocks in .github/workflows/*.yml, all switched
-# to workflow_dispatch-only) — this script is the actual gate now. The
-# pre-commit hook runs it on every commit; `--admin` merges rely on it
-# having been green, not on any GitHub-side check.
+# run entirely on this machine, and the gate for everything bound for
+# `main`. GitHub Actions runs ci.yml on a pull request into `release` and
+# on nothing else (#575), so on every other branch there is no GitHub-side
+# check at all. The pre-commit hook runs this script on every commit, and
+# `--admin` merges rely on it having been green.
 #
 # Comprehensive on purpose, job-for-job with ci.yml, which means it is NOT
 # fast: the full core/ test suite (including the Docker-backed crash matrix,
@@ -308,6 +308,44 @@ bash scripts/tests/e2e-help.test.sh
 gate_step "the two-machine proof's verdict is still its own number (#551)"
 bash scripts/tests/two-machine-exit-status.test.sh
 
+# The same verdict, one layer out (#575). A pull request into `release`
+# now runs .github/workflows/ci.yml, and that workflow calls the proof
+# through scripts/e2e/two-machine-ci.sh, because the proof has three
+# outcomes and a workflow step has two. A runner that cannot start
+# docker-in-docker has to come out red under the word INCOMPLETE, not
+# green under no word at all: green there is a signed image on a public
+# registry standing on a proof nobody performed.
+#
+# Same cost and same reasoning as the step above: stand-in proofs, no
+# containers, about a second.
+gate_step "a proof CI could not perform still reads as incomplete, not as a pass (#575)"
+bash scripts/tests/two-machine-ci-verdict.test.sh
+
+# The gate on `release` is one check with a hand-written list of jobs
+# behind it, because Actions cannot say "every job in this workflow". An
+# enumeration in that position goes stale the first time somebody adds a
+# job without thinking about this one, and it goes stale in the dangerous
+# direction: the new job runs, goes red, and the required check is green
+# because nobody asked it. This reads the workflow and refuses that.
+gate_step "the release gate still covers every job in ci.yml (#575)"
+bash scripts/tests/release-gate-covers-every-job.test.sh
+
+# The other half of the same gate, and the half that does not need a
+# settings page to be true (#575). A required check gates while branch
+# protection says it does, and a direct push, an administrator merging
+# past a red check or an edited ruleset all still land a commit on
+# `release`, which is what publishes. release.yml now asks GitHub whether
+# `release gate` actually passed on the commit it is about to publish and
+# refuses if it did not. This pulls that job's script out of the workflow
+# and runs it against a stand-in `gh`, once per outcome: green, red,
+# skipped, absent, forged, unreachable, overridden, and overridden with no
+# reason given.
+#
+# Same cost and same reasoning as the step above: no containers, no
+# network, about a second.
+gate_step "a publish the release gate never passed is still refused (#575)"
+bash scripts/tests/release-refuses-an-ungated-publish.test.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 
@@ -511,8 +549,8 @@ fi
 
 # The browser e2e signal (#158, #197). Until this step existed, the
 # Playwright suite had no automated execution anywhere: nightly-e2e.yml's
-# schedule is commented out, every workflow here is workflow_dispatch-only,
-# and this script never invoked it. So it ran when somebody remembered to,
+# schedule is commented out, ci.yml runs on nothing bound for main, and
+# this script never invoked it. So it ran when somebody remembered to,
 # which is how a deterministically red spec sat on main through four merges
 # and was dismissed twice as an ordering flake.
 #
@@ -617,8 +655,9 @@ gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
 
-# ci.yml's api-contract job, mirrored here because ci.yml is
-# workflow_dispatch-only and therefore runs on no commit: without these two
+# ci.yml's api-contract job, mirrored here because ci.yml runs only on a
+# pull request into `release` and therefore on nothing bound for main:
+# without these two
 # lines the byte-for-byte binding comparison, the implementation-type leak
 # scan and all 15 of their mutation controls had never executed on a commit
 # at all (#166, PR #194 review M1). Unconditional, FAST included: together

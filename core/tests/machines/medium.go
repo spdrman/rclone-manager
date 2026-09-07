@@ -262,22 +262,50 @@ func (f *Medium) HasBucket(t *testing.T, bucket string) bool {
 // to address the container itself.
 func (f *Medium) ContainerID() string { return f.containerID }
 
+// waitUntilLive waits for two things, not one, and the second is the
+// point.
+//
+// /minio/health/live answers 200 as soon as MinIO's HTTP server is
+// listening, which is BEFORE its object layer exists. In that window
+// every S3 call comes back 503 XMinioServerNotInitialized, and rclone
+// treats that as a permanent error rather than retrying it, so the
+// fixture hands the suite a MinIO that is up and cannot store anything.
+// TestMinioMediumContractSuite lost four subtests to exactly that on a
+// GitHub runner (#575); on the machine this was written on the two states
+// are a single 200ms poll apart and the window was never observed at all.
+//
+// The second condition is the failure restated rather than a second
+// endpoint's semantics borrowed. An unauthenticated GET / is 503 while
+// the server is uninitialised and 403 AccessDenied once it is not, so
+// "anything but 503" is precisely "the object layer is there". It also
+// cannot go stale: / is the S3 root, not a health path that a future
+// MinIO might rename.
 func waitUntilLive(t *testing.T, f *Medium) {
 	t.Helper()
 	deadline := time.Now().Add(minioReadyTimeout)
 	client := &http.Client{Timeout: 2 * time.Second}
+	var stage string
 	for {
+		stage = "the liveness endpoint"
 		resp, err := client.Get(f.Endpoint + "/minio/health/live")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				stage = "an initialised object layer (GET / still says 503 XMinioServerNotInitialized)"
+				var root *http.Response
+				root, err = client.Get(f.Endpoint + "/")
+				if err == nil {
+					root.Body.Close()
+					if root.StatusCode != http.StatusServiceUnavailable {
+						return
+					}
+				}
 			}
 		}
 		if time.Now().After(deadline) {
 			logs, _, _ := dockerRun(dockerExecTimeout, "logs", f.containerID)
-			t.Fatalf("machines: %s never answered its liveness endpoint within %s (last error: %v). Container logs:\n%s",
-				f.Endpoint, minioReadyTimeout, err, logs)
+			t.Fatalf("machines: %s never reached %s within %s (last error: %v). Container logs:\n%s",
+				f.Endpoint, stage, minioReadyTimeout, err, logs)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

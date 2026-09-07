@@ -5,14 +5,23 @@
 # scripts/e2e/tests-repo.pin, and this workflow checks that repository out
 # at the pinned sha and runs it against this repository's ui/shared.
 #
-# WHERE THE GATE IS. Also not here. Every workflow in this repository is
-# workflow_dispatch-only, so a required check on this file would gate
-# nothing. The blocking signal is scripts/ci-local.sh, via
-# .husky/pre-commit, which runs the same Suite B on every non-FAST commit
-# plus a CLI smoke slice, both against the working tree (#197). This
-# workflow exists for the case that gate cannot serve: a run on a clean
-# machine, on demand, with a trace to download afterwards, including the
-# seven-provider matrix the local gate deliberately leaves out.
+# WHERE THE GATE IS. Also not here. This workflow triggers on nothing, so
+# a required check on it would gate nothing. The blocking signal is
+# scripts/ci-local.sh, via .husky/pre-commit, which runs the same Suite B
+# on every non-FAST commit plus a CLI smoke slice, both against the
+# working tree (#197). This workflow exists for the case that gate cannot
+# serve: a run on a clean machine, on demand, with a trace to download
+# afterwards, including the seven-provider matrix the local gate
+# deliberately leaves out.
+#
+# ci.yml is no longer dispatch-only, and this file is deliberately not
+# following it. Issue #575 gave that workflow a pull_request trigger on
+# `release`, because merging there publishes. Suite B is not in it: this
+# workflow's own history is an argument about flake noise, and the release
+# gate already carries the two-machine proof, which is a stronger claim
+# about the same product than a browser suite makes. Putting Suite B in
+# front of a release is the owner's call, and it belongs in ci.yml at the
+# pin rather than as a required check on this file.
 #
 # The schedule stays commented. Re-enabling it would reintroduce the flake
 # noise this workflow's own history argues against, and it is no longer the

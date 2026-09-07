@@ -208,13 +208,21 @@ func TestPidAlive_ChecksIdentityNotExistence(t *testing.T) {
 # and the Go side reads that to completion, so a fixture left holding the
 # pipe would make the test wait out the fixture's whole lifetime.
 "$1" >/dev/null 2>&1 &
-echo $! > "$2"
+fixture=$!
+echo $fixture > "$2"
 sleep 1
 if pid_alive "$2"; then echo VERDICT=ours; else echo VERDICT=not-ours; fi
 # SIGKILL, not SIGTERM: the fixture traps SIGTERM to record that it was
 # signalled, and this cleanup must not be mistaken for the thing under
 # test in the stop_daemon case below.
-kill -9 %1 2>/dev/null
+#
+# By pid rather than by %1, and guarded, because this is the LAST command
+# and its status becomes the probe's. /bin/sh is bash on a Mac and dash on
+# Linux, and dash keeps no job table for a non-interactive script, so %1
+# is "no such job" there: this test printed the right verdict and then
+# failed on its own cleanup, on every Linux runner, for as long as nothing
+# ran it on one (#575).
+kill -9 "$fixture" 2>/dev/null || true
 `), 0o755); err != nil {
 		t.Fatalf("write probe: %v", err)
 	}
@@ -270,10 +278,16 @@ func TestStopDaemon_DoesNotSignalSomebodyElsesProcess(t *testing.T) {
 	harness := filepath.Join(dir, "harness")
 	if err := os.WriteFile(harness, append([]byte(string(stage)[:cut]), []byte(`
 "$1" >/dev/null 2>&1 &
-echo $! > "$2"
+fixture=$!
+echo $fixture > "$2"
 sleep 1
 stop_daemon "$2" "the daemon"
-kill -9 %1 2>/dev/null
+# The pid is captured above rather than read back here, because
+# stop_daemon is the thing under test and what it does to the pid file is
+# its business. By pid and guarded for the reason the probe above gives:
+# on Linux /bin/sh is dash, %1 names nothing, and this last line decided
+# the harness's exit status.
+kill -9 "$fixture" 2>/dev/null || true
 `)...), 0o755); err != nil {
 		t.Fatalf("write harness: %v", err)
 	}

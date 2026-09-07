@@ -18,7 +18,8 @@
 #      this check.
 #
 #   3. THE GATE ITSELF NOT RUNNING. Both rules above were wired only into
-#      .github/workflows/ci.yml, which is workflow_dispatch-only, so for
+#      .github/workflows/ci.yml, which ran on nothing at all then and runs
+#      only on a pull request into `release` now (#575), so for
 #      four PRs they ran on no commit at all while .husky/pre-commit's
 #      scripts/ci-local.sh had never heard of scripts/api (PR #194 review,
 #      M1). A check nothing invokes is indistinguishable from a check that
@@ -179,7 +180,7 @@ else
     if grep -qE "^[[:space:]]*bash $invoked" "$gate"; then
       echo "  ok: $gate runs $invoked"
     else
-      note "FAIL: $gate does not run $invoked. GitHub Actions is workflow_dispatch-only on this repository, so a check that lives only in .github/workflows/ci.yml runs on no commit at all. Add \`bash $invoked\` to $gate."
+      note "FAIL: $gate does not run $invoked. .github/workflows/ci.yml runs only on a pull request into \`release\` (#575), so a check that lives only there runs on nothing bound for main. Add \`bash $invoked\` to $gate."
     fi
   done
 fi

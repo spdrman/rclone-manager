@@ -239,9 +239,9 @@ on the unmutated tree. A gate nobody has watched fail is a gate that might not
 be able to.
 
 Three of them plant the removal of a single line from `scripts/ci-local.sh`.
-That script is what `.husky/pre-commit` runs, and GitHub Actions is
-`workflow_dispatch`-only on this repository, so a check wired only into
-`.github/workflows/ci.yml` runs on no commit at all: `check-contract-drift.sh`
+That script is what `.husky/pre-commit` runs, and `.github/workflows/ci.yml`
+runs only on a pull request into `release`, so a check wired only into that
+file runs on nothing bound for `main` at all: `check-contract-drift.sh`
 therefore also asserts that `ci-local.sh` invokes all three of itself,
 `check-client-paths.sh` and this self-test. A check nothing invokes cannot be
 told apart from a check that does not exist.
