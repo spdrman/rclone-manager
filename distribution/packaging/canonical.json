@@ -13,7 +13,7 @@
     "repository": "spdrman/backup-manager",
     "tag": "0.3.2",
     "reference": "ghcr.io/spdrman/backup-manager:0.3.2",
-    "published": false,
+    "published": true,
     "note": [
       "published:false. 0.3.2 is cut but not pushed: container/release-manifest.json carries a",
       "registry_digest of null per architecture and a null index_digest, and this flag says the",
