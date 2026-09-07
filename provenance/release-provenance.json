@@ -14,21 +14,21 @@
     "manifest without regenerating this bundle changes that digest and",
     "TestProvenanceBundleIsTiedToTheReleaseManifest goes red."
   ],
-  "semanticVersion": "0.3.1",
-  "imageReference": "ghcr.io/spdrman/backup-manager:0.3.1",
+  "semanticVersion": "0.3.2",
+  "imageReference": "ghcr.io/spdrman/backup-manager:0.3.2",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "911234927759a41c8d0a49f4d946581744a0b1c3a22e39daba4f0e2449b36f4d",
+    "sha256": "bb6181a87121482342e7bbb806ce1d3c1732b84cc5b6482fa0a31e5c050550b7",
     "commit": "f6077d6c6508a34f4114dd91094b34db1fedb5c2",
-    "recordedBuildVersion": "0.3.1",
+    "recordedBuildVersion": "0.3.2",
     "architectures": [
       "amd64",
       "arm64"
     ],
-    "published": true,
+    "published": false,
     "registryDigests": {
-      "amd64": "sha256:8aee1aaf6c89e26f966a183c9f7adf256763919d0ed2cf59f0b23923edb37f33",
-      "arm64": "sha256:c207d984ebe14e380d314ffc435a4eaeebf9b9313ffb2a6df33f5f8e23149e96"
+      "amd64": null,
+      "arm64": null
     },
     "versionIsABuildStamp": false
   },
@@ -51,19 +51,19 @@
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "ea16f8e1a638f032a7dd8df619a3e5eaed69fca93f99de5cf038ea3b1d7575a5",
+    "sha256": "43bf3a824529a3a1452c76402b5b9fdad43342ec699a3fd7517dc3398e1b8e28",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "f8d6e001e6493897f45dcb32d25ce1fb69c8daa84143bca68f686452544e3994",
+    "sha256": "254695170114133d3b2d03210b68aaa87a4e26c538272de3a4d4544da76d45c8",
     "format": "sha256sum"
   },
   "artifacts": [
     {
       "target": "casaos",
       "path": "apps/casaos/compose/backup-manager.yml",
-      "sha256": "9337238b3a6b24a52c112ed214481386ab1840a56c253d81674506da2860ba84"
+      "sha256": "179d4f0d5037d99ac5177c30d824fc7a4f797ea38be1e580f1099330540d35b0"
     },
     {
       "target": "casaos",
@@ -73,22 +73,22 @@
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.env",
-      "sha256": "7a34d8906cd4585d5e5cc6ab66b29b1538bc661465af3f078e8d659b91aa85f6"
+      "sha256": "dacb7a6cb1a519028f84b3f6ba92e9756a9806be2b8ef80d0fa3f458c7bab5f4"
     },
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "4a1a84bb786b621f155e253432f7002c27ad705e6f14c17e5e9f918b8fa659dd"
+      "sha256": "b83392fc53894fb465290a8e5bbc35be3b40ef31f2fa7d352be63060d8e8aabc"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backup-manager.env",
-      "sha256": "13e57daaa0500c39a008f7749eb1ff9d505942bc6f640b7499c3c92bae2d4382"
+      "sha256": "f051097ba540ce8ec6ee46254341ea22d66da5325b4065618d02ce1605c673e3"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backup-manager.yml",
-      "sha256": "ae712c3143a4113ef66c5591074586ec7e64d080deb7d43aa8e666b1650874a1"
+      "sha256": "8be942d3df811984f7d53be5b0d63f5ca6b00a1debc44d4c230a9df15e65385a"
     },
     {
       "target": "portainer",
@@ -98,17 +98,17 @@
     {
       "target": "portainer",
       "path": "apps/portainer/templates.json",
-      "sha256": "46d6f24c26906ccf6d9c7b4ecb9d452d859add0ea27c1dfa36be5543f01eac65"
+      "sha256": "652b6b2f7fc92d16a480185f3ac44f55b72e189149f9ef70c0466faca1ac8890"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.env",
-      "sha256": "417214089f701b30e54b34263ed49ce280a265b1936bfca41a930ed9da7c7df1"
+      "sha256": "b4126dd458d8a8c7642858a251d5a71af65b214a272167d49e4f22a5b85a027f"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "904cde12f3d817e92f36afef48738287e400bebc4106db78b8c0c2a92818b315"
+      "sha256": "02d8c352831dc17cadd1bfc63f36f70fba75dc3b2b0abf5b0b37eff2dee47edd"
     },
     {
       "target": "truenas",
@@ -118,12 +118,12 @@
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/ix_values.yaml",
-      "sha256": "fe38e39402ad991dda96393c58e7c4a87177db6a2054113972ddb4bebb41b6e5"
+      "sha256": "6302ff61d2d517f41c5774377265d7d7f301eae3075246aa16609f8db33ee56c"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/questions.yaml",
-      "sha256": "0b0e1bfbf7841ddb1b77fd4dc7aee52cf0385f206d9b5ffe83ef8975cb81ebc6"
+      "sha256": "4fa4442a631da7fcfcfc3da27496d66ef1d12e05fc91de973fbed804df753f46"
     },
     {
       "target": "truenas",
@@ -133,22 +133,22 @@
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "bbc98f3f7ebd5cb679eb479e7129b369ec858713f268ad437017973e8db72289"
+      "sha256": "f50ce5b0e8cc6161eea70bfcab3f08742a72d928c8d10ae0044ae438e8d46ebd"
     },
     {
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager-ui.xml",
-      "sha256": "673cad2c0276c0fc812c50205dc2c55b232c6a6082a4a95d1e1125a37da26864"
+      "sha256": "a5f4533267e62726c6c9047c22766f19b1fd67d2e013e6f84dfd251a35c337de"
     },
     {
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager.xml",
-      "sha256": "6908804990e2a4e6e02ca80807b223974a7f5f50ed5e17d690f8953cb17aec0d"
+      "sha256": "c42a71b11aab15dc402275d672d1336fda04e49f6e2207ef4bd75c0d3ac35e34"
     },
     {
       "target": "zimaos",
       "path": "apps/zimaos/compose/backup-manager.yml",
-      "sha256": "5590b3a2c3bf0168b52add5f4523db86e5f68a81a450db0510bdb5c96c373180"
+      "sha256": "15ac883ab33dab85c2caee8e4d2c804440f316b76bf14f01c18f46c388cb14b6"
     },
     {
       "target": "zimaos",
@@ -190,12 +190,14 @@
     "reason": "the source repository is public, so every declared link resolves for a reviewer outside the project"
   },
   "signing": {
-    "status": "signed",
+    "status": "unsigned",
     "method": "sigstore-keyless",
     "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
-      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release ghcr.io/spdrman/backup-manager:0.3.1"
+      "Nothing has been pushed to ghcr.io/spdrman/backup-manager:0.3.2, so there is no digest to sign and no signature to verify.",
+      "The mechanism is scripts/release/publish-image.sh; the key design is in docs/compliance/release-provenance.md.",
+      "There is no signing key to store, rotate or leak: the workflow's OIDC identity is exchanged for a short-lived Fulcio certificate at signing time."
     ]
   },
   "performance": {

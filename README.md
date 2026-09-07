@@ -624,7 +624,7 @@ The image is published, which is the other thing this section used to deny, and 
 version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
 `ghcr.io/spdrman/backup-manager`, v0.3.0 followed them there, all three are still
 keyless-signed with the SBOM attested beside them, and `0.3.0`'s image index is
-`sha256:95e0bd37`. `0.3.1` is cut and not pushed, which is what a release looks like
+`sha256:95e0bd37`. `0.3.2` is cut and not pushed, which is what a release looks like
 between the cut and the push: `distribution/packaging/canonical.json` records
 `published: false` and `container/release-manifest.json` is back to a null `index_digest`
 and a null `registry_digest` per architecture. That flag and those digests move together,

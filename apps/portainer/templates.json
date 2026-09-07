@@ -40,8 +40,8 @@
         {
           "name": "IMAGE",
           "label": "Canonical image reference",
-          "description": "The one multi-architecture image both containers run. 0.3.1 is not pushed to ghcr.io yet, so until the release lands, change this to wherever you pushed or loaded a build, or to the previous release 0.3.0.",
-          "default": "ghcr.io/spdrman/backup-manager:0.3.1"
+          "description": "The one multi-architecture image both containers run. 0.3.2 is not pushed to ghcr.io yet, so until the release lands, change this to wherever you pushed or loaded a build, or to the previous release 0.3.0.",
+          "default": "ghcr.io/spdrman/backup-manager:0.3.2"
         },
         {
           "name": "PUID",
