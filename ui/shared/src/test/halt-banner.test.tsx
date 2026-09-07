@@ -125,12 +125,13 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
 
     const banner = await screen.findByRole("alert");
     expect(banner.textContent).toMatch(/SSH host key/i);
-    // "Review connection", not "Review fingerprint": the destination no
-    // longer shows a fingerprint, because the one it used to show was an
-    // algorithm literal beside an empty digest. A label naming evidence
-    // the page does not hold is the same defect as an action naming the
-    // wrong remedy, one word further in.
-    expect(screen.getByRole("button", { name: "Review connection" })).toBeTruthy();
+    // "Review fingerprint", because the destination holds one again. It
+    // briefly did not: the panel showed an algorithm literal beside an
+    // empty digest, and a label naming evidence the page does not hold is
+    // the same defect as an action naming the wrong remedy, one word
+    // further in. #572 made the service report the keys a set really pins,
+    // so the label and the destination agree again.
+    expect(screen.getByRole("button", { name: "Review fingerprint" })).toBeTruthy();
   });
 
   it("the dashboard raises a rejected login under its own words", async () => {
@@ -154,7 +155,7 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
     renderDashboard([await setFixture({ haltReason: "authentication-failed" })]);
 
     await screen.findByRole("alert");
-    expect(screen.queryByRole("button", { name: "Review connection" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review fingerprint" })).toBeNull();
   });
 
   it("the dashboard raises a key-permission problem under its own words (#293)", async () => {

@@ -50,17 +50,20 @@ import { backupSetPath } from "@shared/utilities/routes";
  * evidence, never a stand-in for it, and a reason with no matching entry
  * gets no action at all rather than the wrong one.
  *
- * The label used to read "Review fingerprint", and the destination used to
- * be a fingerprint panel. It said "Algorithm: ssh-ed25519" from a literal
- * in the JSX beside an empty fingerprint, because nothing on the wire
- * carries a host key for a configured set, so an operator sent here by the
- * most dangerous state in the app was invited to compare their server's
- * key against a value nobody had chosen. The panel is gone and so is the
- * word: the section now says where a host key is actually decided, which
- * is a smaller answer and a true one.
+ * The label says "fingerprint" because there is one to review. It briefly
+ * did not: the panel it points at used to say "Algorithm: ssh-ed25519"
+ * from a literal in the JSX beside an empty fingerprint, because nothing
+ * on the wire carried a host key for a configured set, so an operator sent
+ * here by the most dangerous state in the app was invited to compare their
+ * server against a value nobody had chosen. Removing the panel was the
+ * right answer to that and the wrong answer to this: the whole reason this
+ * entry exists is that a changed host key is a comparison somebody has to
+ * make. Issue #572 carries the keys a set really pins, so the panel is
+ * back with the service's own reading behind it and the word means
+ * something again.
  */
 const HALT_ACTION_LABEL: Partial<Record<NonNullable<BackupSet["haltReason"]>, string>> = {
-  "host-key-changed": "Review connection"
+  "host-key-changed": "Review fingerprint"
 };
 
 export function DashboardPage({
