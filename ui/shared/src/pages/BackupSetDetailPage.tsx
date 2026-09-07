@@ -132,8 +132,21 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // banner rather than two, because an operator can only be answering one
   // of them at a time; separate acknowledgements on the retry, because
   // confirming one must never grant the other.
-  const [refusal, setRefusal] =
-    useState<{ kind: AcknowledgeableRefusal; keys: EditFieldKey[]; message: string; exitAfter: boolean } | null>(null);
+  //
+  // `patch` is the EXACT body that was refused, kept rather than rebuilt.
+  // The host-key refusal names a fingerprint and asks the operator to
+  // compare it, and the boxes stay editable underneath the banner, so a
+  // retry that re-read the draft would let somebody compare fingerprint A,
+  // change the box, press "Save anyway" and pin B. The acknowledgement has
+  // to answer for the value it was shown for, and this is what makes it
+  // one value rather than a yes.
+  const [refusal, setRefusal] = useState<{
+    kind: AcknowledgeableRefusal;
+    keys: EditFieldKey[];
+    patch: BackupSetPatch;
+    message: string;
+    exitAfter: boolean;
+  } | null>(null);
 
   // The backup set this page is currently showing. Every piece of edit
   // state above belongs to ONE set, and React Router does not remount
@@ -291,7 +304,12 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const saveFields = async (
     requested: EditFieldKey[],
     acknowledge: AcknowledgeableRefusal | null = null,
-    exitAfter = false
+    exitAfter = false,
+    // The body a refused save carried, replayed verbatim. Only
+    // confirmRefusal passes one; every other save builds its own from the
+    // draft. See the `refusal` state above for why answering a refusal
+    // must not go back to the boxes for the values.
+    resend: BackupSetPatch | null = null
   ): Promise<boolean> => {
     // No draft is edit mode not being open, which is the same "nothing to
     // save" as an empty key list rather than a failure.
@@ -311,18 +329,26 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       return false;
     }
 
-    const patch: BackupSetPatch = {};
-    const problems: Partial<Record<EditFieldKey, string>> = {};
-    for (const key of keys) {
-      const field = fieldFor(key);
-      const parsed = field.parse(draft[key]);
-      if (parsed.error) problems[key] = parsed.error;
-      else Object.assign(patch, parsed.patch);
+    let patch: BackupSetPatch;
+    if (resend) {
+      patch = { ...resend };
+    } else {
+      patch = {};
+      const problems: Partial<Record<EditFieldKey, string>> = {};
+      for (const key of keys) {
+        const field = fieldFor(key);
+        const parsed = field.parse(draft[key]);
+        if (parsed.error) problems[key] = parsed.error;
+        else Object.assign(patch, parsed.patch);
+      }
+      if (Object.keys(problems).length > 0) {
+        setFieldErrors((prev) => ({ ...prev, ...problems }));
+        return false;
+      }
     }
-    if (Object.keys(problems).length > 0) {
-      setFieldErrors((prev) => ({ ...prev, ...problems }));
-      return false;
-    }
+    // Whichever refusal is being answered, it is answered for the body
+    // just built (or replayed), so this is the last thing to touch it.
+    const refused = { ...patch };
     // Only ever set when the operator has just been shown what it costs
     // and said yes, and only the one they were shown. It is never carried
     // across saves: the next save starts unacknowledged again, so a
@@ -376,7 +402,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         // wrong, it is saying this edit does something it wants confirmed
         // first, which is a decision with its own two answers rather than
         // a sentence under a box.
-        setRefusal({ kind, keys, message, exitAfter });
+        setRefusal({ kind, keys, patch: refused, message, exitAfter });
         return false;
       }
       setFieldErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, message])) }));
@@ -395,14 +421,20 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     leaveEditMode();
   };
 
-  // The one way out of a refusal that actually writes. It re-sends
-  // exactly the keys the refused save carried, with the one
-  // acknowledgement that refusal asked for, and then finishes whatever
-  // was asked for: SAVE ALL leaves edit mode, a per-box Save stays.
+  // The one way out of a refusal that actually writes. It re-sends the
+  // refused body EXACTLY as it was sent, with the one acknowledgement that
+  // refusal asked for, and then finishes whatever was asked for: SAVE ALL
+  // leaves edit mode, a per-box Save stays.
+  //
+  // The body rather than the keys, because the two come apart precisely
+  // where it matters. A host-key refusal prints a fingerprint and asks the
+  // operator to check it against the host; the boxes stay editable while
+  // they do; and re-reading them on the way back would pin whatever the
+  // box holds at that moment rather than the thing they just compared.
   const confirmRefusal = async () => {
     const pending = refusal;
     if (!pending) return;
-    if (!(await saveFields(pending.keys, pending.kind, pending.exitAfter))) return;
+    if (!(await saveFields(pending.keys, pending.kind, pending.exitAfter, pending.patch))) return;
     if (pending.exitAfter) leaveEditMode();
   };
 

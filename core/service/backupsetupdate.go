@@ -128,11 +128,13 @@ type UpdateBackupSetRequest struct {
 	// mention it.
 	AcknowledgeRepoint bool
 
-	// AcknowledgeHostKeyChange confirms that the caller means to trust a
-	// DIFFERENT host key for the same host. Required only when
-	// KnownHostsLine actually pins a different key from the one on record;
-	// re-sending the trusted line, or trusting a key for a host this set
-	// has nothing pinned for, asks nothing.
+	// AcknowledgeHostKeyChange confirms that the caller means to change
+	// what host keys this backup set trusts for its own address. Required
+	// when KnownHostsLine pins a different key from the one on record, and
+	// equally when it would stop pinning one that IS on record (a host
+	// answering with two key algorithms has a line each, and this field
+	// carries one). Re-sending the line already trusted, or trusting a key
+	// for a HOST this set has nothing pinned for, asks nothing.
 	//
 	// A second flag rather than a second meaning for AcknowledgeRepoint,
 	// for the reason backupsethostkey.go states: the two answer different
@@ -169,6 +171,33 @@ func (r UpdateBackupSetRequest) isEmpty() bool {
 // data. The API layer therefore wraps the route in requireCSRF and not
 // requireDestructiveGate, following POST /api/v1/backup-sets' own
 // precedent rather than the gate's.
+//
+// # Why re-trusting a host key did not move it into the gate
+//
+// Issue #572 made this route able to change a backup set's trust anchor,
+// which is the most consequential thing it can now do, so the bucket was
+// looked at again rather than inherited. It stays where it is, for a
+// reason that is about what the gate IS rather than about how serious a
+// re-trust is.
+//
+// requireDestructiveGate is not a per-request confirmation. It is one
+// deployment-wide switch that reports whether the trusted-proxy
+// authentication gate (issue #92) has been verified for this deployment,
+// and it is open on every deployment that has been through setup. Putting
+// this route behind it would refuse edits on a deployment that has not,
+// while POST /api/v1/backup-sets stayed open on the same deployment, and
+// POST takes an arbitrary known_hosts_line for a brand new set with no
+// acknowledgement at all, because there is nothing on record to compare
+// it against. Anyone who can reach the PATCH can reach the POST. So the
+// gate would cost an operator their edit form without taking anything
+// away from a caller that meant harm, which is a check that reads like
+// protection and is not.
+//
+// What actually stands in front of a re-trust is in backupsethostkey.go:
+// the request has to name the fingerprint's own acknowledgement, and the
+// refusal that asks for it names both keys. That is a decision about this
+// one edit, made by whoever is making it, which is the thing the gate
+// cannot be.
 func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req UpdateBackupSetRequest) (BackupSet, error) {
 	if b.configPath == "" {
 		return BackupSet{}, ErrConfigNotFileBacked
@@ -238,18 +267,17 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 		edited.Remote.KeyFile = ""
 	}
 
-	// The trust question, and then the new line staged but not yet in
-	// place. Refused before anything is written, for the same reason the
-	// repoint refusal above is: a refusal must leave both the
-	// configuration and the trusted line exactly as they were.
+	// The trust questions, and then the new line written under a name of
+	// its own. Every refusal happens before the configuration is touched,
+	// for the same reason the repoint refusal above does: a refusal must
+	// leave both the configuration and the trusted line exactly as they
+	// were, and prepareTrustChange removes what it staged before it
+	// returns one.
 	var trust *stagedKnownHosts
 	if req.KnownHostsLine != nil {
-		if err := requireHostKeyChangeAcknowledgement(*target, edited, req); err != nil {
-			return BackupSet{}, err
-		}
-		staged, err := stageKnownHostsLine(b.configPath, sourceName, setName, *req.KnownHostsLine)
+		staged, err := prepareTrustChange(b.configPath, sourceName, setName, *target, edited, req)
 		if err != nil {
-			return BackupSet{}, fmt.Errorf("service: preparing the trusted host key: %w", err)
+			return BackupSet{}, err
 		}
 		defer staged.discard()
 		edited.Remote.KnownHosts = staged.Path
@@ -287,15 +315,13 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 		return BackupSet{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
 
-	// After the configuration is durably on disk, and last, because a
-	// rename of an already-synced file inside its own directory is the
-	// nearest thing to an infallible step this package has. See
-	// stagedKnownHosts for why the trusted line moves into place on this
-	// side of the write rather than the other.
+	// Nothing below this line can fail, and that is the invariant rather
+	// than a happy accident. The trusted line is already written, already
+	// fsynced and already named by the configuration that just landed, so
+	// keeping it is a flag. See stagedKnownHosts for what the version that
+	// renamed a file here used to do to a caller when the rename lost.
 	if trust != nil {
-		if err := trust.commit(); err != nil {
-			return BackupSet{}, fmt.Errorf("service: pinning the trusted host key: %w", err)
-		}
+		trust.commit()
 	}
 
 	applyValidators()

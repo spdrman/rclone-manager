@@ -781,6 +781,47 @@ describe("issue #572: changing a set's SSH key and its trusted host key", () => 
       acknowledgeHostKeyChange: true
     });
   });
+
+  it("acknowledges the line it showed, not whatever the box holds when Save anyway is pressed", async () => {
+    // The banner prints a fingerprint and asks the operator to compare it
+    // against the host. That takes a minute, the boxes stay editable
+    // underneath it, and the retry used to re-read them: compare
+    // fingerprint A, change the box, press "Save anyway", pin B. The
+    // acknowledgement is an answer about one value, so it travels with
+    // that value.
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+        message: "service: the line offered pins ssh-ed25519 SHA256:theonecompared",
+        correlationId: "cid_hostkey_swap"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAcompared" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+    expect(screen.getByText(/SHA256:theonecompared/)).toBeTruthy();
+
+    // Somebody types over the box while the question is on screen.
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAsomethingelse" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({
+      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAcompared",
+      acknowledgeHostKeyChange: true
+    });
+  });
 });
 
 /**

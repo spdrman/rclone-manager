@@ -24,6 +24,9 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -376,4 +379,482 @@ func trustedFingerprints(t *testing.T, path string) []string {
 		rest = remainder
 	}
 	return out
+}
+
+// # The trust file, rather than the field
+//
+// Everything above this line is about the fingerprint comparison the
+// feature is built around. Everything below it is about the other half of
+// a known_hosts line, which the first version of this code threw away: the
+// marker, the host patterns, and every entry in the file that the one line
+// offered is not.
+//
+// Four separate adversarial reviews of PR #580 found the same shape four
+// times, from four directions, which is why they are here as one group. A
+// known_hosts line is a marker, a set of host patterns and a key, and a
+// comparison that reads only the key answers a question nobody asked. Each
+// test below was written against the code that had the defect and watched
+// to fail for the defect's own reason, not for a proxy.
+
+// newHostPublicKey generates one throwaway ed25519 host key and hands back
+// the public half, for the tests that have to render it against more than
+// one address or compare it against a file by hand. newHostKey above is
+// the same generator with the line and the fingerprint already made; this
+// one is for when the key itself is the thing being carried around.
+func newHostPublicKey(t *testing.T) ssh.PublicKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	pub, err := ssh.NewPublicKey(priv.Public())
+	if err != nil {
+		t.Fatalf("ssh.NewPublicKey: %v", err)
+	}
+	return pub
+}
+
+// trustFileOf reports the known_hosts path the PERSISTED configuration
+// names for a set, never this process's in-memory copy: what a set trusts
+// is what a restarted daemon would read.
+func trustFileOf(t *testing.T, configPath, id string) string {
+	t.Helper()
+	source, set, ok := splitBackupSetID(id)
+	if !ok {
+		t.Fatalf("splitBackupSetID(%q) did not parse", id)
+	}
+	return readBackupSetFromDisk(t, configPath, source, set).Remote.KnownHosts
+}
+
+// TestUpdateBackupSet_APortChangeIsStillAHostKeyChange is the one an
+// address-shaped lookup let straight through.
+//
+// hostKeyAddress includes the port, so an edit sending {port: 2222,
+// known_hosts_line: anything} used to ask the current known_hosts what it
+// pinned for host:2222, get nothing back because the file pins host:22,
+// and read "nothing pinned at this address" as "this set trusts nothing
+// yet". Neither acknowledgement fired: remote.port is deliberately not a
+// repoint field either, and correctly so, which is exactly what left this
+// with no gate at all. A 200, and an arbitrary key pinned.
+func TestUpdateBackupSet_APortChangeIsStillAHostKeyChange(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, trustedFingerprint := createSFTPSet(t, svc, "port-change")
+	trustBefore := readFileOrFail(t, trustFileOf(t, configPath, id))
+
+	somebodyElse := newHostPublicKey(t)
+	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		Port:           intPtr(2222),
+		KnownHostsLine: strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, somebodyElse)),
+	})
+	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
+	}
+	// The refusal is only worth anything if it names what the operator has
+	// to compare, and the key on record is addressed to the OLD port, so
+	// this is the case where naming the wrong one would be easiest.
+	if msg := err.Error(); !strings.Contains(msg, trustedFingerprint) {
+		t.Errorf("the refusal does not name the fingerprint on record (%s):\n%s", trustedFingerprint, msg)
+	}
+	if got := readFileOrFail(t, trustFileOf(t, configPath, id)); got != trustBefore {
+		t.Error("the trusted host-key line changed on a refused port change")
+	}
+}
+
+// TestUpdateBackupSet_APortChangeKeepingTheTrustedKeyAsksNothing is the
+// control for the test above, and the reason that one could not be fixed
+// by refusing every port change.
+//
+// Moving a set to a different SSH port on the SAME host, re-sending the
+// key it already trusts addressed to the new port, changes no trust at
+// all. A refusal here would be a prompt an operator learns to click
+// through, which is the failure the whole acknowledgement is trying not to
+// become.
+func TestUpdateBackupSet_APortChangeKeepingTheTrustedKeyAsksNothing(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, line, fingerprint := createSFTPSet(t, svc, "port-same-key")
+
+	_, _, trusted, _, _, err := ssh.ParseKnownHosts([]byte(line + "\n"))
+	if err != nil {
+		t.Fatalf("ParseKnownHosts: %v", err)
+	}
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		Port:           intPtr(2222),
+		KnownHostsLine: strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, trusted)),
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet moving the same key to a new port: %v", err)
+	}
+	if got := trustedFingerprints(t, trustFileOf(t, configPath, id)); len(got) != 1 || got[0] != fingerprint {
+		t.Errorf("the set now trusts %v, want exactly [%s]", got, fingerprint)
+	}
+}
+
+// TestUpdateBackupSet_ACertAuthorityLineIsRefused: the refusal an operator
+// reads is "algorithm + fingerprint", and for "@cert-authority host
+// ssh-ed25519 ..." that describes one key while installing a rule.
+//
+// The marker used to be parsed and dropped, so the operator was shown a
+// single fingerprint to compare, said yes to it, and the file received the
+// @cert-authority line verbatim: the set then trusted any host
+// certificate that key ever signed, for as many machines as it was aimed
+// at. Since a marker cannot be honestly described by the only vocabulary
+// this edit has, the edit does not take one.
+func TestUpdateBackupSet_ACertAuthorityLineIsRefused(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, _ := createSFTPSet(t, svc, "cert-authority")
+	trustBefore := readFileOrFail(t, trustFileOf(t, configPath, id))
+
+	caLine := "@cert-authority " + knownhosts.Line([]string{"example.internal:22"}, newHostPublicKey(t))
+
+	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine: strPtr(caLine),
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrInvalidRequest", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "cert-authority") {
+		t.Errorf("the refusal does not name the marker it is refusing:\n%s", msg)
+	}
+
+	// And the acknowledgement is not a way past it. This is not the "are
+	// you sure this is your host" question with a yes on the end; it is a
+	// different trust model arriving through a field that means one key.
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine:           strPtr(caLine),
+		AcknowledgeHostKeyChange: true,
+	}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("UpdateBackupSet with the acknowledgement error = %v, want ErrInvalidRequest", err)
+	}
+	if got := readFileOrFail(t, trustFileOf(t, configPath, id)); got != trustBefore {
+		t.Error("the trusted host-key line changed on a refused certificate-authority line")
+	}
+}
+
+// TestCreateBackupSet_StillAcceptsACertAuthorityLine holds the other half
+// of the decision above in place, because "the edit path refuses a marker"
+// is only half a rule and the missing half is the one that would quietly
+// disappear. A deployment that really does run a host CA has to be able to
+// say so when it configures the set, with the wizard's verify step in
+// front of it. What it cannot do is change one afterwards through a field
+// whose whole refusal vocabulary is a single fingerprint.
+func TestCreateBackupSet_StillAcceptsACertAuthorityLine(t *testing.T) {
+	svc, configPath := openTestService(t)
+	req := validCreateReq(t, svc, "created-with-a-ca")
+	req.KnownHostsLine = "@cert-authority " + knownhosts.Line([]string{"example.internal:22"}, newHostPublicKey(t))
+
+	result, err := svc.CreateBackupSet(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateBackupSet with a @cert-authority line: %v", err)
+	}
+	if got := readFileOrFail(t, trustFileOf(t, configPath, result.Set.ID)); !strings.Contains(got, "@cert-authority") {
+		t.Errorf("the created set's trust file does not hold the line it was created with:\n%s", got)
+	}
+}
+
+// TestUpdateBackupSet_ALineNamingAnotherHostIsRefused is the defect that
+// needs no key change at all.
+//
+// Send the key this set ALREADY trusts, under somebody else's host name.
+// The comparison found the key, so nothing was asked, and the file written
+// held exactly that line: the set went on existing, with a 200, pinning
+// nothing whatsoever for its own host. Every connection after it failed
+// with "knownhosts: key is unknown", which reads as an attack rather than
+// as the edit that caused it.
+//
+// The check that catches it is made against the file that would really be
+// written rather than by reading host patterns here, because wildcards,
+// hashed hostnames and port normalisation all live inside knownhosts' own
+// matcher.
+func TestUpdateBackupSet_ALineNamingAnotherHostIsRefused(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, line, fingerprint := createSFTPSet(t, svc, "other-host")
+
+	_, _, trusted, _, _, err := ssh.ParseKnownHosts([]byte(line + "\n"))
+	if err != nil {
+		t.Fatalf("ParseKnownHosts: %v", err)
+	}
+	_, err = svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine: strPtr(knownhosts.Line([]string{"somewhere-else.invalid:22"}, trusted)),
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrInvalidRequest", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "example.internal:22") {
+		t.Errorf("the refusal does not name the address the set could no longer verify:\n%s", msg)
+	}
+
+	// The point is not the error, it is that the set can still check its
+	// own host afterwards.
+	if got := trustedFingerprints(t, trustFileOf(t, configPath, id)); len(got) != 1 || got[0] != fingerprint {
+		t.Fatalf("the set now trusts %v, want exactly [%s]", got, fingerprint)
+	}
+	check, err := knownhosts.New(trustFileOf(t, configPath, id))
+	if err != nil {
+		t.Fatalf("knownhosts.New: %v", err)
+	}
+	if err := check("example.internal:22", knownHostsAddr("example.internal:22"), trusted); err != nil {
+		t.Errorf("the set can no longer verify its own host after a refused edit: %v", err)
+	}
+}
+
+// TestUpdateBackupSet_DroppingAnotherPinnedKeyIsRefused: a save that
+// changes no trust used to silently remove some.
+//
+// OpenSSH writes one line per host key algorithm, so a host answering with
+// both an ed25519 and an RSA key legitimately leaves a set pinning two.
+// known_hosts_line pins exactly one and the file it writes is the whole
+// file, so re-sending the line the set already trusted was waved through
+// as "nothing is changing" and dropped the other one. The next connection
+// that negotiated the dropped algorithm failed with a key MISMATCH, which
+// is the signature of an attack, weeks after an edit nobody would connect
+// it to.
+func TestUpdateBackupSet_DroppingAnotherPinnedKeyIsRefused(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, line, _ := createSFTPSet(t, svc, "two-algorithms")
+	path := trustFileOf(t, configPath, id)
+
+	// A second, equally valid host key for the same host, exactly as
+	// `ssh-keyscan example.internal` would have appended it.
+	second := newHostPublicKey(t)
+	secondFingerprint := ssh.FingerprintSHA256(second)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(knownhosts.Line([]string{"example.internal:22"}, second) + "\n"); err != nil {
+		t.Fatalf("appending the second host key: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err = svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine: strPtr(line),
+	})
+	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, secondFingerprint) {
+		t.Errorf("the refusal does not name the key that would be dropped (%s):\n%s", secondFingerprint, msg)
+	}
+	if got := trustedFingerprints(t, trustFileOf(t, configPath, id)); len(got) != 2 {
+		t.Errorf("the set now trusts %v, want both keys still pinned", got)
+	}
+
+	// The way through, because narrowing a set to one key is a legitimate
+	// thing to mean and a refusal with no answer would be a dead end.
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine:           strPtr(line),
+		AcknowledgeHostKeyChange: true,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet once acknowledged: %v", err)
+	}
+	if got := trustedFingerprints(t, trustFileOf(t, configPath, id)); len(got) != 1 {
+		t.Errorf("the acknowledged save left %v, want the one key it was given", got)
+	}
+}
+
+// TestUpdateBackupSet_ARefusedTrustChangeStagesNothing: a refusal that had
+// already written a file is a refusal that changed something.
+//
+// The two checks that catch a bad line can only be made against the file
+// that would really be written, so by the time they refuse there IS one on
+// disk. This is the proof that it goes away again, and it uses the
+// dropped-key refusal because that is the one that happens after the write
+// rather than before it.
+func TestUpdateBackupSet_ARefusedTrustChangeStagesNothing(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, line, _ := createSFTPSet(t, svc, "no-litter")
+	path := trustFileOf(t, configPath, id)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(knownhosts.Line([]string{"example.internal:22"}, newHostPublicKey(t)) + "\n"); err != nil {
+		t.Fatalf("appending the second host key: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	dir := filepath.Dir(path)
+	before := trustDirListing(t, dir)
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine: strPtr(line),
+	}); !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
+		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
+	}
+	if after := trustDirListing(t, dir); !slices.Equal(before, after) {
+		t.Errorf("a refused trust change left the known_hosts directory as %v, want it as it was %v", after, before)
+	}
+}
+
+// TestKnownHostsFileName_IsInjective is the sharpest statement of a defect
+// that only became reachable when this PR made the file rewritable.
+//
+// Both call sites built "<source>_<name>_known_hosts", and
+// model.NewBackupSetID bars only the "/" separator, whitespace and control
+// characters, so source "api_x" + set "y" and source "api" + set "x_y" are
+// two legal, distinct backup sets that landed on one filename. Before this
+// PR the file was written once at create; after it, a PATCH rewrites it,
+// so one set's host-key edit silently rewrote another set's trust anchor.
+func TestKnownHostsFileName_IsInjective(t *testing.T) {
+	if a, b := knownHostsFileName("api_x", "y"), knownHostsFileName("api", "x_y"); a == b {
+		t.Fatalf("two different backup sets share the trust file %q", a)
+	}
+	// And the ids with nothing to escape keep the name they already have
+	// on disk, which is what makes this need no migration: a set written
+	// under the old scheme goes on being written under the same one.
+	if got, want := knownHostsFileName("api", "nightly"), "api_nightly_known_hosts"; got != want {
+		t.Errorf("knownHostsFileName(api, nightly) = %q, want %q", got, want)
+	}
+}
+
+// TestUpdateBackupSet_DoesNotRewriteAnotherSetsTrustAnchor is the same
+// defect end to end, through the real create and update paths, because a
+// helper being injective is only interesting if both call sites use it.
+func TestUpdateBackupSet_DoesNotRewriteAnotherSetsTrustAnchor(t *testing.T) {
+	svc, configPath := openTestService(t)
+
+	neighbour := validCreateReq(t, svc, "y")
+	neighbour.SourceName = "api_x"
+	neighbourLine, neighbourFingerprint := newHostKey(t, neighbour.Host, neighbour.Port)
+	neighbour.KnownHostsLine = neighbourLine
+	neighbourSet, err := svc.CreateBackupSet(context.Background(), neighbour)
+	if err != nil {
+		t.Fatalf("CreateBackupSet(api_x/y): %v", err)
+	}
+
+	colliding := validCreateReq(t, svc, "x_y")
+	colliding.SourceName = "api"
+	collidingLine, _ := newHostKey(t, colliding.Host, colliding.Port)
+	colliding.KnownHostsLine = collidingLine
+	collidingSet, err := svc.CreateBackupSet(context.Background(), colliding)
+	if err != nil {
+		t.Fatalf("CreateBackupSet(api/x_y): %v", err)
+	}
+
+	if a, b := trustFileOf(t, configPath, neighbourSet.Set.ID), trustFileOf(t, configPath, collidingSet.Set.ID); a == b {
+		t.Fatalf("%s and %s share one trust file (%s)", neighbourSet.Set.ID, collidingSet.Set.ID, a)
+	}
+
+	// The re-trust that used to land on the neighbour's anchor.
+	rebuilt, _ := newHostKey(t, "example.internal", 22)
+	if _, err := svc.UpdateBackupSet(context.Background(), collidingSet.Set.ID, UpdateBackupSetRequest{
+		KnownHostsLine:           strPtr(rebuilt),
+		AcknowledgeHostKeyChange: true,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet(api/x_y): %v", err)
+	}
+	if got := trustedFingerprints(t, trustFileOf(t, configPath, neighbourSet.Set.ID)); len(got) != 1 || got[0] != neighbourFingerprint {
+		t.Errorf("%s trusts %v after its neighbour was edited, want exactly [%s]",
+			neighbourSet.Set.ID, got, neighbourFingerprint)
+	}
+}
+
+// TestUpdateBackupSet_TrustIsInPlaceBeforeTheConfigurationNamesIt is the
+// durability invariant, and it is checked by taking away the one thing the
+// old ordering depended on.
+//
+// The trusted line used to be renamed into the set's canonical path AFTER
+// writeConfigBytesAtomically, on the argument that such a rename is as
+// near infallible as this package gets. A fixed path is one something else
+// can be occupying, and when the rename lost, UpdateBackupSet returned an
+// error with the whole rest of the edit already durably written, before
+// adoptConfig and before the validator catalog was applied: disk said the
+// edit had happened, the process said it had not, and the caller was told
+// it failed. After a restart it took effect with a trust anchor that had
+// never been written, and config.Validate does not stat known_hosts, so
+// the daemon came up green and the set failed at connect time.
+//
+// Occupying that path is how this test reaches the step. What it asserts
+// is the invariant rather than the mechanism: the edit lands in both
+// places or in neither, and the trust file the persisted configuration
+// names is a real file holding the key that was offered.
+func TestUpdateBackupSet_TrustIsInPlaceBeforeTheConfigurationNamesIt(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, _ := createSFTPSet(t, svc, "commit-order")
+	source, set, _ := splitBackupSetID(id)
+
+	previous := trustFileOf(t, configPath, id)
+	occupied := filepath.Join(filepath.Dir(previous), knownHostsFileName(source, set))
+	if err := os.Remove(occupied); err != nil {
+		t.Fatalf("removing the canonical trust file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(occupied, "in-the-way"), 0o700); err != nil {
+		t.Fatalf("occupying the canonical trust path: %v", err)
+	}
+
+	// Acknowledged, because taking the file away is also taking away what
+	// this set trusts, and an unreadable anchor is refused on its own.
+	rebuilt, rebuiltFingerprint := newHostKey(t, "example.internal", 22)
+	updated, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		User:                     strPtr("rotated-user"),
+		KnownHostsLine:           strPtr(rebuilt),
+		AcknowledgeHostKeyChange: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateBackupSet: %v", err)
+	}
+
+	onDisk := readBackupSetFromDisk(t, configPath, source, set)
+	inMemory, err := svc.GetBackupSet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if onDisk.Remote.User != "rotated-user" || inMemory.User != "rotated-user" || updated.User != "rotated-user" {
+		t.Fatalf("the edit is not in all three places: on disk %q, in memory %q, returned %q",
+			onDisk.Remote.User, inMemory.User, updated.User)
+	}
+	if got := trustedFingerprints(t, onDisk.Remote.KnownHosts); len(got) != 1 || got[0] != rebuiltFingerprint {
+		t.Errorf("the trust file the persisted configuration names holds %v, want exactly [%s]", got, rebuiltFingerprint)
+	}
+}
+
+// TestUpdateBackupSet_LeavesThePreviousTrustFileAlone pins the deliberate
+// consequence of the ordering above, because it is the kind of leftover
+// somebody tidies up later without reading why it is there.
+//
+// A re-trust writes a NEW file and points the set at it. The one it used
+// to name is left exactly where it was, and must be: a set configured by
+// hand may point at a known_hosts file it SHARES with other sets, and
+// deleting that would take away trust anchors nobody asked to lose.
+// Nothing reads the old file afterwards, because remote.known_hosts is the
+// only thing that ever named it.
+func TestUpdateBackupSet_LeavesThePreviousTrustFileAlone(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, previousFingerprint := createSFTPSet(t, svc, "leaves-the-old-one")
+	previous := trustFileOf(t, configPath, id)
+
+	rebuilt, _ := newHostKey(t, "example.internal", 22)
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		KnownHostsLine:           strPtr(rebuilt),
+		AcknowledgeHostKeyChange: true,
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet: %v", err)
+	}
+
+	if now := trustFileOf(t, configPath, id); now == previous {
+		t.Fatal("the re-trust wrote over the file the set was already pointing at, so nothing after the configuration write is safe")
+	}
+	if got := trustedFingerprints(t, previous); len(got) != 1 || got[0] != previousFingerprint {
+		t.Errorf("the previous trust file now holds %v, want it untouched at [%s]", got, previousFingerprint)
+	}
+}
+
+// trustDirListing reports the names in a known_hosts directory, sorted, so
+// a test can say "this left nothing behind" without caring what the files
+// are called.
+func trustDirListing(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
 }

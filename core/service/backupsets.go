@@ -607,33 +607,23 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // file for every API-created set, so trusting (or later, rotating) one
 // set's host key can never collide with another's.
 //
-// # Path safety (mandatory review finding M2, PR #155)
-//
-// sourceName/name are concatenated into ONE filename token
-// (sourceName+"_"+name+"_known_hosts"), then filepath.Join'd onto dir.
-// filepath.Join calls Clean, so an embedded "/" or ".." in either value
-// resolves as a real path, not a literal character in a filename —
-// verified empirically before this fix: dir=".../known_hosts.d",
-// name="../../../../tmp/evil" produced a path outside both the
-// known_hosts sandbox and the config directory. validateCreateRequest
-// (below) is CreateBackupSet's very first call and already refuses any
-// such Name/SourceName before this function is ever reached (its own
-// validPathSegment check), so this is defense in depth, not the primary
-// guard: even if some future caller reached this method with a value
-// validateCreateRequest never saw, the filepath.Rel check below refuses
-// to write outside dir regardless of what already let sourceName/name
-// through.
+// The name it writes under, and the path safety around it, are
+// knownHostsPathIn's (backupsethostkey.go), shared with the edit path so
+// the two cannot disagree about which file a set's trust lives in. That
+// sharing is not tidiness: the two DID disagree in the direction that
+// mattered, because the name they both built was not injective, and once
+// a PATCH could rewrite the file, one set's re-trust could land on
+// another set's anchor.
 //
 // It takes configPath rather than hanging off *BackupService for the
 // reason keysDirIn above gives.
 func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error) {
-	dir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, path, err := knownHostsPathIn(configPath, sourceName, name)
+	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, sourceName+"_"+name+"_known_hosts")
-	if rel, err := filepath.Rel(dir, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: source_name/name must not resolve outside the known_hosts directory", ErrInvalidRequest)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
 	}
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		return "", err
