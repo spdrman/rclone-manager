@@ -773,6 +773,15 @@ describe("ApiErrorCode covers every code apps/common/webhost actually emits", ()
     "CONFIG_REVISION_STALE",
     "SSH_KEY_NOT_FOUND",
     "HOST_KEY_PROBE_FAILED",
+    // The three refusals a backup-set write can answer with rather than
+    // fail on. The first two predate issue #572 and were simply never
+    // added here, which is exactly the hole this list exists to close:
+    // BackupSetDetailPage branches on all three by literal, and a literal
+    // compared against a union that does not carry it is a branch nothing
+    // can reach.
+    "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
     "DESTRUCTIVE_OPERATIONS_DISABLED",
     "INVALID_REQUEST",
     "UNAUTHENTICATED",
@@ -1766,6 +1775,63 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     expect(postgres?.readOnlyRetainedCount).toBe(0);
   });
 
+  // Issue #572's RED case for the other half of the same defect. Six
+  // fields on every mapped backup set were literals here that no wire
+  // field fed: hostFingerprint "", fingerprintTrustedAt null,
+  // lastValidation "not-run", expectedIntervalHours 0, retainedCount 0 and
+  // retainedBytes 0. Every one of them renders somewhere as a value
+  // nobody chose, and the two host-key ones rendered under a hardcoded
+  // "ssh-ed25519" on the page the host-key halt banner links to.
+  it("reports the host keys the server actually says are trusted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          {
+            ...wireSet("production/postgres", "postgres"),
+            trusted_host_keys: [
+              { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+              { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+            ],
+            trusted_host_key_recorded_at: "2026-08-02T10:14:00Z"
+          }
+        ],
+        [wireHealth("production/postgres")]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.trustedHostKeys).toEqual([
+      { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+      { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+    ]);
+    expect(set.trustedHostKeyRecordedAt).toBe("2026-08-02T10:14:00Z");
+  });
+
+  it("says it does not know rather than inventing a value the server never sent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([wireSet("production/postgres", "postgres")], [wireHealth("production/postgres")])
+    );
+
+    const [set] = await httpApi.listSets();
+    // An engine that reports no trusted host key leaves the list empty,
+    // which every render site has to say out loud. It is NOT an empty
+    // fingerprint string under a confident algorithm, which is what this
+    // mapper used to produce for every set on every deployment.
+    expect(set.trustedHostKeys).toEqual([]);
+    expect(set.trustedHostKeyRecordedAt).toBeNull();
+    // And the four that have no wire field at all. Null and "unknown"
+    // rather than 0 and "not-run": "Not run" reads as reassuring beside a
+    // validator that may have been failing for a month, and a zero
+    // retained count is what the remove-configuration dialog was printing
+    // in the same breath as promising that removal deletes nothing.
+    expect(set.lastValidation).toBe("unknown");
+    expect(set.expectedIntervalHours).toBeNull();
+    expect(set.retainedCount).toBeNull();
+    expect(set.retainedBytes).toBeNull();
+  });
+
   it("carries a rejected login through under its own reason", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1828,5 +1894,49 @@ describe("listSets joins the per-set health report (issue #245)", () => {
 
     const set = await httpApi.getSet("production/auth-config");
     expect(set.haltReason).toBe("host-key-changed");
+  });
+});
+
+describe("updateBackupSet: the key and trust fields (issue #572)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends ssh_key_id, known_hosts_line and acknowledge_host_key_change in the contract's own spelling", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", {
+      sshKeyId: "key-2",
+      knownHostsLine: "example.internal ssh-ed25519 AAAA",
+      acknowledgeHostKeyChange: true
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({
+      ssh_key_id: "key-2",
+      known_hosts_line: "example.internal ssh-ed25519 AAAA",
+      acknowledge_host_key_change: true
+    });
+  });
+
+  it("drops all three when the caller left them undefined, so an ordinary save is never a re-trust", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", { host: "elsewhere.internal" });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({ host: "elsewhere.internal" });
   });
 });

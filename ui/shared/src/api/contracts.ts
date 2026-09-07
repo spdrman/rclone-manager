@@ -151,10 +151,12 @@ export interface ValidatorCatalogEntry {
  * It carries no name and no source, deliberately: a backup set's identity
  * keys every journal row, artifact id and recovery manifest it has ever
  * produced, so renaming one is a migration rather than an edit
- * (core/service/backupsetupdate.go's own package doc). It carries no key
- * reference and no trusted host line either: those are the results of the
- * wizard's import and probe steps, and re-trusting a host is a trust
- * decision rather than a field.
+ * (core/service/backupsetupdate.go's own package doc).
+ *
+ * It does carry the key reference and the trusted host line, since issue
+ * #572. Both are still produced by the import and probe steps rather than
+ * typed here, and re-trusting a host is still a trust decision, which is
+ * what acknowledgeHostKeyChange answers.
  */
 export interface BackupSetPatch {
   host?: string;
@@ -165,11 +167,34 @@ export interface BackupSetPatch {
   remoteFolder?: string;
   destination?: string;
   includePatterns?: string[];
+  /** This and `stableForSeconds` are one setting the server takes as two,
+   *  and a patch moving to "stable-size" has to carry both: a set on that
+   *  method with a zero window is refused, and there is no default the
+   *  server can supply for it. `withCompanions` in backupSetEditFields is
+   *  what keeps the pair together on the way out of the edit form. */
   completionMethod?: CompletionMethod;
-  /** Only meaningful when the completion method in effect after this edit
-   *  is "stable-size". */
+  /** Only stored when the completion method in effect after this edit is
+   *  "stable-size"; anything else clears it. A patch naming a window the
+   *  result would therefore not hold is refused with INVALID_REQUEST
+   *  rather than accepted and dropped, so a 200 here means the value was
+   *  actually kept. */
   stableForSeconds?: number;
   staleAfterSeconds?: number;
+  /** The id of a key POST /ssh-keys has already imported, replacing the
+   *  one this set authenticates with. A reference, never key material.
+   *  An id no import produced is refused with SSH_KEY_NOT_FOUND. */
+  sshKeyId?: string;
+  /** The exact known_hosts line this set should trust from now on, as
+   *  probeHostKey returns it. It pins ONE plain host key for THIS set's
+   *  own host: a marker such as @cert-authority, and a line naming some
+   *  other host, are both refused with INVALID_REQUEST. One that changes
+   *  what the set trusts for its own address is refused with
+   *  BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED unless
+   *  `acknowledgeHostKeyChange` says otherwise, and that covers a key on
+   *  record this one line would stop pinning as well as a new key being
+   *  pinned. Re-sending the only line on record changes no trust and is
+   *  never refused. */
+  knownHostsLine?: string;
   /** Confirms an edit that moves this set to different data. Needed only
    *  when `host`, `remoteFolder` or `destination` actually change on a
    *  set that already has artifacts on record; without it the service
@@ -177,6 +202,18 @@ export interface BackupSetPatch {
    *  It is not a property of the backup set: it answers one refusal, for
    *  one request. */
   acknowledgeRepoint?: boolean;
+  /** Confirms changing what host keys this set trusts for its own
+   *  address: a different key being pinned, or a key on record that the
+   *  one line sent would stop pinning. Changing `port` does not exempt an
+   *  edit from it. A separate answer from `acknowledgeRepoint` on purpose:
+   *  that one says "this is the same data at a new address" and this one
+   *  says "this is the same host with a new key", and one flag for both
+   *  would let an operator who meant one of them quietly grant the other.
+   *
+   *  It answers for the value it was shown alongside, so the retry after a
+   *  refusal re-sends the body that was refused rather than re-reading the
+   *  form (BackupSetDetailPage's `refusal` state). */
+  acknowledgeHostKeyChange?: boolean;
 }
 
 /** What a run cycle is doing for one backup set right now: the content of

@@ -454,12 +454,35 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
     // card's "never" is the truth.
     newestKnownGoodAt: health?.newest_good_backup_at ?? null,
     lastRunAt: null,
-    lastValidation: "not-run",
-    expectedIntervalHours: 0,
-    retainedCount: 0,
-    retainedBytes: 0,
-    hostFingerprint: "",
-    fingerprintTrustedAt: null
+    // Four gaps, said as gaps. Every one of these was a literal here
+    // ("not-run", 0, 0, 0) that no wire field fed, and every one of them
+    // renders somewhere as a confident value nobody chose: a card that
+    // reports "Last validation: Not run" for a validator that has been
+    // failing for a month, an "every 0h" cadence, and a
+    // remove-configuration dialog that says "0 retained backups stay on
+    // NAS storage" in the same breath as promising that removing
+    // configuration deletes nothing.
+    //
+    // Nothing on GET /backup-sets or GET /system/health carries any of
+    // them, so the fix is not a different literal, it is a type that can
+    // say so: BackupSet.lastValidation admits "unknown" and the three
+    // numbers admit null, which forces the render sites to print
+    // something honest. When a wire field for one of them lands, this is
+    // where it is read, and the render sites need no second change.
+    lastValidation: "unknown",
+    expectedIntervalHours: null,
+    retainedCount: null,
+    retainedBytes: null,
+    // Issue #572: what this set's known_hosts actually pins, read by the
+    // service from that file. ABSENT on the wire means the service could
+    // not report it, and [] is how that arrives here, which
+    // FingerprintDisplay renders as "not reported" rather than as a blank
+    // fingerprint under a confident algorithm.
+    trustedHostKeys: (bs.trusted_host_keys ?? []).map((k) => ({
+      algorithm: k.algorithm,
+      fingerprint: k.fingerprint
+    })),
+    trustedHostKeyRecordedAt: bs.trusted_host_key_recorded_at ?? null
   };
 }
 
@@ -1299,9 +1322,13 @@ function wireBackupSetPatch(patch: BackupSetPatch): Record<string, unknown> {
   put("completion_strategy", patch.completionMethod && COMPLETION_METHOD_TO_STRATEGY[patch.completionMethod]);
   put("stable_for_seconds", patch.stableForSeconds);
   put("stale_after_seconds", patch.staleAfterSeconds);
-  // Sent only when the caller actually set it, like every key above, so
-  // an ordinary save is never a pre-acknowledged one.
+  put("ssh_key_id", patch.sshKeyId);
+  put("known_hosts_line", patch.knownHostsLine);
+  // Both sent only when the caller actually set them, like every key
+  // above, so an ordinary save is never a pre-acknowledged one and never
+  // a pre-granted re-trust.
   put("acknowledge_repoint", patch.acknowledgeRepoint);
+  put("acknowledge_host_key_change", patch.acknowledgeHostKeyChange);
   return body;
 }
 

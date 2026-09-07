@@ -129,8 +129,8 @@ const SETS: BackupSet[] = [
     lastRunAt: "2026-08-29T02:01:01+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
     retainedCount: 32, retainedBytes: 421 * GB,
-    hostFingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM",
-    fingerprintTrustedAt: "2026-08-02T10:14:00+02:00"
+    trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM" }],
+    trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
   },
   {
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
@@ -146,8 +146,15 @@ const SETS: BackupSet[] = [
     lastRunAt: "2026-08-28T02:00:04+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
     retainedCount: 28, retainedBytes: 96 * GB,
-    hostFingerprint: "SHA256:7bTmQ4Kp+Xr9vNc2yLdE8sJf0UwZoGqR3iHuVeM1kAx",
-    fingerprintTrustedAt: "2026-07-19T09:02:00+02:00"
+    // Two lines for one host, which is what `ssh-keyscan` writes when a
+    // server answers with more than one key algorithm. It is here because
+    // a panel that could only render one of them would show an operator a
+    // fingerprint the server in front of them may not present.
+    trustedHostKeys: [
+      { algorithm: "ssh-ed25519", fingerprint: "SHA256:7bTmQ4Kp+Xr9vNc2yLdE8sJf0UwZoGqR3iHuVeM1kAx" },
+      { algorithm: "ssh-rsa", fingerprint: "SHA256:5dWnP1Hj+Kt6xRc9yMbE3sJf8UwZoGqT4iLrDuVeN2m" }
+    ],
+    trustedHostKeyRecordedAt: "2026-07-19T09:02:00+02:00"
   },
   {
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
@@ -164,8 +171,11 @@ const SETS: BackupSet[] = [
     lastRunAt: "2026-08-29T04:12:08+02:00",
     lastValidation: "not-run", expectedIntervalHours: 24,
     retainedCount: 19, retainedBytes: 2 * GB,
-    hostFingerprint: "SHA256:1aXpQ8Lm+Nb3vRt7yKcE0dJf5UwZoGqS2iTrHuVeM4k",
-    fingerprintTrustedAt: null
+    trustedHostKeys: [{ algorithm: "ecdsa-sha2-nistp256", fingerprint: "SHA256:1aXpQ8Lm+Nb3vRt7yKcE0dJf5UwZoGqS2iTrHuVeM4k" }],
+    // The set whose anchor this deployment did not write: it points at a
+    // known_hosts an operator maintains, so there is no honest answer to
+    // "when was this trusted" and the panel says so.
+    trustedHostKeyRecordedAt: null
   },
   {
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
@@ -186,8 +196,8 @@ const SETS: BackupSet[] = [
     lastRunAt: "2026-08-26T01:30:00+02:00",
     lastValidation: "passed", expectedIntervalHours: 168,
     retainedCount: 31, retainedBytes: 3.4 * TB,
-    hostFingerprint: "SHA256:4cRnW2Yk+Qp8mLb6vTdF1sJe9UzXoGhS5iNrCuJeP3t",
-    fingerprintTrustedAt: "2026-05-11T14:20:00+02:00"
+    trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:4cRnW2Yk+Qp8mLb6vTdF1sJe9UzXoGhS5iNrCuJeP3t" }],
+    trustedHostKeyRecordedAt: "2026-05-11T14:20:00+02:00"
   }
 ];
 
@@ -907,8 +917,8 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     expectedIntervalHours: 24,
     retainedCount: 0,
     retainedBytes: 0,
-    hostFingerprint: mockProbedFingerprint,
-    fingerprintTrustedAt: new Date().toISOString()
+    trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint }],
+    trustedHostKeyRecordedAt: new Date().toISOString()
   };
 }
 
@@ -1256,7 +1266,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         billing:
           "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
       }),
-    testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
+    testConnection: () => delay({ ok: true, fingerprint: SETS[0].trustedHostKeys[0].fingerprint }),
     // Both APPLY to the SETS fixture rather than resolving and leaving it
     // alone, for the reason updateBackupSet's own comment below gives:
     // a mock that answers "fine" without changing anything makes every

@@ -177,12 +177,71 @@ export interface BackupSet {
   haltReason?: "host-key-changed" | "authentication-failed" | "key-permissions";
   newestKnownGoodAt: string | null;
   lastRunAt: string | null;
-  lastValidation: "passed" | "failed" | "not-run";
-  expectedIntervalHours: number;
-  retainedCount: number;
-  retainedBytes: number;
-  hostFingerprint: string;
-  fingerprintTrustedAt: string | null;
+  /**
+   * The last application validation this set ran, or "unknown" when the
+   * service did not report one.
+   *
+   * "unknown" is not the same as "not-run", and the two were the same
+   * value until they were not. api/client.ts filled this with the literal
+   * "not-run" on every set, because nothing on the wire carries a
+   * validation verdict for a backup set, so a set whose validator has
+   * been failing for a month rendered a calm "Not run" on its card. A
+   * value nobody chose that happens to read as reassuring is worse than a
+   * gap, so the gap is now sayable.
+   */
+  lastValidation: "passed" | "failed" | "not-run" | "unknown";
+  /**
+   * How often this set is expected to produce a backup, in hours, or null
+   * when the service did not report it. Null rather than 0, for the reason
+   * lastValidation admits "unknown": "every 0h" is a cadence nobody
+   * configured, and it was on every card of every real deployment.
+   */
+  expectedIntervalHours: number | null;
+  /**
+   * How many backups this set is currently retaining, and how many bytes
+   * they occupy, or null when the service did not report them.
+   *
+   * Both are null on the real client and both used to be a literal 0, so
+   * the remove-configuration dialog told an operator that "0 retained
+   * backups stay on NAS storage" while promising in the same breath that
+   * removing configuration deletes nothing. That is the one sentence on
+   * that dialog somebody might act on.
+   */
+  retainedCount: number | null;
+  retainedBytes: number | null;
+  /**
+   * Every host key this set's known_hosts actually pins for its own
+   * address, as the service read that file (GET /backup-sets'
+   * trusted_host_keys).
+   *
+   * EMPTY means the service reported none, which covers a local-transport
+   * set, an anchor it could not read, and a file pinning nothing for this
+   * host. A render site must say that rather than print a blank where a
+   * fingerprint goes: this list replaces a `hostFingerprint` that was the
+   * literal empty string on every real deployment, shown under a
+   * hardcoded "ssh-ed25519" heading, on the page the host-key halt banner
+   * sends an operator to in order to compare a fingerprint.
+   *
+   * A list because a host answering with more than one key algorithm has a
+   * known_hosts line each, and showing one of two would offer a
+   * fingerprint the server in front of the operator may not present.
+   */
+  trustedHostKeys: TrustedHostKey[];
+  /**
+   * When THIS deployment last wrote that trust anchor, or null when the
+   * set points at a known_hosts file it did not write (one an operator
+   * maintains by hand is usually shared, so its timestamp is about
+   * whatever was last added to it).
+   */
+  trustedHostKeyRecordedAt: string | null;
+}
+
+/** One pinned host key, in the two strings an operator compares against
+ *  the server in front of them: the algorithm the key really is, and its
+ *  SHA256 fingerprint as `ssh-keygen -lf` prints it. Never key material. */
+export interface TrustedHostKey {
+  algorithm: string;
+  fingerprint: string;
 }
 
 /**

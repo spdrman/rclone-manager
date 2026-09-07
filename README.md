@@ -384,7 +384,11 @@ backup-manager backup-set --config ./config.yaml patch production/postgres-prima
 
 Only the flags you pass are changed; anything you leave out is left exactly as it is, which
 is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
-one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+one the Web UI's per-box Save rests on. The one pair that has to travel together is
+`--completion-strategy stable` and `--stable-for`: a set on the stable strategy with a zero
+window is refused, there is no default to supply for it because too short a window copies a
+half-written file, and a `--stable-for` the resulting file would not keep is refused rather
+than accepted and cleared. Both surfaces call the same service method, so they
 cannot drift. The change is validated against the same `config.Validate` a hand-edited file
 goes through at boot and written through the same atomic replace.
 
@@ -423,6 +427,36 @@ volume moved, has a real change to make. Add `--acknowledge-repoint` (or
 has been read. If the new location holds a *different* dataset, make it a separate backup
 set instead. `--port` and `--user` are not in that list: neither changes which directory on
 which machine holds the data.
+
+**The SSH key and the trusted host key are patchable too, and one of them asks first.**
+Until issue #572 neither was, on any surface: a key replaced on the source host, or a server
+rebuilt with a new host key, left removing the backup set and creating it again as the only
+route. `--ssh-key-file` imports a replacement key and rotates onto it, `--ssh-key-id` reuses
+one this deployment already has, and both are ordinary edits that ask nothing.
+
+`--known-hosts-line` (or `--trust-host-key`, which probes the host and offers you what
+answers) is the one that asks. A host key changes when a server is rebuilt or migrated, and
+it changes in exactly the same way when something else is answering in its place, so nothing
+here can tell those apart and it will not guess. The refusal names the fingerprint on record
+and the fingerprint being offered, because those two strings are the whole of what there is
+to compare. Check the new one against the host itself, the way the wizard's verify step did
+the first time, then add `--acknowledge-host-key-change` (or
+`"acknowledge_host_key_change": true` on the API, or **Save anyway** in the Web UI).
+Changing `--port` in the same edit does not exempt it: a port is how you reach the same
+machine. It is a separate acknowledgement from `--acknowledge-repoint` on purpose: one says
+"this is the same data at a new address" and the other says "this is the same host with a
+new key", and one flag for both would let an operator who meant one of them quietly grant
+the other.
+
+The line pins one plain host key for this set's own host, so three things are refused
+outright rather than acknowledged: a marker such as `@cert-authority` (trusting whatever a
+key vouches for is a different decision from trusting a server, and the fingerprint this
+prints cannot describe it), a line naming some other host (it would leave the set unable to
+check its own), and, unless you acknowledge it, a line that would drop a key the set is
+already pinning. That last one is the ordinary shape of a host answering with two key
+algorithms: `ssh-keyscan` writes a line each, this field carries one, and narrowing the set
+to that one is something to mean rather than to discover later as a key mismatch.
+Re-sending the only line on record changes no trust and is never refused.
 
 **`backup-set create` asks the same question, for the same reason.** A backup set is
 identified by its source and its name, so `backup-set remove` frees that id up and a set

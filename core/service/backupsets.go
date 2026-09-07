@@ -163,6 +163,32 @@ type BackupSet struct {
 	// what a hand-edited config.yaml already answered.
 	ReadOnly bool
 
+	// TrustedHostKeys is every host key this backup set's known_hosts
+	// actually pins for this set's own address, read from that file rather
+	// than restated from the configuration, because the file is what a
+	// connection checks (backupsethostkey.go's trustedHostKeysFor).
+	//
+	// It is a LIST because a host legitimately answers with more than one
+	// key algorithm and OpenSSH writes a line for each, so a set pinning
+	// both an ed25519 and an RSA key is in ordinary shape and reporting
+	// one of them would show an operator a fingerprint the server they
+	// are looking at may not present.
+	//
+	// EMPTY is "this deployment could not report what this set trusts",
+	// and it is what a local-transport set, an unreadable anchor and a
+	// file that pins nothing for this address all produce. A surface must
+	// say that rather than render a blank where a fingerprint goes: an
+	// empty fingerprint under a confident "Algorithm" heading is the
+	// defect this field exists to end.
+	TrustedHostKeys []TrustedHostKey
+
+	// TrustedHostKeyRecordedAt is when THIS deployment last wrote that
+	// trust anchor, and is the zero time when the set points at a
+	// known_hosts file this deployment did not write. See
+	// trustedHostKeysFor for why a hand-maintained file's timestamp is not
+	// an answer to "when was this host key trusted".
+	TrustedHostKeyRecordedAt time.Time
+
 	// RetentionIsOverride reports whether this backup set declares its own
 	// retention policy rather than being retained under the deployment's
 	// (issue #333, config.BackupSet.RetentionIsOverride).
@@ -310,7 +336,7 @@ func (b *BackupService) ListBackupSets(_ context.Context) ([]BackupSet, error) {
 	var out []BackupSet
 	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
-			out = append(out, toServiceBackupSet(src.Name, bs))
+			out = append(out, toServiceBackupSet(b.configPath, src.Name, bs))
 		}
 	}
 	return out, nil
@@ -324,7 +350,7 @@ func (b *BackupService) GetBackupSet(_ context.Context, id string) (BackupSet, e
 	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
 			if src.Name+"/"+bs.Name == id {
-				return toServiceBackupSet(src.Name, bs), nil
+				return toServiceBackupSet(b.configPath, src.Name, bs), nil
 			}
 		}
 	}
@@ -558,7 +584,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// (adoptConfig, and edithold.go for why the hold was there).
 	newRevision := b.adoptConfig(cfg)
 
-	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
+	created := toServiceBackupSet(b.configPath, sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
 
 	// Issue #391: the adoption. A backup set is identified by its source
@@ -607,35 +633,56 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // file for every API-created set, so trusting (or later, rotating) one
 // set's host key can never collide with another's.
 //
-// # Path safety (mandatory review finding M2, PR #155)
+// The name it writes under, and the path safety around it, are
+// knownHostsPathIn's (backupsethostkey.go), shared with the edit path so
+// the two cannot disagree about which file a set's trust lives in. That
+// sharing is not tidiness: the two DID disagree in the direction that
+// mattered, because the name they both built was not injective, and once
+// a PATCH could rewrite the file, one set's re-trust could land on
+// another set's anchor.
 //
-// sourceName/name are concatenated into ONE filename token
-// (sourceName+"_"+name+"_known_hosts"), then filepath.Join'd onto dir.
-// filepath.Join calls Clean, so an embedded "/" or ".." in either value
-// resolves as a real path, not a literal character in a filename —
-// verified empirically before this fix: dir=".../known_hosts.d",
-// name="../../../../tmp/evil" produced a path outside both the
-// known_hosts sandbox and the config directory. validateCreateRequest
-// (below) is CreateBackupSet's very first call and already refuses any
-// such Name/SourceName before this function is ever reached (its own
-// validPathSegment check), so this is defense in depth, not the primary
-// guard: even if some future caller reached this method with a value
-// validateCreateRequest never saw, the filepath.Rel check below refuses
-// to write outside dir regardless of what already let sourceName/name
-// through.
+// The line is synced, and so is the directory entry, before this returns.
+// It is the same invariant stagedKnownHosts states for the edit path and
+// for the same reason: the configuration written afterwards NAMES this
+// file, so a crash between the two must not be able to leave a
+// configuration pointing at a trust anchor whose bytes never landed.
+// config.Validate does not stat known_hosts, so a daemon would come back
+// up green and the set would fail at connect time.
+//
+// Unlike the edit path this writes the canonical name in place rather than
+// a fresh one, and a truncate-then-write is not itself crash-safe. That is
+// the right trade here and not an oversight: the only way the name is
+// already taken is a set that was REMOVED from the configuration, so
+// nothing live is reading what is being truncated, and a fresh name per
+// create would mean a set's file was named after nothing an operator can
+// recognise in a directory listing.
 //
 // It takes configPath rather than hanging off *BackupService for the
 // reason keysDirIn above gives.
 func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error) {
-	dir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
+	dir, path, err := knownHostsPathIn(configPath, sourceName, name)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, sourceName+"_"+name+"_known_hosts")
-	if rel, err := filepath.Rel(dir, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: source_name/name must not resolve outside the known_hosts directory", ErrInvalidRequest)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
 	}
-	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := fsyncDir(dir); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -740,7 +787,13 @@ func validatorIDProblem(id ValidatorID) string {
 	return ""
 }
 
-func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
+// It takes configPath because the trusted host key is a FILE, and reading
+// it here rather than at each caller is what stops one read surface
+// reporting a set's real anchor while another reports nothing. Every
+// caller has a config path; the ones that do not have a BackupService
+// (firstrun.go) have the path they just wrote.
+func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) BackupSet {
+	trusted, recordedAt := trustedHostKeysFor(configPath, bs)
 	return BackupSet{
 		ID:                 sourceName + "/" + bs.Name,
 		SourceName:         sourceName,
@@ -771,6 +824,9 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		// point of pinning it is that a later edit to the deployment's
 		// policy will not move it.
 		RetentionIsOverride: bs.RetentionIsOverride(),
+
+		TrustedHostKeys:          trusted,
+		TrustedHostKeyRecordedAt: recordedAt,
 	}
 }
 

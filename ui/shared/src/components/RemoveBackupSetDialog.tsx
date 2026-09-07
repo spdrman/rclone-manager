@@ -127,24 +127,16 @@ export function RemoveBackupSetDialog({
       <p style={{ margin: 0 }}>
         {"Backup Manager will stop collecting backups for " + set.name + "."}
       </p>
+      {/* The count is named only when there is one. This sentence used to
+          open "0 retained backups (0 B)" on every real deployment, because
+          api/client.ts filled both numbers with a literal zero, and it is
+          the one sentence on this dialog somebody might act on: an
+          operator reading that nothing is retained has been told the
+          opposite of what the paragraph goes on to promise. */}
       <p style={{ margin: 0, color: "var(--text-2)" }}>
-        {/* Deliberately unquantified. This used to lead with
-            set.retainedCount and bytes(set.retainedBytes), and neither is
-            a number this frontend has: both are literals in
-            fromWireBackupSet (client.ts), zero on every set in every real
-            deployment, because nothing in core/service computes a per-set
-            retained aggregate and neither BackupSet nor BackupSetHealth
-            carries one. So an operator removing a set holding forty-one
-            backups read "0 retained backups (0 B) stay on NAS storage",
-            which is reassurance-shaped copy saying there is nothing here
-            to lose, in a destructive-adjacent dialog, at the moment
-            somebody decides whether to click.
-
-            Removing a false claim does not need the true number. The
-            promise below is the one service.RemoveBackupSet actually
-            keeps and it holds for any quantity, including none. When the
-            aggregate exists this sentence can carry it again. */}
-        {"Backups already taken for this set stay on NAS storage and remain listed under Backups."}
+        {set.retainedCount === null || set.retainedBytes === null
+          ? "Retained backups stay on NAS storage and remain listed under Backups. Backup Manager cannot say how many there are for this set."
+          : set.retainedCount + " retained backups (" + bytes(set.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
       </p>
       <p style={{ margin: 0, color: "var(--text-2)" }}>
         {"Creating a backup set with this source and name again takes those backups back, along with their retention history."}

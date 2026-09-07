@@ -49,7 +49,7 @@ import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { BackupSetRetentionCard } from "./BackupSetRetentionCard";
-import { EDIT_FIELDS, readEditFields, visibleEditFields } from "./backupSetEditFields";
+import { EDIT_FIELDS, readEditFields, visibleEditFields, withCompanions } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
@@ -118,16 +118,35 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const [enterError, setEnterError] = useState<string | null>(null);
   const [warnAbout, setWarnAbout] = useState<RunningWork | null>(null);
   const [stopped, setStopped] = useState<RunningWork | null>(null);
-  // The service refused this save because it would point the set at
-  // different data and nothing said so (issue #333/#350,
-  // core/service/backupsetrepoint.go). Held rather than turned into a
-  // field error, because it is not a field error: the value is fine, and
-  // the operator has one decision to make about it. `exitAfter` carries
-  // whether the refusal came from SAVE ALL, so confirming finishes what
-  // was asked for rather than dropping the operator back into edit mode
-  // having done half of it.
-  const [repointRefusal, setRepointRefusal] =
-    useState<{ keys: EditFieldKey[]; message: string; exitAfter: boolean } | null>(null);
+  // The service refused this save because it needs something said out
+  // loud first. Held rather than turned into a field error, because it is
+  // not a field error: the value is fine, and the operator has one
+  // decision to make about it. `exitAfter` carries whether the refusal
+  // came from SAVE ALL, so confirming finishes what was asked for rather
+  // than dropping the operator back into edit mode having done half of it.
+  //
+  // Two refusals share this one piece of state, and `kind` is which:
+  // pointing the set at different data (issue #333/#350,
+  // core/service/backupsetrepoint.go) and trusting a different host key
+  // for the same host (issue #572, core/service/backupsethostkey.go). One
+  // banner rather than two, because an operator can only be answering one
+  // of them at a time; separate acknowledgements on the retry, because
+  // confirming one must never grant the other.
+  //
+  // `patch` is the EXACT body that was refused, kept rather than rebuilt.
+  // The host-key refusal names a fingerprint and asks the operator to
+  // compare it, and the boxes stay editable underneath the banner, so a
+  // retry that re-read the draft would let somebody compare fingerprint A,
+  // change the box, press "Save anyway" and pin B. The acknowledgement has
+  // to answer for the value it was shown for, and this is what makes it
+  // one value rather than a yes.
+  const [refusal, setRefusal] = useState<{
+    kind: AcknowledgeableRefusal;
+    keys: EditFieldKey[];
+    patch: BackupSetPatch;
+    message: string;
+    exitAfter: boolean;
+  } | null>(null);
 
   // The backup set this page is currently showing. Every piece of edit
   // state above belongs to ONE set, and React Router does not remount
@@ -160,7 +179,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setStopped(null);
     setWarnAbout(null);
     setEnterError(null);
-    setRepointRefusal(null);
+    setRefusal(null);
   }
 
   // The hold's lifetime, tied to `editing` rather than to any one button.
@@ -243,7 +262,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setDraft({ ...loaded });
     setFieldErrors({});
     setStale(false);
-    setRepointRefusal(null);
+    setRefusal(null);
     setSnapshot(captureSetEditSnapshot());
     setEditing(true);
   };
@@ -283,11 +302,25 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
    * stay in edit mode when it did not.
    */
   const saveFields = async (
-    keys: EditFieldKey[],
-    acknowledgeRepoint = false,
-    exitAfter = false
+    requested: EditFieldKey[],
+    acknowledge: AcknowledgeableRefusal | null = null,
+    exitAfter = false,
+    // The body a refused save carried, replayed verbatim. Only
+    // confirmRefusal passes one; every other save builds its own from the
+    // draft. See the `refusal` state above for why answering a refusal
+    // must not go back to the boxes for the values.
+    resend: BackupSetPatch | null = null
   ): Promise<boolean> => {
-    if (keys.length === 0) return true;
+    // No draft is edit mode not being open, which is the same "nothing to
+    // save" as an empty key list rather than a failure.
+    if (requested.length === 0 || !draft) return true;
+    // Expanded here, once, rather than on the button that asked: every
+    // save reaches this function, so a pair of boxes that have to travel
+    // together (the completion method and its window) cannot be split by
+    // whichever control happened to be pressed. Idempotent, so the
+    // acknowledgement retry re-sending its own keys expands to the same
+    // set. See withCompanions for what the pair is and why.
+    const keys = withCompanions(requested, draft);
     // The staleness check the dialog already ran, kept and moved here.
     // Inline editing holds the page open longer than a dialog did, so
     // this matters more here, not less.
@@ -296,24 +329,34 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       return false;
     }
 
-    const patch: BackupSetPatch = {};
-    const problems: Partial<Record<EditFieldKey, string>> = {};
-    for (const key of keys) {
-      const field = fieldFor(key);
-      const parsed = field.parse(draft ? draft[key] : "");
-      if (parsed.error) problems[key] = parsed.error;
-      else Object.assign(patch, parsed.patch);
+    let patch: BackupSetPatch;
+    if (resend) {
+      patch = { ...resend };
+    } else {
+      patch = {};
+      const problems: Partial<Record<EditFieldKey, string>> = {};
+      for (const key of keys) {
+        const field = fieldFor(key);
+        const parsed = field.parse(draft[key]);
+        if (parsed.error) problems[key] = parsed.error;
+        else Object.assign(patch, parsed.patch);
+      }
+      if (Object.keys(problems).length > 0) {
+        setFieldErrors((prev) => ({ ...prev, ...problems }));
+        return false;
+      }
     }
-    if (Object.keys(problems).length > 0) {
-      setFieldErrors((prev) => ({ ...prev, ...problems }));
-      return false;
-    }
+    // Whichever refusal is being answered, it is answered for the body
+    // just built (or replayed), so this is the last thing to touch it.
+    const refused = { ...patch };
     // Only ever set when the operator has just been shown what it costs
-    // and said yes. It is never carried across saves: the next save
-    // starts unacknowledged again, so a second, different repoint asks
-    // again rather than riding on the first answer.
-    if (acknowledgeRepoint) patch.acknowledgeRepoint = true;
-    setRepointRefusal(null);
+    // and said yes, and only the one they were shown. It is never carried
+    // across saves: the next save starts unacknowledged again, so a
+    // second, different refusal asks again rather than riding on the
+    // first answer.
+    if (acknowledge === "repoint") patch.acknowledgeRepoint = true;
+    if (acknowledge === "hostKey") patch.acknowledgeHostKeyChange = true;
+    setRefusal(null);
 
     // Added to, and later removed from, rather than replaced wholesale.
     // Two per-box Saves can genuinely overlap (press one, press another
@@ -353,12 +396,13 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       // discard the operator's work and show them the old value as
       // though nothing had happened.
       const message = describeFailure(e, "Backup Manager could not save this change.").message;
-      if (apiErrorOf(e)?.code === "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED") {
+      const kind = REFUSALS_NEEDING_AN_ANSWER[apiErrorOf(e)?.code ?? ""];
+      if (kind) {
         // Not a field error. The service is not saying the value is
-        // wrong, it is saying this edit moves the set to data it has no
-        // history of and wants that confirmed, which is a decision with
-        // its own two answers rather than a sentence under a box.
-        setRepointRefusal({ keys, message, exitAfter });
+        // wrong, it is saying this edit does something it wants confirmed
+        // first, which is a decision with its own two answers rather than
+        // a sentence under a box.
+        setRefusal({ kind, keys, patch: refused, message, exitAfter });
         return false;
       }
       setFieldErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, message])) }));
@@ -373,19 +417,25 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // per-box Save already wrote, which is why it asks dirtyKeys() rather
   // than sending every field.
   const saveAllAndExit = async () => {
-    if (!(await saveFields(dirtyKeys(), false, true))) return;
+    if (!(await saveFields(dirtyKeys(), null, true))) return;
     leaveEditMode();
   };
 
-  // The one way out of a repoint refusal that actually writes. It
-  // re-sends exactly the keys the refused save carried, with the
-  // acknowledgement, and then finishes whatever was asked for: SAVE ALL
+  // The one way out of a refusal that actually writes. It re-sends the
+  // refused body EXACTLY as it was sent, with the one acknowledgement that
+  // refusal asked for, and then finishes whatever was asked for: SAVE ALL
   // leaves edit mode, a per-box Save stays.
-  const confirmRepoint = async () => {
-    const refusal = repointRefusal;
-    if (!refusal) return;
-    if (!(await saveFields(refusal.keys, true, refusal.exitAfter))) return;
-    if (refusal.exitAfter) leaveEditMode();
+  //
+  // The body rather than the keys, because the two come apart precisely
+  // where it matters. A host-key refusal prints a fingerprint and asks the
+  // operator to check it against the host; the boxes stay editable while
+  // they do; and re-reading them on the way back would pin whatever the
+  // box holds at that moment rather than the thing they just compared.
+  const confirmRefusal = async () => {
+    const pending = refusal;
+    if (!pending) return;
+    if (!(await saveFields(pending.keys, pending.kind, pending.exitAfter, pending.patch))) return;
+    if (pending.exitAfter) leaveEditMode();
   };
 
   const leaveEditMode = () => {
@@ -396,7 +446,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setFieldErrors({});
     setStale(false);
     setStopped(null);
-    setRepointRefusal(null);
+    setRefusal(null);
   };
 
   const reloadLatestValues = () => {
@@ -509,27 +559,27 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </div>
       ) : null}
 
-      {repointRefusal ? (
+      {refusal ? (
         <div style={{ marginBottom: 14 }}>
           <WarningBanner
             tone="warn"
-            title="This change points the backup set at different data"
+            title={REFUSAL_TITLE[refusal.kind]}
             actions={
               <>
                 <button
                   className="btn btn--sm btn--primary"
                   disabled={savingFields.length > 0}
-                  onClick={() => void confirmRepoint()}
+                  onClick={() => void confirmRefusal()}
                 >
                   Save anyway
                 </button>
-                <button className="btn btn--sm" onClick={() => setRepointRefusal(null)}>
+                <button className="btn btn--sm" onClick={() => setRefusal(null)}>
                   Leave it as it was
                 </button>
               </>
             }
           >
-            {repointRefusal.message}
+            {refusal.message}
           </WarningBanner>
         </div>
       ) : null}
@@ -561,8 +611,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             >
               <Cell label="Newest known-good" value={relativeAge(s.newestKnownGoodAt)} mono />
               <Cell label="Last successful run" value={relativeAge(s.lastRunAt)} mono />
-              <Cell label="Retained" value={s.retainedCount + " \u00b7 " + bytes(s.retainedBytes)} mono />
-              <Cell label="Expected cadence" value={"every " + s.expectedIntervalHours + "h"} mono />
+              {/* "Not reported", not "0 \u00b7 0 B" and not "every 0h". Both
+                  of these were literals in api/client.ts on every real
+                  deployment, and a zero here is a claim about how much a
+                  set is keeping. */}
+              <Cell
+                label="Retained"
+                value={
+                  s.retainedCount === null || s.retainedBytes === null
+                    ? "Not reported"
+                    : s.retainedCount + " \u00b7 " + bytes(s.retainedBytes)
+                }
+                mono
+              />
+              <Cell
+                label="Expected cadence"
+                value={s.expectedIntervalHours === null ? "Not reported" : "every " + s.expectedIntervalHours + "h"}
+                mono
+              />
               <Cell label="State" value={s.stateNote} />
               {/* This cell was labelled "Remote cleanup" and read
                   `s.enabled`, which are two different facts. `enabled` is
@@ -625,41 +691,28 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <p style={{ margin: "14px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                 This set&rsquo;s name and source are its identity: every backup, journal
                 entry and recovery manifest is filed under them, so they are not editable
-                here. Its SSH key and trusted host key are not either, because changing
-                those is a trust decision the wizard&rsquo;s verify step exists for.
+                here. Its SSH key and trusted host key are. Both boxes start empty because
+                neither holds a value this page can show back, so leaving one empty keeps
+                what the set already uses, and replacing the trusted host key asks first.
               </p>
             </Section>
           ) : null}
 
           <Section title="Connection">
-            {/* This used to render a fingerprint panel, and every value in
-                it but the host was invented. The algorithm was the literal
-                "ssh-ed25519" written here in the JSX, and the fingerprint
-                was BackupSet.hostFingerprint, which is a literal empty
-                string in fromWireBackupSet: no field on BackupSet or
-                BackupSetHealth carries a host key or its algorithm, so
-                nothing chose either. On a deployment whose trust anchor is
-                an RSA key, this page named a key type the operator had
-                never trusted, beside no fingerprint to check it against,
-                and the halt banner for a CHANGED host key sent them here
-                to do exactly that comparison.
-
-                An empty fingerprint understates trust and is survivable; a
-                confidently wrong algorithm does not understate anything,
-                it states something specific that is not true. So the panel
-                is gone rather than emptied, and what is left is the host,
-                which is real, and where the key is actually decided. */}
-            <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "172px 1fr", gap: "11px 16px", fontSize: 13 }}>
-              <Row label="Host" value={s.host + ":" + s.port} mono />
-              <Row label="User" value={s.username} mono />
-            </dl>
-            <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-              The trusted host key is not reported on this page: the backup service does
-              not send it for a configured set, and naming one this page had not read
-              would be a trust anchor nobody chose. A host key is examined and trusted in
-              the wizard&rsquo;s verify step, and a change to it halts the set rather than
-              being carried on through.
-            </p>
+            {/* Every value in here is one the service read out of this
+                set's own known_hosts. It used to be one literal and one
+                empty string: the algorithm was "ssh-ed25519" written into
+                this JSX and the fingerprint was a field api/client.ts
+                filled with "", because nothing on the wire carried a host
+                key. The halt banner for a CHANGED host key links here so
+                an operator can compare a fingerprint against the server,
+                which is the one comparison this page has to be able to
+                support. */}
+            <FingerprintDisplay
+              host={s.host + ":" + s.port}
+              keys={s.trustedHostKeys}
+              trustedAt={s.trustedHostKeyRecordedAt}
+            />
             <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
               The private key never leaves this NAS and is never displayed.
             </p>
@@ -905,6 +958,34 @@ function EditRow({
     </div>
   );
 }
+
+/** The two refusals a save can come back with that an operator can answer
+ *  rather than fix. Each has its own acknowledgement on the retry, which
+ *  is the whole reason this is a union and not a boolean: confirming one
+ *  must never grant the other. */
+type AcknowledgeableRefusal = "repoint" | "hostKey";
+
+/** Which service refusal is which. Keyed by the wire code so an error
+ *  this page does not recognise falls through to the ordinary field-error
+ *  path rather than being offered a confirmation it has no answer for. */
+const REFUSALS_NEEDING_AN_ANSWER: Record<string, AcknowledgeableRefusal | undefined> = {
+  BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED: "repoint",
+  BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED: "hostKey"
+};
+
+/** The banner's heading. The body is always the service's own sentence,
+ *  which for the host key carries the fingerprints being compared; this is
+ *  only what the operator is being asked about.
+ *
+ *  The host-key heading says "changes" rather than "trusts a different
+ *  key", because the service asks in both directions: a new key being
+ *  pinned, and a key already on record that the one line being sent would
+ *  stop pinning. A heading naming only the first would contradict the
+ *  sentence underneath it for the second. */
+const REFUSAL_TITLE: Record<AcknowledgeableRefusal, string> = {
+  repoint: "This change points the backup set at different data",
+  hostKey: "This change alters what host keys this backup set trusts"
+};
 
 function fieldFor(key: EditFieldKey): EditField {
   const found = EDIT_FIELDS.find((f) => f.key === key);
