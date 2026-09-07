@@ -1,0 +1,304 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Per-set activity terminal, on the backup set detail page</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-5)}
+h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0}
+.caption{color:var(--text-3);font-size:12px;margin:0 0 var(--space-2);
+  text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+
+/* page header of the set detail page */
+.pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);
+  padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--border);background:var(--surface-2)}
+.crumb{color:var(--text-3);font-size:11.5px;margin-bottom:2px}
+.title{font-size:17px;font-weight:640;letter-spacing:-.01em;display:flex;align-items:center;gap:var(--space-3)}
+.pathline{color:var(--text-3);font-size:12px;font-family:var(--font-mono);margin-top:3px}
+.actions{display:flex;gap:var(--space-2);flex-wrap:wrap;justify-content:flex-end}
+.btn{height:28px;padding:0 11px;border:1px solid var(--border-strong);border-radius:var(--radius-md);
+  background:var(--surface);color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--busy{background:var(--accent-quiet);border-color:var(--accent-quiet);color:var(--accent)}
+
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;
+  border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;letter-spacing:.02em}
+.pill--run{background:var(--accent-quiet);color:var(--accent)}
+.pill--ok{background:var(--ok-quiet);color:var(--ok)}
+.pill--err{background:var(--danger-quiet);color:var(--danger)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.dot--pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+.card__header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);
+  padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border)}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-3);margin:0}
+.meta{font-size:11.5px;color:var(--text-3)}
+
+.bar{height:8px;border-radius:var(--radius-pill);background:var(--surface-3);overflow:hidden;position:relative}
+.bar__fill{height:100%;border-radius:var(--radius-pill);position:relative;overflow:hidden;background:var(--accent)}
+.bar__fill--busy::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.55) 45%,transparent 90%);
+  background-size:220% 100%;animation:sweep 1.5s linear infinite}
+@keyframes sweep{from{background-position:180% 0}to{background-position:-80% 0}}
+.bar__fill--ok{background:var(--ok)}
+.barrow{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-5) 0}
+.barrow .bar{flex:1}
+.pct{font-family:var(--font-mono);font-size:12px;color:var(--text-2);min-width:42px;text-align:right;
+  font-variant-numeric:tabular-nums}
+.step{padding:var(--space-2) var(--space-5) var(--space-3);color:var(--text-2);font-size:12.5px;
+  display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.spinner{width:11px;height:11px;border:2px solid var(--border-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.termbar{display:flex;align-items:center;gap:var(--space-2);
+  padding:var(--space-2) var(--space-5);border-top:1px solid var(--border);
+  background:var(--surface-2);font-size:11.5px;color:var(--text-2)}
+.termbar .grow{flex:1}
+.chev{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:2px 4px;
+  font:inherit;font-size:11.5px;color:var(--text-2);cursor:pointer;border-radius:var(--radius-sm)}
+.lines{font-family:var(--font-mono);color:var(--text-3);font-size:11px}
+.tbtn{height:24px;padding:0 9px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--text-2);font:inherit;font-size:11.5px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px}
+.filter{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden}
+.filter button{height:24px;padding:0 9px;border:0;background:var(--surface);color:var(--text-2);
+  font:inherit;font-size:11.5px;cursor:pointer;border-right:1px solid var(--border)}
+.filter button:last-child{border-right:0}
+.filter button[aria-pressed="true"]{background:var(--accent-quiet);color:var(--accent);font-weight:600}
+
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;
+  padding:var(--space-3) var(--space-5);border-top:1px solid var(--border);
+  max-height:270px;overflow-y:scroll;scrollbar-width:thin;scrollbar-color:#3a3d36 #14150f}
+.term--short{max-height:250px}
+.term::-webkit-scrollbar{width:9px}
+.term::-webkit-scrollbar-track{background:#14150f}
+.term::-webkit-scrollbar-thumb{background:#3a3d36;border-radius:var(--radius-pill);border:2px solid #14150f}
+.term .t{color:#6f736a}
+.term .i{color:#9aa39b}
+.term .w{color:oklch(0.78 0.12 75)}
+.term .e{color:oklch(0.72 0.16 25)}
+.term .g{color:oklch(0.72 0.11 155)}
+.term .b{color:#d7d9d2;font-weight:600}
+.term .dep{color:#7f8bb0}
+.term .cmd{color:#8ed2c4}
+.term .cmdq{color:#5c6f6a}
+.term .cur{display:inline-block;width:7px;height:12px;background:#d7d9d2;vertical-align:-2px;
+  animation:blink 1.1s steps(2,start) infinite}
+@keyframes blink{50%{opacity:0}}
+
+.note{padding:var(--space-3) var(--space-5);font-size:12px;color:var(--text-2);
+  background:var(--surface-2);border-top:1px solid var(--border)}
+.note strong{color:var(--text)}
+.legend{display:flex;gap:var(--space-4);flex-wrap:wrap;font-size:11.5px;color:var(--text-3);
+  padding:var(--space-2) var(--space-5) var(--space-3)}
+.swatch{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+</style>
+<div class="wrap">
+  <div>
+    <h1>The backup set detail page gets the same terminal the dashboard has</h1>
+    <p class="sub">Route <span style="font-family:var(--font-mono)">/sets/api-server/var-backups</span>.
+      One set's own strip, the component #573 already built, reading the feed it already serves filtered to
+      this set. Everything below the toolbar is the log, and the log is where a refusal has to land.</p>
+  </div>
+
+  <!-- ============================== 1. a cycle in flight ============ -->
+  <p class="caption">1 &middot; a cycle is running, and this page says so</p>
+  <section class="card">
+    <div class="pagehead">
+      <div>
+        <div class="crumb">Backup sets</div>
+        <div class="title">api-server / var-backups <span class="pill pill--run"><span class="dot dot--pulse"></span>TRANSFERRING</span></div>
+        <div class="pathline">backup@api-server.example.net:1209 &middot; /var/backups &rarr; /srv/backups/api-server &middot; read-only</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn--busy"><span class="spinner"></span>Running&hellip;</button>
+        <button class="btn">Test connection</button>
+        <button class="btn">Edit</button>
+        <button class="btn">Preview retention</button>
+      </div>
+    </div>
+
+    <div class="card__header">
+      <h2 class="eyebrow">Activity</h2>
+      <span class="meta">refreshing every 1s &middot; sequence 4 812</span>
+    </div>
+
+    <div class="barrow">
+      <div class="bar"><div class="bar__fill bar__fill--busy" style="width:63%"></div></div>
+      <span class="pct">63%</span>
+    </div>
+    <div class="step"><span class="spinner"></span>
+      Transferring <strong>dpkg.status.2.gz</strong>
+      <span>&middot; 26 of 41 artifacts &middot; 4.1 MB/s &middot; about 40s left &middot; in progress</span></div>
+
+    <div class="termbar">
+      <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Hide log</button>
+      <span class="lines">1 284 lines</span>
+      <span class="grow"></span>
+      <span class="filter">
+        <button aria-pressed="true">All</button>
+        <button aria-pressed="false">This set</button>
+        <button aria-pressed="false">Warnings &amp; errors</button>
+      </span>
+      <button class="tbtn">Copy</button>
+      <button class="tbtn">Save .txt</button>
+    </div>
+
+    <div class="term">
+      <div><span class="t">00:16:22</span> <span class="dep">[deployment]</span> <span class="i">cycle started</span></div>
+      <div><span class="t">00:16:29</span> <span class="i">connected to sftp://api-server.example.net:1209 (host key matched known_hosts)</span></div>
+      <div><span class="t">00:16:31</span> <span class="i">discovery complete: 41 artifacts, 26 pending</span></div>
+      <div><span class="t">00:16:33</span> <span class="i">transfer started: alternatives.tar.0</span></div>
+      <div><span class="t">00:16:35</span> <span class="g">verified alternatives.tar.0 (md5 matched source)</span></div>
+      <div><span class="t">00:16:35</span> <span class="g">committed alternatives.tar.0</span></div>
+      <div><span class="t">00:16:38</span> <span class="i">transfer started: dpkg.status.2.gz</span></div>
+      <div><span class="t">00:16:41</span> <span class="i">transferred dpkg.status.2.gz (18.4 MB)</span><span class="cur"></span></div>
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#7f8bb0"></span>deployment-wide line, drawn as today's behaviour. G1.5 (#593) decides whether it stays</span>
+      <span><span class="swatch" style="background:oklch(0.72 0.11 155)"></span>good news</span>
+      <span><span class="swatch" style="background:oklch(0.72 0.16 25)"></span>failure</span>
+    </div>
+    <div class="note">The strip is <strong>ActivityStrip</strong> unchanged, fed by
+      <strong>GET /api/v1/activity/live?backup_set=api-server/var-backups</strong>, which the handler already
+      accepts and the client already sends as <code>getLiveActivity({ setId })</code>. The dashboard keeps its
+      row of strips; this is the same one, alone, on the page an operator opened <em>because</em> they care
+      about this set.</div>
+  </section>
+
+  <!-- ============================== 2. test connection =============== -->
+  <p class="caption">2 &middot; Test connection writes what it did, step by step, into the same log</p>
+  <section class="card">
+    <div class="pagehead">
+      <div>
+        <div class="crumb">Backup sets</div>
+        <div class="title">api-server / var-backups <span class="pill pill--ok"><span class="dot"></span>HEALTHY</span></div>
+        <div class="pathline">backup@api-server.example.net:1209 &middot; /var/backups &rarr; /srv/backups/api-server &middot; read-only</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn--primary">Run this backup set</button>
+        <button class="btn btn--busy"><span class="spinner"></span>Testing&hellip;</button>
+        <button class="btn">Edit</button>
+        <button class="btn">Preview retention</button>
+      </div>
+    </div>
+
+    <div class="card__header">
+      <h2 class="eyebrow">Activity</h2>
+      <span class="meta">connection test 4 of 6 steps</span>
+    </div>
+
+    <div class="barrow">
+      <div class="bar"><div class="bar__fill bar__fill--busy" style="width:66%"></div></div>
+      <span class="pct">4/6</span>
+    </div>
+    <div class="step"><span class="spinner"></span>
+      Testing the connection &middot; <strong>authenticate</strong> &middot; 3 passed, 0 failed so far</div>
+
+    <div class="termbar">
+      <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Hide log</button>
+      <span class="lines">98 lines</span>
+      <span class="grow"></span>
+      <span class="filter">
+        <button aria-pressed="false">All</button>
+        <button aria-pressed="true">This set</button>
+        <button aria-pressed="false">Warnings &amp; errors</button>
+      </span>
+      <button class="tbtn">Copy</button>
+      <button class="tbtn">Save .txt</button>
+    </div>
+
+    <div class="term">
+      <div><span class="t">09:41:02</span> <span class="cmdq">$</span> <span class="cmd">backup-manager backup-set test-connection api-server/var-backups</span></div>
+      <div><span class="t">09:41:02</span> <span class="b">connection test started (backup@api-server.example.net:1209, /var/backups)</span></div>
+      <div><span class="t">09:41:02</span> <span class="g">credentials  passed</span>  <span class="i">read the private key ssh_key_2 and opened it with the configured passphrase</span></div>
+      <div><span class="t">09:41:02</span> <span class="g">resolve      passed</span>  <span class="i">api-server.example.net is 203.0.113.24 (A) and 2001:db8::18 (AAAA)</span></div>
+      <div><span class="t">09:41:03</span> <span class="g">connect      passed</span>  <span class="i">TCP to 203.0.113.24:1209 in 41ms</span></div>
+      <div><span class="t">09:41:03</span> <span class="g">host_key     passed</span>  <span class="i">server offered ssh-ed25519</span></div>
+      <div><span class="t">09:41:03</span> <span class="i">&nbsp;&nbsp;offered  SHA256:kP9v1xQ2mR7dLs0aTn4YfB8wC3jHu6EzXq1VgMoKpNw</span></div>
+      <div><span class="t">09:41:03</span> <span class="i">&nbsp;&nbsp;trusted  SHA256:kP9v1xQ2mR7dLs0aTn4YfB8wC3jHu6EzXq1VgMoKpNw  (line 1 of this set's known_hosts)</span></div>
+      <div><span class="t">09:41:03</span> <span class="g">&nbsp;&nbsp;they match, so nothing about trust changed</span></div>
+      <div><span class="t">09:41:03</span> <span class="i">authenticate running</span>  <span class="i">offering publickey as backup</span><span class="cur"></span></div>
+      <div><span class="t">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span> <span class="t">list         waiting</span></div>
+    </div>
+    <div class="note">Today this button calls
+      <strong>POST /api/v1/backup-sets/test-connection</strong>, which reaches one
+      <code>Transport.List</code> and comes back as <code>{ok:false, message:"could not connect and list the
+      remote path"}</code>. Six named steps, each with its own outcome, is
+      <strong>core/internal/mediumcheck</strong>'s existing shape (<code>Step</code>, <code>Outcome</code>,
+      <code>Check{Category, Detail}</code>) applied to an SSH source, so <code>medium preflight</code>'s table
+      and this log are two renderings of one contract.</div>
+  </section>
+
+  <!-- ============================== 3. a failed step ================= -->
+  <p class="caption">3 &middot; a step that fails names the step, not the whole button</p>
+  <section class="card">
+    <div class="card__header">
+      <div><div style="font-weight:600;font-size:13.5px">cicd-pipeline / var-backups</div>
+        <div class="meta" style="font-family:var(--font-mono)">deploy@cicd.example.net:22 &middot; /var/backups</div></div>
+      <span class="pill pill--err"><span class="dot"></span>CONNECTION TEST FAILED</span>
+    </div>
+    <div class="step">Stopped at <strong>host_key</strong> &middot; 3 of 6 steps ran &middot; category: <strong>host key</strong></div>
+    <div class="termbar">
+      <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Hide log</button>
+      <span class="lines">61 lines</span>
+      <span class="grow"></span>
+      <button class="tbtn">Copy</button>
+      <button class="tbtn">Save .txt</button>
+    </div>
+    <div class="term term--short">
+      <div><span class="t">09:44:10</span> <span class="cmdq">$</span> <span class="cmd">backup-manager backup-set test-connection cicd-pipeline/var-backups</span></div>
+      <div><span class="t">09:44:10</span> <span class="g">credentials  passed</span>  <span class="i">read the private key ssh_key_4</span></div>
+      <div><span class="t">09:44:10</span> <span class="g">resolve      passed</span>  <span class="i">cicd.example.net is 198.51.100.7 (A)</span></div>
+      <div><span class="t">09:44:10</span> <span class="g">connect      passed</span>  <span class="i">TCP to 198.51.100.7:22 in 12ms</span></div>
+      <div><span class="t">09:44:10</span> <span class="e">host_key     failed</span>   <span class="e">the key this server offers is not the one this backup set trusts</span></div>
+      <div><span class="t">09:44:10</span> <span class="i">&nbsp;&nbsp;offered  SHA256:Ab3T7pQz9WmK2sYd1RvE6NfXjC0uLhGtI8oPqZrB4Uk (ssh-ed25519)</span></div>
+      <div><span class="t">09:44:10</span> <span class="i">&nbsp;&nbsp;trusted  SHA256:kP9v1xQ2mR7dLs0aTn4YfB8wC3jHu6EzXq1VgMoKpNw (ssh-ed25519)</span></div>
+      <div><span class="t">09:44:10</span> <span class="w">&nbsp;&nbsp;compare the offered fingerprint out of band before trusting it. Edit &rarr; Trusted host key is where</span></div>
+      <div><span class="t">09:44:10</span> <span class="t">authenticate skipped</span>  <span class="i">the host key did not match, so nothing was offered to this server</span></div>
+      <div><span class="t">09:44:10</span> <span class="t">list         skipped</span>  <span class="i">never attempted</span></div>
+      <div><span class="t">09:44:10</span> <span class="e">connection test failed at step 4 of 6</span><span class="cur"></span></div>
+    </div>
+    <div class="note"><strong>skipped</strong> is a first-class outcome, not a quiet pass, exactly as
+      <code>mediumcheck.Skipped</code> argues: a surface that draws an unattempted authentication as anything
+      but "this was never tried" has told an operator their credentials are fine on the strength of a step
+      that never ran.</div>
+  </section>
+
+  <div class="card">
+    <div class="note" style="border-top:0">
+      <strong>Every press names the command that does the same thing.</strong> The <code>$</code> line above each
+      test is the epic's standing rule: copy-pasteable as shown, naming the set by the full
+      <code>source/backup-set</code> id every surface prints, carrying <code>--config</code> when the
+      deployment is not on the packaged default, and never carrying a credential (the connection details come
+      from the configuration, which is why the route takes a set id and not a candidate).<br><br>
+      <strong>The global terminal is the same lines, unfiltered.</strong> This one is
+      <code>?backup_set=api-server/var-backups</code>; the docked one (G1.2) is the whole feed with a set
+      column, and both read one buffer in one process, so a line cannot appear in one and not the other. What
+      belongs on which is G1.5 (#593)'s call: today every set's snapshot merges the shared deployment ring,
+      which is why every strip on the dashboard reads the same, and this page inherits whatever that issue
+      lands rather than deciding it here.
+    </div>
+  </div>
+</div>
