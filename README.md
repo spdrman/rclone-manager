@@ -1808,15 +1808,22 @@ holds the tree to it rather than a convention.
 
 ### The local gate
 
-`scripts/ci-local.sh` is the gate for this repository. `.github/workflows/ci.yml`,
-`rclone-upgrade-gate.yml` and `nightly-e2e.yml` are all `workflow_dispatch`-only, so
-**nothing runs on push or on a pull request**, and `.husky/pre-commit` runs this script on
-every commit instead. It mirrors those workflows job for job, which makes it slow: the whole
+`scripts/ci-local.sh` is the gate for everything bound for `main`. `rclone-upgrade-gate.yml`
+and `nightly-e2e.yml` are `workflow_dispatch`-only and `ci.yml` runs only on a pull request
+into `release`, so **nothing on a `main`-bound branch runs on push or on a pull request**,
+and `.husky/pre-commit` runs this script on every commit instead. It mirrors those
+workflows job for job, which makes it slow: the whole
 `core/` suite including the crash matrix, the SFTP and MinIO integration suites and the
 machine tier, both cross-compiles, every Go module's build/vet/test/lint, the frontend
 lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, EPIC E's
 FR-35 compatibility corpus, and the repository-structure dependency proofs. About
 twenty-five minutes.
+
+The one branch that does gate on GitHub is `release`, because merging into it publishes a
+signed image to a public registry (issue #575). A pull request there runs `ci.yml` in full,
+including `scripts/e2e/two-machine-backup.sh`, and the `release gate` check has to be green
+before the merge. About nine minutes, and it is the only automatic check in this
+repository.
 
 It opens with the cheap checks that can invalidate everything after them, because a control
 that turns out to have been planting nothing is worth knowing about in second one rather

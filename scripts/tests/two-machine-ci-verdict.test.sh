@@ -181,8 +181,16 @@ fi
 # absence keeps them from leaking into a local run's output, and proves
 # the annotation is conditional rather than unconditional and merely
 # harmless.
+#
+# `env -u` rather than simply not setting them, and the difference is the
+# whole case. This file runs inside .github/workflows/ci.yml too, where
+# Actions puts GITHUB_ACTIONS and GITHUB_STEP_SUMMARY in the environment
+# itself, so a case that only declines to set them inherits both and
+# asserts the opposite of what it says on a runner. It also means an
+# unfixed version would write into the real job summary. Found by running
+# it on a runner, which is the whole argument of #575 in miniature.
 proof="$(fake_proof 3)"
-out="$(TWO_MACHINE_PROOF="$proof" bash "$WRAPPER" 2>&1)"
+out="$(env -u GITHUB_ACTIONS -u GITHUB_STEP_SUMMARY TWO_MACHINE_PROOF="$proof" bash "$WRAPPER" 2>&1)"
 case "$out" in
   *"::error"*) fail "the Actions annotation is emitted off a runner too, so a local run prints workflow commands nothing will read" "$out" ;;
   *) pass "off a runner no Actions workflow command is emitted, and the verdict is still printed" ;;

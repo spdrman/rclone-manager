@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 # Full local mirror of .github/workflows/ci.yml and rclone-upgrade-gate.yml,
-# run entirely on this machine. GitHub Actions no longer auto-triggers on
-# this repo (see the "on:" blocks in .github/workflows/*.yml, all switched
-# to workflow_dispatch-only) — this script is the actual gate now. The
-# pre-commit hook runs it on every commit; `--admin` merges rely on it
-# having been green, not on any GitHub-side check.
+# run entirely on this machine, and the gate for everything bound for
+# `main`. GitHub Actions runs ci.yml on a pull request into `release` and
+# on nothing else (#575), so on every other branch there is no GitHub-side
+# check at all. The pre-commit hook runs this script on every commit, and
+# `--admin` merges rely on it having been green.
 #
 # Comprehensive on purpose, job-for-job with ci.yml, which means it is NOT
 # fast: the full core/ test suite (including the Docker-backed crash matrix,
@@ -533,8 +533,8 @@ fi
 
 # The browser e2e signal (#158, #197). Until this step existed, the
 # Playwright suite had no automated execution anywhere: nightly-e2e.yml's
-# schedule is commented out, every workflow here is workflow_dispatch-only,
-# and this script never invoked it. So it ran when somebody remembered to,
+# schedule is commented out, ci.yml runs on nothing bound for main, and
+# this script never invoked it. So it ran when somebody remembered to,
 # which is how a deterministically red spec sat on main through four merges
 # and was dismissed twice as an ordering flake.
 #
@@ -639,8 +639,9 @@ gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
 
-# ci.yml's api-contract job, mirrored here because ci.yml is
-# workflow_dispatch-only and therefore runs on no commit: without these two
+# ci.yml's api-contract job, mirrored here because ci.yml runs only on a
+# pull request into `release` and therefore on nothing bound for main:
+# without these two
 # lines the byte-for-byte binding comparison, the implementation-type leak
 # scan and all 15 of their mutation controls had never executed on a commit
 # at all (#166, PR #194 review M1). Unconditional, FAST included: together

@@ -42,11 +42,17 @@ name: Release
 # OIDC identity, which the compliance record does not describe and the
 # documented verification command rejects.
 #
-# GitHub Actions still does not auto-trigger anywhere else in this
-# repository (see the "on:" blocks in .github/workflows/*.yml) and
-# scripts/ci-local.sh is still the gate. This workflow is the one
-# exception, and it is an exception about publishing rather than about
-# testing.
+# WHAT CHECKS THE CODE BEFORE IT GETS HERE. Not this workflow. Everything
+# below proves the compliance artifacts and the manifest parity, which is
+# a different question from whether the product works, and by the time it
+# runs the merge has already happened. Issue #575 is what answers the
+# other half: ci.yml now runs on a pull request into `release`, carrying
+# every module's build, vet and test plus the two-machine end-to-end
+# proof, and its `release gate` job is the required check. So the order is
+# gate on the pull request, publish on the merge.
+#
+# scripts/ci-local.sh is still the gate everywhere else: ci.yml triggers
+# on release-bound pull requests and nothing more.
 #
 # There is no signing key here and none should ever be added. The signature
 # is keyless: the job's own OIDC token is exchanged for a short-lived

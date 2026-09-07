@@ -72,14 +72,47 @@ remote branch was force-pushed yesterday, so no check in this repository can enf
 them.
 
 They are a GitHub ruleset instead, named "release branch is append-only", active,
-targeting `refs/heads/release`, carrying `deletion`, `non_fast_forward`, and
-`pull_request` (one required approval, merge commits only). `deletion` and
+targeting `refs/heads/release`, carrying `deletion`, `non_fast_forward`,
+`pull_request` (merge commits only) and `required_status_checks`. `deletion` and
 `non_fast_forward` block a force push and block deleting the branch. `pull_request`
 is what makes rule 3 an enforced fact rather than a stated one: it blocks every direct
 push to `release`, ordinary ones included, so the only way a commit lands there is
-through a pull request somebody approved, and it restricts the merge method to a real
+through a pull request, and it restricts the merge method to a real
 merge commit, so approving a PR can never become the squash or rebase merge rule 1
 forbids.
+
+`required_status_checks` is issue #575, and it is the rule that makes any of this
+mean anything about the code: the other three are all about the shape of the
+history. The required context is exactly **`release gate`**, the aggregating job at
+the bottom of `.github/workflows/ci.yml`. It waits on every other job in that
+workflow (every module's build, vet and test, both cross-compiles, the frontend,
+the provider conformance suite, gofmt, the contract-drift gate, the structure
+proofs, and `scripts/e2e/two-machine-backup.sh` in all four of its cases) and
+refuses anything short of all of them green, including a job that was skipped or
+cancelled. Before it, `ci.yml` was `workflow_dispatch`-only, so a merge into
+`release` published on the strength of somebody having run `scripts/ci-local.sh`
+locally and remembering to read the last line.
+
+Like the two rules above it, that is a repository setting rather than a file, so it
+is applied by hand and this is the whole of it:
+
+```
+gh api -X PUT repos/spdrman/rclone-manager/rulesets/21971099 \
+  --input ruleset.json   # the existing rules, plus:
+                         # {"type": "required_status_checks",
+                         #  "parameters": {
+                         #    "strict_required_status_checks_policy": true,
+                         #    "required_status_checks": [
+                         #      {"context": "release gate"}]}}
+```
+
+`strict_required_status_checks_policy` is what makes the branch have to be up to
+date with `release` before the merge, so the check is green for the tree that
+actually lands rather than for one that was current an hour ago.
+
+The way to know it took is to try to merge something red, not to look at the
+settings page. A required context that names a check no run produces is
+indistinguishable, from the settings page, from one that is working.
 
 That is a change from the branch's first weeks, when the ruleset carried only
 `deletion` and `non_fast_forward` and an ordinary push to `release` was possible with
@@ -106,8 +139,11 @@ check starts failing, loudly, on the next run rather than months later.
    before the registry.
 6. Open a pull request from `main` into `release` and get it approved. The ruleset
    refuses a direct push, so this is the only way in; merge it with a real merge
-   commit (the ruleset refuses squash and rebase, which would break rule 1). Merging
-   is what publishes.
+   commit (the ruleset refuses squash and rebase, which would break rule 1). Opening
+   it starts `ci.yml`, whose `release gate` check has to be green before the merge
+   button unlocks: about nine minutes, and the two-machine proof inside it is the
+   part that says a fresh install of what you are about to publish can actually pull
+   a backup. Merging is what publishes.
 7. Record the digests the run prints into the manifest, flip `image.published` to
    true, regenerate the bundle again and land it on `main`. The manifest test refuses
    a published flag without digests and digests without the flag, so the two cannot

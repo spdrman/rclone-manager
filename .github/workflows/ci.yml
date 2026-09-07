@@ -114,17 +114,14 @@ jobs:
     env:
       GOWORK: "off"
     steps:
+      # The default shallow clone. This job used to take a full one for
+      # packaging's release-manifest checks, and packaging has not lived
+      # here since #165 moved it into its own module: the comment outlived
+      # the code it described, and the job that inherited those checks
+      # (distribution, below) inherited a shallow clone with them. Nothing
+      # under apps/common asks git anything.
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # packaging's release-manifest checks ask git whether the commit
-          # container/release-manifest.json pins is an ancestor of HEAD
-          # (#174). In actions/checkout's default single-commit shallow
-          # clone that commit is not an object at all, so git exits 128 and
-          # the check correctly reports that it could not decide, which is
-          # a red job either way. Full history is what makes the question
-          # answerable.
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -169,6 +166,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # packaging's release-manifest checks ask git whether the commit
+          # container/release-manifest.json pins is an ancestor of HEAD
+          # (#174), and TestReleaseManifestPinsACommitThisHistoryCanReach
+          # asks it of origin/main and origin/release by name. In
+          # actions/checkout's default single-commit shallow clone that
+          # commit is not an object at all and those refs do not exist, so
+          # git exits 128 and every one of the ten provider rows in the
+          # conformance matrix fails with "could not decide". Full history
+          # is what makes the question answerable.
+          #
+          # This sat on apps/common until #575, which is where packaging
+          # lived before #165 moved it into this module. Nothing noticed
+          # because no pull request had ever run this workflow.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -434,17 +446,18 @@ jobs:
       - name: gofmt sweep
         run: bash scripts/format/check-gofmt.sh
 
-      # Two things that belong with the sweep are deliberately NOT here,
-      # and both are statements about this workflow rather than about the
-      # checks. scripts/format/selftest.sh and
-      # scripts/architecture/check-unowned-go.sh (which vets and lints the
-      # two Go files that live outside every module) both need
-      # golangci-lint, and this workflow runs no golangci-lint at all, in
-      # any job: linting lives entirely in scripts/ci-local.sh, which is
-      # the gate that actually runs and which runs both on every non-FAST
-      # run. Installing a linter here purely to exercise a config nothing
-      # here uses would be the wrong shape, and pretending the gap is not
-      # there would be worse.
+      # scripts/format/selftest.sh is deliberately NOT here, and that is a
+      # statement about this job rather than about the check. It needs
+      # golangci-lint, this job installs none, and per-module linting still
+      # lives entirely in scripts/ci-local.sh, which runs it on every
+      # non-FAST run.
+      #
+      # The dependency-rules job below does install golangci-lint now,
+      # because scripts/architecture/selftest.sh cannot exercise
+      # check-unowned-go.sh without it and was reporting three broken
+      # controls instead of a missing binary (#575). That is one control
+      # needing one tool, not this workflow taking on the linting the local
+      # gate does.
 
   api-contract:
     name: /api/v1 contract drift (#166)
@@ -515,6 +528,24 @@ jobs:
         run: |
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
+
+      # scripts/architecture/selftest.sh exercises check-unowned-go.sh,
+      # which lints the two Go files that live outside every module by
+      # copying each into a throwaway module and running golangci-lint
+      # there. Without the binary that control does not report "the linter
+      # is missing": it reports the check failing on an unmutated tree,
+      # which is the selftest correctly refusing to trust a control it
+      # could not run, and it took three of the thirty-eight architecture
+      # controls down with it the first time a pull request ever ran this
+      # workflow (#575).
+      #
+      # Built rather than downloaded, so the version is pinned in this
+      # file and needs no third-party action and no piped installer. It is
+      # the version scripts/ci-local.sh runs against on the machine this
+      # gate mirrors; the two agreeing is the whole reason either is worth
+      # reading. Under a minute against setup-go's warm module cache.
+      - name: Install golangci-lint (the version the local gate runs)
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
       # The three-layer manifest (issue #165) comes first: every check
       # below reads it to decide which layer a path is in, so a hole in it
