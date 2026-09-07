@@ -174,6 +174,16 @@ jobs:
   # reasoning about which commit carries the check run is worth as much as
   # looking in both places.
   #
+  # WHAT IT PROVES, PRECISELY: that the full suite ran and passed on this
+  # tree. Not that anybody reviewed it. A `release gate` on the pushed
+  # commit itself satisfies this job, and ci.yml can be dispatched by hand
+  # on any ref, so somebody holding push rights on `release` could run the
+  # suite on their own branch and push that. It is worth being clear that
+  # this is allowed rather than pretending otherwise: the suite really did
+  # run on those bytes, which is the question this job asks. Whether a
+  # second person looked is the pull request rule's question, and the
+  # ruleset is what answers it.
+  #
   # THE ESCAPE HATCH IS A COMMIT TRAILER: `Release-Gate-Override: <why>`
   # on the commit being published, with a reason of at least twelve
   # characters. A release process with no override is a release process

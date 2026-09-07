@@ -145,6 +145,14 @@ run unless one of them completed successfully. It looks at the parent because a
 rather than against the merge commit the button writes, and the ruleset allows merge
 commits only, so the head that was checked is the second parent of what lands.
 
+What it proves is that the full suite ran and passed on that tree, and not that
+anybody reviewed it. A `release gate` on the pushed commit itself satisfies the job,
+and `ci.yml` can be dispatched by hand on any ref, so somebody holding push rights
+here could run the suite on their own branch and push that. That is allowed on
+purpose: the suite really did run on those bytes, which is the question this job asks.
+Whether a second person looked is rule 3's question, and the ruleset is what answers
+it.
+
 It refuses more than an absent check. A `release gate` that concluded `failure` or
 `skipped` is a refusal, and so is a green one posted by an app that is not GitHub
 Actions, because a check run is only as trustworthy as whatever holds `checks: write`
