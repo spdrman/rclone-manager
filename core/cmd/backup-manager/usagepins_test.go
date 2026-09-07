@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -197,6 +199,116 @@ func TestUsage_NamesEveryMediumVerb(t *testing.T) {
 				verb, usageRecaptureHint)
 		}
 	}
+}
+
+// TestUsage_ListsEveryBackupSetPatchFlag relates a REGISTERED flag to the
+// text an operator reads, which nothing in this repository did.
+//
+// The whole file above is about commands, and it works: a verb that is
+// dispatchable has to be listed and a listed line has to be pinned. A flag
+// had none of that. TestUsage_EveryRegisteredCommandIsPinned keys on the
+// first word of an entry line, so an entry listing zero flags satisfies it
+// completely, and the "what this does NOT check" list next door names
+// continuation lines and exit statuses and never mentions flags at all.
+//
+// The cost was not hypothetical. Issue #572 added five flags to
+// `backup-set patch` (--ssh-key-file, --ssh-key-id, --known-hosts-line,
+// --trust-host-key and --acknowledge-host-key-change), every one of them
+// declared, parsed, routed and tested, and not one of them reached the
+// usage block. An operator reading the only reference the binary gives
+// them could not find out that a key rotation or a host-key re-trust was
+// reachable from a terminal at all, which for a feature whose entire
+// premise is "you used to have to delete the set and make it again" is
+// the feature not shipping. --acknowledge-repoint had been missing from
+// the same entry since #350, for the same reason: nothing was looking.
+//
+// It walks the FlagSet rather than a list typed here, in the shape
+// backupSetVerbNames and mediumVerbNames already use one level up: the
+// answer comes from the declaration, so a flag added tomorrow is checked
+// without anybody remembering this test exists.
+//
+// What it deliberately does NOT do, in the spirit of the list above:
+//
+//   - pin the continuation lines it reads. It asks whether a flag is
+//     NAMED somewhere in the command's block, never how the block is
+//     worded. That exclusion is argued at length above and reversing it
+//     would make an honest one-line clarification cost a re-capture.
+//
+//   - hold `backup-set create` to the same rule. That entry is not
+//     complete either (--port and --acknowledge-repoint are both missing
+//     from it), and the same VisitAll would say so. It is left for
+//     whoever owns that entry rather than swept in here, because #572
+//     touched patch and this is the guard for the gap #572 fell into.
+//     Written down so the next person meets it as a decision.
+func TestUsage_ListsEveryBackupSetPatchFlag(t *testing.T) {
+	block := usageCommandBlock(captureStderr(t, usage), "backup-set patch ")
+	if block == "" {
+		t.Fatal("the usage block has no entry starting \"backup-set patch \", so this test read no text for that command and would report every flag as fine. Either the entry was reworded, in which case teach this test the new opening, or `backup-set patch` has stopped being listed, which TestUsage_EveryRegisteredCommandIsPinned should already have said.")
+	}
+
+	// --config is every command's, and usage() says so once in a trailing
+	// paragraph rather than on twenty entry lines. The create-only flags
+	// are not this verb's to list, and backupSetCreateOnlyFlags is the
+	// same list refuseFlagsOfTheOtherVerb refuses them by, so the two
+	// cannot drift.
+	notPatchs := map[string]bool{"config": true}
+	for _, name := range backupSetCreateOnlyFlags {
+		notPatchs[name] = true
+	}
+
+	checked := 0
+	declareBackupSetFlags().fs.VisitAll(func(fl *flag.Flag) {
+		if notPatchs[fl.Name] {
+			return
+		}
+		checked++
+		// A boundary rather than a substring, so listing --ssh-key-file
+		// can never be read as also listing a future --ssh-key.
+		named := regexp.MustCompile(`--` + regexp.QuoteMeta(fl.Name) + `([^\w-]|$)`)
+		if !named.MatchString(block) {
+			t.Errorf("--%s is a registered `backup-set patch` flag and the usage block never names it, so the only reference the binary gives an operator does not say it exists. Add it to the entry in usage(), then %s.\nThe block is:\n%s",
+				fl.Name, usageRecaptureHint, block)
+		}
+	})
+	if checked == 0 {
+		t.Fatal("no flag survived the exclusions, so this test compared nothing and passed. Either declareBackupSetFlags stopped registering flags, or backupSetCreateOnlyFlags has grown to cover all of them.")
+	}
+}
+
+// usageCommandBlock returns everything usage() says about one command:
+// its entry line, plus every continuation line under it, up to the next
+// entry line.
+//
+// It is usageEntryLines' shape with the opposite job. That one wants the
+// index and throws the prose away; this one wants one command's whole
+// paragraph, because a flag is as legitimately named on a continuation
+// line as on the entry itself (`backup-set create` names most of its own
+// that way), and a check that read only the entry line would be a check
+// about formatting.
+func usageCommandBlock(text, prefix string) string {
+	var out []string
+	inIndex := false
+	collecting := false
+	for _, line := range strings.Split(text, "\n") {
+		if !inIndex {
+			inIndex = strings.HasPrefix(line, "commands:")
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Back at column zero: the index is over.
+		if !strings.HasPrefix(line, " ") {
+			break
+		}
+		if isEntry := strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   "); isEntry {
+			collecting = strings.HasPrefix(strings.TrimSpace(line), prefix)
+		}
+		if collecting {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // usageEntryLines returns the lines of the usage block that introduce a
