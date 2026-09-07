@@ -78,8 +78,15 @@ targeting `refs/heads/release`, carrying `deletion`, `non_fast_forward`,
 is what makes rule 3 an enforced fact rather than a stated one: it blocks every direct
 push to `release`, ordinary ones included, so the only way a commit lands there is
 through a pull request, and it restricts the merge method to a real
-merge commit, so approving a PR can never become the squash or rebase merge rule 1
+merge commit, so merging a PR can never become the squash or rebase merge rule 1
 forbids.
+
+Its approval count is zero, and this paragraph used to say one. Zero is the honest
+setting on a repository with one maintainer, because GitHub will not let an author
+approve their own pull request and a count of one would deadlock every release cut;
+what makes rule 3 hold is the pull request being required at all, not a review nobody
+can give. The number is written down here rather than described, so that turning it up
+the day there is a second maintainer is a decision somebody makes on purpose.
 
 `required_status_checks` is issue #575, and it is the rule that makes any of this
 mean anything about the code: the other three are all about the shape of the
