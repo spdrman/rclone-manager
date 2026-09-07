@@ -773,6 +773,15 @@ describe("ApiErrorCode covers every code apps/common/webhost actually emits", ()
     "CONFIG_REVISION_STALE",
     "SSH_KEY_NOT_FOUND",
     "HOST_KEY_PROBE_FAILED",
+    // The three refusals a backup-set write can answer with rather than
+    // fail on. The first two predate issue #572 and were simply never
+    // added here, which is exactly the hole this list exists to close:
+    // BackupSetDetailPage branches on all three by literal, and a literal
+    // compared against a union that does not carry it is a branch nothing
+    // can reach.
+    "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+    "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
     "DESTRUCTIVE_OPERATIONS_DISABLED",
     "INVALID_REQUEST",
     "UNAUTHENTICATED",
@@ -1775,5 +1784,49 @@ describe("listSets joins the per-set health report (issue #245)", () => {
 
     const set = await httpApi.getSet("production/auth-config");
     expect(set.haltReason).toBe("host-key-changed");
+  });
+});
+
+describe("updateBackupSet: the key and trust fields (issue #572)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends ssh_key_id, known_hosts_line and acknowledge_host_key_change in the contract's own spelling", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", {
+      sshKeyId: "key-2",
+      knownHostsLine: "example.internal ssh-ed25519 AAAA",
+      acknowledgeHostKeyChange: true
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({
+      ssh_key_id: "key-2",
+      known_hosts_line: "example.internal ssh-ed25519 AAAA",
+      acknowledge_host_key_change: true
+    });
+  });
+
+  it("drops all three when the caller left them undefined, so an ordinary save is never a re-trust", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({ id: "src/set-1", source_name: "src", name: "set-1", host: "h", port: 22, user: "u" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.updateBackupSet("src", "set-1", { host: "elsewhere.internal" });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({ host: "elsewhere.internal" });
   });
 });

@@ -394,6 +394,17 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// exists, and what it offers an operator is "create anyway"
 		// rather than "save anyway". Safe to echo on the same terms.
 		writeError(w, http.StatusConflict, "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", err.Error())
+	case errors.Is(err, service.ErrHostKeyChangeNotAcknowledged):
+		// 409 and its own code, beside the two repoint refusals rather
+		// than folded into either: this one is about the host's identity
+		// rather than the data's, and what it offers an operator is
+		// "trust the new key anyway" rather than "save anyway". A client
+		// that could not tell them apart would offer the wrong
+		// confirmation, and for a host key that is the confirmation that
+		// matters. Safe to echo on the same terms: core/service builds
+		// this message from its own text plus two fingerprints and the
+		// caller's own address.
+		writeError(w, http.StatusConflict, "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", err.Error())
 	case errors.Is(err, service.ErrRepointNotAcknowledged):
 		// 409 rather than 400, because this is not a malformed request:
 		// it is a well-formed one whose consequences the caller has to
@@ -597,12 +608,27 @@ type updateBackupSetRequest struct {
 
 	ValidatorID *string `json:"validator_id"`
 
+	// SSHKeyID and KnownHostsLine are issue #572's two: the key this set
+	// authenticates with and the host key it trusts, both editable in
+	// place since the only alternative was removing the set and creating
+	// it again. Pointers like every other field of the set above, so a
+	// body that never mentions them leaves both alone. Neither carries
+	// material: an id an import produced, and the line a probe returned.
+	SSHKeyID       *string `json:"ssh_key_id"`
+	KnownHostsLine *string `json:"known_hosts_line"`
+
 	// AcknowledgeRepoint is not a field of the backup set and is not a
 	// pointer for that reason: it answers one refusal for one request
 	// rather than carrying a stored value. Absent is false, which is the
 	// honest reading of a client that did not mention it. See
 	// core/service/backupsetrepoint.go for what it acknowledges.
 	AcknowledgeRepoint bool `json:"acknowledge_repoint"`
+
+	// AcknowledgeHostKeyChange is the same shape answering a different
+	// refusal: that this edit means to trust a different host key for the
+	// same host. Two flags rather than one, for the reason
+	// core/service/backupsethostkey.go gives.
+	AcknowledgeHostKeyChange bool `json:"acknowledge_host_key_change"`
 }
 
 // updateBackupSet is PATCH /api/v1/backup-sets/{source}/{set} (issue
@@ -648,7 +674,11 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 		CompletionStrategy: body.CompletionStrategy,
 		StableFor:          secondsPointerToDuration(body.StableForSeconds),
 		StaleAfter:         secondsPointerToDuration(body.StaleAfterSeconds),
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
+		SSHKeyID:           body.SSHKeyID,
+		KnownHostsLine:     body.KnownHostsLine,
+
+		AcknowledgeRepoint:       body.AcknowledgeRepoint,
+		AcknowledgeHostKeyChange: body.AcknowledgeHostKeyChange,
 	}
 	if body.ValidatorID != nil {
 		id := service.ValidatorID(*body.ValidatorID)

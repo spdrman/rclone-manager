@@ -1221,9 +1221,13 @@ function wireBackupSetPatch(patch: BackupSetPatch): Record<string, unknown> {
   put("completion_strategy", patch.completionMethod && COMPLETION_METHOD_TO_STRATEGY[patch.completionMethod]);
   put("stable_for_seconds", patch.stableForSeconds);
   put("stale_after_seconds", patch.staleAfterSeconds);
-  // Sent only when the caller actually set it, like every key above, so
-  // an ordinary save is never a pre-acknowledged one.
+  put("ssh_key_id", patch.sshKeyId);
+  put("known_hosts_line", patch.knownHostsLine);
+  // Both sent only when the caller actually set them, like every key
+  // above, so an ordinary save is never a pre-acknowledged one and never
+  // a pre-granted re-trust.
   put("acknowledge_repoint", patch.acknowledgeRepoint);
+  put("acknowledge_host_key_change", patch.acknowledgeHostKeyChange);
   return body;
 }
 

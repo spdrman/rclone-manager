@@ -30,13 +30,20 @@ import (
 // becomes silent: `backup-set patch --read-only` would have exited 0
 // having changed nothing about the posture the operator just asked for.
 //
-// It used to run in both directions. Since issue #411 there is nothing to
-// check in the other one, because --acknowledge-repoint, the only flag
-// patch ever had to itself, means something on create too: removing a set
-// frees its id up, so a create over an id that already has artifacts on
-// record is the same repoint an edit makes. So the second subtest checks
-// the direction that is now true, that create ACCEPTS it, which is also
-// the assertion that fails if it is ever quietly parsed and dropped.
+// It runs in both directions again. Between #411 and #572 there was
+// nothing to check in the second one: --acknowledge-repoint, the only flag
+// patch had ever had to itself, came to mean something on create too, and
+// the deny-list was left empty. Issue #572 gave patch a flag of its own
+// again, --acknowledge-host-key-change, which answers a question about a
+// host key already on record and therefore cannot mean anything for a set
+// that does not exist yet. The middle subtest is the direction that stayed
+// true through both, that create ACCEPTS --acknowledge-repoint, which is
+// also the assertion that fails if it is ever quietly parsed and dropped.
+//
+// The four SSH-facing flags left create's deny-list in #572, so patch now
+// takes them; backupsetkeytrust_test.go is where that half is checked,
+// because "patch accepts it" is only worth anything if the edit it makes
+// actually lands.
 //
 // The refusals are checked against a control that the same invocation
 // without the wrong flag really does succeed. Without the control this
@@ -56,9 +63,6 @@ func TestRun_BackupSetVerbsRefuseEachOthersFlags(t *testing.T) {
 			{"--read-only"},
 			{"--disabled"},
 			{"--run"},
-			{"--trust-host-key"},
-			{"--ssh-key-id", "some-key"},
-			{"--known-hosts-line", "example.com ssh-ed25519 AAAA"},
 			{"--state-database", "/tmp/nope.db"},
 		} {
 			args := append(append([]string{}, base...), wrong...)
@@ -84,6 +88,31 @@ func TestRun_BackupSetVerbsRefuseEachOthersFlags(t *testing.T) {
 		// against a patch verb that refused this invocation outright.
 		if got := run(base); got != 0 {
 			t.Fatalf("run(%v) = %d, want 0: the same patch without the create flag has to work, or the cases above prove nothing", base, got)
+		}
+	})
+
+	t.Run("create refuses patch's flags", func(t *testing.T) {
+		configPath := writeTestConfig(t)
+		keyPath := writeTestPrivateKey(t)
+
+		// There is no host key on record for a set that does not exist,
+		// so this flag answers nothing on create. Refusing it is what
+		// stops `backup-set create ... --acknowledge-host-key-change`
+		// exiting 0 having granted an acknowledgement to nothing.
+		args := createArgs(configPath, keyPath, "api/nope", "--acknowledge-host-key-change")
+		out := captureStderr(t, func() {
+			if got := run(args); got != 2 {
+				t.Errorf("run(%v) = %d, want 2 (a usage error)", args, got)
+			}
+		})
+		if !strings.Contains(out, "acknowledge-host-key-change") {
+			t.Errorf("the refusal does not name the flag it refused: %q", out)
+		}
+
+		// The control: the same create without it works, so the refusal
+		// above is about the flag and not about the invocation.
+		if got := run(createArgs(configPath, keyPath, "api/nope")); got != 0 {
+			t.Fatal("the same create without the patch flag has to work, or the case above proves nothing")
 		}
 	})
 

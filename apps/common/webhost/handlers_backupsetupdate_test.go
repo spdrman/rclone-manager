@@ -306,3 +306,82 @@ func TestUpdateBackupSet_AcknowledgementCrossesTheSeam(t *testing.T) {
 		t.Error("a body that never mentioned acknowledge_repoint arrived as an acknowledgement")
 	}
 }
+
+// TestUpdateBackupSet_KeyAndTrustCrossTheSeam is issue #572's own half of
+// the sparse-edit contract: the two fields that had no route at all now
+// have one, and they keep the same absent/present distinction every other
+// field on this body keeps. A handler that decoded them and dropped them
+// would answer 200 for a rotation that never happened.
+func TestUpdateBackupSet_KeyAndTrustCrossTheSeam(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	seedSet(t, tr, "api/postgres-primary")
+
+	rec := patchBackupSet(t, tr.router, "api/postgres-primary",
+		`{"ssh_key_id":"key-2","known_hosts_line":"example.internal ssh-ed25519 AAAA","acknowledge_host_key_change":true}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got := tr.backend.lastUpdate()
+	if got.SSHKeyID == nil || *got.SSHKeyID != "key-2" {
+		t.Errorf("SSHKeyID = %v, want a pointer to %q", got.SSHKeyID, "key-2")
+	}
+	if got.KnownHostsLine == nil || *got.KnownHostsLine != "example.internal ssh-ed25519 AAAA" {
+		t.Errorf("KnownHostsLine = %v, want the line the body carried", got.KnownHostsLine)
+	}
+	if !got.AcknowledgeHostKeyChange {
+		t.Error("AcknowledgeHostKeyChange did not reach the service request")
+	}
+
+	// The control, on both halves: a body that names neither must not
+	// arrive naming them, and must not arrive pre-acknowledged.
+	if rec := patchBackupSet(t, tr.router, "api/postgres-primary", `{"user":"someone"}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	quiet := tr.backend.lastUpdate()
+	if quiet.SSHKeyID != nil {
+		t.Error("ssh_key_id crossed the seam as set, but the body never mentioned it")
+	}
+	if quiet.KnownHostsLine != nil {
+		t.Error("known_hosts_line crossed the seam as set, but the body never mentioned it")
+	}
+	if quiet.AcknowledgeHostKeyChange {
+		t.Error("a body that never mentioned acknowledge_host_key_change arrived as an acknowledgement")
+	}
+}
+
+// TestUpdateBackupSet_HostKeyRefusalIs409WithItsOwnCode: a changed host
+// key and a moved path are two different questions with two different
+// answers, so they cannot share a code. A client that could only see one
+// would offer an operator the wrong confirmation, which for a host key is
+// the confirmation that matters.
+func TestUpdateBackupSet_HostKeyRefusalIs409WithItsOwnCode(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	seedSet(t, tr, "api/postgres-primary")
+	tr.backend.errOnUpdate = fmt.Errorf("%w: this set trusts SHA256:oldoldold and the line offered is SHA256:newnewnew",
+		service.ErrHostKeyChangeNotAcknowledged)
+
+	rec := patchBackupSet(t, tr.router, "api/postgres-primary",
+		`{"known_hosts_line":"example.internal ssh-ed25519 AAAA"}`, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED" {
+		t.Errorf("error code = %q, want BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", body.Error.Code)
+	}
+	// Both fingerprints survive the hop, because they are the whole
+	// content of the decision the operator is being asked to make.
+	for _, want := range []string{"SHA256:oldoldold", "SHA256:newnewnew"} {
+		if !strings.Contains(body.Error.Message, want) {
+			t.Errorf("the message does not carry %q: %s", want, body.Error.Message)
+		}
+	}
+}

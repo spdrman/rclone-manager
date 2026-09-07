@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd"
+const ContractSHA256 = "dbe2ae97bbdc53bcfa6573b290e0fd9de25b7e583fc631f788cce046077cf9a5"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -85,6 +85,7 @@ const (
 	ErrorCodeReinstatementRefused                   ErrorCode = "REINSTATEMENT_REFUSED"
 	ErrorCodeBackupSetRepointNotAcknowledged        ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged ErrorCode = "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged  ErrorCode = "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
 	ErrorCodeMediumDisclosureRequired               ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
 	ErrorCodeRestoreRefused                         ErrorCode = "RESTORE_REFUSED"
 	ErrorCodeRestoreUnavailable                     ErrorCode = "RESTORE_UNAVAILABLE"
@@ -123,6 +124,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -185,6 +187,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeBackupSetHistoryRepointNotAcknowledged,
+	ErrorCodeBackupSetHostKeyChangeNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
 	ErrorCodeRestoreRefused,
 	ErrorCodeRestoreUnavailable,
@@ -198,7 +201,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeArtifactNotFailed},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -352,11 +355,11 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
-			409: {ErrorCodeBackupSetRepointNotAcknowledged},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1609,24 +1612,32 @@ type TestConnectionResponse struct {
 // optional, and a property this body omits is left exactly as it is
 // rather than cleared. That is what lets the Web UI's per-box Save
 // persist only the box it belongs to. It deliberately carries no
-// name/source_name (a backup set's identity keys every journal row,
+// name/source_name: a backup set's identity keys every journal row,
 // artifact id and recovery manifest it has ever produced, so a
-// rename is a migration rather than an edit) and no
-// ssh_key_id/known_hosts_line (those are the results of the import
-// and probe steps, and re-trusting a host is a trust decision rather
-// than an edit).
+// rename is a migration rather than an edit. It does carry
+// ssh_key_id and known_hosts_line (issue #572), because a key
+// replaced on the source host and a host key that changes when a
+// server is rebuilt are both ordinary events a set has to be able to
+// be told about, and until they were here the only route was to
+// remove the set and create it again. Both are still references
+// produced by the import and probe steps rather than material typed
+// here, and re-trusting a host is still a trust decision, which is
+// what acknowledge_host_key_change is for.
 type UpdateBackupSetRequest struct {
-	AcknowledgeRepoint bool      `json:"acknowledge_repoint"`
-	CompletionStrategy *string   `json:"completion_strategy"`
-	Host               *string   `json:"host"`
-	Include            *[]string `json:"include"`
-	LocalPath          *string   `json:"local_path"`
-	Port               *int      `json:"port"`
-	RemotePath         *string   `json:"remote_path"`
-	StableForSeconds   *int      `json:"stable_for_seconds"`
-	StaleAfterSeconds  *int      `json:"stale_after_seconds"`
-	User               *string   `json:"user"`
-	ValidatorID        *string   `json:"validator_id"`
+	AcknowledgeHostKeyChange bool      `json:"acknowledge_host_key_change"`
+	AcknowledgeRepoint       bool      `json:"acknowledge_repoint"`
+	CompletionStrategy       *string   `json:"completion_strategy"`
+	Host                     *string   `json:"host"`
+	Include                  *[]string `json:"include"`
+	KnownHostsLine           *string   `json:"known_hosts_line"`
+	LocalPath                *string   `json:"local_path"`
+	Port                     *int      `json:"port"`
+	RemotePath               *string   `json:"remote_path"`
+	SSHKeyID                 *string   `json:"ssh_key_id"`
+	StableForSeconds         *int      `json:"stable_for_seconds"`
+	StaleAfterSeconds        *int      `json:"stale_after_seconds"`
+	User                     *string   `json:"user"`
+	ValidatorID              *string   `json:"validator_id"`
 }
 
 // UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the

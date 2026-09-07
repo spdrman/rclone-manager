@@ -93,6 +93,7 @@
           "REINSTATEMENT_REFUSED",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
           "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+          "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
           "MEDIUM_DISCLOSURE_REQUIRED",
           "RESTORE_REFUSED",
           "RESTORE_UNAVAILABLE",
@@ -139,6 +140,7 @@
           "REINSTATEMENT_REFUSED": "wire",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
           "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED": "wire",
+          "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED": "wire",
           "MEDIUM_DISCLOSURE_REQUIRED": "wire",
           "RESTORE_REFUSED": "wire",
           "RESTORE_UNAVAILABLE": "wire",
@@ -174,6 +176,8 @@
             "ARTIFACT_IRRECOVERABLE",
             "REINSTATEMENT_REFUSED",
             "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+            "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+            "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
             "ARTIFACT_NOT_FAILED"
           ],
           "not-found": [
@@ -2281,7 +2285,7 @@
       },
       "UpdateBackupSetRequest": {
         "type": "object",
-        "description": "PATCH /backup-sets/{source}/{set}. A SPARSE edit of one already-persisted backup set (issue #350): every property is optional, and a property this body omits is left exactly as it is rather than cleared. That is what lets the Web UI's per-box Save persist only the box it belongs to. It deliberately carries no name/source_name (a backup set's identity keys every journal row, artifact id and recovery manifest it has ever produced, so a rename is a migration rather than an edit) and no ssh_key_id/known_hosts_line (those are the results of the import and probe steps, and re-trusting a host is a trust decision rather than an edit).",
+        "description": "PATCH /backup-sets/{source}/{set}. A SPARSE edit of one already-persisted backup set (issue #350): every property is optional, and a property this body omits is left exactly as it is rather than cleared. That is what lets the Web UI's per-box Save persist only the box it belongs to. It deliberately carries no name/source_name: a backup set's identity keys every journal row, artifact id and recovery manifest it has ever produced, so a rename is a migration rather than an edit. It does carry ssh_key_id and known_hosts_line (issue #572), because a key replaced on the source host and a host key that changes when a server is rebuilt are both ordinary events a set has to be able to be told about, and until they were here the only route was to remove the set and create it again. Both are still references produced by the import and probe steps rather than material typed here, and re-trusting a host is still a trust decision, which is what acknowledge_host_key_change is for.",
         "additionalProperties": false,
         "properties": {
           "host": {
@@ -2330,6 +2334,16 @@
             "type": "integer",
             "x-go-pointer": true
           },
+          "ssh_key_id": {
+            "type": "string",
+            "description": "The id of a key POST /ssh-keys has already imported, replacing whichever key this backup set authenticates with now (issue #572). A reference, never key material, exactly as on the create path. An id no import produced is refused with SSH_KEY_NOT_FOUND and nothing is written.",
+            "x-go-pointer": true
+          },
+          "known_hosts_line": {
+            "type": "string",
+            "description": "The exact known_hosts line this backup set should trust from now on, as POST /backup-sets/probe-host-key returns it (issue #572). Replacing it is how a set is told that its source host was legitimately rebuilt. A line pinning a DIFFERENT host key from the one on record is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED unless acknowledge_host_key_change is set; re-sending the line already trusted changes no trust and is never refused.",
+            "x-go-pointer": true
+          },
           "validator_id": {
             "type": "string",
             "description": "An id from the registered validator catalog GET /validators serves, or \"\" for none. Never a path.",
@@ -2338,6 +2352,10 @@
           "acknowledge_repoint": {
             "type": "boolean",
             "description": "Confirms that this edit is meant to point the backup set at different data. Required only when the body actually changes host, remote_path or local_path on a set that already has artifacts on record; without it such an edit is refused with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and nothing is written. It is not a property of the backup set and nothing persists it: it answers one refusal, for one request."
+          },
+          "acknowledge_host_key_change": {
+            "type": "boolean",
+            "description": "Confirms that this edit is meant to trust a DIFFERENT host key for the same host (issue #572). Required only when known_hosts_line actually pins a different key from the one this set trusts now; without it the edit is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, naming the fingerprint on record and the one being offered, and nothing is written. Separate from acknowledge_repoint on purpose: that one answers \"this is the same data at a new address\" and this one answers \"this is the same host with a new key\", and one flag for both would let an operator who meant one of them quietly grant the other."
           }
         }
       },
@@ -5901,7 +5919,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST.",
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5910,7 +5928,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "SSH_KEY_NOT_FOUND"
             ]
           },
           "401": {
@@ -5954,7 +5973,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED. The edit would move this set to different data while artifacts are already on record for it; re-send with acknowledge_repoint once the message has been read.",
+            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED. Either the edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host; re-send with the acknowledgement the message names, once the message has been read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5963,7 +5982,8 @@
               }
             },
             "x-error-codes": [
-              "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
             ]
           },
           "500": {

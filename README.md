@@ -422,6 +422,25 @@ has been read. If the new location holds a *different* dataset, make it a separa
 set instead. `--port` and `--user` are not in that list: neither changes which directory on
 which machine holds the data.
 
+**The SSH key and the trusted host key are patchable too, and one of them asks first.**
+Until issue #572 neither was, on any surface: a key replaced on the source host, or a server
+rebuilt with a new host key, left removing the backup set and creating it again as the only
+route. `--ssh-key-file` imports a replacement key and rotates onto it, `--ssh-key-id` reuses
+one this deployment already has, and both are ordinary edits that ask nothing.
+
+`--known-hosts-line` (or `--trust-host-key`, which probes the host and offers you what
+answers) is the one that asks. A host key changes when a server is rebuilt or migrated, and
+it changes in exactly the same way when something else is answering in its place, so nothing
+here can tell those apart and it will not guess. The refusal names the fingerprint on record
+and the fingerprint being offered, because those two strings are the whole of what there is
+to compare. Check the new one against the host itself, the way the wizard's verify step did
+the first time, then add `--acknowledge-host-key-change` (or
+`"acknowledge_host_key_change": true` on the API, or **Save anyway** in the Web UI).
+Re-sending the line the set already trusts changes no trust and is never refused. It is a
+separate acknowledgement from `--acknowledge-repoint` on purpose: one says "this is the same
+data at a new address" and the other says "this is the same host with a new key", and one
+flag for both would let an operator who meant one of them quietly grant the other.
+
 **`backup-set create` asks the same question, for the same reason.** A backup set is
 identified by its source and its name, so `backup-set remove` frees that id up and a set
 created over it again takes every artifact the removed one left on record. That is what

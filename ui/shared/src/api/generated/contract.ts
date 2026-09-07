@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd";
+export const CONTRACT_SHA256 = "dbe2ae97bbdc53bcfa6573b290e0fd9de25b7e583fc631f788cce046077cf9a5";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -48,6 +48,7 @@ export const WIRE_ERROR_CODES = [
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
   "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -114,6 +115,7 @@ export const API_ERROR_CODES = [
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
   "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+  "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
   "MEDIUM_DISCLOSURE_REQUIRED",
   "RESTORE_REFUSED",
   "RESTORE_UNAVAILABLE",
@@ -129,7 +131,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -388,11 +390,11 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "BackupSet",
     successStatus: 200,
     errorCodes: {
-      400: ["INVALID_REQUEST"],
+      400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
-      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
     }
   },
@@ -1904,20 +1906,28 @@ export interface WireTestConnectionResponse {
  *  optional, and a property this body omits is left exactly as it is
  *  rather than cleared. That is what lets the Web UI's per-box Save
  *  persist only the box it belongs to. It deliberately carries no
- *  name/source_name (a backup set's identity keys every journal row,
+ *  name/source_name: a backup set's identity keys every journal row,
  *  artifact id and recovery manifest it has ever produced, so a
- *  rename is a migration rather than an edit) and no
- *  ssh_key_id/known_hosts_line (those are the results of the import
- *  and probe steps, and re-trusting a host is a trust decision rather
- *  than an edit). */
+ *  rename is a migration rather than an edit. It does carry
+ *  ssh_key_id and known_hosts_line (issue #572), because a key
+ *  replaced on the source host and a host key that changes when a
+ *  server is rebuilt are both ordinary events a set has to be able to
+ *  be told about, and until they were here the only route was to
+ *  remove the set and create it again. Both are still references
+ *  produced by the import and probe steps rather than material typed
+ *  here, and re-trusting a host is still a trust decision, which is
+ *  what acknowledge_host_key_change is for. */
 export interface WireUpdateBackupSetRequest {
+  acknowledge_host_key_change?: boolean;
   acknowledge_repoint?: boolean;
   completion_strategy?: "rename" | "marker" | "stable";
   host?: string;
   include?: string[];
+  known_hosts_line?: string;
   local_path?: string;
   port?: number;
   remote_path?: string;
+  ssh_key_id?: string;
   stable_for_seconds?: number;
   stale_after_seconds?: number;
   user?: string;

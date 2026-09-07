@@ -27,6 +27,18 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * produced, so renaming one is a migration rather than a field on a form
  * (core/service/backupsetupdate.go's own package doc). The detail page
  * shows the name as its heading, which is what it has always been.
+ *
+ * # The two write-only boxes (issue #572)
+ *
+ * `sshKeyId` and `knownHostsLine` do not read anything back, and that is
+ * the one place this table breaks its own "read and parse are inverses"
+ * shape. There is nothing to read: the API answers with the set, and the
+ * set carries a reference to a key and a path to a trust anchor, neither
+ * of which is a value an operator typed or could act on. So both `read`
+ * as "", both are dirty only once something is typed into them, and a
+ * save that never touched them cannot carry them. That is also what makes
+ * them safe to sit beside six ordinary boxes: SAVE ALL walks the dirty
+ * ones, and an untouched empty box is not dirty.
  */
 export type EditFieldKey =
   | "host"
@@ -36,7 +48,9 @@ export type EditFieldKey =
   | "localPath"
   | "include"
   | "completion"
-  | "stableFor";
+  | "stableFor"
+  | "sshKeyId"
+  | "knownHostsLine";
 
 export interface ParsedField {
   /** The patch this field contributes, or undefined when `error` is set. */
@@ -191,6 +205,46 @@ export const EDIT_FIELDS: EditField[] = [
         return { error: "Stable for must be a whole number of seconds greater than zero." };
       }
       return { patch: { stableForSeconds: value } };
+    }
+  },
+  {
+    key: "sshKeyId",
+    label: "SSH key",
+    help: FIELD_HELP.editSetSSHKey,
+    control: "text",
+    // Write-only: see this file's own doc. "" is not the key's value, it
+    // is the absence of an instruction, and the dirty check is what keeps
+    // those two from being confused.
+    read: () => "",
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      // Caught here rather than left to the server for the reason the
+      // port is: there is no request that expresses it. An empty
+      // ssh_key_id is refused by core, so sending one would spend a round
+      // trip to be told what this box already knows.
+      if (trimmed === "") {
+        return { error: "Paste the id of an imported key, or leave the box empty to keep the key this set already uses." };
+      }
+      return { patch: { sshKeyId: trimmed } };
+    }
+  },
+  {
+    key: "knownHostsLine",
+    label: "Trusted host key",
+    help: FIELD_HELP.editSetKnownHostsLine,
+    control: "text",
+    read: () => "",
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      if (trimmed === "") {
+        return { error: "Paste the known_hosts line to trust, or leave the box empty to keep trusting the key this set already trusts." };
+      }
+      // Nothing beyond emptiness is checked here. Whether the line parses,
+      // and whether it pins a key different from the one on record, are
+      // both decided by the service against what is actually persisted,
+      // and a second opinion about a host key formed in a browser would be
+      // one that can be wrong in the permissive direction.
+      return { patch: { knownHostsLine: trimmed } };
     }
   }
 ];

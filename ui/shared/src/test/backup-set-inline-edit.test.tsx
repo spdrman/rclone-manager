@@ -689,3 +689,90 @@ describe("issue #350: repointing a set that already has history", () => {
     await screen.findByRole("button", { name: "Edit" });
   });
 });
+
+/**
+ * Issue #572: rotating the key and re-trusting the host, from the page
+ * that already edits everything else about a set.
+ *
+ * Both boxes start empty and stay empty, which is the one thing here that
+ * is not like the other seven. There is nothing to prefill them with: the
+ * API answers with the set, and the set carries a reference to a key and a
+ * path to a trust anchor, neither of which is a value an operator typed or
+ * could usefully be shown back. So they are write-only boxes, and the
+ * tests below pin that: an untouched one contributes nothing to any save,
+ * and a filled one contributes exactly its own key.
+ */
+describe("issue #572: changing a set's SSH key and its trusted host key", () => {
+  it("offers a box for each, and a per-box Save that sends only that box", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("SSH key"), { target: { value: "key_9f3c" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save ssh key" }));
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ sshKeyId: "key_9f3c" });
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({ knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" });
+  });
+
+  it("leaves both out of a save that did not touch them", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("User"), { target: { value: "backup-agent-2" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save user" }));
+    });
+    expect(update.mock.calls[0][2]).toEqual({ username: "backup-agent-2" });
+  });
+
+  it("asks before re-trusting a changed host key, and the retry carries the acknowledgement", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+        message:
+          "service: this backup set trusts ssh-ed25519 SHA256:oldoldoldold and the line offered is ssh-ed25519 SHA256:newnewnewnew",
+        correlationId: "cid_hostkey"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Trusted host key"), {
+      target: { value: "prod-db-01.internal ssh-ed25519 AAAAnew" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+    });
+
+    // Both fingerprints, from the service's own sentence: they are the
+    // whole content of the decision being asked for.
+    expect(screen.getByText(/SHA256:oldoldoldold/)).toBeTruthy();
+    expect(screen.getByText(/SHA256:newnewnewnew/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeTruthy();
+    expect(update.mock.calls[0][2].acknowledgeHostKeyChange).toBeUndefined();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[1][2]).toEqual({
+      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAnew",
+      acknowledgeHostKeyChange: true
+    });
+  });
+});

@@ -165,7 +165,15 @@ func (r *engineRoute) UpdateBackupSet(ctx context.Context, id string, req servic
 		LocalPath:          req.LocalPath,
 		Include:            req.Include,
 		CompletionStrategy: req.CompletionStrategy,
-		AcknowledgeRepoint: req.AcknowledgeRepoint,
+		// Issue #572's two, carried across with the same nil/non-nil
+		// distinction everything else on this body keeps: a routed patch
+		// that dropped them would report success for a rotation the
+		// engine never heard about.
+		SSHKeyID:       req.SSHKeyID,
+		KnownHostsLine: req.KnownHostsLine,
+
+		AcknowledgeRepoint:       req.AcknowledgeRepoint,
+		AcknowledgeHostKeyChange: req.AcknowledgeHostKeyChange,
 	}
 	if req.ValidatorID != nil {
 		v := string(*req.ValidatorID)

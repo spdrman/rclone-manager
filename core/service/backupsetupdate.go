@@ -40,14 +40,17 @@
 // shows the name as a fixed heading beside the editable fields for that
 // reason, rather than an input that would refuse on save.
 //
-// Also not here: the SSH key reference and the trusted host-key line.
-// Those are not values an operator types, they are the results of the
-// import and probe steps the wizard already owns (ImportSSHKey,
-// ProbeHostKey), and rotating either is a trust decision rather than an
-// edit. CreateBackupSetRequest carries a reference to each rather than
-// the material itself for the same reason; an edit path that accepted a
-// raw known_hosts line would be a way to re-trust a host without ever
-// being shown a fingerprint.
+// What IS here since issue #572, and used not to be: the SSH key
+// reference and the trusted host-key line. Leaving them out was defensible
+// as a scope line and wrong as a product: a key replaced on the source
+// host, or a server rebuilt with a new host key, left an operator with no
+// route but to remove the backup set and create it again, and the one
+// field whose whole purpose is to be updated when something changes was
+// the one that could not be. Both are still references produced by
+// ImportSSHKey and ProbeHostKey rather than material typed here, so
+// nothing on this path ever holds key bytes. Re-trusting a host is still a
+// trust decision, and backupsethostkey.go is where that is asked about
+// rather than assumed.
 package service
 
 import (
@@ -90,6 +93,21 @@ type UpdateBackupSetRequest struct {
 
 	StaleAfter *time.Duration
 
+	// SSHKeyID replaces the key this backup set authenticates with, by
+	// the id an earlier ImportSSHKey call returned (issue #572). A
+	// reference, never key material, exactly as on the create path: a
+	// caller outside core/ never learns the server-side path it resolves
+	// to, and an id no import produced is refused with ErrSSHKeyNotFound
+	// before anything is written.
+	SSHKeyID *string
+
+	// KnownHostsLine replaces the host key this backup set trusts, as the
+	// exact known_hosts line an earlier ProbeHostKey call returned. It is
+	// the one field on this request that can be refused for what it MEANS
+	// rather than for how it is spelled; see backupsethostkey.go for the
+	// whole argument, and AcknowledgeHostKeyChange below for the way out.
+	KnownHostsLine *string
+
 	// ValidatorID selects this backup set's FR-13 application validator
 	// from the registered catalog, or is "" for none. An id, never a
 	// path, and refused unless the catalog lists it, exactly as on the
@@ -109,6 +127,19 @@ type UpdateBackupSetRequest struct {
 	// one call, and false is the honest default for a caller that did not
 	// mention it.
 	AcknowledgeRepoint bool
+
+	// AcknowledgeHostKeyChange confirms that the caller means to trust a
+	// DIFFERENT host key for the same host. Required only when
+	// KnownHostsLine actually pins a different key from the one on record;
+	// re-sending the trusted line, or trusting a key for a host this set
+	// has nothing pinned for, asks nothing.
+	//
+	// A second flag rather than a second meaning for AcknowledgeRepoint,
+	// for the reason backupsethostkey.go states: the two answer different
+	// questions, and one flag for both would let an operator moving a set
+	// to a new path grant a re-trust they never looked at. Not a pointer,
+	// for the same reason AcknowledgeRepoint is not.
+	AcknowledgeHostKeyChange bool
 }
 
 // isEmpty reports whether this request names nothing at all. An update
@@ -117,13 +148,14 @@ type UpdateBackupSetRequest struct {
 // exactly nothing, and it would let a client send {} and read the 200
 // back as though something had happened.
 func (r UpdateBackupSetRequest) isEmpty() bool {
-	// AcknowledgeRepoint is deliberately not counted: it names no field
-	// to change, so a request carrying only it changes nothing and is
-	// refused exactly like an empty one.
+	// Neither acknowledgement is counted: each names no field to change,
+	// so a request carrying only one changes nothing and is refused
+	// exactly like an empty one.
 	return r.Host == nil && r.Port == nil && r.User == nil &&
 		r.RemotePath == nil && r.LocalPath == nil && r.Include == nil &&
 		r.CompletionStrategy == nil && r.StableFor == nil &&
-		r.StaleAfter == nil && r.ValidatorID == nil
+		r.StaleAfter == nil && r.ValidatorID == nil &&
+		r.SSHKeyID == nil && r.KnownHostsLine == nil
 }
 
 // UpdateBackupSet applies req to the backup set named by id ("source/name"),
@@ -183,6 +215,47 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	if err := validateUpdatedBackupSet(edited, req); err != nil {
 		return BackupSet{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
+
+	// The key reference resolves to a real file here rather than in
+	// applyBackupSetUpdate, because it can fail and that function is a
+	// pure edit of a copy. Resolved before the trust question below and
+	// well before any write, so a rotation naming an id nothing imported
+	// costs the caller an attempt and not a set (issue #572).
+	//
+	// The whole Key is replaced rather than only its File, and KeyFile,
+	// the deprecated alias, is cleared with it. config.Validate refuses a
+	// remote naming two key sources, so an edit that set File beside an
+	// existing key.env would leave a configuration this process could not
+	// reload. A passphrase configured for the OLD key goes with it for the
+	// same reason it would not work: it is the passphrase for a key this
+	// set no longer uses.
+	if req.SSHKeyID != nil {
+		keyFile, err := b.resolveSSHKeyFile(*req.SSHKeyID)
+		if err != nil {
+			return BackupSet{}, err
+		}
+		edited.Remote.Key = config.Key{File: keyFile}
+		edited.Remote.KeyFile = ""
+	}
+
+	// The trust question, and then the new line staged but not yet in
+	// place. Refused before anything is written, for the same reason the
+	// repoint refusal above is: a refusal must leave both the
+	// configuration and the trusted line exactly as they were.
+	var trust *stagedKnownHosts
+	if req.KnownHostsLine != nil {
+		if err := requireHostKeyChangeAcknowledgement(*target, edited, req); err != nil {
+			return BackupSet{}, err
+		}
+		staged, err := stageKnownHostsLine(b.configPath, sourceName, setName, *req.KnownHostsLine)
+		if err != nil {
+			return BackupSet{}, fmt.Errorf("service: preparing the trusted host key: %w", err)
+		}
+		defer staged.discard()
+		edited.Remote.KnownHosts = staged.Path
+		trust = staged
+	}
+
 	*target = edited
 
 	// Encoded before cfg.Validate, which resolves Retention and Alerts in
@@ -212,6 +285,17 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 
 	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
 		return BackupSet{}, fmt.Errorf("service: persisting configuration: %w", err)
+	}
+
+	// After the configuration is durably on disk, and last, because a
+	// rename of an already-synced file inside its own directory is the
+	// nearest thing to an infallible step this package has. See
+	// stagedKnownHosts for why the trusted line moves into place on this
+	// side of the write rather than the other.
+	if trust != nil {
+		if err := trust.commit(); err != nil {
+			return BackupSet{}, fmt.Errorf("service: pinning the trusted host key: %w", err)
+		}
 	}
 
 	applyValidators()
@@ -245,6 +329,12 @@ func findBackupSetPointer(cfg *config.Config, sourceName, setName string) *confi
 // over a copy on purpose: the caller validates the result before it
 // writes it back, so a refused update never leaves a partially-applied
 // set behind.
+//
+// SSHKeyID and KnownHostsLine are deliberately not applied here even
+// though they are fields of the same request. Both resolve to something
+// on this deployment's own filesystem, both can fail doing it, and one of
+// them writes a file; none of that belongs in a pure function over a copy.
+// UpdateBackupSet applies them itself, in the order its own comments give.
 func applyBackupSetUpdate(bs config.BackupSet, req UpdateBackupSetRequest) config.BackupSet {
 	if req.Host != nil {
 		bs.Remote.Host = *req.Host
@@ -331,6 +421,24 @@ func validateUpdatedBackupSet(bs config.BackupSet, req UpdateBackupSetRequest) e
 	}
 	if req.LocalPath != nil {
 		problems = appendProblem(problems, requiredFieldProblem("local_path", bs.LocalPath))
+	}
+	// The key and the trusted line only mean anything for an sftp remote:
+	// a local-transport set has no host to trust and nothing to
+	// authenticate to, and config.Validate refuses one that carries
+	// either. Said here rather than left to that refusal so the message
+	// names what the caller actually asked for.
+	if req.SSHKeyID != nil || req.KnownHostsLine != nil {
+		if bs.Remote.Type != "sftp" {
+			problems = append(problems, fmt.Sprintf(
+				"ssh_key_id and known_hosts_line only mean something for a remote of type \"sftp\", and this backup set's remote is type %q",
+				bs.Remote.Type))
+		}
+	}
+	if req.SSHKeyID != nil && *req.SSHKeyID == "" {
+		problems = append(problems, "ssh_key_id must not be empty (import a key first, or omit the field to leave the key alone)")
+	}
+	if req.KnownHostsLine != nil {
+		problems = appendProblem(problems, knownHostsLineProblem(*req.KnownHostsLine))
 	}
 	problems = append(problems, completionProblems(bs.Completion.Strategy, bs.Completion.StableFor.Duration())...)
 	if req.StaleAfter != nil && bs.StaleAfter.Duration() <= 0 {
