@@ -1821,9 +1821,13 @@ twenty-five minutes.
 
 The one branch that does gate on GitHub is `release`, because merging into it publishes a
 signed image to a public registry (issue #575). A pull request there runs `ci.yml` in full,
-including `scripts/e2e/two-machine-backup.sh`, and the `release gate` check has to be green
-before the merge. About nine minutes, and it is the only automatic check in this
-repository.
+including `scripts/e2e/two-machine-backup.sh` in all four of its cases, and the
+`release gate` check has to be green before the merge. About fourteen minutes on hosted
+runners, measured on a rehearsal rather than estimated, and it is the only automatic check
+in this repository. The repository-structure proofs are the long pole at just over
+thirteen of those minutes, because each one deletes a directory in a throwaway worktree and
+rebuilds and retests what is left; the two-machine proof is four and a half and finishes
+well inside them.
 
 It opens with the cheap checks that can invalidate everything after them, because a control
 that turns out to have been planting nothing is worth knowing about in second one rather

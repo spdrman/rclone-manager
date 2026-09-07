@@ -101,14 +101,21 @@ gh api -X PUT repos/spdrman/rclone-manager/rulesets/21971099 \
   --input ruleset.json   # the existing rules, plus:
                          # {"type": "required_status_checks",
                          #  "parameters": {
-                         #    "strict_required_status_checks_policy": true,
+                         #    "strict_required_status_checks_policy": false,
                          #    "required_status_checks": [
                          #      {"context": "release gate"}]}}
 ```
 
-`strict_required_status_checks_policy` is what makes the branch have to be up to
-date with `release` before the merge, so the check is green for the tree that
-actually lands rather than for one that was current an hour ago.
+`release gate` is the check-run name exactly as GitHub reports it, which is the
+job's `name:` and not the `CI / release gate` the pull request page displays.
+
+Strict is deliberately off. Its job is to stop a check going green against a stale
+tree, and nothing here is stale: a `pull_request` run builds the merge of head into
+base, so the run is already against the tree that will land. Turning it on would
+instead require every release PR's head to already contain the current tip of
+`release`, which is a rule about `main` absorbing release commits rather than about
+anything being proven, and it would block a cut on a bookkeeping merge nobody
+needed.
 
 The way to know it took is to try to merge something red, not to look at the
 settings page. A required context that names a check no run produces is
@@ -141,7 +148,7 @@ check starts failing, loudly, on the next run rather than months later.
    refuses a direct push, so this is the only way in; merge it with a real merge
    commit (the ruleset refuses squash and rebase, which would break rule 1). Opening
    it starts `ci.yml`, whose `release gate` check has to be green before the merge
-   button unlocks: about nine minutes, and the two-machine proof inside it is the
+   button unlocks: about fourteen minutes, and the two-machine proof inside it is the
    part that says a fresh install of what you are about to publish can actually pull
    a backup. Merging is what publishes.
 7. Record the digests the run prints into the manifest, flip `image.published` to

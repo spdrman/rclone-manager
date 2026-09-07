@@ -622,13 +622,17 @@ jobs:
   two-machine-e2e:
     name: two machines, one temporary network, one real backup (#356)
     runs-on: ubuntu-latest
-    # Generous on purpose. The image under test is built from this tree
-    # (Go binaries plus the UI bundle) on a cold Docker cache, and then
-    # four cases each stand up a docker-in-docker machine, load that image
-    # into its inner daemon, run the real installer and pull a real
-    # backup. A run that overruns should say so as a timeout naming this
-    # job rather than as a six-hour Actions default nobody is watching.
-    timeout-minutes: 90
+    # Ten times what it measures, rather than the six-hour Actions default
+    # nobody is watching. On ubuntu-latest the whole job is about four and
+    # a half minutes: 1m44s to build the image under test from this tree
+    # (Go binaries plus the UI bundle) on a cold Docker cache, then 31s
+    # for plain, 31s for no-arguments, 35s for connection-cap and 51s for
+    # lifecycle, each standing up its own docker-in-docker machine,
+    # loading that image into its inner daemon, running the real installer
+    # and pulling a real backup. Every wait inside the script is bounded
+    # and names what it was waiting for, so this is a backstop rather than
+    # the thing that catches a hang.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -648,8 +652,10 @@ jobs:
       # filesystem.
       - name: What this runner has
         run: |
-          echo "## Runner capability" >>"$GITHUB_STEP_SUMMARY"
-          echo '```' >>"$GITHUB_STEP_SUMMARY"
+          # One block, teed once, so the job summary carries the same
+          # thing the log does. A reader who opens a red INCOMPLETE
+          # should not have to scroll a log to find out what the machine
+          # was missing.
           {
             echo "kernel:  $(uname -sr)"
             echo "cpus:    $(nproc)"
@@ -659,28 +665,39 @@ jobs:
             df -h / /var/lib/docker 2>/dev/null || df -h /
             echo "docker:  $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unreachable)"
             echo "docker data root: $(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo unknown)"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >>"$GITHUB_STEP_SUMMARY"
 
-          # The two capabilities the proof refuses without, probed here so
-          # the answer is legible even when the proof's own preflight says
-          # the same thing forty lines further down. Neither is fatal in
-          # this step: the proof is what decides, and a probe that
-          # disagreed with it would be a second opinion nobody asked for.
-          if docker run --rm --privileged docker:28-dind true >/dev/null 2>&1; then
-            echo "privileged containers: allowed, so docker-in-docker can start"
-          else
-            echo "privileged containers: REFUSED, so the manager machine cannot be a machine"
-          fi
-          # connlimit is what the connection-cap case installs inside the
-          # source container to model #264's production rule. It is a
-          # kernel module, so a runner can have iptables and still not
-          # carry it.
-          if sudo modprobe xt_connlimit >/dev/null 2>&1; then
-            echo "xt_connlimit: loadable, so the connection-cap case can impose #264's rule"
-          else
-            echo "xt_connlimit: not loadable by name (it may still be built in; the case proves the cap bites before trusting it)"
-          fi
+            # The two capabilities the proof refuses without, probed here
+            # so the answer is legible even when the proof's own
+            # preflight says the same thing forty lines further down.
+            # Neither is fatal in this step: the proof is what decides,
+            # and a probe that disagreed with it would be a second
+            # opinion nobody asked for.
+            if docker run --rm --privileged docker:28-dind true >/dev/null 2>&1; then
+              echo "privileged containers: allowed, so docker-in-docker can start"
+            else
+              echo "privileged containers: REFUSED, so the manager machine cannot be a machine"
+            fi
+            # connlimit is what the connection-cap case installs inside
+            # the source container to model #264's production rule. It is
+            # a kernel module, so a runner can have iptables and still not
+            # carry it.
+            if sudo modprobe xt_connlimit >/dev/null 2>&1; then
+              echo "xt_connlimit: loadable, so the connection-cap case can impose #264's rule"
+            else
+              echo "xt_connlimit: not loadable by name (it may still be built in; the case proves the cap bites before trusting it)"
+            fi
+          } >"$RUNNER_TEMP/runner-capability.txt"
+          cat "$RUNNER_TEMP/runner-capability.txt"
+          # RUNNER_TEMP rather than the checkout: the proof below builds
+          # the image under test from this working tree and stamps it with
+          # what git says about it, so nothing here should leave a file in
+          # it.
+          {
+            echo "## Runner capability"
+            echo '```'
+            cat "$RUNNER_TEMP/runner-capability.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
       # All four cases, not a subset, and one invocation rather than a
       # matrix. `release` moves a handful of times a year, so the argument
