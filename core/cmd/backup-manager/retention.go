@@ -255,6 +255,30 @@ func cmdRetention(args []string) int {
 			fmt.Printf("    Create %s again to put them back under a policy: `backup-manager unconfigured` explains the rest.\n", u.Set)
 		}
 	}
+
+	// The other side of that decision, which the decision on its own left
+	// open. Keeping the list off the one-set form is right, and it means
+	// an operator who types `retention prod/db` out of habit and never
+	// types it bare never meets the list at all. What the list is about is
+	// backups nothing retains, reconciles or expires, which are the ones
+	// most worth knowing about and the least likely to announce
+	// themselves, so silence here is a worse answer than a line.
+	//
+	// A pointer rather than the list, so the shape of the answer still
+	// matches the shape of the question: it says the list exists, says how
+	// many are on it and says how to see it, and names none of them.
+	//
+	// Printed only when there is something behind it, which is the rule
+	// the appendix above already follows and for the same reason: a
+	// deployment that has never removed a backup set prints exactly what
+	// it printed before this line existed.
+	ungoverned, err := ungovernedElsewhere(ctx, svc, only)
+	if err != nil {
+		return fail(err)
+	}
+	if ungoverned > 0 {
+		fmt.Printf("\nthis preview is about one backup set, so it leaves out %d backup set(s) whose configuration was removed and which no retention policy governs at all. `backup-manager retention` with no argument lists those (issue #418).\n", ungoverned)
+	}
 	if !*dryRun {
 		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed.")
 	}
@@ -275,6 +299,34 @@ func cmdRetention(args []string) int {
 // retention` splits the two the same way, which matters because it is the
 // same operand, spelled the same way, on a command an operator moves to
 // and from.
+//
+// # The rule the split comes from
+//
+// Two rows of a published table are not enough on their own: 2 is
+// "nothing ran, the command line was wrong" and 1 is "an ordinary
+// failure", and read as prose those overlap. The line between them is
+// whether this deployment had to be consulted to know. A string that is
+// not shaped like a backup set id is wrong on every deployment there will
+// ever be, so it is answered here, before a configuration is loaded or a
+// journal is opened, and it is a 2. A set the configuration does not have
+// is only wrong on this one, so it is a 1 and it waits for the service. An
+// answer that is true and empty is a 0 and always was: a configured set
+// with no finished backups under it yet prints that it has none and exits
+// 0, which is what keeps "there are none yet" from reading as "they are
+// gone".
+//
+// Two places that rule is applied narrowly rather than literally, and both
+// times because the narrow reading is what the majority of this binary's
+// other commands already do. A malformed ARTIFACT id is a 1: `validate`,
+// `retry`, `quarantine`, `restore` and `artifacts <id>` have all answered
+// that way since long before the table existed, and moving five commands
+// is a bigger change than settling this one. A flag VALUE that parses and
+// then fails validation is a 1 too, which is what --daily-days -1 and
+// --timezone Mars/Phobos get here: they go through the identical
+// config.ValidateRetention the YAML file's own retention block goes
+// through, and `settings patch --timezone Mars/Phobos` and `backup-set
+// retention --daily-days -1` both answer with whatever that validation
+// says, on the same row.
 //
 // An exit code returned rather than an error, like buildRetentionOverride
 // (backupsetretention.go): these are argument problems this package owns
@@ -322,6 +374,27 @@ func unconfiguredForPreview(ctx context.Context, svc *app.Service, only model.Ba
 		return nil, nil
 	}
 	return svc.UnconfiguredSets(ctx)
+}
+
+// ungovernedElsewhere is how many backup sets the appendix above would
+// have listed, for the one invocation shape that does not get the
+// appendix, and zero for the one that does.
+//
+// The mirror image of the function above rather than a widening of it, so
+// each shape asks the journal exactly one question and the two cannot
+// both run. Keeping them apart is also what keeps #418's decision legible:
+// that one decides what the LIST is, this one decides what the pointer at
+// the list is, and the reason the one-set form gets a pointer instead of a
+// list is unchanged by having one.
+func ungovernedElsewhere(ctx context.Context, svc *app.Service, only model.BackupSetID) (int, error) {
+	if only.IsZero() {
+		return 0, nil
+	}
+	sets, err := svc.UnconfiguredSets(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(sets), nil
 }
 
 // printVerdictLine renders one artifact's verdict.
