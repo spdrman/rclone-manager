@@ -38,6 +38,7 @@ on:
   pull_request:
     branches:
       - release
+      - scratch/gate-trigger-probe-base
   workflow_dispatch:
 
 concurrency:
