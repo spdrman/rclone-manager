@@ -28,7 +28,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
 
 /* the app frame, so the dock is shown where it actually sits */
 .app{background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-xl);
-  box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:730px}
+  box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:880px}
 .topbar{flex:none;height:44px;display:flex;align-items:center;gap:var(--space-3);
   padding:0 var(--space-4);border-bottom:1px solid var(--border);background:var(--surface)}
 .mark{width:18px;height:18px;border-radius:5px;background:var(--accent);opacity:.85}
@@ -55,8 +55,11 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
 /* the dock */
 .dock{flex:none;border-top:1px solid var(--border-strong);background:var(--surface-2);
   display:flex;flex-direction:column;min-height:0}
-.dockbar{flex:none;display:flex;align-items:center;gap:var(--space-2);height:32px;
-  padding:0 var(--space-4);font-size:11.5px;color:var(--text-2);border-bottom:1px solid var(--border)}
+.dockbar{flex:none;display:flex;align-items:center;gap:var(--space-2);min-height:32px;
+  padding:5px var(--space-4);font-size:11.5px;color:var(--text-2);border-bottom:1px solid var(--border);
+  flex-wrap:wrap}
+.dockbar > *{white-space:nowrap;flex:none}
+.dockbar .grow{flex:1 1 0}
 .chev{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:2px 4px;
   font:inherit;font-size:11.5px;font-weight:600;color:var(--text);cursor:pointer;border-radius:var(--radius-sm)}
 .chev svg{transition:transform .15s ease}
@@ -86,6 +89,9 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
 .term .w{color:oklch(0.78 0.12 75)}
 .term .e{color:oklch(0.72 0.16 25)}
 .term .g{color:oklch(0.72 0.11 155)}
+.term .cmd{color:oklch(0.86 0.10 200)}
+.term .prompt{color:#6f736a}
+.term .gap{color:#7f8478;font-style:italic}
 .term .cur{display:inline-block;width:7px;height:12px;background:#d7d9d2;vertical-align:-2px}
 .rule{display:flex;align-items:center;gap:10px;color:#8a8f83;margin:7px 0}
 .rule::before,.rule::after{content:"";height:1px;background:#31342d;flex:1}
@@ -143,13 +149,14 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
         </div>
       </div>
 
-      <div class="dock" style="height:382px">
+      <div class="dock" style="height:530px">
         <div class="dockbar">
           <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Terminal</button>
           <span class="scope scope--on">Everything</span>
           <span class="scope">api-server / var-backups</span>
           <span class="scope">cicd-pipeline / var-backups</span>
           <span class="scope">This browser</span>
+          <span class="scope">Commands only</span>
           <span class="grow"></span>
           <span class="dropped">14 earlier lines dropped</span>
           <span class="lines">1,284 lines</span>
@@ -165,9 +172,14 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
           <div><span class="t">14:01:49</span> <span class="src">[api-server/var-backups]</span> <span class="g">verified dpkg.status.2.gz (md5 matched source)</span></div>
           <div><span class="t">14:01:52</span> <span class="src">[api-server/var-backups]</span> <span class="g">committed dpkg.status.2.gz</span></div>
           <div><span class="t">14:02:04</span> <span class="src--you">[you]</span> <span class="i">Test connection &#8594; cicd-pipeline / var-backups</span></div>
+          <div><span class="t">14:02:04</span> <span class="src--you">[you]</span> <span class="gap"># no backup-manager equivalent yet &#183; POST /api/v1/backup-sets/test-connection</span></div>
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">refused: host key for 10.0.0.14:22 does not match known_hosts</span></div>
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">  offered SHA256:aTx9&#8230; recorded SHA256:pQ71&#8230; &#183; nothing was changed</span></div>
+          <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="i">Saved stale_after on api-server / var-backups</span></div>
+          <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">backup-manager backup-set patch api-server/var-backups --stale-after 48h</span></div>
           <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="i">Run all due sets &#8594; accepted as operation op_4d19</span></div>
+          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap"># no backup-manager equivalent yet &#183; POST /api/v1/operations run_cycle</span></div>
+          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap">#   `backup-manager run` starts a cycle in your shell, not in this engine</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="w">validation failed: dpkg.status.1.gz (md5 differs from source)</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="e">quarantined: dpkg.status.1.gz</span></div>
           <div class="rule rule--warn">engine restarted at 14:02:41 &#183; everything above belongs to a process that has gone</div>
@@ -184,6 +196,17 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <strong>Three kinds of line, and the prefix says which.</strong> A set's own work, the engine's
       deployment-wide work, and what this browser asked for. The engine's feed already carries that
       distinction as an event scope, so the prefix is read rather than invented.
+    </p>
+    <p class="caption" style="margin-top:var(--space-3)">
+      <strong>And every action names the command that would have done the same thing.</strong> The
+      <code>$</code> lines are copy-pasteable <code>backup-manager</code> invocations, built from the very
+      request the browser sent, so a new operator learns the CLI by using the UI and a support conversation
+      gets commands instead of a description of which buttons were pressed. The <code>#</code> lines are the
+      point rather than an omission: an action with no command to name is a CLI parity gap, and this makes it
+      visible the first time somebody uses the feature instead of at some later audit. Note the second one.
+      <code>backup-manager run</code> exists, but it runs a cycle in the operator's own shell rather than
+      asking this engine to run one, so it is not the equivalent of the button and the terminal declines to
+      pretend it is.
     </p>
   </section>
 
@@ -217,7 +240,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     <div class="framehead">
       <h2 class="eyebrow">A fresh instance &#183; before any backup set exists</h2>
     </div>
-    <div class="dock" style="height:176px">
+    <div class="dock" style="height:258px">
       <div class="dockbar">
         <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Terminal</button>
         <span class="scope scope--on">Everything</span>
@@ -231,6 +254,9 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
         <div><span class="t">13:59:40</span> <span class="src--you">[you]</span> <span class="i">Probe host key &#8594; 10.0.0.14:22</span></div>
         <div><span class="t">13:59:41</span> <span class="src--you">[you]</span> <span class="g">host key SHA256:pQ71&#8230; (ssh-ed25519), first time seen</span></div>
         <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="i">Create backup set &#8594; cicd-pipeline / var-backups</span></div>
+        <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">backup-manager backup-set create cicd-pipeline/var-backups --host 10.0.0.14 --user backups \</span></div>
+        <div><span class="t">        </span> <span class="src--you">     </span> <span class="cmd">    --remote-path /var/backups --local-path /srv/backups --ssh-key-id key_7f21 \</span></div>
+        <div><span class="t">        </span> <span class="src--you">     </span> <span class="cmd">    --known-hosts-line &lt;the line you accepted above&gt; --completion-strategy stable</span></div>
         <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="e">refused: this deployment has no configuration file to persist to</span></div>
         <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="e">  nothing was written &#183; the set was not created</span><span class="cur"></span></div>
       </div>
