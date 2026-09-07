@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"time"
 )
 
 // This file is the sink itself: the type other packages hold, and the one
@@ -64,6 +65,18 @@ type Logger struct {
 	// Redactor's own doc (redact.go); a nil value here is "redact
 	// nothing", exactly the default a Logger built by New starts at.
 	redact *Redactor
+
+	// sink, when non-nil, is handed a flattened copy of every event this
+	// Logger emits, after redaction. See WithSink and Sink's own doc
+	// (sink.go); a nil value is "nobody is following this stream", which
+	// is what a Logger built by New starts at.
+	sink Sink
+
+	// bound is what With has attached, in the form a Sink reads. base
+	// already carries the same attributes in slog's own form; this copy
+	// exists so the tap and the log line cannot disagree about what an
+	// event carried (see boundFields, sink.go).
+	bound []Field
 }
 
 // New builds a Logger that writes newline-delimited JSON to w, one JSON
@@ -105,7 +118,10 @@ func (l *Logger) With(args ...any) *Logger {
 	if l == nil || l.base == nil {
 		return l
 	}
-	return &Logger{base: l.base.With(args...), redact: l.redact}
+	cp := *l
+	cp.base = l.base.With(args...)
+	cp.bound = append(append([]Field(nil), l.bound...), boundFields(args)...)
+	return &cp
 }
 
 // WithRedaction returns a Logger that runs every event's message and every
@@ -162,12 +178,19 @@ func (l *Logger) Event(ctx context.Context, level Level, event, msg string, attr
 // runs unconditionally rather than branching on whether l.redact is set:
 // a deployment that never configured one pays a nil check per string attr,
 // not a different code path.
+// It is also issue #573's one seam for the in-process tap, for the same
+// reason and in the same place: a Sink is handed the finished record here,
+// after redaction, so the tap and the line are built from one set of
+// bytes and every event events.go declares later is followed for free.
 func (l *Logger) emit(ctx context.Context, level Level, event, msg string, attrs ...slog.Attr) {
 	if l == nil || l.base == nil {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if extra, ok := contextBackupSet(ctx, attrs); ok {
+		attrs = append(attrs, extra)
 	}
 	all := make([]slog.Attr, 0, len(attrs)+1)
 	all = append(all, slog.String(fieldEvent, event))
@@ -177,5 +200,29 @@ func (l *Logger) emit(ctx context.Context, level Level, event, msg string, attrs
 		}
 		all = append(all, a)
 	}
-	l.base.LogAttrs(ctx, level, l.redact.Filter(msg), all...)
+	msg = l.redact.Filter(msg)
+	l.base.LogAttrs(ctx, level, msg, all...)
+	l.tap(level, event, msg, all[1:])
+}
+
+// tap hands one already-redacted event to the Sink, if there is one. attrs
+// excludes the event attribute emit prepends, because Record names the
+// event in a field of its own and repeating it in the list would leave
+// every reader to filter it back out.
+func (l *Logger) tap(level Level, event, msg string, attrs []slog.Attr) {
+	if l.sink == nil {
+		return
+	}
+	fields := make([]Field, 0, len(l.bound)+len(attrs))
+	fields = append(fields, l.bound...)
+	for _, a := range attrs {
+		fields = append(fields, Field{Key: a.Key, Value: a.Value.String()})
+	}
+	l.sink.RecordEvent(Record{
+		At:      time.Now(),
+		Level:   level,
+		Event:   event,
+		Message: msg,
+		Fields:  fields,
+	})
 }

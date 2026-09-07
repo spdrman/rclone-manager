@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd";
+export const CONTRACT_SHA256 = "1f0b5a2704a27464019bb3d7d0aaf6d31328cff6abfef0aabf11fad911e1468d";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -184,6 +184,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getLiveActivity",
+    method: "GET",
+    path: "/activity/live",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "LiveActivityResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -1466,6 +1485,72 @@ export interface WireListStorageStatusResponse {
  *  would be an arbitrary-command surface. */
 export interface WireListValidatorsResponse {
   validators: WireValidator[];
+}
+
+/** One line of the live feed. It carries the engine's own event name,
+ *  the engine's own severity and the event's own fields, because what
+ *  a moment is worth calling is presentation and belongs to whichever
+ *  client is presenting: a severity invented on the way to the wire
+ *  would freeze one screen's display decision for every other client.
+ *  The level is not such a decision, it is what the emitter chose
+ *  when it decided a line was a warning rather than a note, so it is
+ *  carried through rather than re-derived. */
+export interface WireLiveActivityEvent {
+  at: string;
+  event: string;
+  fields: WireLiveActivityField[];
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  scope: "deployment" | "set";
+  sequence: number;
+}
+
+/** One field of an event, rendered as a string and already redacted.
+ *  A pair rather than a map because the order the event logged its
+ *  fields in is the order that reads best, and because a client
+ *  rendering a line wants them in that order without sorting. */
+export interface WireLiveActivityField {
+  key: string;
+  value: string;
+}
+
+/** One reading of the live feed. It is a snapshot a client polls, not
+ *  a stream: this product runs on a NAS behind whatever reverse proxy
+ *  the operator already had, and behind the UI container's own proxy
+ *  in the two-container topology, so a held-open response is at the
+ *  mercy of every buffering and idle-timeout default in that path. A
+ *  plain GET works through all of them, needs no reconnection logic,
+ *  and is exactly as readable from a terminal as from a browser. The
+ *  cursor on the request is what keeps polling cheap. */
+export interface WireLiveActivityResponse {
+  observed_at: string;
+  poll_after_ms: number;
+  sets: WireLiveActivitySet[];
+}
+
+/** What one backup set is doing right now, and the tail of events
+ *  behind it. Every configured set appears whether or not anything
+ *  has happened to it: a panel that shows up only during activity
+ *  teaches an operator to hunt for it, and its absence then means
+ *  either nothing is running or nothing is reporting, with no way to
+ *  tell which. */
+export interface WireLiveActivitySet {
+  active: boolean;
+  artifact?: string;
+  artifacts_completed: number;
+  artifacts_total?: number;
+  backup_set_id: string;
+  bytes_per_second?: number;
+  bytes_total?: number;
+  bytes_transferred?: number;
+  events: WireLiveActivityEvent[];
+  failures: number;
+  finished_at?: string;
+  latest_sequence: number;
+  oldest_sequence: number;
+  progress_basis: "artifacts" | "unknown";
+  stage?: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
+  started_at?: string;
 }
 
 /** The one manager-wide storage reading: what the backup root's

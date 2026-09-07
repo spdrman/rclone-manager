@@ -28,6 +28,7 @@ import type {
   SystemHealth,
   VersionInfo
 } from "@shared/types/operation";
+import type { LiveActivity } from "@shared/types/activity";
 
 /**
  * Every error code this frontend's backends can actually put on the wire,
@@ -1064,6 +1065,27 @@ export interface BackupManagerApi {
 
   listOperations(): Promise<Operation[]>;
   listActivity(): Promise<ActivityEvent[]>;
+
+  /**
+   * What every configured backup set is doing right now, plus a bounded
+   * tail of the events behind it (issue #573).
+   *
+   * A different question from `listActivity` above and not a filter over
+   * it. That one reads the durable lifecycle record and cannot know a
+   * transfer is at 4 MB/s; this one reads what the serving process is
+   * holding in memory and has forgotten last Tuesday.
+   *
+   * It is polled rather than streamed, and the service names the cadence
+   * in `pollAfterMs` because the service is the one that knows whether
+   * anything is moving. `since` is the highest sequence already seen, so
+   * a repeat call carries back only what is new.
+   *
+   * Every configured set comes back whether or not anything has happened
+   * to it: a panel that appears only during activity teaches an operator
+   * to hunt for it, and its absence then means either nothing is running
+   * or nothing is reporting, with no way to tell which.
+   */
+  getLiveActivity(options?: { setId?: string; since?: number; limit?: number }): Promise<LiveActivity>;
   listQuarantine(): Promise<BackupArtifact[]>;
   revalidate(artifactId: string): Promise<void>;
   retryIngestion(artifactId: string): Promise<void>;

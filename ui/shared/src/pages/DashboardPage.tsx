@@ -31,6 +31,7 @@ import { MetricCard } from "@shared/components/MetricCard";
 import { StorageGauge } from "@shared/components/StorageGauge";
 import { OperationProgress } from "@shared/components/OperationProgress";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
+import { DashboardActivity } from "@shared/pages/DashboardActivity";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { HaltBanner } from "@shared/components/HaltBanner";
@@ -289,6 +290,12 @@ export function DashboardPage({
               : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
         </div>
       </section>
+
+      {/* Issue #573. One strip per backup set, always present, so the place
+          an operator looks when something is wrong is the same place that
+          was there when it was fine. It sits between what is running and
+          what has happened because that is what it is: the middle. */}
+      <DashboardActivity sets={sets.data} />
 
       <section className="card" aria-label="Recent activity">
         <div className="card__header">

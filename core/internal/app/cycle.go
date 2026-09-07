@@ -8,6 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/reconcile"
 )
@@ -324,6 +325,14 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	// on ctx this is ctx itself and a no-op cancel.
 	ctx, cancelOnHold, stoppedByHold := withHoldCancellation(ctx, bs.ID.String())
 	defer cancelOnHold()
+
+	// Everything logged from here on is about THIS set, so it says so
+	// (issue #573, obs.WithBackupSet). Most events already name their own
+	// set or their own artifact; the ones that do not are the reconcile,
+	// discovery and listing failures immediately below, which are exactly
+	// the lines that explain why a set stopped, and which used to reach an
+	// operator as an op and an error with nothing saying where.
+	ctx = obs.WithBackupSet(ctx, bs.ID.String())
 
 	// stopReason turns "this context is done" into the reason it is done,
 	// so a pass an operator stopped is not reported in the same words as

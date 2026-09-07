@@ -101,6 +101,32 @@ type Progress struct {
 	// beside it: see this type's own doc.
 	ArtifactsDone int
 
+	// SetArtifactsPlanned and SetArtifactsCompleted are the same question
+	// asked of ONE backup set, where it does have an answer (issue #573).
+	//
+	// The type doc's argument against a cycle-wide total is that a cycle
+	// discovers what it will find set by set as it goes. That is true of
+	// the cycle and stops being true of a set: by the time a set's pass
+	// starts walking rows, it has reconciled and discovered, so the rows
+	// it is about to drive forward are countable. SetArtifactsPlanned is
+	// that count, and SetArtifactsCompleted is how many of them the pass
+	// has finished, which is what lets a per-set view draw a bar with an
+	// honest denominator instead of a spinner.
+	//
+	// Planned is a pointer for the same reason the byte counters are.
+	// Before the walk begins there is no total, and a zero would read as
+	// "nothing to do" on a set that has plenty to do and has simply not
+	// finished discovering it yet. Both reset when the cycle enters a new
+	// set, because they describe the set named by BackupSetID.
+	//
+	// The numerator counts only rows the pass is actually driving
+	// forward, which is the same set of rows the denominator counted. A
+	// set holding a thousand finished backups walks a thousand rows every
+	// cycle and works on none of them; counting those would put a bar at
+	// 99% permanently.
+	SetArtifactsPlanned   *int
+	SetArtifactsCompleted int
+
 	// BytesTransferred, BytesTotal and BytesPerSecond describe the ONE
 	// artifact named by Artifact, never the cycle. They are set only
 	// while a copy is in flight and reporting.
@@ -205,7 +231,43 @@ func (c *cycleProgress) enterSet(setID string) {
 	defer c.mu.Unlock()
 	c.cur.BackupSetID = setID
 	c.cur.Stage = StageDiscovering
+	// The per-set counters describe the set named on the reading, so
+	// entering a new one clears them rather than carrying the previous
+	// set's numbers into a pass that has not started.
+	c.cur.SetArtifactsPlanned = nil
+	c.cur.SetArtifactsCompleted = 0
 	c.clearArtifactLocked()
+	c.publishLocked()
+}
+
+// planSetArtifacts records how many of this set's journal rows the pass is
+// about to drive forward. It is called once per set, after discovery, by
+// the walk itself: nothing earlier can know the number, and nothing later
+// could put a denominator under the readings the walk is already
+// publishing.
+func (c *cycleProgress) planSetArtifacts(n int) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	planned := n
+	c.cur.SetArtifactsPlanned = &planned
+	c.publishLocked()
+}
+
+// finishPlannedArtifact records that one of the rows planSetArtifacts
+// counted has finished. It is deliberately separate from finishArtifact:
+// that one counts every row the cycle walked, and this one counts only the
+// rows the set's own denominator was built from, so the two halves of a
+// per-set bar are always counting the same population.
+func (c *cycleProgress) finishPlannedArtifact() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cur.SetArtifactsCompleted++
 	c.publishLocked()
 }
 

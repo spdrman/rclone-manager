@@ -59,6 +59,9 @@ import type {
   WireFirstRunStatusResponse,
   WireHealthResponse,
   WireListActivityResponse,
+  WireLiveActivityResponse,
+  WireLiveActivitySet,
+  WireLiveActivityEvent,
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
   WireListOperationsResponse,
@@ -118,6 +121,7 @@ import type {
   TransferProgress,
   VersionInfo
 } from "@shared/types/operation";
+import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 const BASE = "/api/v1";
 
@@ -1069,6 +1073,62 @@ function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
 }
 
 /**
+ * Maps the live activity feed off the wire (issue #573).
+ *
+ * Two shapes change here and both are deliberate. The wire's optional
+ * fields become explicit nulls, because "absent" is a fact this feed
+ * carries on purpose: a missing artifacts_total means a pass has not
+ * counted its rows yet, and rendering it as zero would draw a bar as a
+ * finished cycle. And the wire's ordered array of key/value pairs becomes
+ * a record, because every reader here looks a field up by name;
+ * JavaScript keeps insertion order for string keys, so the renderer that
+ * prints an unknown event's fields still prints them in the order they
+ * were logged.
+ */
+function fromWireLiveActivityEvent(e: WireLiveActivityEvent): SetActivityEvent {
+  const fields: Record<string, string> = {};
+  for (const f of e.fields) fields[f.key] = f.value;
+  return {
+    sequence: e.sequence,
+    at: e.at,
+    level: e.level,
+    event: e.event,
+    scope: e.scope,
+    message: e.message,
+    fields
+  };
+}
+
+function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
+  return {
+    setId: s.backup_set_id,
+    active: s.active,
+    stage: s.stage ?? null,
+    artifact: s.artifact ?? null,
+    artifactsCompleted: s.artifacts_completed,
+    artifactsTotal: s.artifacts_total ?? null,
+    progressBasis: s.progress_basis,
+    bytesTransferred: s.bytes_transferred ?? null,
+    bytesTotal: s.bytes_total ?? null,
+    bytesPerSecond: s.bytes_per_second ?? null,
+    failures: s.failures,
+    startedAt: s.started_at ?? null,
+    finishedAt: s.finished_at ?? null,
+    events: s.events.map(fromWireLiveActivityEvent),
+    oldestSequence: s.oldest_sequence,
+    latestSequence: s.latest_sequence
+  };
+}
+
+function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
+  return {
+    observedAt: r.observed_at,
+    pollAfterMs: r.poll_after_ms,
+    sets: r.sets.map(fromWireLiveActivitySet)
+  };
+}
+
+/**
  * Maps one operation off the wire onto the UI's model.
  *
  * The durable record and the live reading are two different things and
@@ -1500,6 +1560,19 @@ export const httpApi: BackupManagerApi = {
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
   listActivity: () =>
     request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
+  // Every parameter is optional and each one is appended with its own
+  // trailing separator after a "?" that is always present. That is not
+  // fussiness: it means every branch of this expression builds a path
+  // whose query begins in the same place, so the path is the same string
+  // no matter which parameters were passed, and a bare trailing "?" or
+  // "&" is inert to every server and every proxy.
+  getLiveActivity: (options) =>
+    request<WireLiveActivityResponse>(
+      "/activity/live?" +
+        (options?.setId ? "backup_set=" + encodeURIComponent(options.setId) + "&" : "") +
+        (options?.since ? "since=" + options.since + "&" : "") +
+        (options?.limit ? "limit=" + options.limit : "")
+    ).then(fromWireLiveActivity),
   listQuarantine: () =>
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: async (id) => post(quarantinedArtifactPath(id) + "/revalidate"),
