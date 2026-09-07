@@ -92,11 +92,11 @@ jobs:
       - name: Test
         working-directory: core
         # -race, the same as scripts/ci-local.sh's own step for this
-        # module (#417). This workflow is workflow_dispatch-only and that
-        # script is the gate that actually runs, but the script's whole
-        # claim is that it mirrors this file job for job, and a mirror
-        # that runs a weaker check than the thing it mirrors is worse
-        # than no mirror.
+        # module (#417). That script is the gate that runs on everything
+        # bound for main, and this workflow only runs on a release-bound
+        # pull request, but the script's whole claim is that it mirrors
+        # this file job for job, and a mirror that runs a weaker check
+        # than the thing it mirrors is worse than no mirror.
         run: go test -race ./...
 
   apps-common-build-vet-test:

@@ -2,8 +2,8 @@
 # The replacement e2e signal (issues #158 and #197).
 #
 # Until this existed, the browser suite had no automated execution at all:
-# nightly-e2e.yml's schedule was commented out, GitHub Actions is
-# workflow_dispatch-only here, and scripts/ci-local.sh never invoked
+# nightly-e2e.yml's schedule was commented out, no workflow here triggered
+# on anything, and scripts/ci-local.sh never invoked
 # Playwright. So the suite ran when somebody remembered to run it, which is
 # how a deterministically red spec sat on main through four merges and got
 # dismissed twice as an ordering flake (#172, then #197).
