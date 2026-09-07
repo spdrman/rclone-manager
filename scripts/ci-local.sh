@@ -308,6 +308,28 @@ bash scripts/tests/e2e-help.test.sh
 gate_step "the two-machine proof's verdict is still its own number (#551)"
 bash scripts/tests/two-machine-exit-status.test.sh
 
+# The same verdict, one layer out (#575). A pull request into `release`
+# now runs .github/workflows/ci.yml, and that workflow calls the proof
+# through scripts/e2e/two-machine-ci.sh, because the proof has three
+# outcomes and a workflow step has two. A runner that cannot start
+# docker-in-docker has to come out red under the word INCOMPLETE, not
+# green under no word at all: green there is a signed image on a public
+# registry standing on a proof nobody performed.
+#
+# Same cost and same reasoning as the step above: stand-in proofs, no
+# containers, about a second.
+gate_step "a proof CI could not perform still reads as incomplete, not as a pass (#575)"
+bash scripts/tests/two-machine-ci-verdict.test.sh
+
+# The gate on `release` is one check with a hand-written list of jobs
+# behind it, because Actions cannot say "every job in this workflow". An
+# enumeration in that position goes stale the first time somebody adds a
+# job without thinking about this one, and it goes stale in the dangerous
+# direction: the new job runs, goes red, and the required check is green
+# because nobody asked it. This reads the workflow and refuses that.
+gate_step "the release gate still covers every job in ci.yml (#575)"
+bash scripts/tests/release-gate-covers-every-job.test.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 
