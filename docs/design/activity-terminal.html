@@ -65,6 +65,33 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
 .term .cur{display:inline-block;width:7px;height:12px;background:#d7d9d2;vertical-align:-2px;
   animation:blink 1.1s steps(2,start) infinite}
 @keyframes blink{50%{opacity:0}}
+
+/* terminal toolbar: collapse, scrollback size, export */
+.termbar{display:flex;align-items:center;gap:var(--space-2);
+  padding:var(--space-2) var(--space-5);border-top:1px solid var(--border);
+  background:var(--surface-2);font-size:11.5px;color:var(--text-2)}
+.termbar .grow{flex:1}
+.chev{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:2px 4px;
+  font:inherit;font-size:11.5px;color:var(--text-2);cursor:pointer;border-radius:var(--radius-sm)}
+.chev:hover{background:var(--surface-3);color:var(--text)}
+.chev svg{transition:transform .15s ease}
+.chev--closed svg{transform:rotate(-90deg)}
+.lines{font-family:var(--font-mono);color:var(--text-3);font-size:11px}
+.tbtn{height:24px;padding:0 9px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--text-2);font:inherit;font-size:11.5px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px}
+.tbtn:hover{background:var(--surface-3);color:var(--text)}
+.tbtn svg{opacity:.75}
+.copied{color:var(--ok);font-weight:600}
+
+/* scrollable log with a visible track so the affordance is not a surprise */
+.term{max-height:132px;overflow-y:scroll;scrollbar-width:thin;
+  scrollbar-color:#3a3d36 #14150f}
+.term::-webkit-scrollbar{width:9px}
+.term::-webkit-scrollbar-track{background:#14150f}
+.term::-webkit-scrollbar-thumb{background:#3a3d36;border-radius:var(--radius-pill);
+  border:2px solid #14150f}
+.term--collapsed{display:none}
 </style>
 <div class="wrap">
   <div>
@@ -86,7 +113,15 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     </div>
     <div class="step"><span class="spinner"></span>
       Transferring <strong>dpkg.status.2.gz</strong> · 26 of 41 · 4.1 MB/s · about 40s left</div>
+    <div class="termbar">
+      <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Hide log</button>
+      <span class="lines">1,284 lines</span>
+      <span class="grow"></span>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.3" stroke="currentColor" stroke-width="1.2"/><path d="M8.5 3V2.3A1.3 1.3 0 007.2 1H3.3A1.3 1.3 0 002 2.3v3.9A1.3 1.3 0 003.3 7.5H4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Copy</button>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1.5v6m0 0L3.8 5.3M6 7.5l2.2-2.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.8 8.6v.6A1.3 1.3 0 003.1 10.5h5.8a1.3 1.3 0 001.3-1.3v-.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Save .txt</button>
+    </div>
     <div class="term">
+      <div><span class="t">00:16:29</span> <span class="i">connected to sftp://…:1209 (host key matched known_hosts)</span></div>
       <div><span class="t">00:16:31</span> <span class="i">discovery complete: 41 artifacts, 26 pending</span></div>
       <div><span class="t">00:16:33</span> <span class="i">transfer started: alternatives.tar.0</span></div>
       <div><span class="t">00:16:35</span> <span class="g">verified alternatives.tar.0 (md5 matched source)</span></div>
@@ -106,6 +141,13 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <span class="pct">93%</span>
     </div>
     <div class="step">Stopped after 26 of 28 · 2 artifacts failed and no retry is scheduled</div>
+    <div class="termbar">
+      <button class="chev"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Hide log</button>
+      <span class="lines">412 lines</span>
+      <span class="grow"></span><span class="copied">copied</span>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.3" stroke="currentColor" stroke-width="1.2"/><path d="M8.5 3V2.3A1.3 1.3 0 007.2 1H3.3A1.3 1.3 0 002 2.3v3.9A1.3 1.3 0 003.3 7.5H4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Copy</button>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1.5v6m0 0L3.8 5.3M6 7.5l2.2-2.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.8 8.6v.6A1.3 1.3 0 003.1 10.5h5.8a1.3 1.3 0 001.3-1.3v-.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Save .txt</button>
+    </div>
     <div class="term">
       <div><span class="t">00:16:37</span> <span class="e">integrity failure: dpkg.status.1.gz</span></div>
       <div><span class="t">00:16:37</span> <span class="e">  md5 differs: source a70969a2… destination d41d8cd9… (empty)</span></div>
@@ -126,7 +168,14 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <span class="pct">100%</span>
     </div>
     <div class="step">Idle · last cycle finished 12 minutes ago · newest known-good 12m old</div>
-    <div class="term">
+    <div class="termbar">
+      <button class="chev chev--closed"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Show log</button>
+      <span class="lines">96 lines</span>
+      <span class="grow"></span>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.3" stroke="currentColor" stroke-width="1.2"/><path d="M8.5 3V2.3A1.3 1.3 0 007.2 1H3.3A1.3 1.3 0 002 2.3v3.9A1.3 1.3 0 003.3 7.5H4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Copy</button>
+      <button class="tbtn"><svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1.5v6m0 0L3.8 5.3M6 7.5l2.2-2.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.8 8.6v.6A1.3 1.3 0 003.1 10.5h5.8a1.3 1.3 0 001.3-1.3v-.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Save .txt</button>
+    </div>
+    <div class="term term--collapsed">
       <div><span class="t">00:04:02</span> <span class="i">cycle started</span></div>
       <div><span class="t">00:04:44</span> <span class="g">18 artifacts verified, 0 failures</span></div>
       <div><span class="t">00:04:44</span> <span class="i">next cycle at 01:04 (poll_interval 1h)</span><span class="cur"></span></div>
