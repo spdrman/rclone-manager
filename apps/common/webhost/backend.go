@@ -318,6 +318,15 @@ type BackupServiceClient interface {
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
 
+	// LiveActivity backs GET /api/v1/activity/live (issue #573): what
+	// each backup set is doing right now, plus a bounded tail of the
+	// events behind it. Read-only (§50) and deliberately a different
+	// question from ListActivity above: that one reads a table and
+	// cannot know a transfer is at 4.1 MB/s, this one reads what the
+	// serving process is holding in memory and has forgotten last
+	// Tuesday.
+	LiveActivity(ctx context.Context, req service.LiveActivityRequest) (service.LiveActivity, error)
+
 	// ListOperations backs GET /api/v1/operations: the list counterpart
 	// of GetOperation, for a client that holds no operation id to poll
 	// with.

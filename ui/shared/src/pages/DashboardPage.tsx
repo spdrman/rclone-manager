@@ -31,6 +31,7 @@ import { MetricCard } from "@shared/components/MetricCard";
 import { StorageGauge } from "@shared/components/StorageGauge";
 import { OperationProgress } from "@shared/components/OperationProgress";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
+import { DashboardActivity } from "@shared/pages/DashboardActivity";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { HaltBanner } from "@shared/components/HaltBanner";
@@ -42,16 +43,24 @@ import { backupSetPath } from "@shared/utilities/routes";
 /**
  * The one evidence-navigating action each halt reason actually has on the
  * backup set's own detail page (issue #285's second defect). Host-key-
- * changed has a fingerprint panel there ("Connection", FingerprintDisplay)
- * to send an operator to; authentication-failed has no equivalent
- * evidence section, so it carries no entry here rather than borrowing the
- * fingerprint one. HaltBanner's own doc is the rule this map exists to
- * satisfy: actions are for navigating to the evidence, never a stand-in
- * for it, and a reason with no matching entry gets no action at all
- * rather than the wrong one.
+ * changed has the "Connection" section there to send an operator to;
+ * authentication-failed has no equivalent evidence section, so it carries
+ * no entry here rather than borrowing that one. HaltBanner's own doc is
+ * the rule this map exists to satisfy: actions are for navigating to the
+ * evidence, never a stand-in for it, and a reason with no matching entry
+ * gets no action at all rather than the wrong one.
+ *
+ * The label used to read "Review fingerprint", and the destination used to
+ * be a fingerprint panel. It said "Algorithm: ssh-ed25519" from a literal
+ * in the JSX beside an empty fingerprint, because nothing on the wire
+ * carries a host key for a configured set, so an operator sent here by the
+ * most dangerous state in the app was invited to compare their server's
+ * key against a value nobody had chosen. The panel is gone and so is the
+ * word: the section now says where a host key is actually decided, which
+ * is a smaller answer and a true one.
  */
 const HALT_ACTION_LABEL: Partial<Record<NonNullable<BackupSet["haltReason"]>, string>> = {
-  "host-key-changed": "Review fingerprint"
+  "host-key-changed": "Review connection"
 };
 
 export function DashboardPage({
@@ -289,6 +298,12 @@ export function DashboardPage({
               : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
         </div>
       </section>
+
+      {/* Issue #573. One strip per backup set, always present, so the place
+          an operator looks when something is wrong is the same place that
+          was there when it was fine. It sits between what is running and
+          what has happened because that is what it is: the middle. */}
+      <DashboardActivity sets={sets.data} />
 
       <section className="card" aria-label="Recent activity">
         <div className="card__header">

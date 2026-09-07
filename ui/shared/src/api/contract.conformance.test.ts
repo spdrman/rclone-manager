@@ -224,6 +224,10 @@ describe("every request the shared client makes is a declared operation", () => 
       ["getArtifact", () => httpApi.getArtifact("src/set-1/a.tar.gz")],
       ["listOperations", () => httpApi.listOperations()],
       ["listActivity", () => httpApi.listActivity()],
+      // Driven with no options, which is the shape the dashboard actually
+      // sends on its first look: every set, from wherever the service's
+      // buffer still starts.
+      ["getLiveActivity", () => httpApi.getLiveActivity()],
       ["listQuarantine", () => httpApi.listQuarantine()],
       ["revalidate", () => httpApi.revalidate("src/set-1/a.tar.gz")],
       ["retryIngestion", () => httpApi.retryIngestion("src/set-1/a.tar.gz")],

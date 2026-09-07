@@ -25,6 +25,7 @@
  * this set at different data.
  */
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { fetchResource, useResource } from "@shared/state/resource";
@@ -39,7 +40,6 @@ import {
 import type { SetEditSnapshot } from "@shared/state/backupSetDetailNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
-import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
@@ -632,12 +632,34 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           ) : null}
 
           <Section title="Connection">
-            <FingerprintDisplay
-              host={s.host}
-              algorithm="ssh-ed25519"
-              fingerprint={s.hostFingerprint}
-              trustedAt={s.fingerprintTrustedAt}
-            />
+            {/* This used to render a fingerprint panel, and every value in
+                it but the host was invented. The algorithm was the literal
+                "ssh-ed25519" written here in the JSX, and the fingerprint
+                was BackupSet.hostFingerprint, which is a literal empty
+                string in fromWireBackupSet: no field on BackupSet or
+                BackupSetHealth carries a host key or its algorithm, so
+                nothing chose either. On a deployment whose trust anchor is
+                an RSA key, this page named a key type the operator had
+                never trusted, beside no fingerprint to check it against,
+                and the halt banner for a CHANGED host key sent them here
+                to do exactly that comparison.
+
+                An empty fingerprint understates trust and is survivable; a
+                confidently wrong algorithm does not understate anything,
+                it states something specific that is not true. So the panel
+                is gone rather than emptied, and what is left is the host,
+                which is real, and where the key is actually decided. */}
+            <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "172px 1fr", gap: "11px 16px", fontSize: 13 }}>
+              <Row label="Host" value={s.host + ":" + s.port} mono />
+              <Row label="User" value={s.username} mono />
+            </dl>
+            <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+              The trusted host key is not reported on this page: the backup service does
+              not send it for a configured set, and naming one this page had not read
+              would be a trust anchor nobody chose. A host key is examined and trusted in
+              the wizard&rsquo;s verify step, and a change to it halts the set rather than
+              being carried on through.
+            </p>
             <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
               The private key never leaves this NAS and is never displayed.
             </p>
@@ -645,17 +667,18 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
 
           <Section title="Backup discovery">
             <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "172px 1fr", gap: "11px 16px", fontSize: 13 }}>
-              <dt style={{ color: "var(--text-2)" }}>Remote folder</dt>
-              <dd className="mono" style={{ margin: 0 }}>{s.remoteFolder}</dd>
-              <dt style={{ color: "var(--text-2)" }}>Include</dt>
-              <dd className="mono" style={{ margin: 0 }}>{s.includePatterns.join(", ") || "\u2014"}</dd>
-              <dt style={{ color: "var(--text-2)" }}>Exclude</dt>
-              <dd className="mono" style={{ margin: 0 }}>{s.excludePatterns.join(", ") || "\u2014"}</dd>
-              <dt style={{ color: "var(--text-2)" }}>Completion method</dt>
-              <dd style={{ margin: 0 }}>
-                {methodLabel}
-                <span style={{ color: "var(--text-3)" }}>{" \u2014 " + methodDetail}</span>
-              </dd>
+              <Row label="Remote folder" value={s.remoteFolder} mono />
+              <Row label="Include" value={s.includePatterns.join(", ") || "\u2014"} mono />
+              <Row label="Exclude" value={s.excludePatterns.join(", ") || "\u2014"} mono />
+              <Row
+                label="Completion method"
+                value={
+                  <>
+                    {methodLabel}
+                    <span style={{ color: "var(--text-3)" }}>{" \u2014 " + methodDetail}</span>
+                  </>
+                }
+              />
             </dl>
             {s.completionMethod === "stable-size" ? (
               <div style={{ marginTop: 12 }}>
@@ -927,12 +950,44 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/**
+ * The two label-and-value patterns this page states its facts in.
+ *
+ * Cell is a boxed summary tile; Row is a two-column grid whose dt and dd
+ * are direct grid children, so it returns a fragment and must not wrap
+ * them in anything.
+ *
+ * Neither gives its dt or its dd an accessible name, and that is a known
+ * gap rather than an oversight. `<dt>` is role `term` and `<dd>` is role
+ * `definition`, and both take their name from the author rather than from
+ * their content, so every row here is unreachable by anything navigating
+ * by role and every value is announced with nothing attached to it. The
+ * fix is one line in each of these two functions (an id on the dt, an
+ * aria-labelledby on the dd) and it was written, measured and taken back
+ * out: four of this page's read-only labels are also the labels of its
+ * inline EDIT fields (Host, User, Remote folder, Completion method), so
+ * naming the values puts two elements with the same accessible name on
+ * the page whenever edit mode is open. That is ambiguous for anything
+ * looking a control up by its label, and deciding whether a read-only
+ * value and an editable field may share a name is a decision about
+ * backupSetEditFields.ts rather than about this file. See the pull
+ * request that recorded it.
+ */
 function Cell({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
       <dt className="eyebrow" style={{ fontSize: 10.5, letterSpacing: "0.06em" }}>{label}</dt>
       <dd style={{ margin: "4px 0 0", fontFamily: mono ? "var(--font-mono)" : undefined }}>{value}</dd>
     </div>
+  );
+}
+
+function Row({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <>
+      <dt style={{ color: "var(--text-2)" }}>{label}</dt>
+      <dd className={mono ? "mono" : undefined} style={{ margin: 0 }}>{value}</dd>
+    </>
   );
 }
 

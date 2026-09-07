@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
-import { bytes } from "@shared/utilities/format";
 import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 import type { BackupSet } from "@shared/types/backup";
 
@@ -129,7 +128,23 @@ export function RemoveBackupSetDialog({
         {"Backup Manager will stop collecting backups for " + set.name + "."}
       </p>
       <p style={{ margin: 0, color: "var(--text-2)" }}>
-        {set.retainedCount + " retained backups (" + bytes(set.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
+        {/* Deliberately unquantified. This used to lead with
+            set.retainedCount and bytes(set.retainedBytes), and neither is
+            a number this frontend has: both are literals in
+            fromWireBackupSet (client.ts), zero on every set in every real
+            deployment, because nothing in core/service computes a per-set
+            retained aggregate and neither BackupSet nor BackupSetHealth
+            carries one. So an operator removing a set holding forty-one
+            backups read "0 retained backups (0 B) stay on NAS storage",
+            which is reassurance-shaped copy saying there is nothing here
+            to lose, in a destructive-adjacent dialog, at the moment
+            somebody decides whether to click.
+
+            Removing a false claim does not need the true number. The
+            promise below is the one service.RemoveBackupSet actually
+            keeps and it holds for any quantity, including none. When the
+            aggregate exists this sentence can carry it again. */}
+        {"Backups already taken for this set stay on NAS storage and remain listed under Backups."}
       </p>
       <p style={{ margin: 0, color: "var(--text-2)" }}>
         {"Creating a backup set with this source and name again takes those backups back, along with their retention history."}

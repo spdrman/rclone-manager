@@ -179,6 +179,7 @@ type syncFakeBackend struct {
 	// with, and what the handler asked it for.
 	artifacts     []service.Artifact
 	activity      []service.ActivityEvent
+	liveActivity  service.LiveActivity
 	operationList []service.Operation
 	health        service.HealthReport
 	catalog       service.CatalogReport
@@ -189,6 +190,7 @@ type syncFakeBackend struct {
 
 	errOnArtifacts       error
 	errOnActivity        error
+	errOnLiveActivity    error
 	errOnListOperations  error
 	errOnHealth          error
 	errOnCatalog         error
@@ -206,6 +208,7 @@ type syncFakeBackend struct {
 
 	lastArtifactFilter    service.ArtifactFilter
 	lastActivityLimit     int
+	lastLiveActivity      service.LiveActivityRequest
 	lastOperationsLimit   int
 	lastRevalidated       string
 	lastRetried           string
@@ -714,6 +717,33 @@ func (f *syncFakeBackend) ListActivity(_ context.Context, limit int) ([]service.
 	return f.activity, nil
 }
 
+// The live activity feed's half of this double: what to serve, what went
+// wrong if anything, and what the handler actually asked for. The last of
+// those is the point of a recording double rather than a stub: a filter or
+// a cursor a handler quietly dropped would otherwise look exactly like one
+// it passed through.
+func (f *syncFakeBackend) LiveActivity(_ context.Context, req service.LiveActivityRequest) (service.LiveActivity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastLiveActivity = req
+	if f.errOnLiveActivity != nil {
+		return service.LiveActivity{}, f.errOnLiveActivity
+	}
+	return f.liveActivity, nil
+}
+
+func (f *syncFakeBackend) setLiveActivity(live service.LiveActivity) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.liveActivity = live
+}
+
+func (f *syncFakeBackend) lastLiveActivityRequest() service.LiveActivityRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastLiveActivity
+}
+
 func (f *syncFakeBackend) ListOperations(_ context.Context, limit int) ([]service.Operation, error) {
 	if f.errOnListOperations != nil {
 		return nil, f.errOnListOperations
@@ -972,6 +1002,10 @@ func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (s
 
 func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.ActivityEvent, error) {
 	return nil, nil
+}
+
+func (f *asyncFakeBackend) LiveActivity(context.Context, service.LiveActivityRequest) (service.LiveActivity, error) {
+	return service.LiveActivity{}, nil
 }
 
 func (f *asyncFakeBackend) ListOperations(context.Context, int) ([]service.Operation, error) {

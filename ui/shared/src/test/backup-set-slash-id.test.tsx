@@ -119,7 +119,7 @@ describe("a backup set whose id contains a slash is reachable (issue #285)", () 
     renderApp(apiWithSets([slashIdSet({ haltReason: "host-key-changed", state: "failing" })]));
     await shellIsUp();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Review fingerprint" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Review connection" }));
 
     expect(await screen.findByRole("heading", { name: /API server/ })).toBeInTheDocument();
   });

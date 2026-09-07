@@ -59,6 +59,9 @@ import type {
   WireFirstRunStatusResponse,
   WireHealthResponse,
   WireListActivityResponse,
+  WireLiveActivityResponse,
+  WireLiveActivitySet,
+  WireLiveActivityEvent,
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
   WireListOperationsResponse,
@@ -118,6 +121,7 @@ import type {
   TransferProgress,
   VersionInfo
 } from "@shared/types/operation";
+import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 const BASE = "/api/v1";
 
@@ -371,19 +375,30 @@ const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
  * the health report, and taking it is its own change with its own naming
  * question rather than a side effect of the field appearing.
  *
- * The join stops at the verdict on purpose. Validations, counters and
- * the host fingerprint below stay placeholders because nothing anywhere
- * in core/service computes them yet. Retention used to be on that list
- * and is not any more: `retention_is_override` is computed, so it is
- * read rather than invented (issue #333). The health report
- * does carry two more facts this type has fields for, and neither is
- * taken here: `newest_good_backup_at` would map cleanly onto
- * `newestKnownGoodAt`, and `stale_after_seconds` onto
- * `expectedIntervalHours`, but `last_completed_backup_at` is NOT
- * `lastRunAt` (a cycle that ran and found nothing is a run with no
- * completed backup), so taking two of the three would leave a card
- * showing two real dates beside one invented null. That is its own
- * change, with its own naming question, and issue #245 is the refusal.
+ * The join stops just past the verdict, and where it stops moved once.
+ * `newest_good_backup_at` IS taken now, onto `newestKnownGoodAt`. It used
+ * to be left out on the argument that taking it would leave two real
+ * dates beside one invented null, which was a tidiness argument and was
+ * fine until a live browser spec watched a set that had just committed
+ * three artifacts render a Healthy badge with "Newest known-good: never"
+ * under it. That is one card giving two contradictory answers about one
+ * set, and "never" is the single worst thing this product can say wrongly,
+ * because it says a backup set has no restore point at all. The field is
+ * computed end to end (internal/health aggregates it, core/service
+ * carries it, handlers_health serialises it) and this join was already
+ * fetching it, so the card was contradicting data the client had in hand.
+ *
+ * Nothing else moved with it, and the reasons differ per field.
+ * `last_completed_backup_at` is NOT `lastRunAt` (a cycle that ran and
+ * found nothing is a run with no completed backup), so it is a naming
+ * question rather than a mapping. `stale_after_seconds` onto
+ * `expectedIntervalHours` is the join issue #245 refused, unchanged.
+ * Validations, the retained counters and the host fingerprint stay
+ * placeholders because nothing anywhere in core/service computes them
+ * yet, so there is no field to take: those are a contract change, not a
+ * mapper change. Retention used to be on that list and is not any more:
+ * `retention_is_override` is computed, so it is read rather than invented
+ * (issue #333).
  */
 function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): BackupSet {
   const haltReason = health ? HALT_REASON[health.halt_reason ?? ""] : undefined;
@@ -434,7 +449,10 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
     // undefined still reads as the mapper having an opinion; this way a
     // set with no refusal on record simply does not carry the field.
     ...(haltReason ? { haltReason } : {}),
-    newestKnownGoodAt: null,
+    // Read, not defaulted. Absent means the report genuinely carries no
+    // known-good backup for this set, which is the one case where the
+    // card's "never" is the truth.
+    newestKnownGoodAt: health?.newest_good_backup_at ?? null,
     lastRunAt: null,
     lastValidation: "not-run",
     expectedIntervalHours: 0,
@@ -1069,6 +1087,66 @@ function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
 }
 
 /**
+ * Maps the live activity feed off the wire (issue #573).
+ *
+ * Two shapes change here and both are deliberate. The wire's optional
+ * fields become explicit nulls, because "absent" is a fact this feed
+ * carries on purpose: a missing artifacts_total means a pass has not
+ * counted its rows yet, and rendering it as zero would draw a bar as a
+ * finished cycle. And the wire's ordered array of key/value pairs becomes
+ * a record, because every reader here looks a field up by name;
+ * JavaScript keeps insertion order for string keys, so the renderer that
+ * prints an unknown event's fields still prints them in the order they
+ * were logged.
+ */
+function fromWireLiveActivityEvent(e: WireLiveActivityEvent): SetActivityEvent {
+  const fields: Record<string, string> = {};
+  for (const f of e.fields) fields[f.key] = f.value;
+  return {
+    sequence: e.sequence,
+    at: e.at,
+    level: e.level,
+    event: e.event,
+    scope: e.scope,
+    message: e.message,
+    fields
+  };
+}
+
+function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
+  return {
+    setId: s.backup_set_id,
+    active: s.active,
+    stage: s.stage ?? null,
+    artifact: s.artifact ?? null,
+    artifactsCompleted: s.artifacts_completed,
+    artifactsTotal: s.artifacts_total ?? null,
+    progressBasis: s.progress_basis,
+    bytesTransferred: s.bytes_transferred ?? null,
+    bytesTotal: s.bytes_total ?? null,
+    bytesPerSecond: s.bytes_per_second ?? null,
+    failures: s.failures,
+    outcome: s.outcome ?? null,
+    startedAt: s.started_at ?? null,
+    finishedAt: s.finished_at ?? null,
+    events: s.events.map(fromWireLiveActivityEvent),
+    truncated: s.truncated,
+    dropped: s.dropped,
+    oldestSequence: s.oldest_sequence,
+    latestSequence: s.latest_sequence
+  };
+}
+
+function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
+  return {
+    observedAt: r.observed_at,
+    epoch: r.epoch,
+    pollAfterMs: r.poll_after_ms,
+    sets: r.sets.map(fromWireLiveActivitySet)
+  };
+}
+
+/**
  * Maps one operation off the wire onto the UI's model.
  *
  * The durable record and the live reading are two different things and
@@ -1500,6 +1578,19 @@ export const httpApi: BackupManagerApi = {
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
   listActivity: () =>
     request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
+  // Every parameter is optional and each one is appended with its own
+  // trailing separator after a "?" that is always present. That is not
+  // fussiness: it means every branch of this expression builds a path
+  // whose query begins in the same place, so the path is the same string
+  // no matter which parameters were passed, and a bare trailing "?" or
+  // "&" is inert to every server and every proxy.
+  getLiveActivity: (options) =>
+    request<WireLiveActivityResponse>(
+      "/activity/live?" +
+        (options?.setId ? "backup_set=" + encodeURIComponent(options.setId) + "&" : "") +
+        (options?.since ? "since=" + options.since + "&" : "") +
+        (options?.limit ? "limit=" + options.limit : "")
+    ).then(fromWireLiveActivity),
   listQuarantine: () =>
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: async (id) => post(quarantinedArtifactPath(id) + "/revalidate"),

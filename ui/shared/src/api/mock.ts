@@ -26,6 +26,7 @@ import type {
   SystemHealth,
   VersionInfo
 } from "@shared/types/operation";
+import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 /** Development fixtures. Covers every scenario the brief requires (§42):
  *  healthy / stale / failing sets, active transfer, quarantine, retention
@@ -442,6 +443,111 @@ const OPERATIONS: Operation[] = [
       // and none arrived.
       moves: { attempted: 3, landed: 0 }
     }
+  }
+];
+
+// The live feed, in the three states the strip has to be told apart at a
+// glance (issue #573): one set mid-transfer, one that stopped with
+// failures, and two sitting idle. The failing set's lines are the real
+// pair from #570, because a fixture that only ever shows tidy successes
+// is a fixture nobody designs the error state against.
+function liveEvent(
+  sequence: number,
+  event: string,
+  fields: Record<string, string>,
+  level: "info" | "warn" | "error" = "info",
+  scope: "set" | "deployment" = "set",
+  message = ""
+): SetActivityEvent {
+  return { sequence, at: "2026-08-29T02:01:1" + (sequence % 10) + "+02:00", level, event, scope, message, fields };
+}
+
+const IDLE_ACTIVITY = {
+  active: false,
+  stage: null,
+  artifact: null,
+  artifactsCompleted: 0,
+  artifactsTotal: null,
+  progressBasis: "unknown",
+  bytesTransferred: null,
+  bytesTotal: null,
+  bytesPerSecond: null,
+  failures: 0,
+  outcome: null,
+  startedAt: null,
+  finishedAt: null,
+  events: [],
+  truncated: false,
+  dropped: false,
+  oldestSequence: 0,
+  latestSequence: 0
+} satisfies Omit<SetActivity, "setId">;
+
+const LIVE_ACTIVITY: SetActivity[] = [
+  {
+    ...IDLE_ACTIVITY,
+    setId: "production/postgres-primary",
+    active: true,
+    stage: "transferring",
+    artifact: "postgres-2026-08-29.dump.zst",
+    artifactsCompleted: 26,
+    artifactsTotal: 41,
+    progressBasis: "artifacts",
+    bytesTransferred: 6.1 * 1024 ** 3,
+    bytesTotal: 14.2 * 1024 ** 3,
+    bytesPerSecond: 118 * 1024 ** 2,
+    startedAt: "2026-08-29T02:00:11+02:00",
+    events: [
+      liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting"),
+      liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete"),
+      liveEvent(3, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", from: "VERIFYING", to: "VERIFIED" }, "info", "set", "lifecycle transition"),
+      liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete"),
+      liveEvent(5, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-29.dump.zst", from: "DISCOVERED", to: "TRANSFERRING" }, "info", "set", "lifecycle transition")
+    ],
+    oldestSequence: 1,
+    latestSequence: 5
+  },
+  {
+    ...IDLE_ACTIVITY,
+    setId: "production/auth-config",
+    artifactsCompleted: 26,
+    artifactsTotal: 28,
+    progressBasis: "artifacts",
+    failures: 2,
+    outcome: "failed",
+    startedAt: "2026-08-29T00:16:00+02:00",
+    finishedAt: "2026-08-29T00:16:55+02:00",
+    events: [
+      liveEvent(6, "lifecycle_transition", { artifact: "production/auth-config/dpkg.status.1.gz", from: "VERIFYING", to: "FAILED", detail: "md5 differs: source a70969a2 destination d41d8cd9 (empty)" }, "info", "set", "lifecycle transition"),
+      liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error"),
+      liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error")
+    ],
+    oldestSequence: 6,
+    latestSequence: 8
+  },
+  {
+    ...IDLE_ACTIVITY,
+    setId: "production/billing-mysql",
+    outcome: "ok",
+    artifactsCompleted: 18,
+    artifactsTotal: 18,
+    progressBasis: "artifacts",
+    finishedAt: "2026-08-29T01:04:44+02:00",
+    events: [liveEvent(9, "cycle_end", { cycle_id: "c_0" }, "info", "deployment", "cycle finished")],
+    oldestSequence: 9,
+    latestSequence: 9
+  },
+  {
+    ...IDLE_ACTIVITY,
+    setId: "media/weekly-archive",
+    outcome: "ok",
+    artifactsCompleted: 51,
+    artifactsTotal: 51,
+    progressBasis: "artifacts",
+    finishedAt: "2026-08-29T01:35:40+02:00",
+    events: [liveEvent(10, "retention", { artifact: "media/weekly-archive/week-31.tar", backup_set: "media/weekly-archive", tier: "weekly", decision: "keep" }, "info", "set", "retention decision")],
+    oldestSequence: 10,
+    latestSequence: 10
   }
 ];
 
@@ -1269,6 +1375,19 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () => delay(empty ? [] : ACTIVITY),
+    getLiveActivity: (options) =>
+      delay({
+        observedAt: "2026-08-29T02:01:20+02:00",
+        // One process, one epoch. A mock that changed it between calls
+        // would have every surface built against it believe the service
+        // restarts on every poll.
+        epoch: "mock-process",
+        // The cadence the service would ask for while something is
+        // moving. A mock that answered with the idle one would let a
+        // surface be built against a poll that never keeps up.
+        pollAfterMs: 1000,
+        sets: (empty ? [] : LIVE_ACTIVITY).filter((a) => !options?.setId || a.setId === options.setId)
+      }),
     listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),

@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "e3c9f75dbd2d125484597bb40e48778ee2f9a61a0d615288d314f5e9d7b0b9fd"
+const ContractSHA256 = "fcb92ad83ba543e8f49e5a60bf0aa2bcfdf5b9c49a29a831c5d9ad6d09873268"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -236,6 +236,17 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getLiveActivity", Method: "GET", Path: "/activity/live",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "LiveActivityResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -1173,6 +1184,76 @@ type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
 }
 
+// LiveActivityEvent is one line of the live feed. It carries the engine's own event name,
+// the engine's own severity and the event's own fields, because what
+// a moment is worth calling is presentation and belongs to whichever
+// client is presenting: a severity invented on the way to the wire
+// would freeze one screen's display decision for every other client.
+// The level is not such a decision, it is what the emitter chose
+// when it decided a line was a warning rather than a note, so it is
+// carried through rather than re-derived.
+type LiveActivityEvent struct {
+	At       string              `json:"at"`
+	Event    string              `json:"event"`
+	Fields   []LiveActivityField `json:"fields"`
+	Level    string              `json:"level"`
+	Message  string              `json:"message"`
+	Scope    string              `json:"scope"`
+	Sequence int64               `json:"sequence"`
+}
+
+// LiveActivityField is one field of an event, rendered as a string and already redacted.
+// A pair rather than a map because the order the event logged its
+// fields in is the order that reads best, and because a client
+// rendering a line wants them in that order without sorting.
+type LiveActivityField struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// LiveActivityResponse is one reading of the live feed. It is a snapshot a client polls, not
+// a stream: this product runs on a NAS behind whatever reverse proxy
+// the operator already had, and behind the UI container's own proxy
+// in the two-container topology, so a held-open response is at the
+// mercy of every buffering and idle-timeout default in that path. A
+// plain GET works through all of them, needs no reconnection logic,
+// and is exactly as readable from a terminal as from a browser. The
+// cursor on the request is what keeps polling cheap.
+type LiveActivityResponse struct {
+	Epoch       string            `json:"epoch"`
+	ObservedAt  string            `json:"observed_at"`
+	PollAfterMs int               `json:"poll_after_ms"`
+	Sets        []LiveActivitySet `json:"sets"`
+}
+
+// LiveActivitySet is what one backup set is doing right now, and the tail of events
+// behind it. Every configured set appears whether or not anything
+// has happened to it: a panel that shows up only during activity
+// teaches an operator to hunt for it, and its absence then means
+// either nothing is running or nothing is reporting, with no way to
+// tell which.
+type LiveActivitySet struct {
+	Active             bool                `json:"active"`
+	Artifact           string              `json:"artifact,omitempty"`
+	ArtifactsCompleted int                 `json:"artifacts_completed"`
+	ArtifactsTotal     *int                `json:"artifacts_total,omitempty"`
+	BackupSetID        string              `json:"backup_set_id"`
+	BytesPerSecond     *int64              `json:"bytes_per_second,omitempty"`
+	BytesTotal         *int64              `json:"bytes_total,omitempty"`
+	BytesTransferred   *int64              `json:"bytes_transferred,omitempty"`
+	Dropped            bool                `json:"dropped"`
+	Events             []LiveActivityEvent `json:"events"`
+	Failures           int                 `json:"failures"`
+	FinishedAt         string              `json:"finished_at,omitempty"`
+	LatestSequence     int64               `json:"latest_sequence"`
+	OldestSequence     int64               `json:"oldest_sequence"`
+	Outcome            string              `json:"outcome,omitempty"`
+	ProgressBasis      string              `json:"progress_basis"`
+	Stage              string              `json:"stage,omitempty"`
+	StartedAt          string              `json:"started_at,omitempty"`
+	Truncated          bool                `json:"truncated"`
+}
+
 // ManagerStorage is the one manager-wide storage reading: what the backup root's
 // filesystem holds, what this manager itself accounts for, and which
 // of the two the gauge is a fraction of. Distinct from the
@@ -1734,6 +1815,10 @@ var SchemaTypes = map[string]any{
 	"ListOperationsResponse":      ListOperationsResponse{},
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
+	"LiveActivityEvent":           LiveActivityEvent{},
+	"LiveActivityField":           LiveActivityField{},
+	"LiveActivityResponse":        LiveActivityResponse{},
+	"LiveActivitySet":             LiveActivitySet{},
 	"ManagerStorage":              ManagerStorage{},
 	"MediumPreflightCheck":        MediumPreflightCheck{},
 	"MediumPreflightResponse":     MediumPreflightResponse{},

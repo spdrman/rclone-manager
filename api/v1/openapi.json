@@ -2878,6 +2878,239 @@
             "description": "An operator's own explanation for why this retry is worth making (\"replaced the failing credential\", \"the NAS came back\")."
           }
         }
+      },
+      "LiveActivityField": {
+        "type": "object",
+        "description": "One field of an event, rendered as a string and already redacted. A pair rather than a map because the order the event logged its fields in is the order that reads best, and because a client rendering a line wants them in that order without sorting.",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      },
+      "LiveActivityEvent": {
+        "type": "object",
+        "description": "One line of the live feed. It carries the engine's own event name, the engine's own severity and the event's own fields, because what a moment is worth calling is presentation and belongs to whichever client is presenting: a severity invented on the way to the wire would freeze one screen's display decision for every other client. The level is not such a decision, it is what the emitter chose when it decided a line was a warning rather than a note, so it is carried through rather than re-derived.",
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Strictly increasing across every event this process has emitted, so a client can order a set's own lines against the deployment-wide ones and resume from the last one it saw."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ],
+            "description": "The severity the engine emitted this event at, carried through unchanged."
+          },
+          "event": {
+            "type": "string",
+            "description": "The engine's own event name (discovery, lifecycle_transition, transfer_stats, retention, cycle_end and the rest). It is deliberately not an enum: the catalog grows, and a client that meets a name it has no special rendering for prints the message and the fields, which is a worse line rather than a broken one."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "deployment",
+              "set"
+            ],
+            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those reach every set's feed marked deployment, rather than being dropped (which would hide them) or pinned to one set (which would put them on the wrong screen)."
+          },
+          "message": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityField"
+            }
+          }
+        },
+        "required": [
+          "sequence",
+          "at",
+          "level",
+          "event",
+          "scope",
+          "message",
+          "fields"
+        ]
+      },
+      "LiveActivitySet": {
+        "type": "object",
+        "description": "What one backup set is doing right now, and the tail of events behind it. Every configured set appears whether or not anything has happened to it: a panel that shows up only during activity teaches an operator to hunt for it, and its absence then means either nothing is running or nothing is reporting, with no way to tell which.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether a cycle is inside this set in the serving process right now. It is a separate fact from the fraction below and both are needed: a large artifact holds the numbers still for a long time while everything is fine, so a fraction alone cannot tell slow from stuck. This is what a moving indicator is driven by."
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "discovering",
+              "transferring",
+              "verifying",
+              "committing",
+              "cleaning-remote"
+            ],
+            "x-go-omitempty": true,
+            "description": "The step the artifact below is at. Absent when nothing is in flight."
+          },
+          "artifact": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "The artifact the stage is about. Absent when nothing is in flight."
+          },
+          "artifacts_completed": {
+            "type": "integer",
+            "description": "How many artifacts this set's current or most recent pass has finished driving forward."
+          },
+          "artifacts_total": {
+            "type": "integer",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "How many artifacts that pass set out to drive forward. Absent until the pass has counted them, which is a different answer from zero: zero of zero draws as a finished cycle, and that is the reading an operator would act on wrongly."
+          },
+          "progress_basis": {
+            "type": "string",
+            "enum": [
+              "artifacts",
+              "unknown"
+            ],
+            "description": "What the fraction counts, said rather than left to be inferred. It counts artifacts: artifacts done over artifacts this pass will walk, which is a fraction of two numbers the engine actually holds. It jumps unevenly on a set mixing a 2GB dump with a 4KB text file, and that is honest; the smoother alternative is a byte total that does not exist until discovery has finished and that no remote reports reliably even then. unknown is the window before the pass has counted, and it is why artifacts_total is absent rather than zero."
+          },
+          "bytes_transferred": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_total": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "The three byte counters describe the ONE artifact named above, never the set, and are absent whenever no copy is in flight and reporting, which is a different fact from a measured zero. There is deliberately no time-remaining figure beside them: everything needed to work one out for the artifact in flight is here, and a figure the engine cannot check does not belong on a wire other clients then have to serve."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "How many of this set's artifacts ended this pass in a terminal failure state. It describes the pass, not the set's history, so it resets when a new pass begins: last night's two failures are not tonight's, and a strip carrying them forward would keep an operator looking at a problem already dealt with."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed",
+              "stopped"
+            ],
+            "x-go-omitempty": true,
+            "description": "How this set's last finished pass ENDED, which is a different fact from how many of its artifacts failed. A pass whose reconcile or discovery failed never reaches an artifact at all, so it leaves failures at zero and artifacts_total absent, and a strip reading only those two would draw it as a set that has nothing to do. stopped is a pass an operator stopped (an edit hold, a cancellation) and is deliberately not failed: in a product whose job is to be believed about backups, spelling an ordinary edit the same way as a source that has gone unreachable is a false alarm. Absent until a pass has ended here."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true,
+            "description": "When the pass this strip describes started and ended. Both absent until a pass has actually run here; finished_at is absent while one is running."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityEvent"
+            },
+            "description": "The tail, oldest first, filtered by whatever cursor the caller sent. Empty is an empty array, never an absent key."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether limit cut this reading short. The events above are the OLDEST held that are newer than the cursor, never the newest, because a cursor a client advances past a gap is a client that never sees the middle of a burst again. True means the rest is still held: ask again with the sequence this reading ends at."
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Whether lines this cursor had not reached yet fell out of the bounded buffer before this read did. True means the tail above is not continuous with what the caller already holds, and a client should say so rather than presenting a gap as continuity. The full record is the durable feed at GET /activity."
+          },
+          "oldest_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The bounds of what the server still holds for this set, NOT of the events array above. The buffer is bounded on purpose, so a client whose cursor has fallen below oldest_sequence knows it missed lines and can say so instead of presenting a gap as continuity. The full history is the durable record at GET /activity."
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "active",
+          "artifacts_completed",
+          "progress_basis",
+          "failures",
+          "events",
+          "truncated",
+          "dropped",
+          "oldest_sequence",
+          "latest_sequence"
+        ]
+      },
+      "LiveActivityResponse": {
+        "type": "object",
+        "description": "One reading of the live feed. It is a snapshot a client polls, not a stream: this product runs on a NAS behind whatever reverse proxy the operator already had, and behind the UI container's own proxy in the two-container topology, so a held-open response is at the mercy of every buffering and idle-timeout default in that path. A plain GET works through all of them, needs no reconnection logic, and is exactly as readable from a terminal as from a browser. The cursor on the request is what keeps polling cheap.",
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "epoch": {
+            "type": "string",
+            "description": "An opaque name for the process this reading came from. It changes on every start, and the sequence counter the cursor is built from starts again at zero with it, so a client that kept polling across a restart would otherwise ask for everything after a sequence the new process has not reached yet and be told, correctly and uselessly, that there is nothing new. Compare it with the one the last reading carried: a different value means drop the cursor and everything held behind it, because the cycle those lines described no longer exists."
+          },
+          "poll_after_ms": {
+            "type": "integer",
+            "description": "How long the server suggests waiting before asking again. The server decides because the server is the one that knows whether anything is moving: a client picking its own interval would either hammer a NAS holding a dozen idle sets or watch a transfer at a cadence that makes the bar jump."
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivitySet"
+            }
+          }
+        },
+        "required": [
+          "observed_at",
+          "epoch",
+          "poll_after_ms",
+          "sets"
+        ]
       }
     },
     "responses": {}
@@ -7265,6 +7498,120 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": null,
         "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/activity/live": {
+      "get": {
+        "operationId": "getLiveActivity",
+        "summary": "What every backup set is doing right now, with a bounded tail of the events behind it.",
+        "tags": [
+          "activity"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "backup_set",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Narrow the reading to one backup set, by its source/name id. Omitted means every configured set, which is what a dashboard drawing a strip per set wants: one request per tick rather than one per set, because a browser will not open more than a handful of concurrent connections to one origin. An id this deployment does not have is refused rather than answered with an empty feed, which would read like a quiet set."
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The highest sequence the caller has already seen. Only events after it come back, which is what makes polling this cheap, and they come back oldest first so this cursor is always safe to advance to the last one handed over. Omitted, unparseable or non-positive means whatever the server still holds. Compare the response's epoch before reusing a cursor: the sequence counter is per process and starts again at zero, so a cursor kept across a restart asks for what the new process has not reached yet."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does. It pages rather than truncates: the events returned are the OLDEST above the cursor and the response says whether it was cut short, so a caller that asks again from where the last one ended sees every line rather than skipping the middle of a burst."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveActivityResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
         "x-authenticated": true
       }
     }

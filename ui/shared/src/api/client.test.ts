@@ -1651,6 +1651,59 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     vi.restoreAllMocks();
   });
 
+  /**
+   * A live browser spec against a real deployment saw a set that had just
+   * committed three artifacts render a Healthy badge with "Newest
+   * known-good: never" directly underneath it. One card, two contradictory
+   * answers about the same set, seconds after a successful cycle.
+   *
+   * It is not a stale read and it shares no cause with a refetch problem.
+   * `newest_good_backup_at` is computed all the way through
+   * (internal/health aggregates it, core/service carries it,
+   * handlers_health serialises it), it is on the wire, this very join
+   * already fetches it, and the mapper threw it away. So the badge was
+   * reading real data and the field beside it was reading a literal null,
+   * which `relativeAge` renders as "never".
+   *
+   * "never" is not a placeholder on a screen, it is a statement, and it is
+   * the single worst statement this product can make wrongly: it says a
+   * backup set has no restore point. The mapper's own note used to argue
+   * that taking this field would leave two real dates beside one invented
+   * null and was therefore its own change; that argument was about tidiness
+   * and this one is about a card contradicting itself in front of an
+   * operator, so this field is taken and the rest still are not.
+   */
+  it("takes the newest known-good backup the health report carries, rather than rendering never beside a Healthy badge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/postgres", "postgres")],
+        [wireHealth("production/postgres", { newest_good_backup_at: "2026-08-30T09:40:00Z" })]
+      )
+    );
+
+    const sets = await httpApi.listSets();
+
+    expect(sets[0].state).toBe("healthy");
+    expect(sets[0].newestKnownGoodAt).toBe("2026-08-30T09:40:00Z");
+  });
+
+  it("still reports no known-good backup when the report genuinely carries none", async () => {
+    // The negative control, and it is the reason the field above is read
+    // rather than defaulted. A set that really has never produced a
+    // restore point must still say so: "never" is correct here and only
+    // here, and a mapper that invented a date to avoid the word would be
+    // the same defect pointing the other way.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([wireSet("production/postgres", "postgres")], [wireHealth("production/postgres")])
+    );
+
+    const sets = await httpApi.listSets();
+
+    expect(sets[0].newestKnownGoodAt).toBeNull();
+  });
+
   it("carries a refused connection through as haltReason, and leaves it absent on a set that is fine", async () => {
     vi.stubGlobal(
       "fetch",

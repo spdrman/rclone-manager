@@ -570,9 +570,17 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// rides on it because live progress is scoped to exactly this
 	// operation, and a field on the shared internal/app.Service would be
 	// one cycle's reading in a place a second cycle could overwrite.
+	// The live activity feed is bracketed the same way the edit-hold
+	// watch is, and for the same reason: readings stop arriving both when
+	// a cycle finishes and when it stalls, and a strip must not go on
+	// showing a transfer as moving because nothing told it the cycle
+	// ended (issue #573, liveactivity.go).
+	b.activity.beginCycle()
+	defer b.activity.endCycle()
+
 	report := runCycle(b.state.Load().inner,
 		app.WithBackupSetHolds(
-			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch}),
+			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch, b.activity}),
 			b.holds))
 
 	// SystemicFailure, not Err != nil: a set whose pass was stopped

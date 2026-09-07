@@ -427,6 +427,22 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 // today.
 func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) artifactWalk {
 	walk := artifactWalk{coveredPaths: map[string]bool{}}
+
+	// The per-set denominator (issue #573), counted before the walk
+	// starts and over the same rows the walk will count as it goes: a
+	// row this pass is actually driving forward. A set holding a thousand
+	// finished backups walks a thousand rows every cycle and works on
+	// none of them, so counting rows rather than acquiring rows would put
+	// a per-set progress bar at 99% permanently.
+	prog := progressFrom(ctx)
+	planned := 0
+	for _, rec := range records {
+		if acquiring(lifecycle.State(rec.State)) {
+			planned++
+		}
+	}
+	prog.planSetArtifacts(planned)
+
 	for _, rec := range records {
 		if ctx.Err() != nil {
 			break
@@ -445,6 +461,7 @@ func (s *Service) processArtifacts(ctx context.Context, source transport.Source,
 			continue
 		}
 		walk.Progress.Walked++
+		prog.finishPlannedArtifact()
 		if durable(after) {
 			walk.Progress.Durable++
 		}

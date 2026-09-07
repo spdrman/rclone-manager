@@ -198,9 +198,15 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 	// interrupt.
 	b.cycleWatch.begin()
 	defer b.cycleWatch.end()
+	// A scheduled tick feeds the live activity feed exactly as an
+	// API-submitted one does (issue #573). It has to: the scheduler is
+	// the path that runs unattended for weeks, so it is the cycle an
+	// operator looking at a dashboard is most likely to be watching.
+	b.activity.beginCycle()
+	defer b.activity.endCycle()
 	runCycle(b.state.Load().inner,
 		app.WithBackupSetHolds(
-			app.WithProgressObserver(ctx, b.cycleWatch),
+			app.WithProgressObserver(ctx, progressFanout{b.cycleWatch, b.activity}),
 			b.holds))
 }
 
