@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "44447b46b0f1223fa2f5947bb1323487c4d3cd6808040613a6d123f83b2c95fb"
+const ContractSHA256 = "caa959c2f802269301a0fe7aec56bf000ac6c9aa0dc4ea90835e2654080372d0"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -831,22 +831,24 @@ type AuthErrorResponse struct {
 
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
-	CompletionStrategy  string   `json:"completion_strategy"`
-	Disabled            bool     `json:"disabled"`
-	Host                string   `json:"host"`
-	ID                  string   `json:"id"`
-	Include             []string `json:"include"`
-	LocalPath           string   `json:"local_path"`
-	Name                string   `json:"name"`
-	Port                int      `json:"port"`
-	ReadOnly            bool     `json:"read_only"`
-	RemotePath          string   `json:"remote_path"`
-	RetentionIsOverride bool     `json:"retention_is_override"`
-	SourceName          string   `json:"source_name"`
-	StableForSeconds    int      `json:"stable_for_seconds"`
-	StaleAfterSeconds   int      `json:"stale_after_seconds"`
-	User                string   `json:"user"`
-	ValidatorID         string   `json:"validator_id"`
+	CompletionStrategy       string           `json:"completion_strategy"`
+	Disabled                 bool             `json:"disabled"`
+	Host                     string           `json:"host"`
+	ID                       string           `json:"id"`
+	Include                  []string         `json:"include"`
+	LocalPath                string           `json:"local_path"`
+	Name                     string           `json:"name"`
+	Port                     int              `json:"port"`
+	ReadOnly                 bool             `json:"read_only"`
+	RemotePath               string           `json:"remote_path"`
+	RetentionIsOverride      bool             `json:"retention_is_override"`
+	SourceName               string           `json:"source_name"`
+	StableForSeconds         int              `json:"stable_for_seconds"`
+	StaleAfterSeconds        int              `json:"stale_after_seconds"`
+	TrustedHostKeyRecordedAt string           `json:"trusted_host_key_recorded_at,omitempty"`
+	TrustedHostKeys          []TrustedHostKey `json:"trusted_host_keys,omitempty"`
+	User                     string           `json:"user"`
+	ValidatorID              string           `json:"validator_id"`
 }
 
 // BackupSetEditHold is POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
@@ -1607,6 +1609,15 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// TrustedHostKey is ONE host key a backup set actually pins, named the way an operator
+// compares it: the algorithm and the SHA256 fingerprint, the form
+// `ssh-keygen -lf` prints and the wizard's verify step shows. Never
+// the key material, which is a wall of base64 nobody checks by eye.
+type TrustedHostKey struct {
+	Algorithm   string `json:"algorithm"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 // UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
 // already-persisted backup set (issue #350): every property is
 // optional, and a property this body omits is left exactly as it is
@@ -1775,6 +1786,7 @@ var SchemaTypes = map[string]any{
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"TrustedHostKey":              TrustedHostKey{},
 	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},

@@ -176,9 +176,43 @@ type backupSetResponse struct {
 	// /backup-sets/{source}/{set}/retention, which serves it on demand
 	// alongside the deployment's own.
 	RetentionIsOverride bool `json:"retention_is_override"`
+	// TrustedHostKeys is what this set's known_hosts actually pins for its
+	// own address (service.BackupSet.TrustedHostKeys). Omitted, not sent
+	// as an empty list, and the difference is the whole point: absent
+	// reads as "this deployment could not report what this set trusts",
+	// which is what a client has to say out loud instead of rendering a
+	// blank where a fingerprint goes.
+	//
+	// This is the field that ends a literal. The Web UI's connection panel
+	// printed a hardcoded "ssh-ed25519" beside an empty fingerprint on
+	// every deployment, because nothing on this response carried a host
+	// key at all, and the halt banner for a CHANGED host key sent an
+	// operator to that panel to compare a fingerprint that was not there.
+	TrustedHostKeys []trustedHostKeyResponse `json:"trusted_host_keys,omitempty"`
+	// TrustedHostKeyRecordedAt is when this deployment last wrote that
+	// anchor, omitted when the set points at a known_hosts file this
+	// deployment did not write. See service.trustedHostKeysFor for why a
+	// hand-maintained file's timestamp answers a different question.
+	TrustedHostKeyRecordedAt string `json:"trusted_host_key_recorded_at,omitempty"`
+}
+
+// trustedHostKeyResponse is one pinned host key on the wire: the algorithm
+// and the SHA256 fingerprint, which are the two strings an operator
+// compares against the server in front of them. Never key material.
+type trustedHostKeyResponse struct {
+	Algorithm   string `json:"algorithm"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
+	var trusted []trustedHostKeyResponse
+	for _, k := range bs.TrustedHostKeys {
+		trusted = append(trusted, trustedHostKeyResponse{Algorithm: k.Algorithm, Fingerprint: k.Fingerprint})
+	}
+	recordedAt := ""
+	if !bs.TrustedHostKeyRecordedAt.IsZero() {
+		recordedAt = bs.TrustedHostKeyRecordedAt.UTC().Format(time.RFC3339)
+	}
 	return backupSetResponse{
 		ID:                  bs.ID,
 		SourceName:          bs.SourceName,
@@ -196,6 +230,9 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		Disabled:            bs.Disabled,
 		ReadOnly:            bs.ReadOnly,
 		RetentionIsOverride: bs.RetentionIsOverride,
+
+		TrustedHostKeys:          trusted,
+		TrustedHostKeyRecordedAt: recordedAt,
 	}
 }
 

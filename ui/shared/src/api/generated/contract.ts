@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "44447b46b0f1223fa2f5947bb1323487c4d3cd6808040613a6d123f83b2c95fb";
+export const CONTRACT_SHA256 = "caa959c2f802269301a0fe7aec56bf000ac6c9aa0dc4ea90835e2654080372d0";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1141,6 +1141,8 @@ export interface WireBackupSet {
   source_name: string;
   stable_for_seconds: number;
   stale_after_seconds: number;
+  trusted_host_key_recorded_at?: string;
+  trusted_host_keys?: WireTrustedHostKey[];
   user: string;
   validator_id: string;
 }
@@ -1899,6 +1901,15 @@ export interface WireTestConnectionRequest {
 export interface WireTestConnectionResponse {
   message?: string;
   ok: boolean;
+}
+
+/** ONE host key a backup set actually pins, named the way an operator
+ *  compares it: the algorithm and the SHA256 fingerprint, the form
+ *  `ssh-keygen -lf` prints and the wizard's verify step shows. Never
+ *  the key material, which is a wall of base64 nobody checks by eye. */
+export interface WireTrustedHostKey {
+  algorithm: string;
+  fingerprint: string;
 }
 
 /** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one

@@ -199,6 +199,25 @@
           ]
         }
       },
+      "TrustedHostKey": {
+        "type": "object",
+        "description": "ONE host key a backup set actually pins, named the way an operator compares it: the algorithm and the SHA256 fingerprint, the form `ssh-keygen -lf` prints and the wizard's verify step shows. Never the key material, which is a wall of base64 nobody checks by eye.",
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "description": "The host key algorithm, as an SSH implementation names it (\"ssh-ed25519\", \"ssh-rsa\", \"ecdsa-sha2-nistp256\"). Read off the key itself, never assumed: a panel that printed a fixed algorithm beside a fingerprint told an operator with an RSA anchor that they had trusted an ed25519 one."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The SHA256 fingerprint, \"SHA256:\" prefix included, byte for byte what `ssh-keygen -lf` prints for the same key. It is the whole of what an operator has to compare against the host."
+          }
+        },
+        "required": [
+          "algorithm",
+          "fingerprint"
+        ]
+      },
       "VersionResponse": {
         "type": "object",
         "description": "GET /system/version. Nothing here names an implementation: no rclone, no SQLite, no filesystem path.",
@@ -984,6 +1003,20 @@
           "retention_is_override": {
             "type": "boolean",
             "description": "Whether this backup set declares its own retention policy rather than being retained under the deployment's (issue #333). The policy itself is not here: read it from /backup-sets/{source}/{set}/retention, which serves the resolved chain, the deployment's chain beside it, and the raw override. A list of sets needs the attribution, not three numbers that only fit one shape of chain."
+          },
+          "trusted_host_keys": {
+            "type": "array",
+            "description": "Every host key this backup set's known_hosts actually pins for this set's own address, read from that file rather than restated from the configuration, because the file is what a connection checks. A LIST because a host legitimately answers with more than one key algorithm and OpenSSH writes a line for each, so a set pinning both an ed25519 and an RSA key is in ordinary shape and reporting one of them would show an operator a fingerprint the server in front of them may not present. ABSENT is \"this deployment could not report what this set trusts\", and it is what a local-transport set, an unreadable anchor and a file pinning nothing for this address all produce; a client must say that rather than render a blank where a fingerprint goes. An engine built before this field answers the same way, so a client cannot read absence as \"this set trusts nothing\".",
+            "items": {
+              "$ref": "#/components/schemas/TrustedHostKey"
+            },
+            "x-go-omitempty": true
+          },
+          "trusted_host_key_recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When THIS deployment last wrote the trust anchor above. Absent when the backup set points at a known_hosts file this deployment did not write: a file an operator maintains by hand is usually shared with other sets, so its timestamp is about whatever was last added to it rather than about this set's host, and reporting it would answer \"when was this host key trusted\" with something else.",
+            "x-go-omitempty": true
           }
         },
         "required": [

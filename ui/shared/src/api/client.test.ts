@@ -1722,6 +1722,63 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     expect(postgres?.readOnlyRetainedCount).toBe(0);
   });
 
+  // Issue #572's RED case for the other half of the same defect. Six
+  // fields on every mapped backup set were literals here that no wire
+  // field fed: hostFingerprint "", fingerprintTrustedAt null,
+  // lastValidation "not-run", expectedIntervalHours 0, retainedCount 0 and
+  // retainedBytes 0. Every one of them renders somewhere as a value
+  // nobody chose, and the two host-key ones rendered under a hardcoded
+  // "ssh-ed25519" on the page the host-key halt banner links to.
+  it("reports the host keys the server actually says are trusted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          {
+            ...wireSet("production/postgres", "postgres"),
+            trusted_host_keys: [
+              { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+              { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+            ],
+            trusted_host_key_recorded_at: "2026-08-02T10:14:00Z"
+          }
+        ],
+        [wireHealth("production/postgres")]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.trustedHostKeys).toEqual([
+      { algorithm: "ssh-rsa", fingerprint: "SHA256:realRsaDigestFromTheServer" },
+      { algorithm: "ssh-ed25519", fingerprint: "SHA256:realEd25519DigestFromTheServer" }
+    ]);
+    expect(set.trustedHostKeyRecordedAt).toBe("2026-08-02T10:14:00Z");
+  });
+
+  it("says it does not know rather than inventing a value the server never sent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([wireSet("production/postgres", "postgres")], [wireHealth("production/postgres")])
+    );
+
+    const [set] = await httpApi.listSets();
+    // An engine that reports no trusted host key leaves the list empty,
+    // which every render site has to say out loud. It is NOT an empty
+    // fingerprint string under a confident algorithm, which is what this
+    // mapper used to produce for every set on every deployment.
+    expect(set.trustedHostKeys).toEqual([]);
+    expect(set.trustedHostKeyRecordedAt).toBeNull();
+    // And the four that have no wire field at all. Null and "unknown"
+    // rather than 0 and "not-run": "Not run" reads as reassuring beside a
+    // validator that may have been failing for a month, and a zero
+    // retained count is what the remove-configuration dialog was printing
+    // in the same breath as promising that removal deletes nothing.
+    expect(set.lastValidation).toBe("unknown");
+    expect(set.expectedIntervalHours).toBeNull();
+    expect(set.retainedCount).toBeNull();
+    expect(set.retainedBytes).toBeNull();
+  });
+
   it("carries a rejected login through under its own reason", async () => {
     vi.stubGlobal(
       "fetch",

@@ -328,7 +328,7 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 
 	b.adoptConfig(cfg)
 
-	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
+	return toServiceBackupSet(b.configPath, sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
 
 // findBackupSetPointer returns a pointer INTO cfg for the named backup

@@ -34,8 +34,8 @@ const SET_V1: BackupSet = {
   lastRunAt: "2026-08-29T02:01:01+02:00",
   lastValidation: "passed", expectedIntervalHours: 24,
   retainedCount: 32, retainedBytes: 421,
-  hostFingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM",
-  fingerprintTrustedAt: "2026-08-02T10:14:00+02:00"
+  trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM" }],
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
 };
 
 /** Someone else's commit, landed after the form opened against SET_V1 —

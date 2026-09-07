@@ -611,8 +611,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             >
               <Cell label="Newest known-good" value={relativeAge(s.newestKnownGoodAt)} mono />
               <Cell label="Last successful run" value={relativeAge(s.lastRunAt)} mono />
-              <Cell label="Retained" value={s.retainedCount + " \u00b7 " + bytes(s.retainedBytes)} mono />
-              <Cell label="Expected cadence" value={"every " + s.expectedIntervalHours + "h"} mono />
+              {/* "Not reported", not "0 \u00b7 0 B" and not "every 0h". Both
+                  of these were literals in api/client.ts on every real
+                  deployment, and a zero here is a claim about how much a
+                  set is keeping. */}
+              <Cell
+                label="Retained"
+                value={
+                  s.retainedCount === null || s.retainedBytes === null
+                    ? "Not reported"
+                    : s.retainedCount + " \u00b7 " + bytes(s.retainedBytes)
+                }
+                mono
+              />
+              <Cell
+                label="Expected cadence"
+                value={s.expectedIntervalHours === null ? "Not reported" : "every " + s.expectedIntervalHours + "h"}
+                mono
+              />
               <Cell label="State" value={s.stateNote} />
               {/* This cell was labelled "Remote cleanup" and read
                   `s.enabled`, which are two different facts. `enabled` is
@@ -683,11 +699,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           ) : null}
 
           <Section title="Connection">
+            {/* Every value in here is one the service read out of this
+                set's own known_hosts. It used to be one literal and one
+                empty string: the algorithm was "ssh-ed25519" written into
+                this JSX and the fingerprint was a field api/client.ts
+                filled with "", because nothing on the wire carried a host
+                key. The halt banner for a CHANGED host key links here so
+                an operator can compare a fingerprint against the server,
+                which is the one comparison this page has to be able to
+                support. */}
             <FingerprintDisplay
-              host={s.host}
-              algorithm="ssh-ed25519"
-              fingerprint={s.hostFingerprint}
-              trustedAt={s.fingerprintTrustedAt}
+              host={s.host + ":" + s.port}
+              keys={s.trustedHostKeys}
+              trustedAt={s.trustedHostKeyRecordedAt}
             />
             <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
               The private key never leaves this NAS and is never displayed.

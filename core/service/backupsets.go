@@ -163,6 +163,32 @@ type BackupSet struct {
 	// what a hand-edited config.yaml already answered.
 	ReadOnly bool
 
+	// TrustedHostKeys is every host key this backup set's known_hosts
+	// actually pins for this set's own address, read from that file rather
+	// than restated from the configuration, because the file is what a
+	// connection checks (backupsethostkey.go's trustedHostKeysFor).
+	//
+	// It is a LIST because a host legitimately answers with more than one
+	// key algorithm and OpenSSH writes a line for each, so a set pinning
+	// both an ed25519 and an RSA key is in ordinary shape and reporting
+	// one of them would show an operator a fingerprint the server they
+	// are looking at may not present.
+	//
+	// EMPTY is "this deployment could not report what this set trusts",
+	// and it is what a local-transport set, an unreadable anchor and a
+	// file that pins nothing for this address all produce. A surface must
+	// say that rather than render a blank where a fingerprint goes: an
+	// empty fingerprint under a confident "Algorithm" heading is the
+	// defect this field exists to end.
+	TrustedHostKeys []TrustedHostKey
+
+	// TrustedHostKeyRecordedAt is when THIS deployment last wrote that
+	// trust anchor, and is the zero time when the set points at a
+	// known_hosts file this deployment did not write. See
+	// trustedHostKeysFor for why a hand-maintained file's timestamp is not
+	// an answer to "when was this host key trusted".
+	TrustedHostKeyRecordedAt time.Time
+
 	// RetentionIsOverride reports whether this backup set declares its own
 	// retention policy rather than being retained under the deployment's
 	// (issue #333, config.BackupSet.RetentionIsOverride).
@@ -310,7 +336,7 @@ func (b *BackupService) ListBackupSets(_ context.Context) ([]BackupSet, error) {
 	var out []BackupSet
 	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
-			out = append(out, toServiceBackupSet(src.Name, bs))
+			out = append(out, toServiceBackupSet(b.configPath, src.Name, bs))
 		}
 	}
 	return out, nil
@@ -324,7 +350,7 @@ func (b *BackupService) GetBackupSet(_ context.Context, id string) (BackupSet, e
 	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
 			if src.Name+"/"+bs.Name == id {
-				return toServiceBackupSet(src.Name, bs), nil
+				return toServiceBackupSet(b.configPath, src.Name, bs), nil
 			}
 		}
 	}
@@ -558,7 +584,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// (adoptConfig, and edithold.go for why the hold was there).
 	newRevision := b.adoptConfig(cfg)
 
-	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
+	created := toServiceBackupSet(b.configPath, sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
 
 	// Issue #391: the adoption. A backup set is identified by its source
@@ -761,7 +787,13 @@ func validatorIDProblem(id ValidatorID) string {
 	return ""
 }
 
-func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
+// It takes configPath because the trusted host key is a FILE, and reading
+// it here rather than at each caller is what stops one read surface
+// reporting a set's real anchor while another reports nothing. Every
+// caller has a config path; the ones that do not have a BackupService
+// (firstrun.go) have the path they just wrote.
+func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) BackupSet {
+	trusted, recordedAt := trustedHostKeysFor(configPath, bs)
 	return BackupSet{
 		ID:                 sourceName + "/" + bs.Name,
 		SourceName:         sourceName,
@@ -792,6 +824,9 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		// point of pinning it is that a later edit to the deployment's
 		// policy will not move it.
 		RetentionIsOverride: bs.RetentionIsOverride(),
+
+		TrustedHostKeys:          trusted,
+		TrustedHostKeyRecordedAt: recordedAt,
 	}
 }
 

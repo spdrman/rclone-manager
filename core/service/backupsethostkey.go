@@ -91,6 +91,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -485,6 +486,98 @@ func droppedTrust(currentPath, stagedPath, addr string) ([]string, error) {
 		dropped = append(dropped, describeHostKey(entry.Key))
 	}
 	return dropped, nil
+}
+
+// keysTrustedFor reports every plain host key the known_hosts file at path
+// verifies addr with, in file order.
+//
+// Each candidate is read out of the file and then put back to knownhosts'
+// own callback, which is the same two-step droppedTrust uses and for the
+// same reason: reading gives the list, and only the callback can say
+// whether an entry applies to an address, because that answer has
+// wildcards, hashed hostnames and port normalisation in it.
+//
+// A marker entry is left out. "@cert-authority" says who may vouch for a
+// host rather than which key the host has, and the surfaces this feeds
+// show a fingerprint an operator compares against the server in front of
+// them; a CA's fingerprint is not that, and printing it under the same
+// heading would invite exactly the wrong comparison.
+func keysTrustedFor(path, addr string) ([]ssh.PublicKey, error) {
+	entries, err := readKnownHostsEntries(path)
+	if err != nil {
+		return nil, err
+	}
+	check, err := knownhosts.New(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []ssh.PublicKey
+	for _, entry := range entries {
+		if entry.Marker != "" {
+			continue
+		}
+		if check(addr, knownHostsAddr(addr), entry.Key) == nil {
+			out = append(out, entry.Key)
+		}
+	}
+	return out, nil
+}
+
+// TrustedHostKey is ONE host key a backup set actually pins, named the way
+// an operator compares it: the algorithm and the SHA256 fingerprint, the
+// form `ssh-keygen -lf` prints and the wizard's verify step shows. Never
+// the key material, which is a wall of base64 nobody checks by eye.
+type TrustedHostKey struct {
+	Algorithm   string
+	Fingerprint string
+}
+
+// trustedHostKeysFor reads what a backup set's known_hosts pins for that
+// set's own address, and when this deployment wrote it.
+//
+// It reads the FILE rather than reporting anything from the configuration,
+// because the file is what a connection checks. That matters more than it
+// sounds: until this existed, the Web UI's connection panel printed the
+// literal "ssh-ed25519" beside an empty fingerprint on every deployment,
+// so a set whose anchor was an RSA key was described as an ed25519 one,
+// with no digest beside it to check that against, and the halt banner for
+// a CHANGED host key sent the operator to exactly that panel to make
+// exactly that comparison.
+//
+// Empty means "this deployment could not report what this set trusts", and
+// deliberately does not distinguish an unreadable file from a file that
+// pins nothing for this address. Both are the same sentence to a surface,
+// "we cannot show you the key", and both need the same answer from an
+// operator, which is to go and look. What a surface must NOT do with it is
+// print a blank where a fingerprint goes.
+//
+// recordedAt is the moment THIS deployment last wrote that anchor, and is
+// zero unless the set points at a file in our own known_hosts.d. A set
+// configured by hand may point at a known_hosts an operator maintains,
+// shared with other sets, and that file's timestamp is about whatever was
+// last added to it rather than about this set's host.
+func trustedHostKeysFor(configPath string, bs config.BackupSet) (keys []TrustedHostKey, recordedAt time.Time) {
+	path := bs.Remote.KnownHosts
+	if path == "" {
+		return nil, time.Time{}
+	}
+	found, err := keysTrustedFor(path, hostKeyAddress(bs.Remote))
+	if err != nil {
+		// Reported as "nothing to show" rather than as an error on a read
+		// path: listing backup sets must not fail because one set's trust
+		// file is missing, and the surface's answer to an unreadable
+		// anchor is the same as its answer to one it could not parse.
+		return nil, time.Time{}
+	}
+	for _, k := range found {
+		keys = append(keys, TrustedHostKey{Algorithm: k.Type(), Fingerprint: ssh.FingerprintSHA256(k)})
+	}
+	if configPath != "" && filepath.Dir(path) == knownHostsDirIn(configPath) {
+		if info, statErr := os.Stat(path); statErr == nil {
+			recordedAt = info.ModTime()
+		}
+	}
+	return keys, recordedAt
 }
 
 // knownHostsDirIn is where this deployment keeps the per-set trusted

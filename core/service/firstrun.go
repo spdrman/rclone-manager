@@ -334,7 +334,7 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 	}
 	applyValidators()
 
-	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name)), nil
+	return toServiceBackupSet(f.defaults.ConfigPath, sourceName, findBackupSet(cfg, sourceName, req.Name)), nil
 }
 
 // writeConfigPayload is the file-write half of the two create paths

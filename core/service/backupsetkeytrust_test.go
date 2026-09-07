@@ -874,3 +874,114 @@ func trustDirListing(t *testing.T, dir string) []string {
 	sort.Strings(names)
 	return names
 }
+
+// # What the read surface says about the trusted key
+//
+// The tests above are about changing a trust anchor. These are about
+// being able to see one, which nothing could until now: no field on any
+// read surface carried a host key or its algorithm, so the Web UI's
+// connection panel printed the literal "ssh-ed25519" beside an empty
+// fingerprint on every deployment. A set whose anchor was an RSA key was
+// described as an ed25519 one, with no digest beside it to check that
+// against, and the halt banner for a CHANGED host key linked to that panel
+// so an operator could make exactly that comparison.
+
+// TestGetBackupSet_ReportsTheHostKeyItActuallyTrusts is the claim the
+// panel rests on: the algorithm and fingerprint served are the ones in the
+// set's own known_hosts, read from the file rather than assumed.
+func TestGetBackupSet_ReportsTheHostKeyItActuallyTrusts(t *testing.T) {
+	svc, _ := openTestService(t)
+	id, _, _, fingerprint := createSFTPSet(t, svc, "reports-its-key")
+
+	got, err := svc.GetBackupSet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if len(got.TrustedHostKeys) != 1 {
+		t.Fatalf("the set reports %d trusted host keys, want exactly 1: %+v", len(got.TrustedHostKeys), got.TrustedHostKeys)
+	}
+	if got.TrustedHostKeys[0].Fingerprint != fingerprint {
+		t.Errorf("reported fingerprint %q, want the one the set was created trusting %q",
+			got.TrustedHostKeys[0].Fingerprint, fingerprint)
+	}
+	if got.TrustedHostKeys[0].Algorithm != "ssh-ed25519" {
+		t.Errorf("reported algorithm %q, want the key's own %q", got.TrustedHostKeys[0].Algorithm, "ssh-ed25519")
+	}
+	// Written by this deployment, so there is an honest answer to "when
+	// was this trusted" and it is not the zero time.
+	if got.TrustedHostKeyRecordedAt.IsZero() {
+		t.Error("the set reports no moment for a trust anchor this deployment wrote itself")
+	}
+}
+
+// TestGetBackupSet_ReportsEveryPinnedAlgorithm: a host answering with more
+// than one key algorithm has a known_hosts line each, so reporting one of
+// two would show an operator a fingerprint the server in front of them may
+// not present. That is the same failure as reporting an invented one, one
+// step subtler, which is why the field is a list.
+func TestGetBackupSet_ReportsEveryPinnedAlgorithm(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, first := createSFTPSet(t, svc, "two-pinned")
+
+	second := newHostPublicKey(t)
+	path := trustFileOf(t, configPath, id)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(knownhosts.Line([]string{"example.internal:22"}, second) + "\n"); err != nil {
+		t.Fatalf("appending the second host key: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := svc.GetBackupSet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	var reported []string
+	for _, k := range got.TrustedHostKeys {
+		reported = append(reported, k.Fingerprint)
+	}
+	want := []string{first, ssh.FingerprintSHA256(second)}
+	if !slices.Equal(reported, want) {
+		t.Errorf("the set reports %v, want both pinned keys %v", reported, want)
+	}
+}
+
+// TestGetBackupSet_ReportsNothingRatherThanAGuess: an anchor this
+// deployment cannot read has to come back as nothing at all, so the
+// surface says "we could not read it" instead of drawing a panel with a
+// blank where a fingerprint goes. Empty is the honest answer for an
+// unreadable file, a file pinning nothing for this host, and a
+// local-transport set with no host to trust; none of them is a key.
+func TestGetBackupSet_ReportsNothingRatherThanAGuess(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, _ := createSFTPSet(t, svc, "unreadable-anchor")
+
+	path := trustFileOf(t, configPath, id)
+	if err := os.Rename(path, path+".gone"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	got, err := svc.GetBackupSet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if len(got.TrustedHostKeys) != 0 {
+		t.Errorf("the set reports %+v for an anchor that cannot be read, want nothing", got.TrustedHostKeys)
+	}
+
+	// The local-transport fixture, which has no host and no anchor at all.
+	local, err := svc.GetBackupSet(context.Background(), fixtureSetID)
+	if err != nil {
+		t.Fatalf("GetBackupSet(%s): %v", fixtureSetID, err)
+	}
+	if len(local.TrustedHostKeys) != 0 {
+		t.Errorf("a local-transport set reports %+v, want nothing", local.TrustedHostKeys)
+	}
+	if !local.TrustedHostKeyRecordedAt.IsZero() {
+		t.Error("a local-transport set reports a moment it trusted a host key")
+	}
+}
