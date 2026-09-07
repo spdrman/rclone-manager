@@ -283,6 +283,15 @@ func FinalArtifactPath(localDir string, artifact model.ArtifactID) (string, erro
 // Every transition Transfer records goes through Advance, never
 // state.RecordTransition directly, so an illegal move here is refused
 // before the journal is touched, exactly like every other lifecycle step.
+//
+// One outcome is neither a success nor a failure of this artifact, and it
+// is TransferSupersededError: this attempt found, either before the copy or
+// when it went to record the copy's failure, that the artifact is no longer
+// where this attempt left it. Nothing is written on that path. The artifact
+// already has a state, another attempt put it there, and that state is the
+// answer both `status` and `artifacts` will be giving an operator, so this
+// one names it rather than claiming a verdict of its own. Issue #570 is
+// what it cost not to.
 func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, error) {
 	if d.Journal == nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer needs a Journal")
@@ -325,14 +334,45 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 	}
 
 	lp := partial
-	if _, err := Advance(ctx, d, state.Transition{
+	started, err := Advance(ctx, d, state.Transition{
 		Artifact:  p.Artifact,
 		Key:       p.AttemptKey + keyTransferringSuffix,
 		From:      rec.State,
 		To:        string(Transferring),
 		LocalPath: &lp,
-	}); err != nil {
+	})
+	if err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: recording TRANSFERRING: %w", err)
+	}
+
+	// Recording TRANSFERRING is not the same as the artifact BEING at
+	// TRANSFERRING, and issue #570 is the gap between the two.
+	//
+	// The Get above and this write are two separate journal calls, and an
+	// artifact that has already moved on by the time this step looks is
+	// refused between them by machine.go's table, loudly and with nothing
+	// written (TestTransferRefusesAnArtifactPastItsOwnStage). What is left
+	// is the interleaving: a second attempt moving the row in the window
+	// between the two calls. If this attempt's key is new the write itself
+	// catches that, because the journal compares From against the row. If
+	// the key has been seen before it does not, because the journal's
+	// exactly-once guarantee makes that a replay, and a replay reports the
+	// row as it stands and validates nothing, there being nothing to
+	// validate about a write it is not making.
+	//
+	// Two attempts sharing a key is not exotic. internal/app's attemptKey
+	// is the artifact plus its retry count and nothing in it distinguishes
+	// two live attempts, and nothing stops two of them existing: service's
+	// runOnce is an in-process lock, and `backup-manager fetch` and `run`
+	// open the same journal from another process behind a SHARED one.
+	//
+	// Without this check the copy below would start anyway and write into
+	// the directory of an artifact this attempt has no claim on any more.
+	// Reading the state off the outcome rather than asking again is
+	// deliberate: Outcome.Record is the row as the transaction that just
+	// ran saw it, so there is no second read to be stale.
+	if State(started.Record.State) != Transferring {
+		return state.Outcome{}, &TransferSupersededError{Artifact: p.Artifact, Current: State(started.Record.State)}
 	}
 
 	// Deliberate cleanup of whatever a prior, interrupted attempt left
@@ -406,6 +446,9 @@ func failCollision(ctx context.Context, d Deps, p TransferParams, from, path str
 		To:       string(Failed),
 		Detail:   collision.Error(),
 	}); err != nil {
+		if superseded := supersededBy(ctx, d, p.Artifact, err, collision); superseded != nil {
+			return state.Outcome{}, superseded
+		}
 		return state.Outcome{}, fmt.Errorf("%w (and recording FAILED also failed: %v)", collision, err)
 	}
 	return state.Outcome{}, collision
@@ -414,6 +457,24 @@ func failCollision(ctx context.Context, d Deps, p TransferParams, from, path str
 // failCopy records a non-retryable (or retry-exhausted) copy failure as a
 // FAILED transition and returns the underlying error, wrapped so
 // errors.Is/As against copyErr still work.
+//
+// From stays TRANSFERRING rather than becoming "wherever the row is now",
+// and that is issue #570's whole answer rather than an oversight. This
+// attempt recorded TRANSFERRING itself and then spent however long the copy
+// took not looking at the journal, so TRANSFERRING is the only state it can
+// honestly claim to be speaking about. Recording FAILED from wherever the
+// row happens to have got to would let a losing attempt stamp a verdict
+// over a winning one mid-flight (TRANSFERRED, VERIFYING and COMMITTING are
+// all legal FAILED predecessors, and all three mean another attempt is
+// still working) or over an artifact that already has a durable local copy,
+// which is the one thing machine.go's table refuses outright.
+//
+// So the mismatch stays a refusal, and what changes is what the caller is
+// handed for it: supersededBy turns the journal's "not in the expected
+// state" into a sentence about what actually happened, naming the state
+// the artifact is really in. Nothing is recorded in that case, on purpose.
+// The artifact is not failed, its row already says what it is, and the
+// record an operator acts on is that row plus this error in the FR-23 log.
 func failCopy(ctx context.Context, d Deps, p TransferParams, copyErr error) (state.Outcome, error) {
 	if _, err := Advance(ctx, d, state.Transition{
 		Artifact: p.Artifact,
@@ -422,7 +483,96 @@ func failCopy(ctx context.Context, d Deps, p TransferParams, copyErr error) (sta
 		To:       string(Failed),
 		Detail:   copyErr.Error(),
 	}); err != nil {
+		if superseded := supersededBy(ctx, d, p.Artifact, err, copyErr); superseded != nil {
+			return state.Outcome{}, superseded
+		}
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: copy failed (%v), and recording FAILED also failed: %w", copyErr, err)
 	}
 	return state.Outcome{}, fmt.Errorf("lifecycle: transfer: copy failed: %w", copyErr)
+}
+
+// TransferSupersededError reports that a transfer attempt stopped speaking
+// for its artifact partway through: the journal has the artifact somewhere
+// this attempt's own outcome, success or failure, would misdescribe.
+//
+// It exists because the alternative an operator was actually getting is
+// worse than an unhandled case. Issue #570 caught the shape twice in one
+// cycle on a live deployment: a copy failed, the FAILED transition that
+// would have recorded it was refused because another attempt had already
+// carried the same artifact to REMOTE_RETAINED, and the engine reported a
+// verdict no row anywhere backed. `status` counted no failure for it and
+// `artifacts` showed a durable, retained artifact, and the log said the
+// backup had failed. All three were reading the same artifact.
+//
+// The state is on the error rather than only in its message so a caller can
+// act on it, and because it is the thing an operator has to see: it is the
+// answer to "so what IS this artifact", which a bare copy error does not
+// give and which the journal's own ErrStateMismatch gives in the vocabulary
+// of a refused write rather than of an artifact.
+type TransferSupersededError struct {
+	// Artifact is the artifact this attempt lost its claim on, and
+	// Current is where the journal actually has it.
+	Artifact model.ArtifactID
+	Current  State
+
+	// Cause is the failure this attempt observed before it found out, and
+	// it is nil when the attempt was superseded before any bytes moved.
+	// It is unwrapped, so errors.Is and errors.As against a transport
+	// error still work through this.
+	Cause error
+}
+
+// Error says what this attempt saw, what it did NOT record, and what the
+// artifact is instead. All three are needed: the first is the only account
+// of the failure that exists anywhere, the second is what stops a reader
+// going looking for a FAILED row, and the third is the state both other
+// surfaces will be showing them.
+func (e *TransferSupersededError) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf(
+			"lifecycle: transfer: refusing to copy %s: this attempt was already recorded and the journal has since moved the artifact to %q, so a copy now would write over an artifact this attempt no longer speaks for",
+			e.Artifact, e.Current,
+		)
+	}
+	return fmt.Sprintf(
+		"lifecycle: transfer: copy failed (%v), and this attempt no longer speaks for %s: another attempt carried it to %q while this copy was running, so nothing was recorded as FAILED and that state is what the artifact is",
+		e.Cause, e.Artifact, e.Current,
+	)
+}
+
+// Unwrap exposes the copy or collision failure this attempt observed, so
+// errors.Is against a transport category still answers about the thing that
+// actually went wrong.
+func (e *TransferSupersededError) Unwrap() error { return e.Cause }
+
+// AsTransferSuperseded reports whether err is, or wraps, a
+// *TransferSupersededError, mirroring AsNotRemoteRetained.
+func AsTransferSuperseded(err error) (*TransferSupersededError, bool) {
+	var e *TransferSupersededError
+	ok := errors.As(err, &e)
+	return e, ok
+}
+
+// supersededBy turns the journal's refusal to record a verdict into the
+// reason for it, or reports that this was not that kind of refusal.
+//
+// It returns nil for anything other than a state mismatch, which keeps a
+// genuinely broken journal (a closed database, a missing row) reading as
+// the infrastructure failure it is rather than as somebody else's attempt
+// winning a race.
+//
+// The re-read is what supplies the state, and it is only ever done on this
+// path: the write that just failed proved the row is not where this attempt
+// left it, and the whole value of the error is naming where it actually is.
+// A read that itself fails leaves the caller with its original message,
+// which is worse than this one but is still the failure it observed.
+func supersededBy(ctx context.Context, d Deps, artifact model.ArtifactID, recordErr, cause error) *TransferSupersededError {
+	if !errors.Is(recordErr, state.ErrStateMismatch) {
+		return nil
+	}
+	rec, err := d.Journal.Get(ctx, artifact)
+	if err != nil {
+		return nil
+	}
+	return &TransferSupersededError{Artifact: artifact, Current: State(rec.State), Cause: cause}
 }

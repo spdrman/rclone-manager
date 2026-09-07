@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,6 +54,13 @@ type fakeTransferJournal struct {
 
 	getErr        error
 	failRecordFor string // if non-empty, RecordTransition to this To-state fails
+
+	// afterGet, when set, runs immediately after Get has answered. It is
+	// the only way to stand in for another attempt moving the row in the
+	// window between this step reading where the artifact is and writing
+	// where it is going, which is a window every lifecycle step has and
+	// which issue #570 is about the far end of.
+	afterGet func()
 }
 
 // newFakeTransferJournal starts an artifact at DISCOVERED with a recorded
@@ -87,7 +95,13 @@ func (f *fakeTransferJournal) Get(_ context.Context, _ model.ArtifactID) (state.
 	if !f.exists {
 		return state.Record{}, errors.New("fake journal: artifact not found")
 	}
-	return f.rec, nil
+	rec := f.rec
+	if hook := f.afterGet; hook != nil {
+		f.mu.Unlock()
+		hook()
+		f.mu.Lock()
+	}
+	return rec, nil
 }
 
 // LastEnteredAt reports "never entered". This fake is only ever used by
@@ -123,11 +137,22 @@ func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transi
 	if f.failRecordFor != "" && t.To == f.failRecordFor {
 		return state.Outcome{}, fmt.Errorf("fake journal: forced failure recording %s", t.To)
 	}
-	if out, ok := f.seen[t.Key]; ok {
-		return state.Outcome{Applied: false, Record: out.Record}, nil
+	if _, ok := f.seen[t.Key]; ok {
+		// The row as it stands NOW, not as it stood when the key was
+		// first seen. That is what the real journal does (it re-reads by
+		// row id inside the replay's own transaction) and the difference
+		// is the whole of issue #570's silent window: a replay that
+		// echoed the old snapshot would tell a caller the artifact is
+		// still where this attempt left it no matter where it has got to.
+		return state.Outcome{Applied: false, Record: f.rec}, nil
 	}
 	if f.exists && f.rec.State != t.From {
-		return state.Outcome{}, fmt.Errorf("fake journal: state mismatch: have %q, want from %q", f.rec.State, t.From)
+		// Joined to the real sentinel rather than spelled as a fresh
+		// error: production classifies this refusal by identity (issue
+		// #570's supersededBy asks errors.Is), so a fake that reports the
+		// same situation under a different identity would leave that
+		// classification untested here and passing everywhere.
+		return state.Outcome{}, fmt.Errorf("%w: fake journal: have %q, want from %q", state.ErrStateMismatch, f.rec.State, t.From)
 	}
 
 	f.rec.State = t.To
@@ -142,6 +167,16 @@ func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transi
 	out := state.Outcome{Applied: true, Record: f.rec}
 	f.seen[t.Key] = out
 	return out, nil
+}
+
+// forceState moves the row without recording anything, which is how a test
+// stands in for a SECOND attempt (in this process or another) that carried
+// the same artifact somewhere else while the attempt under test was busy.
+// Going through RecordTransition would make it this attempt's own write.
+func (f *fakeTransferJournal) forceState(s State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec.State = string(s)
 }
 
 // currentState reads the row under the lock, for tests asserting where the
@@ -845,5 +880,127 @@ func TestFinalPathRefusesAnUnrootedStore(t *testing.T) {
 	}
 	if got, err := FinalArtifactPath("", artifact); err == nil {
 		t.Fatalf("FinalArtifactPath with no local directory returned %q", got)
+	}
+}
+
+// --- issue #570: an attempt that stops speaking for its artifact ---
+
+// TestTransferRefusesWhenItsTransferringKeyReplaysOverAnArtifactThatMovedOn
+// closes the hole the field report came through: a transition key the
+// journal has already seen replays without validating anything, because
+// there is nothing to validate about a write it is not making, and up to
+// #570 this step read that "already applied" as permission to carry on.
+//
+// The sequence here is the one internal/app's attemptKey makes reachable
+// with no crash and no corruption involved. Two attempts on one artifact
+// derive the same keys, the first records TRANSFERRING and walks the
+// artifact to a durable terminal state, and the second arrives with the
+// same key. What it must not do is copy: those bytes would land in the
+// directory of an artifact that is already committed and retained, under a
+// .partial name a later step could act on.
+func TestTransferRefusesWhenItsTransferringKeyReplaysOverAnArtifactThatMovedOn(t *testing.T) {
+	artifact := testArtifact(t)
+	dir := t.TempDir()
+
+	j := newFakeTransferJournal(artifact, "backups/backup-2026-08-27.dump.zst")
+	tr := &fakeTransport{copyFunc: writingCopy([]byte("must never be written"))}
+	deps := Deps{Journal: j, Transport: tr}
+	params := TransferParams{Artifact: artifact, LocalDir: dir, AttemptKey: "attempt-1"}
+
+	// The first attempt records TRANSFERRING under this key ...
+	if _, err := Advance(context.Background(), deps, state.Transition{
+		Artifact: artifact,
+		Key:      params.AttemptKey + keyTransferringSuffix,
+		From:     string(Discovered),
+		To:       string(Transferring),
+	}); err != nil {
+		t.Fatalf("seeding the first attempt's TRANSFERRING: %v", err)
+	}
+
+	// ... and carries the artifact all the way to a retained terminal state
+	// in the window between this attempt reading the row and writing to it.
+	// That window is the only way in: Transfer re-reads the artifact itself
+	// and Advance checks the table, so an artifact that had ALREADY moved
+	// on when this attempt looked is refused by machine.go long before the
+	// journal is asked (TestTransferRefusesAnArtifactPastItsOwnStage). What
+	// is left is the interleaving, and the replay is what makes it silent:
+	// the key has been seen, so the write reports "already applied" and
+	// validates nothing, because there is nothing to validate about a write
+	// it is not making.
+	once := false
+	j.afterGet = func() {
+		if once {
+			return
+		}
+		once = true
+		j.forceState(RemoteRetained)
+	}
+
+	_, err := Transfer(context.Background(), deps, params)
+
+	superseded, ok := AsTransferSuperseded(err)
+	if !ok {
+		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
+	}
+	if superseded.Current != RemoteRetained {
+		t.Errorf("superseded.Current = %q, want %q: the refusal has to name where the artifact actually is", superseded.Current, RemoteRetained)
+	}
+	if tr.callCount() != 0 {
+		t.Fatalf("CopyToLocal was called %d time(s); a superseded attempt must not spend a byte of bandwidth or touch the local directory", tr.callCount())
+	}
+	if j.currentState() != string(RemoteRetained) {
+		t.Fatalf("journal state = %q, want %q: a refusal must leave the artifact exactly as it was", j.currentState(), RemoteRetained)
+	}
+}
+
+// TestCopyFailureAfterAnotherAttemptFinishedTheArtifactIsReportedNotClaimed
+// is issue #570's own reproduction at this level: the copy fails, and by
+// the time this attempt goes to write FAILED the artifact is already
+// durable and retained.
+//
+// The two halves of the assertion are the whole point. FAILED must not be
+// recorded, because it is not true and machine.go refuses it for exactly
+// that reason once an artifact has a committed local copy. And the caller
+// must still be told what happened, in a sentence that names what the
+// artifact IS, because the alternative it used to get ("recording FAILED
+// also failed", carrying the journal's refusal verbatim) reads as a verdict
+// while `status` and `artifacts` show a healthy artifact.
+func TestCopyFailureAfterAnotherAttemptFinishedTheArtifactIsReportedNotClaimed(t *testing.T) {
+	artifact := testArtifact(t)
+	dir := t.TempDir()
+
+	j := newFakeTransferJournal(artifact, "backups/backup-2026-08-27.dump.zst")
+	copyErr := transport.NewError(transport.NotFound, "copy_to_local", errors.New("rename ...partial.ac832174.partial: no such file or directory"))
+	tr := &fakeTransport{copyFunc: func(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+		// The other attempt finishes while this copy is in flight, which
+		// is the only window the field report leaves: the collision guard
+		// has already found nothing at the final name and TRANSFERRING is
+		// already recorded.
+		j.forceState(RemoteRetained)
+		return transport.TransferResult{}, copyErr
+	}}
+
+	_, err := Transfer(context.Background(), Deps{Journal: j, Transport: tr}, TransferParams{
+		Artifact: artifact, LocalDir: dir, AttemptKey: "attempt-1", Policy: fastPolicy(),
+	})
+
+	superseded, ok := AsTransferSuperseded(err)
+	if !ok {
+		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
+	}
+	if superseded.Current != RemoteRetained {
+		t.Errorf("superseded.Current = %q, want %q", superseded.Current, RemoteRetained)
+	}
+	if !errors.Is(err, copyErr) {
+		t.Error("the copy failure is no longer reachable through the returned error; it is the only account of what actually went wrong")
+	}
+	if !strings.Contains(err.Error(), string(RemoteRetained)) {
+		t.Errorf("the error never names the state the artifact is in: %v", err)
+	}
+	if strings.Contains(err.Error(), state.ErrStateMismatch.Error()) {
+		t.Errorf("the journal's refusal is being reported as the outcome, which is the #570 sentence: %v", err)
+	}
+	if j.currentState() != string(RemoteRetained) {
+		t.Fatalf("journal state = %q, want %q: a durable, retained artifact must not be stamped FAILED by an attempt that lost", j.currentState(), RemoteRetained)
 	}
 }
