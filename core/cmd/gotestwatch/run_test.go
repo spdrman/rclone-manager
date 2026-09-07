@@ -1275,7 +1275,28 @@ func TestRun_ABurstyHostIsKilledWithoutBeingToldWhy(t *testing.T) {
 		skipCannotMeasure(t, "the recent window still held a %s gap when the cap closed, so the planted %s stall had not rolled out of it and this run is not reproducing the blind spot",
 			res.Trip.slowestStep.Round(time.Millisecond), burstStall)
 	}
-	if res.Trip.runSlowest < burstStall {
+	// burstPace of slack, and it is the observation method rather than a
+	// fudge factor. tracker.observe timestamps an event at the instant
+	// gotestwatch RECEIVED it, deliberately, because a watchdog can only
+	// act on what it can observe. So the measured gap is the planted
+	// stall plus however much later the "recovered" line was delivered,
+	// minus however much later the "stalling for" line was: it can land
+	// a whisker under the stall, and requiring it to be at least exactly
+	// burstStall is asking the reader's clock for a precision this
+	// design says it does not have. On a Linux runner it came back at
+	// 799ms against a planted 800ms and failed a test nothing was wrong
+	// with (#575); on the Mac this was written on it never did.
+	//
+	// burstPace is the right size for that slack rather than an
+	// arbitrary one: if delivery skew were ever larger than the pace the
+	// fixture prints at, its quiet stretch would be indistinguishable
+	// from its stall and every assertion here would already be
+	// meaningless. And it costs nothing that matters, because what makes
+	// this measurement discriminating is not the exact number: the line
+	// above has already required the recent window to be under the
+	// stall, and the label check below requires this gap to be the
+	// fixture's own stall line rather than any other.
+	if res.Trip.runSlowest < burstStall-burstPace {
 		t.Fatalf("the run's slowest gap is reported as %s (%s), but the fixture stalled for %s and `go test` replayed the line that says so; the whole-run measurement is not being kept",
 			res.Trip.runSlowest.Round(time.Millisecond), res.Trip.runSlowestLabel, burstStall)
 	}
