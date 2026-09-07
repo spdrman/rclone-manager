@@ -449,9 +449,11 @@ func requireNoDroppedTrustAcknowledgement(currentPath, stagedPath, addr string, 
 // checked. Whether "@cert-authority *.example.com" covers this set's host
 // is a question that can only be answered with a host certificate in hand,
 // and there is none here, so this says so rather than guessing in the
-// permissive direction. The cost of being wrong is one acknowledgement on
-// one edit for a set whose file carries a marker at all, which the create
-// path is the only way to reach.
+// permissive direction. Two things can put one in front of this, a create
+// that took a marker line and a set pointed at a known_hosts file an
+// operator keeps by hand, and being wrong about either costs one
+// acknowledgement on one edit: that edit moves the set onto a file of its
+// own, and this never fires for it again.
 func droppedTrust(currentPath, stagedPath, addr string) ([]string, error) {
 	entries, err := readKnownHostsEntries(currentPath)
 	if err != nil {
