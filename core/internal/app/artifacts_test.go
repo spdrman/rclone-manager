@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -78,6 +80,120 @@ func TestListArtifacts_FiltersBySourceAndSet(t *testing.T) {
 	if len(stagingOnly) != 1 || stagingOnly[0].RemotePath != "staging.dump" {
 		t.Errorf("stagingOnly = %+v, want exactly the staging artifact", stagingOnly)
 	}
+
+	// Issue #569: the same narrowing, spelled the way every surface that
+	// PRINTS a backup set spells it. This fixture is the shape that makes
+	// the assertion worth making, since both sources configure a set
+	// called postgres-primary and only the source half of the id tells
+	// them apart.
+	byID, err := svc.ListArtifacts(ctx, ArtifactFilter{Set: "staging/postgres-primary"})
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	if len(byID) != 1 || byID[0].RemotePath != "staging.dump" {
+		t.Errorf("byID = %+v, want exactly the staging artifact", byID)
+	}
+}
+
+// TestListArtifacts_RefusesABareSetNameTwoSourcesShare is the other half
+// of issue #569.
+//
+// FR-7 makes a backup set's identity source-plus-set, so a name two
+// sources both configure identifies neither of them. Answering it with
+// one set's rows, or with both merged, hands an operator who filtered for
+// one host another host's backups with nothing in the output to doubt, and
+// the same convention applied across a fleet produces that collision on
+// every deployment that has one.
+//
+// The candidates are asserted individually rather than as a rendered
+// sentence: what the refusal owes the operator is the two ids they can
+// retype, and how they are punctuated is this package's business.
+func TestListArtifacts_RefusesABareSetNameTwoSourcesShare(t *testing.T) {
+	prodPostgres := testBackupSet(t, t.TempDir())
+	prodPostgres.Name = "postgres-primary"
+	prodPostgres.ID = mustSetID(t, "production", "postgres-primary")
+
+	stagingPostgres := testBackupSet(t, t.TempDir())
+	stagingPostgres.Name = "postgres-primary"
+	stagingPostgres.ID = mustSetID(t, "staging", "postgres-primary")
+
+	svc := New(
+		testConfig(t,
+			testSource("production", prodPostgres),
+			testSource("staging", stagingPostgres),
+		),
+		openJournal(t), newFakeTransport(), nil)
+
+	records, err := svc.ListArtifacts(context.Background(), ArtifactFilter{Set: "postgres-primary"})
+
+	var ambiguous *AmbiguousSetError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("ListArtifacts(Set: postgres-primary) error = %v (%T), want an *AmbiguousSetError", err, err)
+	}
+	if ambiguous.Name != "postgres-primary" {
+		t.Errorf("the refusal is about %q, want the name that was typed", ambiguous.Name)
+	}
+	want := []string{"production/postgres-primary", "staging/postgres-primary"}
+	if len(ambiguous.Candidates) != len(want) {
+		t.Fatalf("candidates = %v, want both configured ids %v", ambiguous.Candidates, want)
+	}
+	if !slices.Equal(ambiguous.Candidates, want) {
+		t.Errorf("candidates = %v, want %v in configuration order", ambiguous.Candidates, want)
+	}
+	if !strings.Contains(ambiguous.Error(), want[0]) || !strings.Contains(ambiguous.Error(), want[1]) {
+		t.Errorf("the refusal reads %q and does not name both candidates; an operator cannot retype what they are not shown", ambiguous.Error())
+	}
+	if records != nil {
+		t.Errorf("ListArtifacts returned %d record(s) alongside its refusal, want none", len(records))
+	}
+}
+
+// TestListArtifacts_RefusesAFilterThatNamesTwoSources covers the one
+// mistake the composite id makes possible, and it lives here rather than
+// beside the command because the command refuses that pair on the
+// command line before it ever opens anything: this is the answer for a
+// caller that builds the filter by hand, which is every caller this
+// presentation-agnostic package is meant to have.
+//
+// What it asserts about the refusal is that it is NOT the not-found one.
+// Both halves of this pair name real, configured things, and reporting it
+// as a missing backup set would print "no configured backup set named
+// staging/postgres-primary" about a set that is configured, which is the
+// untruth #569 was reported for in the first place.
+func TestListArtifacts_RefusesAFilterThatNamesTwoSources(t *testing.T) {
+	prodPostgres := testBackupSet(t, t.TempDir())
+	prodPostgres.Name = "postgres-primary"
+	prodPostgres.ID = mustSetID(t, "production", "postgres-primary")
+
+	stagingPostgres := testBackupSet(t, t.TempDir())
+	stagingPostgres.Name = "postgres-primary"
+	stagingPostgres.ID = mustSetID(t, "staging", "postgres-primary")
+
+	svc := New(
+		testConfig(t,
+			testSource("production", prodPostgres),
+			testSource("staging", stagingPostgres),
+		),
+		openJournal(t), newFakeTransport(), nil)
+
+	filter := ArtifactFilter{Source: "staging", Set: "production/postgres-primary"}
+	records, err := svc.ListArtifacts(context.Background(), filter)
+
+	if err == nil {
+		t.Fatalf("ListArtifacts(%+v) returned %d record(s) and no error; a filter naming two different sources names no backup set", filter, len(records))
+	}
+	var notFound *NotFoundError
+	if errors.As(err, &notFound) {
+		t.Errorf("ListArtifacts(%+v) refused with %v, which says something configured is not configured", filter, err)
+	}
+	for _, want := range []string{"production", "staging"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ListArtifacts(%+v) refused with %q, which does not name %q; the whole complaint is that two sources were named", filter, err, want)
+		}
+	}
+	if records != nil {
+		t.Errorf("ListArtifacts returned %d record(s) alongside its refusal, want none", len(records))
+	}
 }
 
 // TestListArtifacts_RefusesAnUnconfiguredFilter is issue #187's proof.
@@ -128,7 +244,8 @@ func TestListArtifacts_RefusesAnUnconfiguredFilter(t *testing.T) {
 		{name: "no filter at all", filter: ArtifactFilter{}},
 		{name: "a configured source", filter: ArtifactFilter{Source: "production"}},
 		{name: "a configured source and set", filter: ArtifactFilter{Source: "production", Set: "uploads"}},
-		{name: "a set name configured under some source", filter: ArtifactFilter{Set: "postgres-primary"}},
+		{name: "a set name only one source configures", filter: ArtifactFilter{Set: "uploads"}},
+		{name: "the composite id every surface that prints a set prints", filter: ArtifactFilter{Set: "staging/postgres-primary"}},
 		{
 			name:     "an unconfigured source",
 			filter:   ArtifactFilter{Source: "no-such-source"},
@@ -152,6 +269,28 @@ func TestListArtifacts_RefusesAnUnconfiguredFilter(t *testing.T) {
 			// staging/uploads is not.
 			name:     "a real set name under the wrong source",
 			filter:   ArtifactFilter{Source: "staging", Set: "uploads"},
+			wantKind: "backup set",
+			wantName: "staging/uploads",
+		},
+		{
+			// The same three refusals again, spelled as the composite id
+			// #569 taught this filter to take. The name each one reports
+			// is the half that is actually missing, so an operator who
+			// mistyped the source is not sent looking for the set.
+			name:     "a composite id under a source nobody configured",
+			filter:   ArtifactFilter{Set: "no-such-source/postgres-primary"},
+			wantKind: "source",
+			wantName: "no-such-source",
+		},
+		{
+			name:     "a composite id naming no set under a real source",
+			filter:   ArtifactFilter{Set: "production/no-such-set"},
+			wantKind: "backup set",
+			wantName: "production/no-such-set",
+		},
+		{
+			name:     "a composite id pairing a real source with the wrong set",
+			filter:   ArtifactFilter{Set: "staging/uploads"},
 			wantKind: "backup set",
 			wantName: "staging/uploads",
 		},

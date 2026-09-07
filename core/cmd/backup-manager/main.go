@@ -143,9 +143,19 @@ commands:
                                                   collected stay on storage and stay listed by artifacts, and creating
                                                   the set again with the same source and name takes them back (#391)
   artifacts [--source S] [--backup-set B]        list journal artifacts
+                                                  --backup-set takes the source/backup-set id sources, status and
+                                                  retention name a backup set by, and a plain set name where one
+                                                  source configures it. Not this list's own first column: that one
+                                                  is the whole artifact id, a field longer, so drop the file name
+                                                  off the end of it. A name two sources share names neither of
+                                                  them, so it is refused with both ids rather than answered for one
+                                                  of them (#569)
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
+                                                  --backup-set takes the source/backup-set id here too, and names
+                                                  the source itself when it carries one, so --source is only
+                                                  needed for the plain set name (#569)
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
                                                   preview GFS/last-known-good retention decisions. It deletes nothing in
                                                   either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
@@ -257,10 +267,20 @@ to print:
       not open, a cycle that backed nothing up, a set or an artifact that is not there, a
       status short of HEALTHY, a route that was named and did not answer, and a route that
       answered for a DIFFERENT deployment than the one this command was typed at
+      a --backup-set naming a set name two sources share is an ordinary failure too, and
+      not a 2: it takes the loaded configuration to know it is ambiguous at all, and the
+      same command line is exactly right on a deployment where one source has that name
+      (#569)
   2   nothing ran: the command line was wrong (an unknown command, an unknown flag, a
       missing or surplus argument), or it asked for help rather than for work. A -h on a
       subcommand is here too and it is not a mistake: 2 says no command was carried out,
       and the reason is on stderr either way
+      a value that is not shaped like a backup set id is here too, everywhere one is taken:
+      retention's operand, backup-set create/patch/remove/retention, unconfigured clear, and
+      --backup-set on artifacts and fetch all refuse it before they open anything. That is
+      where the line between this row and the one above it falls: source/name with a file
+      name still on the end is wrong wherever it is typed, and a name this configuration
+      does not have is only wrong here (#569)
   3   another process is serving this deployment, so nothing was done: a configuration write
       refused because it would never reach that process, or a daemon refused rather than
       started beside one. backup-manager-web serve answers the same way for the same

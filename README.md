@@ -50,7 +50,7 @@ the way its predecessor did.
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
 | `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
-| `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
+| `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set`. `--backup-set` takes the `source/backup-set` id `sources`, `status` and `retention` name a backup set by, and a plain set name where one source configures it. Not this list's own first column, which is the whole artifact id and a field longer; a name two sources share is refused with both ids rather than answered for one of them (issue #569) |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
 | `reconcile` | run FR-17 reconciliation for every backup set |
@@ -1694,9 +1694,12 @@ branches, is [`docs/recovery.md`](docs/recovery.md); this is the part you should
 click through to get.
 
 Start with `backup-manager status --config <path>` and `backup-manager artifacts --config
-<path> --backup-set <set>`, which is faster than a query and does not need you to know the
-schema. When you want the raw truth, or the binary is not to hand: **the SQLite journal at
-`state.database` is the truth, and it's a plain SQLite file.** Query it directly:
+<path> --backup-set <source/backup-set>`, which is faster than a query and does not need you
+to know the schema. The set name on its own works too, as long as only one source configures
+it: where two hosts follow one naming convention, name the whole id, since the same name
+under two sources is refused rather than answered for one of them (issue #569). When you
+want the raw truth, or the binary is not to hand: **the SQLite journal at `state.database`
+is the truth, and it's a plain SQLite file.** Query it directly:
 
 ```bash
 sqlite3 /path/to/state.db "
