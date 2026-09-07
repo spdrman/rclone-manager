@@ -2353,3 +2353,4 @@ All four are generated, never hand-edited:
 ```
 cd distribution && go run ./cmd/provenance -write
 ```
+
