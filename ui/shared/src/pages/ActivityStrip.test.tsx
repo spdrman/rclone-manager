@@ -47,8 +47,8 @@ const SET: BackupSet = {
   expectedIntervalHours: 1,
   retainedCount: 41,
   retainedBytes: 12 * 1024 ** 3,
-  hostFingerprint: "SHA256:test-fingerprint",
-  fingerprintTrustedAt: "2026-09-01T10:14:00+02:00"
+  trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
+  trustedHostKeyRecordedAt: "2026-09-01T10:14:00+02:00"
 };
 
 function event(over: Partial<SetActivityEvent> & { sequence: number }): SetActivityEvent {

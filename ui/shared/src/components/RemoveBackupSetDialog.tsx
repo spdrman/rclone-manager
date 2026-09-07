@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
+import { bytes } from "@shared/utilities/format";
 import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 import type { BackupSet } from "@shared/types/backup";
 

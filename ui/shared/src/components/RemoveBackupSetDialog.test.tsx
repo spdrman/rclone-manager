@@ -61,11 +61,11 @@ const SET: BackupSet = {
   newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
   lastRunAt: null,
   lastValidation: "not-run",
-  expectedIntervalHours: 0,
-  retainedCount: 0,
-  retainedBytes: 0,
-  hostFingerprint: "",
-  fingerprintTrustedAt: null
+  expectedIntervalHours: null,
+  retainedCount: null,
+  retainedBytes: null,
+  trustedHostKeys: [],
+  trustedHostKeyRecordedAt: null
 };
 
 function open(set: BackupSet) {
@@ -83,24 +83,30 @@ describe("the removal confirmation", () => {
     expect(within(dialog).getByText(/stay on NAS storage and remain listed under Backups/)).toBeTruthy();
   });
 
-  it("states no count of what stays, on a set reporting none", () => {
+  it("says it cannot say how many, rather than saying none", () => {
+    // Nothing on the wire feeds retainedCount or retainedBytes, so
+    // fromWireBackupSet yields null and this is what every real deployment
+    // renders. It used to render "0 retained backups (0 B)", which is
+    // reassurance-shaped copy saying there is nothing here to lose, in a
+    // destructive-adjacent dialog, at the moment somebody decides whether
+    // to click.
     const dialog = open(SET);
     const text = dialog.textContent ?? "";
-    // "0 retained backups (0 B)" is what every real deployment rendered,
-    // because the two fields behind it are literals rather than reads.
     expect(text).not.toMatch(/0 retained backups/);
     expect(text).not.toMatch(/0 B/);
+    expect(text).toMatch(/cannot say how many/i);
+    expect(text).toMatch(/stay on NAS storage/i);
   });
 
-  it("states no count of what stays even when a count is available to state", () => {
-    // The important half. This frontend cannot stand behind either number
-    // whatever they happen to hold, so a dialog that only stopped saying
-    // "0" would be wrong again the moment a fixture said 41. What has to
-    // be true is that the sentence does not quantify at all.
+  it("states the count once there is a real one to state", () => {
+    // The other half. Refusing to quantify was right while the numbers were
+    // literals, and wrong as a permanent rule: an operator deciding whether
+    // to remove a set is better served by "41 retained backups" when the
+    // service actually reported 41.
     const dialog = open({ ...SET, retainedCount: 41, retainedBytes: 12 * 1024 ** 3 });
     const text = dialog.textContent ?? "";
-    expect(text).not.toMatch(/41/);
-    expect(text).not.toMatch(/\d+(\.\d+)?\s?(B|KB|MB|GB|TB)\b/);
-    expect(text).not.toMatch(/retained backups/);
+    expect(text).toMatch(/41 retained backups/);
+    expect(text).toMatch(/stay on NAS storage/i);
+    expect(text).not.toMatch(/cannot say how many/i);
   });
 });
