@@ -315,8 +315,8 @@ func declareBackupSetFlags() *backupSetFlags {
 	f.disabled = fs.Bool("disabled", false, "create: save the set disabled, so no cycle runs it until it is enabled")
 	f.readOnly = fs.Bool("read-only", false, "create: this set's remote source must never be deleted from (issue #282)")
 	f.runNow = fs.Bool("run", false, "create: submit a run cycle immediately after the set is persisted")
-	f.stateDatabase = fs.String("state-database", defaultStateDatabase,
-		"create: the SQLite journal path a FIRST configuration names. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
+	f.stateDatabase = fs.String("state-database", service.StateDatabaseDefault(),
+		"create: the SQLite journal path a FIRST configuration names, and the deployment this command asks about when there is no config.yaml to read one out of. Defaults to $STATE_DATABASE, or the packaged /data/state/state.db, which is the same default the web host serves under. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
 
 	f.acknowledgeRepoint = fs.Bool("acknowledge-repoint", false,
 		"create, patch: confirm pointing this set at different data. On patch, needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; on create, only when this id already has artifacts on record and the set is being created somewhere other than where they came from. The refusal without it says what it costs")
@@ -552,16 +552,6 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 // reaching the host it runs on), so it says what it is rather than
 // inventing a username.
 const cliActor = "cli"
-
-// defaultStateDatabase is the SQLite journal path a FIRST configuration
-// names when --state-database is not given. It is the packaged mount from
-// container/compose.yaml, the same literal and for the same reason
-// defaultConfigPath above is: this is the value an operator on the
-// machine the installer just set up should never have to type.
-// apps/generic's own --state-database carries the same default, which is
-// what makes a config written from here and one written through the
-// first-run wizard name the same file.
-const defaultStateDatabase = "/data/state/state.db"
 
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -772,5 +773,78 @@ func TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven(t *testing.T) {
 		if got != want {
 			t.Errorf("the first-run save dropped or changed %s: asked for %v, persisted %v", row.field, want, got)
 		}
+	}
+}
+
+// TestCompleteFirstRun_SaysWhatIsWrongWithTheStateDirectory is PR #581's
+// review finding, seen from the surface the operator is actually looking
+// at.
+//
+// A fresh install whose state volume is read-only, mounted late, or owned
+// by another uid cannot be set up: core/service.FirstRun.CreateInitialConfig
+// refuses rather than writing a configuration naming a journal it cannot
+// create. Refusing was already right. What was wrong is that the refusal
+// arrived as the generic "failed to write backup set", so the one screen
+// this operator has said nothing about the volume, and the container was
+// exiting before they could reach that screen at all.
+//
+// The wizard renders the message field verbatim (ui/shared's
+// BackupSetWizardPage puts it straight into its save error), so what is
+// asserted here is that the sentence carries the diagnosis rather than a
+// shrug.
+func TestCompleteFirstRun_SaysWhatIsWrongWithTheStateDirectory(t *testing.T) {
+	fr := &fakeFirstRun{createErr: fmt.Errorf("%w: /data/state is not writable: permission denied", service.ErrStateDirInvalid)}
+	router := unconfiguredRouter(fr)
+
+	rec := postFirstRun(t, router, validCreateBody, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: a state volume this deployment cannot write is not the client's request being wrong (%s)", rec.Code, rec.Body.String())
+	}
+	if got := responseErrorCode(rec.Body.String()); got != "INTERNAL" {
+		t.Fatalf("error code = %q, want INTERNAL, which is what the contract declares for this operation (%s)", got, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding the refusal: %v (%s)", err, rec.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, "/data/state is not writable") {
+		t.Errorf("message = %q, want the state directory's own complaint in it; the operator's only screen is this one, and 'failed to write backup set' sends them to look at their backup set", body.Error.Message)
+	}
+	if fr.activated != 0 {
+		t.Error("activation ran although no configuration was written")
+	}
+}
+
+// TestCompleteFirstRun_SaysWhenTheDeploymentCouldNotBeAnnounced is the
+// other refusal the same screen has to carry.
+//
+// A first-run process announces which deployment it is about to serve
+// before it serves anything (#571). When it could not, setup must not
+// write the first configuration: nothing would stop a `backup-set create`
+// on the same host writing one too, which is the exact defect #571 is.
+// The operator is told, in the wizard, rather than being left with a
+// wizard that silently will not finish.
+func TestCompleteFirstRun_SaysWhenTheDeploymentCouldNotBeAnnounced(t *testing.T) {
+	fr := &fakeFirstRun{createErr: fmt.Errorf("%w: flock is not supported on this filesystem", service.ErrNotAnnounced)}
+	router := unconfiguredRouter(fr)
+
+	rec := postFirstRun(t, router, validCreateBody, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding the refusal: %v (%s)", err, rec.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, "flock is not supported on this filesystem") {
+		t.Errorf("message = %q, want the reason this deployment could not be announced", body.Error.Message)
 	}
 }

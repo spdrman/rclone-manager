@@ -460,7 +460,9 @@ deployment or the hundredth edit of an existing one. Write the file, run `check`
 `backup-set create` holds that line rather than breaking it. On a machine with no
 `config.yaml` it writes the first one, through the same `FirstRun.CreateInitialConfig` the
 wizard's route calls, and `--state-database` names the journal that first configuration
-points at (defaulting to `/data/state/state.db`, the packaged mount). So an operator on a
+points at (defaulting to `$STATE_DATABASE`, or `/data/state/state.db`, the packaged mount).
+That default is the same one the web host serves under, read out of one definition, so moving
+the journal with `$STATE_DATABASE` moves both surfaces or neither. So an operator on a
 host where no engine is up has one command to type rather than a wizard to open, and the two
 surfaces still reach the same code.
 

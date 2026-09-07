@@ -460,11 +460,11 @@ func TestAnnounceServingFirstRun_IsFoundOnAnInstanceWithNoConfiguration(t *testi
 	configPath := filepath.Join(dir, "config.yaml")
 	dbPath := filepath.Join(dir, "state", "state.db")
 
-	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	serving, err := AnnounceServingFirstRun(configPath, dbPath)
 	if err != nil {
 		t.Fatalf("AnnounceServingFirstRun: %v", err)
 	}
-	t.Cleanup(func() { _ = release() })
+	t.Cleanup(func() { _ = serving.Release() })
 
 	engine, err := DetectRunningEngineForJournal(dbPath)
 	if err != nil {
@@ -486,8 +486,8 @@ func TestAnnounceServingFirstRun_IsFoundOnAnInstanceWithNoConfiguration(t *testi
 
 	// And it is given back, so a restarted container is not refused by the
 	// announcement its predecessor made.
-	if err := release(); err != nil {
-		t.Fatalf("release: %v", err)
+	if err := serving.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
 	}
 	engine, err = DetectRunningEngineForJournal(dbPath)
 	if err != nil {
@@ -510,11 +510,11 @@ func TestAnnounceServingFirstRun_PrefersTheJournalTheConfigurationNames(t *testi
 	configPath := writeConfigFileFor(t, dir, dbPath)
 	elsewhere := filepath.Join(dir, "elsewhere", "state.db")
 
-	release, err := AnnounceServingFirstRun(configPath, elsewhere)
+	serving, err := AnnounceServingFirstRun(configPath, elsewhere)
 	if err != nil {
 		t.Fatalf("AnnounceServingFirstRun: %v", err)
 	}
-	t.Cleanup(func() { _ = release() })
+	t.Cleanup(func() { _ = serving.Release() })
 
 	engine, err := DetectRunningEngine(configPath)
 	if err != nil {
@@ -542,11 +542,11 @@ func TestAnnounceServingFirstRun_SaysNothingAboutAConfigurationItCannotRead(t *t
 	configPath := writeFileFor(t, filepath.Join(dir, "config.yaml"), "state:\n  database: [this is not a path\n")
 	dbPath := filepath.Join(dir, "state", "state.db")
 
-	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	serving, err := AnnounceServingFirstRun(configPath, dbPath)
 	if err != nil {
 		t.Fatalf("AnnounceServingFirstRun: %v", err)
 	}
-	t.Cleanup(func() { _ = release() })
+	t.Cleanup(func() { _ = serving.Release() })
 
 	engine, err := DetectRunningEngineForJournal(dbPath)
 	if err != nil {
@@ -570,13 +570,116 @@ func TestAnnounceServingFirstRun_RefusesASecondEngine(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	dbPath := filepath.Join(dir, "state", "state.db")
 
-	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	serving, err := AnnounceServingFirstRun(configPath, dbPath)
 	if err != nil {
 		t.Fatalf("AnnounceServingFirstRun: %v", err)
 	}
-	t.Cleanup(func() { _ = release() })
+	t.Cleanup(func() { _ = serving.Release() })
 
 	if _, err := AnnounceServingFirstRun(configPath, dbPath); !errors.Is(err, ErrAlreadyServing) {
 		t.Fatalf("second AnnounceServingFirstRun error = %v, want errors.Is(_, ErrAlreadyServing)", err)
+	}
+}
+
+// The two below are PR #581's own review finding, and the defect they
+// pin is the one this whole file is meant to prevent a milder version of.
+//
+// Announcing about --state-database means creating a lock file in the
+// state directory, so #571's fix put a directory check in front of the
+// one start where an operator has nothing but a browser. A read-only bind
+// mount, a volume mounted after the service starts, or a uid that cannot
+// write /data/state turned a fresh install from "serves the setup wizard"
+// into a container that exits and is restarted forever, diagnosable only
+// through `docker logs`. That trades a rare, recoverable misconfiguration
+// for an invisible one.
+
+// TestAnnounceServingFirstRun_ServesTheWizardWhenTheStateDirectoryIsUnusable
+// is that defect: the start does not fail, and the reason is carried back
+// for the operator to read in the browser they already have open.
+func TestAnnounceServingFirstRun_ServesTheWizardWhenTheStateDirectoryIsUnusable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	// A plain file where the state directory has to be. It refuses for
+	// every uid, unlike a permission bit, which root ignores and which
+	// would make this test say nothing in a container that runs as root.
+	inTheWay := writeFileFor(t, filepath.Join(dir, "state"), "not a directory")
+	dbPath := filepath.Join(inTheWay, "state.db")
+
+	serving, err := AnnounceServingFirstRun(configPath, dbPath)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun with an unusable state directory = %v, want no error: this is a first install, and failing the start here is a container restart loop in front of an operator who has only a browser", err)
+	}
+	t.Cleanup(func() { _ = serving.Release() })
+
+	blocked := serving.Blocked()
+	if blocked == nil {
+		t.Fatal("Blocked() = nil while the state directory is a file; nothing would then stop setup writing a configuration for a journal that cannot be created")
+	}
+	if !errors.Is(blocked, ErrStateDirInvalid) {
+		t.Errorf("Blocked() = %v, want an error matching ErrStateDirInvalid so the wizard can say what is wrong with the volume", blocked)
+	}
+	if !errors.Is(blocked, ErrNotAnnounced) {
+		t.Errorf("Blocked() = %v, want an error matching ErrNotAnnounced; that is the one thing a caller branches on", blocked)
+	}
+}
+
+// TestFirstRunServing_AnnouncesOnceTheStateDirectoryWorks is the other
+// half, and the half that keeps #571 closed while the wizard is up.
+//
+// Refusing setup is only half an answer. An operator who fixes the mount
+// must be able to finish setup in the wizard that is still on screen, and
+// the moment they can, this deployment has to be announced: the whole
+// point of #571 is that a `backup-set create` typed on the same host
+// finds the engine rather than writing a configuration behind it.
+func TestFirstRunServing_AnnouncesOnceTheStateDirectoryWorks(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	stateDir := writeFileFor(t, filepath.Join(dir, "state"), "not a directory")
+	dbPath := filepath.Join(stateDir, "state.db")
+
+	serving, err := AnnounceServingFirstRun(configPath, dbPath)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = serving.Release() })
+	if serving.Blocked() == nil {
+		t.Fatal("Blocked() = nil before the state directory was fixed")
+	}
+
+	// The operator fixes the volume, without restarting anything.
+	if err := os.Remove(stateDir); err != nil {
+		t.Fatalf("removing the file in the way: %v", err)
+	}
+
+	if blocked := serving.Blocked(); blocked != nil {
+		t.Fatalf("Blocked() = %v once the state directory works, want nil: setup stays refused until the process is restarted, which is the restart this whole path exists to avoid", blocked)
+	}
+	engine, err := DetectRunningEngineForJournal(dbPath)
+	if err != nil {
+		t.Fatalf("DetectRunningEngineForJournal: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("nothing is announced although setup is now allowed to proceed, so a `backup-set create` on this host would write a configuration the wizard will never read (issue #571)")
+	}
+}
+
+// TestAnnounceServingFirstRun_StillFailsAConfiguredDeploymentsStart is the
+// control for the two above. Degrading is the right answer for an install
+// that has never been configured and is about to serve a wizard; it is the
+// wrong answer for an engine that has a configuration, where being
+// unfindable is exactly what #535 and #571 are.
+func TestAnnounceServingFirstRun_StillFailsAConfiguredDeploymentsStart(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	configPath := writeConfigFileFor(t, dir, dbPath)
+
+	first, err := AnnounceServingFirstRun(configPath, filepath.Join(dir, "unused.db"))
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Release() })
+
+	if _, err := AnnounceServingFirstRun(configPath, filepath.Join(dir, "unused.db")); !errors.Is(err, ErrAlreadyServing) {
+		t.Fatalf("second AnnounceServingFirstRun against a configured deployment = %v, want errors.Is(_, ErrAlreadyServing) and a failed start", err)
 	}
 }

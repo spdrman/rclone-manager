@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -78,6 +79,55 @@ import (
 // platform and not the other is worse than one that carries none. So the
 // engine is named by the thing it was actually found holding, which is
 // also the thing an operator needs in order to go and find it.
+
+// DefaultStateDatabase is the SQLite journal a deployment that has not
+// been told otherwise names, and it is ONE definition on purpose.
+//
+// Everything in this file rests on it. A first-run engine announces
+// itself about the journal --state-database names (AnnounceServingFirstRun
+// below), and a `backup-set create` typed on that host finds the
+// announcement by asking about the journal ITS --state-database names, so
+// "the CLI and the web host agree about which deployment is live" is
+// exactly the statement "those two defaults are the same string". It used
+// to be two constants in two modules with nothing comparing them: the
+// claim held only while they happened to match, and a change to one of
+// them broke #571's fix silently, on the one deployment shape where
+// nothing else would notice.
+//
+// It is the packaged mount from container/compose.yaml (STATE_DIR ->
+// /data/state), the path scripts/deploy/deploy_generic.py's
+// render_config_yaml has always written, and the value an operator on a
+// machine the installer just set up should never have to type.
+//
+// It is a deployment fact, never something an API caller supplies: see
+// FirstRunDefaults' own doc for why that boundary matters.
+const DefaultStateDatabase = "/data/state/state.db"
+
+// StateDatabaseEnv is the environment variable that moves the journal, and
+// it has to reach BOTH surfaces or it does the opposite of what an
+// operator setting it means.
+//
+// The web host read it and the CLI did not, so a hand-tuned deployment
+// that moved the journal moved the engine out of the CLI's sight: the
+// engine announced about $STATE_DATABASE and the create asked about
+// /data/state/state.db, found nothing, and wrote a first configuration
+// behind a running wizard. That is #571 again, reached through the one
+// setting that was supposed to be the supported way to move the journal.
+const StateDatabaseEnv = "STATE_DATABASE"
+
+// StateDatabaseDefault is the journal a process should assume when its own
+// command line does not name one: what $STATE_DATABASE says, or the
+// packaged path.
+//
+// Both commands' --state-database flags take their default from here and
+// statedatabase_test.go fails if either one stops doing so, which is what
+// makes the paragraphs above a check rather than an intention.
+func StateDatabaseDefault() string {
+	if v := os.Getenv(StateDatabaseEnv); v != "" {
+		return v
+	}
+	return DefaultStateDatabase
+}
 
 // RunningEngine describes a process that has announced itself as serving
 // this deployment and is still serving it. Its presence is the whole
@@ -260,14 +310,17 @@ func AnnounceServing(configPath string) (func() error, error) {
 // that names a journal wins, always, so a configured deployment behaves
 // exactly as it did before and firstRunDatabase is never looked at.
 //
-// And it can only be found by somebody asking about the same journal. The
-// packaged deployment fixes both ends to the same path (this app's
-// --state-database and the CLI's carry the same default, and
-// container/compose.yaml overrides neither), so the shape that gets past
-// this is a hand-tuned deployment where $STATE_DATABASE was moved for the
-// engine and the create was typed without a matching --state-database.
-// That is the same shape a mistyped --config has always had, and it is
-// named here rather than left for somebody to rediscover.
+// And it can only be found by somebody asking about the same journal, so
+// both ends read that path out of ONE definition: StateDatabaseDefault
+// above, which is what this app's --state-database and the CLI's both
+// default to, $STATE_DATABASE included. That last part was the hole PR
+// #581's review found. The engine read the variable and the CLI did not,
+// so an operator who moved the journal the supported way moved the engine
+// out of the CLI's sight, and a `backup-set create` on that host went
+// straight back to writing a configuration behind a running wizard. What
+// gets past this now is the same thing that has always got past it: a
+// --config or a --state-database typed by hand that names a deployment
+// other than the one running.
 //
 // It does not guess for a configuration that EXISTS and cannot be read.
 // That is a deployment that is set up wrongly rather than one that is not
@@ -277,7 +330,7 @@ func AnnounceServing(configPath string) (func() error, error) {
 // and minting an identity beside, a journal that may not be the one that
 // file names.
 //
-// # Why the state directory is made here
+// # Why the state directory is made here, and what happens when it cannot be
 //
 // acquireServingLock creates its lock file, and it cannot create it in a
 // directory that is not there. A first-ever start against a fresh volume is
@@ -285,23 +338,207 @@ func AnnounceServing(configPath string) (func() error, error) {
 // validateStateDir step §46.1's startup sequence runs, which creates a
 // missing directory and refuses one that exists and cannot be used.
 //
-// A refusal here fails the start, which is AnnounceServing's rule rather
-// than a new one: an engine that serves a setup flow nothing can find is
-// the failure #571 is about, and a state directory that cannot be written
-// is a deployment that could not have completed setup anyway. Loud at the
-// start beats silent until the end of a wizard.
-func AnnounceServingFirstRun(configPath, firstRunDatabase string) (func() error, error) {
+// A refusal there does NOT fail the start. It is carried back on the
+// FirstRunServing this returns, and the whole argument for that is on the
+// type: an install that cannot announce yet still serves its wizard, says
+// why inside it, and refuses to be configured until the announcement can
+// really be made.
+//
+// What DOES fail the start is ErrAlreadyServing, on either path, and any
+// failure at all on the configured path. Neither of those is a volume an
+// operator can fix from a browser.
+func AnnounceServingFirstRun(configPath, firstRunDatabase string) (*FirstRunServing, error) {
 	if dbPath, ok := journalNamedBy(configPath); ok {
-		return announceServingJournal(dbPath)
+		release, err := announceServingJournal(dbPath)
+		if err != nil {
+			return nil, err
+		}
+		return &FirstRunServing{release: release}, nil
 	}
 	if firstRunDatabase == "" || !configAbsent(configPath) {
-		return func() error { return nil }, nil
+		return &FirstRunServing{}, nil
 	}
-	if err := validateStateDir(firstRunDatabase); err != nil {
+	s := &FirstRunServing{dbPath: firstRunDatabase}
+	if err := s.announce(); err != nil {
 		return nil, err
 	}
-	return announceServingJournal(firstRunDatabase)
+	return s, nil
 }
+
+// FirstRunServing is a first-run process's announcement, and the one
+// thing that announcement can be missing.
+//
+// It exists because of what announcing costs on the config-absent path: a
+// lock file inside the state directory, which is the one thing a fresh
+// install is most likely to have wrong. This type is what lets that be a
+// refusal the operator READS rather than a start that fails.
+//
+// # Why a failed announcement does not fail a first-run start
+//
+// The first version of #571's fix refused the start, on AnnounceServing's
+// own rule: an engine nothing can find is the failure this file exists to
+// prevent. That rule is right for a CONFIGURED deployment and wrong here,
+// and PR #581's review is where the difference got named.
+//
+// A configured engine that cannot announce is unsafe to run: a
+// `backup-set create` beside it writes a configuration it will never
+// read, which is #535 with both halves live, so refusing to start is the
+// fail-closed answer and the operator has a CLI, a config.yaml and a
+// running deployment to diagnose it with.
+//
+// A FIRST install has none of that. It has a browser pointed at a setup
+// wizard and nothing else, so a read-only bind mount, a volume mounted
+// after the service starts or a uid that cannot write /data/state turned
+// a recoverable misconfiguration into a container restart loop whose only
+// symptom is `docker logs`. Serving the wizard and saying what is wrong
+// inside it is strictly more information than exiting, and it costs
+// nothing that was there to lose: with no configuration and no announcement
+// this deployment has nothing anybody could write behind, and the one
+// write that would create something (setup itself) is refused by Blocked
+// below until the announcement can actually be made.
+//
+// Two failures are still failures rather than degradations, and both come
+// back from AnnounceServingFirstRun as errors. A configured deployment's
+// announcement, for the paragraph above. And ErrAlreadyServing on either
+// path, because that is not a broken volume, it is a second engine over
+// one journal, and the answer to that has always been to refuse the second
+// one (#551 gives it an exit code of its own).
+type FirstRunServing struct {
+	// dbPath is the journal this process will serve, and is empty for the
+	// two shapes that have nothing to retry: a configured deployment
+	// (announced once, at the top) and a process with no journal to name.
+	dbPath string
+
+	// mu guards the two fields below. Blocked is reachable from an HTTP
+	// handler while Release is reachable from the process's own shutdown,
+	// so the retry and the giving-back can genuinely race.
+	mu       sync.Mutex
+	release  func() error
+	problem  error
+	released bool
+}
+
+// Blocked reports what stops this deployment being set up, or nil when
+// nothing does.
+//
+// It RETRIES the announcement rather than reporting a verdict taken at
+// startup, and that is the whole point of the type. An operator who
+// remounts the volume read-write, or fixes the ownership of /data/state,
+// has to be able to finish setup in the wizard already on their screen;
+// a verdict cached at boot would tell them to restart a container they
+// have never seen a shell for.
+//
+// It is also what keeps #571 closed while the wizard is up. The moment
+// this returns nil the deployment is announced, so the `backup-set
+// create` that #571 was reported for finds this process rather than
+// writing a first configuration behind it. Setup calls this before it
+// writes anything, which is what makes "announced" and "allowed to be
+// configured" the same instant rather than two.
+func (s *FirstRunServing) Blocked() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.release != nil || s.dbPath == "" || s.released {
+		return nil
+	}
+	if err := s.announceLocked(); err != nil {
+		// Marked, unlike the identical error at startup. This is reached
+		// from a setup submission rather than from a start, and what a
+		// caller there needs is one thing to branch on: every reason this
+		// deployment is not announced reaches the operator the same way,
+		// through the wizard, in whatever words the reason itself used.
+		return notAnnounced{err}
+	}
+	return s.problem
+}
+
+// announce makes the first attempt, and is the only one whose failure can
+// fail the process's start.
+func (s *FirstRunServing) announce() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.announceLocked()
+}
+
+// announceLocked tries to take the serving lock, recording an ordinary
+// misconfiguration as a problem to be read and returning only the errors
+// that must stop a start.
+func (s *FirstRunServing) announceLocked() error {
+	s.problem = nil
+	// The state directory has to exist before a lock file can be created
+	// in it, and a first-ever start against a fresh volume is exactly that
+	// directory not being there, so this runs §46.1's own
+	// "validate state directory" step: it creates a missing directory and
+	// refuses one that exists and cannot be used.
+	if err := validateStateDir(s.dbPath); err != nil {
+		s.problem = notAnnounced{err}
+		return nil
+	}
+	release, err := announceServingJournal(s.dbPath)
+	if err != nil {
+		if errors.Is(err, ErrAlreadyServing) {
+			// Not a degradation. Two engines over one journal is the one
+			// thing this lock exists to make impossible, and a supervisor
+			// reading exit code 3 knows to wait and try again.
+			return err
+		}
+		// Everything else is the volume rather than a second engine:
+		// EACCES on a lock file owned by another uid, ENOTSUP where flock
+		// is unavailable, EIO on a sick disk. A fresh install used to come
+		// up on those filesystems and must go on doing so.
+		s.problem = notAnnounced{err}
+		return nil
+	}
+	s.release = release
+	return nil
+}
+
+// Release gives the announcement back. Safe on a nil receiver and on one
+// that never managed to announce, so a caller can defer it
+// unconditionally.
+func (s *FirstRunServing) Release() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Marked released whether or not there was anything to give back, so a
+	// late Blocked (a setup submission racing this process's own shutdown)
+	// cannot re-announce a deployment nobody is going to serve.
+	s.released = true
+	if s.release == nil {
+		return nil
+	}
+	release := s.release
+	s.release = nil
+	return release()
+}
+
+// ErrNotAnnounced marks the refusal a first-run process hands to its own
+// setup surface: this deployment could not be announced, so nothing may
+// write its first configuration yet.
+//
+// A sentinel rather than a sentence, for the reason the CLI's
+// errEngineHoldsDeployment gives: the caller branching on it (the setup
+// handler, which turns it into an HTTP refusal) must never have to read
+// the prose an operator reads.
+var ErrNotAnnounced = errors.New("service: this deployment could not be announced, so it cannot be set up yet")
+
+// notAnnounced marks an error as that refusal without altering a word of
+// it, the same trick core/cmd/backup-manager's engineHeld plays.
+//
+// The words matter here more than usual: what validateStateDir says
+// ("/data/state is not writable", "exists and is not a directory") is the
+// entire diagnosis an operator gets, and it reaches them through the
+// wizard. Wrapping it in a prefix of this package's own would push the
+// useful half of the sentence further from the start of a message shown
+// in a browser.
+type notAnnounced struct{ err error }
+
+func (e notAnnounced) Error() string   { return e.err.Error() }
+func (e notAnnounced) Unwrap() []error { return []error{e.err, ErrNotAnnounced} }
 
 // announceServingJournal is the announcement itself, shared by the two
 // entry points above so that "which journal" is the only thing they can
