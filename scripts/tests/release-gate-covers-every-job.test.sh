@@ -21,9 +21,11 @@
 #      at parse time rather than silently, but fails here first and says
 #      why;
 #   3. release-gate carries `if: always()`, because without it a failed
-#      dependency SKIPS this job, a skipped check reports no conclusion,
-#      and branch protection reads no conclusion as "still waiting"
-#      rather than as a failure;
+#      dependency SKIPS this job, GitHub records the skip as a check run
+#      whose conclusion is `skipped`, and a required status check counts
+#      `skipped` as satisfied. Removing that line fails OPEN: the gate
+#      goes quiet exactly when a job went red, and the merge is allowed
+#      rather than stalled;
 #   4. ci.yml still triggers on a pull request into `release`, which is
 #      the whole acceptance criterion of #575 and one line away from
 #      being undone by accident.
@@ -154,8 +156,8 @@ check(
 
 check(
     gate_has_always,
-    f"{GATE} carries `if: always()`, so a failed job leaves it red rather than skipped",
-    f"{GATE} has no `if: always()`. Without it a failed dependency SKIPS this job, a skipped check reports no conclusion at all, and a branch protection rule waiting on it reads that as 'not finished yet' rather than as a failure: the merge button stays blocked forever instead of the change being refused, and re-running to clear it is the obvious wrong fix",
+    f"{GATE} carries `if: always()`, so a failed job leaves it red rather than skipped, and a skipped required check would have counted as a pass",
+    f"{GATE} has no `if: always()`. Without it a failed dependency SKIPS this job, GitHub reports the skip as a check run whose conclusion is `skipped`, and a required status check counts `skipped` as satisfied. That fails OPEN, not shut: the line is what keeps a red suite red, and deleting it lets exactly the merges this gate exists to stop go through, quietly, because the job that would have gone red never ran",
 )
 
 body = "\n".join(lines)

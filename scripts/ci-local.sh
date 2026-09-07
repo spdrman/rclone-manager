@@ -330,6 +330,22 @@ bash scripts/tests/two-machine-ci-verdict.test.sh
 gate_step "the release gate still covers every job in ci.yml (#575)"
 bash scripts/tests/release-gate-covers-every-job.test.sh
 
+# The other half of the same gate, and the half that does not need a
+# settings page to be true (#575). A required check gates while branch
+# protection says it does, and a direct push, an administrator merging
+# past a red check or an edited ruleset all still land a commit on
+# `release`, which is what publishes. release.yml now asks GitHub whether
+# `release gate` actually passed on the commit it is about to publish and
+# refuses if it did not. This pulls that job's script out of the workflow
+# and runs it against a stand-in `gh`, once per outcome: green, red,
+# skipped, absent, forged, unreachable, overridden, and overridden with no
+# reason given.
+#
+# Same cost and same reasoning as the step above: no containers, no
+# network, about a second.
+gate_step "a publish the release gate never passed is still refused (#575)"
+bash scripts/tests/release-refuses-an-ungated-publish.test.sh
+
 gate_step "core/ go build"
 (cd core && GOWORK=off go build ./...)
 

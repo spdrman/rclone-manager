@@ -128,6 +128,55 @@ The way to know it took is to try to merge something red, not to look at the
 settings page. A required context that names a check no run produces is
 indistinguishable, from the settings page, from one that is working.
 
+### The half that is not a settings page
+
+The ruleset blocks the merge button, and that is by far the better place to find out:
+it happens before anything publishes, on a page with the diff on it. It is also the
+only part of the arrangement above that this repository cannot see, and it is not the
+only way a commit reaches `release`. An administrator can merge past a required check,
+a ruleset can be edited or switched off, a bypass list can grow. Each of those lands a
+commit here, and landing a commit here is what publishes.
+
+So `.github/workflows/release.yml` asks the same question again, at publish time, in a
+file. Its `require-release-gate` job reads the `release gate` check run on the commit
+being published and on the head that commit merged in, and it refuses to let `publish`
+run unless one of them completed successfully. It looks at the parent because a
+`pull_request` run reports its check runs against the pull request's head commit
+rather than against the merge commit the button writes, and the ruleset allows merge
+commits only, so the head that was checked is the second parent of what lands.
+
+It refuses more than an absent check. A `release gate` that concluded `failure` or
+`skipped` is a refusal, and so is a green one posted by an app that is not GitHub
+Actions, because a check run is only as trustworthy as whatever holds `checks: write`
+in this repository. A query it could not get an answer to refuses as well: a publish
+is not the place to assume the check was probably green.
+
+`scripts/tests/release-refuses-an-ungated-publish.test.sh` pulls that job's script out
+of the workflow and runs it against a stand-in `gh`, once per outcome, so the refusals
+are performed somewhere rather than only described. Actions is the only thing that
+ever runs `release.yml`, so without that test the first time any of them ran would be
+the day one of them mattered.
+
+### The emergency override
+
+`Release-Gate-Override: <why>` in the message of the commit being published, with a
+reason of at least twelve characters, publishes anyway. The run reports `release gate:
+OVERRIDDEN` in its summary, annotates itself with a warning carrying the reason, and
+still prints everywhere it looked and what it found there.
+
+That exists because a release process with no override is a release process people
+route around, and the route around this one is deleting the job. It is a commit
+trailer rather than a dispatch input for the same reason merging beats typing a
+string: `release` is append-only, so the trailer and its reason sit in the published
+history for good, next to the commit they excused, while a dispatch input lives in a
+run log that ages out. It also cannot be added after a commit has landed, and that is
+the point rather than a limitation. Overriding is a decision made while cutting, not a
+button found afterwards.
+
+A trailer on a commit whose gate did pass is noise rather than a standing permission.
+The gate is what allows that release; the override is only ever read when the gate did
+not pass.
+
 That is a change from the branch's first weeks, when the ruleset carried only
 `deletion` and `non_fast_forward` and an ordinary push to `release` was possible with
 no diff reviewed by anyone: the redesign's safety argument ("merging is a stronger
@@ -157,7 +206,9 @@ check starts failing, loudly, on the next run rather than months later.
    it starts `ci.yml`, whose `release gate` check has to be green before the merge
    button unlocks: about fourteen minutes, and the two-machine proof inside it is the
    part that says a fresh install of what you are about to publish can actually pull
-   a backup. Merging is what publishes.
+   a backup. Merging is what publishes, and the release run asks for that same green
+   check a second time before it pushes anything, so a merge that got here some other
+   way stops there rather than shipping.
 7. Record the digests the run prints into the manifest, flip `image.published` to
    true, regenerate the bundle again and land it on `main`. The manifest test refuses
    a published flag without digests and digests without the flag, so the two cannot

@@ -42,14 +42,24 @@ name: Release
 # OIDC identity, which the compliance record does not describe and the
 # documented verification command rejects.
 #
-# WHAT CHECKS THE CODE BEFORE IT GETS HERE. Not this workflow. Everything
-# below proves the compliance artifacts and the manifest parity, which is
-# a different question from whether the product works, and by the time it
-# runs the merge has already happened. Issue #575 is what answers the
-# other half: ci.yml now runs on a pull request into `release`, carrying
-# every module's build, vet and test plus the two-machine end-to-end
-# proof, and its `release gate` job is the required check. So the order is
-# gate on the pull request, publish on the merge.
+# WHAT CHECKS THE CODE BEFORE IT GETS HERE. Not the jobs below.
+# Everything under compliance-artifacts and publish proves the compliance
+# artifacts and the manifest parity, which is a different question from
+# whether the product works, and by the time it runs the merge has already
+# happened. Issue #575 is what answers the other half: ci.yml runs on a
+# pull request into `release`, carrying every module's build, vet and test
+# plus the two-machine end-to-end proof, and its `release gate` job is the
+# required check. So the order is gate on the pull request, publish on the
+# merge.
+#
+# What this workflow does check is that the gate was there at all. A
+# required check gates while a branch protection ruleset says it does, and
+# the ruleset is a settings page nothing in this repository can read. The
+# require-release-gate job below reads the `release gate` check run on the
+# commit being published and refuses `publish` if it never passed, so a
+# direct push, an administrator merging past a red check, or an edited
+# ruleset stops here instead of shipping. Its own header has the design
+# and the escape hatch.
 #
 # scripts/ci-local.sh is still the gate everywhere else: ci.yml triggers
 # on release-bound pull requests and nothing more.
@@ -134,6 +144,305 @@ jobs:
           fi
           echo "publish=${publish}" >> "$GITHUB_OUTPUT"
 
+  # Did anything actually check this commit before it got here?
+  #
+  # Issue #575 put the full suite in front of a release: ci.yml runs on a
+  # pull request into `release` and its `release gate` job is the required
+  # status check. That gates while a branch protection ruleset says it
+  # does, and a ruleset is a settings page. It can be edited, an
+  # administrator can merge past it, and a direct push to `release` never
+  # meets a pull request at all. Each of those still lands a commit here,
+  # and landing a commit here is what publishes. So the thing standing
+  # between a bad tree and a signed image on a public registry lived
+  # somewhere this repository cannot read, which is the same "a person
+  # remembers" shape #575 set out to delete rather than relocate.
+  #
+  # This job is that check written down where it can be read. It asks
+  # GitHub for the `release gate` check run on the commit being published,
+  # and on the head that commit merged in, and it refuses to let `publish`
+  # run unless one of them completed successfully. The ruleset stays,
+  # because blocking the merge button is a much better place to find this
+  # out. This is what answers the case where the merge button was not the
+  # way in.
+  #
+  # WHY IT ASKS ABOUT THE PARENT TOO. A `pull_request` run reports its
+  # check runs against the pull request's head commit, not against the
+  # merge commit GitHub writes when the button is pressed. The ruleset
+  # allows merge commits only, so the head that was checked is the second
+  # parent of what lands here. Asking about both is deliberate: a false
+  # refusal costs a release on the day of the release, and no amount of
+  # reasoning about which commit carries the check run is worth as much as
+  # looking in both places.
+  #
+  # THE ESCAPE HATCH IS A COMMIT TRAILER: `Release-Gate-Override: <why>`
+  # on the commit being published, with a reason of at least twelve
+  # characters. A release process with no override is a release process
+  # people route around, and the route around this one is deleting the
+  # job. A trailer beats a dispatch input here for the same reason a merge
+  # beats a typed string: `release` is append-only, so the override and
+  # its reason sit in the published history for good, next to the commit
+  # they excused, while a dispatch input lives in a run log that ages out.
+  # It also cannot be added after the fact, and that is the point rather
+  # than a limitation. Overriding is a decision made while cutting, not a
+  # button found afterwards.
+  #
+  # It changes nothing about signing. This job holds no id-token and no
+  # packages scope and pushes nothing; `publish` below is still the only
+  # job that reaches a registry, on the same push to `release` it always
+  # did. The Fulcio certificate still says
+  # .github/workflows/release.yml@refs/heads/release and the documented
+  # `cosign verify` command is untouched.
+  #
+  # scripts/tests/release-refuses-an-ungated-publish.test.sh pulls the
+  # script below out of this file and runs it against a stand-in `gh`,
+  # once per outcome worth having: green, red, skipped, absent, forged,
+  # unreachable, overridden and overridden with no reason given.
+  require-release-gate:
+    name: the release gate passed on what this publishes
+    needs: decide
+    runs-on: ubuntu-latest
+    permissions:
+      # Reading check runs, and nothing else. No id-token, no packages:
+      # this job decides whether `publish` may run and publishes nothing
+      # of its own.
+      contents: read
+      checks: read
+    steps:
+      - name: Refuse to publish a commit the release gate never passed
+        # Through env, never through a ${{ }} expansion inside the script,
+        # for the reason the confirmation step below spells out: an
+        # expansion is pasted into the shell source before bash parses it.
+        env:
+          PUBLISH: ${{ needs.decide.outputs.publish }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          GATE = "release gate"
+          TRAILER = "Release-Gate-Override:"
+          MIN_REASON = 12
+
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          sha = os.environ.get("GITHUB_SHA", "")
+          publish = os.environ.get("PUBLISH", "")
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+
+          def emit(lines):
+              text = "\n".join(lines)
+              print(text)
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as fh:
+                      fh.write(text + "\n")
+
+
+          def refuse(title, lines):
+              emit(["## release gate: REFUSED", ""] + lines)
+              print("::error title=" + title + "::" + lines[0])
+              sys.exit(1)
+
+
+          def allow(heading, lines):
+              emit(["## " + heading, ""] + lines)
+              sys.exit(0)
+
+
+          # The inputs first, and an unrecognised one refuses. Reading
+          # anything that is not "true" as "this run does not publish"
+          # would turn a renamed output into a gate that waves everything
+          # through while still reporting green, which is the failure this
+          # job exists to stop wearing this job's own uniform.
+          if publish not in ("true", "false"):
+              refuse(
+                  "release gate cannot tell whether this run publishes",
+                  [
+                      "`decide` handed this job publish=" + repr(publish) + ", which is neither `true` nor `false`.",
+                      "",
+                      "Every publishing step reads that output. If it has been renamed or dropped, this job cannot tell a dry run from a release, so it refuses rather than guess the answer that happens to look safe.",
+                  ],
+              )
+
+          if publish == "false":
+              allow(
+                  "release gate: nothing to gate",
+                  [
+                      "`decide` says this run publishes nothing, so there is no image and no signature at the end of it. Everything below runs on the publishing path only.",
+                  ],
+              )
+
+          if not repo or not sha:
+              refuse(
+                  "release gate does not know what it is looking at",
+                  [
+                      "GITHUB_REPOSITORY is " + repr(repo) + " and GITHUB_SHA is " + repr(sha) + ". One of them is empty, so there is no commit to ask about.",
+                  ],
+              )
+
+
+          def api(path):
+              proc = subprocess.run(
+                  ["gh", "api", "-H", "Accept: application/vnd.github+json", path],
+                  capture_output=True,
+                  text=True,
+              )
+              if proc.returncode != 0:
+                  refuse(
+                      "release gate could not be read",
+                      [
+                          "I asked GitHub for `" + path + "` and the query failed:",
+                          "",
+                          "```",
+                          (proc.stderr.strip() or proc.stdout.strip() or "(no output)"),
+                          "```",
+                          "",
+                          "This job's whole answer stands on that query, so a query that did not answer refuses. A publish is not the place to assume the check was probably green.",
+                      ],
+                  )
+              try:
+                  return json.loads(proc.stdout)
+              except ValueError:
+                  refuse(
+                      "release gate could not be read",
+                      ["`" + path + "` answered something that is not JSON, so there is no conclusion in it to read."],
+                  )
+
+
+          def check_runs(commit_sha):
+              runs = []
+              page = 1
+              while page <= 10:
+                  data = api(
+                      "repos/" + repo + "/commits/" + commit_sha
+                      + "/check-runs?per_page=100&page=" + str(page)
+                  )
+                  batch = data.get("check_runs", [])
+                  runs.extend(batch)
+                  total = int(data.get("total_count") or 0)
+                  if not batch or len(runs) >= total:
+                      break
+                  page += 1
+              return runs
+
+
+          commit = api("repos/" + repo + "/commits/" + sha)
+
+          # A positive control on the query, because every check below is a
+          # search for one check run and a search over the wrong commit
+          # comes back empty in exactly the way a genuinely ungated commit
+          # does.
+          if commit.get("sha") != sha:
+              refuse(
+                  "release gate looked at the wrong commit",
+                  ["I asked about `" + sha + "` and GitHub answered about `" + str(commit.get("sha")) + "`, so nothing below would be about this release."],
+              )
+
+          message = commit.get("commit", {}).get("message", "")
+          parents = [p.get("sha", "") for p in commit.get("parents", []) if p.get("sha")]
+
+          # Read off the commit being published and nothing else. A trailer
+          # in a commit this one merged in is not an override: what counts
+          # is the message written at the moment the release landed.
+          override = ""
+          override_without_reason = False
+          for line in message.splitlines():
+              stripped = line.strip()
+              if not stripped.startswith(TRAILER):
+                  continue
+              reason = stripped[len(TRAILER):].strip()
+              if len(reason) >= MIN_REASON:
+                  override = reason
+              else:
+                  override_without_reason = True
+
+          candidates = [("the commit being published", sha)]
+          for n, parent in enumerate(parents[1:], start=2):
+              candidates.append(("parent " + str(n) + ", the head this merge brought in", parent))
+
+          findings = []
+          green = None
+          for label, candidate in candidates:
+              runs = [r for r in check_runs(candidate) if r.get("name") == GATE]
+              if not runs:
+                  findings.append((label, candidate, "no `" + GATE + "` check run at all"))
+                  continue
+              # The most recent one wins, which is the rule branch
+              # protection itself applies to a re-run: an old green does not
+              # excuse a new red.
+              runs.sort(key=lambda r: (str(r.get("started_at") or ""), int(r.get("id") or 0)))
+              latest = runs[-1]
+              slug = str((latest.get("app") or {}).get("slug") or "")
+              status = str(latest.get("status") or "")
+              conclusion = str(latest.get("conclusion") or "none")
+              if slug != "github-actions":
+                  findings.append((label, candidate, "a `" + GATE + "` check run posted by the `" + slug + "` app rather than by GitHub Actions, and anything holding checks:write can write one of those"))
+                  continue
+              if status != "completed":
+                  findings.append((label, candidate, "`" + GATE + "` is `" + status + "` and has not finished"))
+                  continue
+              if conclusion != "success":
+                  findings.append((label, candidate, "`" + GATE + "` concluded `" + conclusion + "`"))
+                  continue
+              findings.append((label, candidate, "`" + GATE + "` succeeded"))
+              if green is None:
+                  green = (label, candidate, str(latest.get("html_url") or ""))
+
+          report = ["I looked in " + str(len(candidates)) + " place(s):", ""]
+          for label, candidate, found in findings:
+              report.append("- " + label + " (`" + candidate[:12] + "`): " + found)
+          report.append("")
+
+          if green is not None:
+              lines = ["`" + GATE + "` succeeded on " + green[0] + " (`" + green[1][:12] + "`)."]
+              if green[2]:
+                  lines += ["", green[2]]
+              allow("release gate: PASSED", lines + [""] + report)
+
+          if override_without_reason and not override:
+              refuse(
+                  "release gate override carries no reason",
+                  [
+                      "The commit being published has a `" + TRAILER + "` trailer with nothing usable after it, and `" + GATE + "` did not pass.",
+                      "",
+                      "An override needs a reason of at least " + str(MIN_REASON) + " characters, because the reason is the whole audit trail. `release` is append-only, so what is written there is what somebody reads a year from now when they ask why this release skipped its own gate.",
+                      "",
+                  ]
+                  + report,
+              )
+
+          if override:
+              print("::warning title=release gate overridden::" + override)
+              allow(
+                  "release gate: OVERRIDDEN",
+                  [
+                      "`" + GATE + "` did not pass on this commit, and the commit carries a `" + TRAILER + "` trailer, so this run publishes anyway.",
+                      "",
+                      "> " + override,
+                      "",
+                      "This is the deliberate escape hatch, and it is not a quiet one. The trailer stays in the history of `release` for good, so this paragraph is permanent. If the reason for it has since gone away, the next cut should not carry it.",
+                      "",
+                  ]
+                  + report,
+              )
+
+          refuse(
+              "nothing checked the commit this run would publish",
+              [
+                  "This run publishes a signed image to a public registry, and `" + GATE + "` never passed on what it would publish.",
+                  "",
+              ]
+              + report
+              + [
+                  "`" + GATE + "` is the aggregating job at the bottom of `.github/workflows/ci.yml`, and that workflow runs on a pull request into `release`. A commit here carrying no `" + GATE + "` on itself or on the head it merged got onto `release` without one: a direct push, a merge that went past the required check, or a pull request whose run never finished.",
+                  "",
+                  "The way through is to open a pull request into `release`, let the gate go green, and merge that. If this is a real emergency, put `" + TRAILER + " <why>` in the message of the merge commit and it publishes, loudly and permanently on the record. docs/release-branch.md has the rest.",
+              ],
+          )
+          PY
+
   compliance-artifacts:
     name: compliance artifacts are what this tree generates
     needs: decide
@@ -196,7 +505,7 @@ jobs:
 
   publish:
     name: build, push, sign and attest
-    needs: [decide, compliance-artifacts]
+    needs: [decide, require-release-gate, compliance-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: read

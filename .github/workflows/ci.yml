@@ -594,11 +594,12 @@ jobs:
   gate-guards:
     name: the release gate's own guards (#575)
     runs-on: ubuntu-latest
-    # A gate that cannot be checked is a gate nobody can trust, and both
-    # things checked here are the kind that fail silently and in the
-    # dangerous direction: a needs list that fell behind the jobs it
-    # covers, and a workflow step that read "this runner could not perform
-    # the proof" as nothing to report. Both are seconds of shell with no
+    # A gate that cannot be checked is a gate nobody can trust, and
+    # everything checked here fails silently and in the dangerous
+    # direction: a needs list that fell behind the jobs it covers, a
+    # workflow step that read "this runner could not perform the proof" as
+    # nothing to report, and release.yml publishing a commit whose gate
+    # nobody ever looked up. All of them are seconds of shell with no
     # Docker and no toolchain, so they run in their own job rather than
     # being tucked into one whose name describes something else.
     #
@@ -612,6 +613,9 @@ jobs:
 
       - name: the release gate still covers every job in this workflow
         run: bash scripts/tests/release-gate-covers-every-job.test.sh
+
+      - name: and a publish the release gate never passed is still refused
+        run: bash scripts/tests/release-refuses-an-ungated-publish.test.sh
 
       - name: a proof this runner could not perform still reads as incomplete
         run: bash scripts/tests/two-machine-ci-verdict.test.sh
@@ -741,11 +745,15 @@ jobs:
     # two come apart.
     #
     # always(), because the default `needs` behaviour is to SKIP a job
-    # whose dependency failed. A skipped check reports no conclusion at
-    # all, which a branch protection rule reads as "not yet run" rather
-    # than as a failure, and a required check that never reports is a
-    # merge waiting for something that is not coming. This job has to run
-    # and go red instead.
+    # whose dependency failed, and a skipped job is not a job that stays
+    # silent. GitHub gives it a check run whose conclusion is `skipped`,
+    # and a required status check counts `skipped` as satisfied. So
+    # deleting this line does not stall the merge, it releases it: the day
+    # two-machine-e2e goes red is the day this gate reports `skipped`,
+    # branch protection reads that as a pass, and the merge that publishes
+    # a signed image goes through on a suite that failed. It fails open,
+    # quietly, and only in the case the gate exists for. This job has to
+    # run and go red instead.
     if: always()
     needs:
       - core-build-vet-test
