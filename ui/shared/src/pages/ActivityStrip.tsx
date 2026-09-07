@@ -56,7 +56,42 @@ export interface ActivityLine {
  *  engine's lifecycle vocabulary arriving as event field values, not a
  *  type this app declares. */
 const TERMINAL_FAILURES = new Set(["FAILED", "QUARANTINED", "QUARANTINED_LOST"]);
-const COMPLETED_STATES = new Set(["VERIFIED", "COMMITTED", "COMPLETE", "REMOTE_RETAINED"]);
+
+/**
+ * The transitions this log paints as good news: an artifact arriving
+ * somewhere good AND settled.
+ *
+ * It is deliberately not internal/retention's managed-complete set, it is
+ * registered as not being it (notTheManagedCompleteSet, in that package's
+ * managedcompleteprose_test.go), and it differs at both ends because the
+ * two answer different questions. That one asks whether there is a durable
+ * local backup here that FR-18 retention may consider. This one asks
+ * whether a line in a scrolling log deserves to be green.
+ *
+ * VERIFIED is in this set and not in that one. Retention is right to
+ * exclude it: an artifact that has been verified is still in flight and is
+ * not yet a completed backup. But verification passing is the strongest
+ * piece of good news the pipeline produces, it is the moment the content
+ * was confirmed against its source, and a log that would not colour it is
+ * a log that has nothing to say when things go right.
+ *
+ * REMOTE_DELETE_PENDING is in that set and not in this one, and that is the
+ * half worth reading twice. Retention is right to include it: the local
+ * commit already succeeded, so the backup exists whatever happens to the
+ * remote next. It is left out here because it is the one state in the list
+ * that is not a resting place. It is the inside of FR-15's delete window,
+ * the moment before an irreversible act on somebody else's machine, and
+ * the deed itself already gets its own uncoloured line further down
+ * (remote_delete renders "remote source deleted" and takes its tone from
+ * the event's level alone). Painting the intention green while the deed
+ * stays grey would have this panel most enthusiastic about the step an
+ * operator would most want to notice.
+ *
+ * Nothing here counts towards the progress bar. The numerator beside it is
+ * activity.artifactsCompleted, which the engine counts over the rows a
+ * pass is actually driving forward; this set only ever picks a colour.
+ */
+const SETTLED_STATES = new Set(["VERIFIED", "COMMITTED", "COMPLETE", "REMOTE_RETAINED"]);
 
 /** The last segment of an artifact id, which is "source/set/name". The
  *  strip is already inside one set, so repeating the first two segments on
@@ -113,7 +148,7 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       else text = name + ": " + (f.from ?? "?") + " to " + (f.to ?? "?");
       if (f.detail) text += "\n  " + f.detail;
       if (TERMINAL_FAILURES.has(f.to ?? "")) tone = "error";
-      else if (COMPLETED_STATES.has(f.to ?? "") && tone === "info") tone = "ok";
+      else if (SETTLED_STATES.has(f.to ?? "") && tone === "info") tone = "ok";
       break;
     case "transfer_stats":
       text = "transferred " + name + (f.bytes_transferred ? " (" + bytes(Number(f.bytes_transferred)) + ")" : "");
