@@ -192,6 +192,14 @@ type modeDecision struct {
 	// read and the other, by construction, cannot.
 	because string
 
+	// remedy is what engineRefusal tells an operator to do instead, and it
+	// is carried here rather than fixed in engineRefusal because the two
+	// callers have genuinely different answers: a write an address could
+	// carry can be handed over by setting one, and a first configuration
+	// cannot be handed anywhere at all. liveengine.go's engineRefusal has
+	// the whole argument, and #571 is where it came from.
+	remedy string
+
 	// route is how this invocation hands the change to that process, and
 	// is nil whenever it cannot: in direct mode, on a write no verb
 	// routes, and beside a serving process this command was told nothing
@@ -258,10 +266,14 @@ func (d modeDecision) heldBy() string {
 // so the line can name serving without over-claiming.
 //
 // The direct line says "no process has announced itself" rather than
-// "nothing is serving this deployment", and the difference is the one gap
-// liveengine.go names out loud: a host still on the first-run wizard
-// serves something and has not announced anything, because it has no
-// journal to announce about yet. The weaker sentence is the true one.
+// "nothing is serving this deployment", and the weaker sentence stays even
+// though #571 closed the gap it was written for. A host still on the
+// first-run wizard used to serve something and announce nothing; it
+// announces now (core/service's AnnounceServingFirstRun), but the claim
+// this binary can make is still about announcements it can find rather
+// than about everything that might be running on the host, and a line
+// that over-claimed would be wrong on the next process nobody thought of
+// rather than on this one.
 //
 // No address appears here. A mode that named one would print
 // apiclient.BaseURL(), which renders userinfo credentials in cleartext
@@ -329,7 +341,7 @@ func (d modeDecision) refusal() error {
 	if d.mode != engineAttachedMode || d.route != nil {
 		return nil
 	}
-	return engineRefusal(d.engine, d.because)
+	return engineRefusal(d.engine, d.because, d.remedy)
 }
 
 // enterConfigWriteMode claims the deployment configPath names for a
@@ -374,6 +386,7 @@ func enterConfigWriteMode(ctx context.Context, configPath string, attach attachF
 		engine:     engine,
 		configFile: resolved,
 		because:    fmt.Sprintf("that process read %s when it started and nothing re-reads that file", resolved),
+		remedy:     routableRemedy,
 	}, attach, announceTo, refuseTo)
 }
 
@@ -384,12 +397,15 @@ func enterConfigWriteMode(ctx context.Context, configPath string, attach attachF
 //
 // It exists because that path was the way around the check, and it is
 // also the one write in this binary that would otherwise announce no mode
-// at all. Two ordinary mistakes land here against a LIVE deployment and
-// both used to exit 0 after writing a configuration nothing would ever
-// read: a mistyped --config, and a config.yaml renamed out from under a
-// running engine. --state-database is what still identifies the
-// deployment in both, because it carries the same packaged default the
-// first-run wizard writes.
+// at all. Three things land here against a LIVE deployment and all three
+// used to exit 0 after writing a configuration nothing would ever read: a
+// mistyped --config, a config.yaml renamed out from under a running
+// engine, and the one #571 was reported for, a genuinely fresh install
+// whose engine is serving the first-run setup flow. --state-database is
+// what identifies the deployment in all three, because it carries the same
+// packaged default apps/generic's own --state-database does, which is what
+// a first-run engine now announces about (core/service's
+// AnnounceServingFirstRun).
 //
 // configFile is only ever announced, never probed. That split is the
 // point: the decision is about the deployment, which is the journal, and
@@ -404,16 +420,25 @@ func enterFirstConfigWriteMode(configFile, stateDatabase string, announceTo, ref
 		_ = guard.Release()
 		return nil, cannotTellError(err)
 	}
-	// No attach, and that is a decision rather than an omission. This
-	// path writes a whole FIRST configuration, and finding a process
-	// serving the journal it names means that deployment is already
-	// configured; POST /system/first-run is the wrong operation to send an
-	// already-configured engine, and there is no other. So engine-attached
-	// here is still exactly what it was: a refusal.
+	// No attach, and that is a decision rather than an omission. A route
+	// is an address this command has been given, and the write it would
+	// carry is POST /system/first-run, which is an operation an engine
+	// accepts exactly once and only while it is still unconfigured. Two of
+	// the three shapes that reach here beside a serving process are
+	// deployments that are already configured, where that request is
+	// simply the wrong one, and the third is a wizard the operator is
+	// already standing in front of. So engine-attached here is still
+	// exactly what it was: a refusal.
+	//
+	// The clause below has to be true of all three, which is what it was
+	// not before #571. "That process read its configuration when it
+	// started" is a false sentence to hand somebody whose engine has not
+	// read one at all and is waiting to be told what to serve.
 	write, err := settleConfigWriteMode(context.Background(), guard, modeDecision{
 		engine:     engine,
 		configFile: config.ResolvePath(configFile),
-		because:    "that process read its configuration when it started and nothing re-reads it",
+		because:    "nothing re-reads a configuration file once a process is serving this deployment, and an instance still on its first-run setup flow will serve the configuration that flow writes rather than one written here",
+		remedy:     firstConfigRemedy,
 	}, nil, announceTo, refuseTo)
 	if err != nil {
 		return nil, err

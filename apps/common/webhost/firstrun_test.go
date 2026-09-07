@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -637,5 +639,212 @@ func TestCompleteFirstRun_ActivationOutlivesTheRequest(t *testing.T) {
 	}
 	if !hasDeadline {
 		t.Error("the detached activation context has no deadline; a hung open would hold the request for the life of the process")
+	}
+}
+
+// wholeSpecCreateBody is a first-run submission with every field of
+// backupSetSpec set to something distinctive and non-zero.
+//
+// validCreateBody above is deliberately not reused, and that is the point
+// of this fixture existing at all. It leaves six of the sixteen fields
+// out, so a comparison of the whole request against it would agree about
+// six zeroes and prove nothing about them: that is exactly how a dropped
+// field survives a passing test. Every value below is one no zero value
+// could be mistaken for.
+const wholeSpecCreateBody = `{
+	"source_name": "api",
+	"name": "postgres-primary",
+	"host": "prod-db-01.internal",
+	"port": 2222,
+	"user": "backup-agent",
+	"ssh_key_id": "key_test_1",
+	"known_hosts_line": "prod-db-01.internal ssh-ed25519 AAAAfaketest",
+	"remote_path": "/backups/postgresql",
+	"local_path": "/data/backups/production/postgres",
+	"include": ["*.dump.zst"],
+	"completion_strategy": "marker",
+	"stable_for_seconds": 90,
+	"stale_after_seconds": 172800,
+	"validator_id": "postgres-custom-format",
+	"disabled": true,
+	"read_only": true
+}`
+
+// firstRunSpecCarriage is every field of backupSetSpec, paired with what
+// completeFirstRun has to have put on the CreateBackupSetRequest for it.
+//
+// A table rather than a reflective field-by-field diff, because the two
+// types are not the same shape: two fields change name and unit on the way
+// across (seconds to a Duration) and one changes type (a string to a
+// service.ValidatorID). What keeps a table honest is the guard beside it,
+// which walks backupSetSpec itself and fails on any field with no row
+// here, so a field added to the contract cannot arrive uncarried and
+// unnoticed.
+var firstRunSpecCarriage = []struct {
+	// field is the backupSetSpec field name, spelled as Go spells it, so
+	// the completeness guard below can match rows against the type.
+	field string
+	// got reads what the handler actually asked CreateInitialConfig for.
+	got func(service.CreateBackupSetRequest) any
+	// want reads what the submission said, out of the same bytes the
+	// handler decoded, so the expectation cannot drift from the fixture.
+	want func(backupSetSpec) any
+}{
+	{"SourceName", func(r service.CreateBackupSetRequest) any { return r.SourceName }, func(s backupSetSpec) any { return s.SourceName }},
+	{"Name", func(r service.CreateBackupSetRequest) any { return r.Name }, func(s backupSetSpec) any { return s.Name }},
+	{"Host", func(r service.CreateBackupSetRequest) any { return r.Host }, func(s backupSetSpec) any { return s.Host }},
+	{"Port", func(r service.CreateBackupSetRequest) any { return r.Port }, func(s backupSetSpec) any { return s.Port }},
+	{"User", func(r service.CreateBackupSetRequest) any { return r.User }, func(s backupSetSpec) any { return s.User }},
+	{"SSHKeyID", func(r service.CreateBackupSetRequest) any { return r.SSHKeyID }, func(s backupSetSpec) any { return s.SSHKeyID }},
+	{"KnownHostsLine", func(r service.CreateBackupSetRequest) any { return r.KnownHostsLine }, func(s backupSetSpec) any { return s.KnownHostsLine }},
+	{"RemotePath", func(r service.CreateBackupSetRequest) any { return r.RemotePath }, func(s backupSetSpec) any { return s.RemotePath }},
+	{"LocalPath", func(r service.CreateBackupSetRequest) any { return r.LocalPath }, func(s backupSetSpec) any { return s.LocalPath }},
+	{"Include", func(r service.CreateBackupSetRequest) any { return strings.Join(r.Include, ",") }, func(s backupSetSpec) any { return strings.Join(s.Include, ",") }},
+	{"CompletionStrategy", func(r service.CreateBackupSetRequest) any { return r.CompletionStrategy }, func(s backupSetSpec) any { return s.CompletionStrategy }},
+	{"StableForSeconds", func(r service.CreateBackupSetRequest) any { return r.StableFor }, func(s backupSetSpec) any { return secondsToDuration(s.StableForSeconds) }},
+	{"StaleAfterSeconds", func(r service.CreateBackupSetRequest) any { return r.StaleAfter }, func(s backupSetSpec) any { return secondsToDuration(s.StaleAfterSeconds) }},
+	{"ValidatorID", func(r service.CreateBackupSetRequest) any { return r.ValidatorID }, func(s backupSetSpec) any { return service.ValidatorID(s.ValidatorID) }},
+	{"Disabled", func(r service.CreateBackupSetRequest) any { return r.Disabled }, func(s backupSetSpec) any { return s.Disabled }},
+	{"ReadOnly", func(r service.CreateBackupSetRequest) any { return r.ReadOnly }, func(s backupSetSpec) any { return s.ReadOnly }},
+}
+
+// TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven is the whole
+// of what a hand-built request has to promise.
+//
+// completeFirstRun assembles a service.CreateBackupSetRequest field by
+// field, and it dropped read_only: an operator who ticked "read only" in
+// the wizard on a fresh install got a set that was not read only, with
+// nothing anywhere saying so. That is the wrong direction for a mistake to
+// fall in, because read-only is the declaration that stops this manager
+// ever deleting the remote copies (#282, #316) and the wizard presents it
+// as a safety choice. It was also the only field being dropped, which is
+// not something to find out by reading: a hand-built request that omits
+// one field is a shape that usually omits more.
+//
+// So this compares the WHOLE request against the whole submission rather
+// than checking the field somebody noticed, and the two guards under it
+// are what stop that comparison hollowing out. The first fails on a
+// backupSetSpec field with no row above, so a field added to the contract
+// has to be carried or explicitly argued about. The second fails on a
+// fixture field left at its zero value, because a comparison of two zeroes
+// agrees about nothing.
+//
+// run_immediately is deliberately absent from all three, and that is a
+// contract fact rather than an oversight: it is a field of
+// backupSetRequest, which this operation does not take, because there is
+// no BackupService to submit an operation to until activation has
+// happened. completeFirstRun's own doc has the argument.
+func TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven(t *testing.T) {
+	var submitted backupSetSpec
+	if err := json.Unmarshal([]byte(wholeSpecCreateBody), &submitted); err != nil {
+		t.Fatalf("the fixture is not a backupSetSpec: %v", err)
+	}
+
+	specType := reflect.TypeOf(backupSetSpec{})
+	rows := make(map[string]bool, len(firstRunSpecCarriage))
+	for _, row := range firstRunSpecCarriage {
+		rows[row.field] = true
+	}
+	submittedValue := reflect.ValueOf(submitted)
+	for i := 0; i < specType.NumField(); i++ {
+		name := specType.Field(i).Name
+		if !rows[name] {
+			t.Errorf("backupSetSpec.%s has no row in firstRunSpecCarriage, so nothing checks whether the first-run save carries it; add one rather than the row that was easy to forget", name)
+		}
+		if submittedValue.Field(i).IsZero() {
+			t.Errorf("wholeSpecCreateBody leaves %s at its zero value, so comparing it proves nothing about whether the handler carried it", name)
+		}
+	}
+	if len(rows) != specType.NumField() {
+		t.Errorf("firstRunSpecCarriage has %d rows for a backupSetSpec with %d fields, so a row names something that is not a field any more", len(rows), specType.NumField())
+	}
+
+	fr := &fakeFirstRun{}
+	rec := postFirstRun(t, unconfiguredRouter(fr), wholeSpecCreateBody, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	if fr.created == nil {
+		t.Fatal("CreateInitialConfig was never called, so there is nothing to compare")
+	}
+
+	for _, row := range firstRunSpecCarriage {
+		got, want := row.got(*fr.created), row.want(submitted)
+		if got != want {
+			t.Errorf("the first-run save dropped or changed %s: asked for %v, persisted %v", row.field, want, got)
+		}
+	}
+}
+
+// TestCompleteFirstRun_SaysWhatIsWrongWithTheStateDirectory is PR #581's
+// review finding, seen from the surface the operator is actually looking
+// at.
+//
+// A fresh install whose state volume is read-only, mounted late, or owned
+// by another uid cannot be set up: core/service.FirstRun.CreateInitialConfig
+// refuses rather than writing a configuration naming a journal it cannot
+// create. Refusing was already right. What was wrong is that the refusal
+// arrived as the generic "failed to write backup set", so the one screen
+// this operator has said nothing about the volume, and the container was
+// exiting before they could reach that screen at all.
+//
+// The wizard renders the message field verbatim (ui/shared's
+// BackupSetWizardPage puts it straight into its save error), so what is
+// asserted here is that the sentence carries the diagnosis rather than a
+// shrug.
+func TestCompleteFirstRun_SaysWhatIsWrongWithTheStateDirectory(t *testing.T) {
+	fr := &fakeFirstRun{createErr: fmt.Errorf("%w: /data/state is not writable: permission denied", service.ErrStateDirInvalid)}
+	router := unconfiguredRouter(fr)
+
+	rec := postFirstRun(t, router, validCreateBody, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: a state volume this deployment cannot write is not the client's request being wrong (%s)", rec.Code, rec.Body.String())
+	}
+	if got := responseErrorCode(rec.Body.String()); got != "INTERNAL" {
+		t.Fatalf("error code = %q, want INTERNAL, which is what the contract declares for this operation (%s)", got, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding the refusal: %v (%s)", err, rec.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, "/data/state is not writable") {
+		t.Errorf("message = %q, want the state directory's own complaint in it; the operator's only screen is this one, and 'failed to write backup set' sends them to look at their backup set", body.Error.Message)
+	}
+	if fr.activated != 0 {
+		t.Error("activation ran although no configuration was written")
+	}
+}
+
+// TestCompleteFirstRun_SaysWhenTheDeploymentCouldNotBeAnnounced is the
+// other refusal the same screen has to carry.
+//
+// A first-run process announces which deployment it is about to serve
+// before it serves anything (#571). When it could not, setup must not
+// write the first configuration: nothing would stop a `backup-set create`
+// on the same host writing one too, which is the exact defect #571 is.
+// The operator is told, in the wizard, rather than being left with a
+// wizard that silently will not finish.
+func TestCompleteFirstRun_SaysWhenTheDeploymentCouldNotBeAnnounced(t *testing.T) {
+	fr := &fakeFirstRun{createErr: fmt.Errorf("%w: flock is not supported on this filesystem", service.ErrNotAnnounced)}
+	router := unconfiguredRouter(fr)
+
+	rec := postFirstRun(t, router, validCreateBody, true)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding the refusal: %v (%s)", err, rec.Body.String())
+	}
+	if !strings.Contains(body.Error.Message, "flock is not supported on this filesystem") {
+		t.Errorf("message = %q, want the reason this deployment could not be announced", body.Error.Message)
 	}
 }

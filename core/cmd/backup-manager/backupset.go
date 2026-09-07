@@ -142,11 +142,13 @@ func backupSetVerbNames() []string {
 // one piece of work rather than two halves.
 //
 // The first configuration a create writes on an instance that has no
-// config.yaml yet has no route for a different reason: finding a process
-// serving the journal --state-database names says that deployment is
-// already configured, and POST /system/first-run is not an operation to
-// send an already configured engine. Both refuse beside a serving
-// process, exactly as every configuration write did before #543.
+// config.yaml yet has no route for a different reason: the only request
+// that would carry it is POST /system/first-run, which an engine accepts
+// once and only while it is still unconfigured, and a process found
+// serving the journal --state-database names is either past that moment or
+// standing in the setup flow the operator can finish themselves. Both
+// refuse beside a serving process, exactly as every configuration write did
+// before #543.
 //
 // That is issue #535: a `backup-set create` through docker exec against a
 // live server succeeded, `sources` listed both sets, and the Web UI showed
@@ -313,8 +315,8 @@ func declareBackupSetFlags() *backupSetFlags {
 	f.disabled = fs.Bool("disabled", false, "create: save the set disabled, so no cycle runs it until it is enabled")
 	f.readOnly = fs.Bool("read-only", false, "create: this set's remote source must never be deleted from (issue #282)")
 	f.runNow = fs.Bool("run", false, "create: submit a run cycle immediately after the set is persisted")
-	f.stateDatabase = fs.String("state-database", defaultStateDatabase,
-		"create: the SQLite journal path a FIRST configuration names. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
+	f.stateDatabase = fs.String("state-database", service.StateDatabaseDefault(),
+		"create: the SQLite journal path a FIRST configuration names, and the deployment this command asks about when there is no config.yaml to read one out of. Defaults to $STATE_DATABASE, or the packaged /data/state/state.db, which is the same default the web host serves under. Used only when there is no config.yaml yet; ignored, never applied, against an instance that already has one")
 
 	f.acknowledgeRepoint = fs.Bool("acknowledge-repoint", false,
 		"create, patch: confirm pointing this set at different data. On patch, needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; on create, only when this id already has artifacts on record and the set is being created somewhere other than where they came from. The refusal without it says what it costs")
@@ -551,16 +553,6 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 // inventing a username.
 const cliActor = "cli"
 
-// defaultStateDatabase is the SQLite journal path a FIRST configuration
-// names when --state-database is not given. It is the packaged mount from
-// container/compose.yaml, the same literal and for the same reason
-// defaultConfigPath above is: this is the value an operator on the
-// machine the installer just set up should never have to type.
-// apps/generic's own --state-database carries the same default, which is
-// what makes a config written from here and one written through the
-// first-run wizard name the same file.
-const defaultStateDatabase = "/data/state/state.db"
-
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST
 // /api/v1/backup-sets calls, in this process.
@@ -611,28 +603,28 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	// the configuration: there is no configuration here to read a journal
 	// path out of, which is the entire reason this branch was taken.
 	//
-	// Two ordinary mistakes land here against a LIVE deployment, and both
-	// used to exit 0 after writing a configuration nothing would ever
-	// read: a mistyped --config, and a config.yaml renamed out from under
-	// a running engine. --state-database is what still identifies the
-	// deployment in both, because it carries the same packaged default
-	// the first-run wizard writes, so a create that does not name one is
-	// still asking about the right journal.
+	// Three things land here against a LIVE deployment, and all three used
+	// to exit 0 after writing a configuration nothing would ever read: a
+	// mistyped --config, a config.yaml renamed out from under a running
+	// engine, and a genuinely fresh install whose engine is serving the
+	// first-run setup flow, which is #571. --state-database is what
+	// identifies the deployment in all three, because it carries the same
+	// packaged default apps/generic's own --state-database does, so a
+	// create that does not name one is still asking about the right
+	// journal, and a first-run engine is now announcing about exactly that
+	// journal (core/service's AnnounceServingFirstRun).
 	//
 	// A genuine first run is untouched by this, and that is the half that
-	// had to stay true: a bare host has no journal, a host serving the
-	// setup wizard has not opened one yet, and neither announces itself
-	// as serving anything. Both still write their first configuration
-	// from here.
+	// had to stay true: a bare host has no serving lock file beside a
+	// journal that does not exist, so the question comes back "nothing is
+	// serving" and the first configuration is written from here, which is
+	// the whole reason this path exists.
 	//
 	// It announces its mode too (#542), for the same reason it has to
 	// ask at all: this was the one configuration write in the binary with
 	// no route through openBackupService, so leaving it out would leave
 	// exactly one write that never says which world it believed it was
-	// in. What the decision can see here is narrower than elsewhere and
-	// liveengine.go says so out loud, but announcing the mode it did
-	// decide is the honest answer and is strictly more than the nothing
-	// this path said before.
+	// in.
 	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
 	if err != nil {
 		return fail(err)

@@ -42,6 +42,11 @@ const (
 	serveChildEnv       = "BACKUP_MANAGER_WEB_TEST_SERVE_CHILD"
 	serveChildConfig    = "BACKUP_MANAGER_WEB_TEST_SERVE_CONFIG"
 	serveChildAuthStore = "BACKUP_MANAGER_WEB_TEST_SERVE_AUTH_STORE"
+	// serveChildStateDB is optional: a child that is given one names the
+	// journal a FIRST-RUN start would announce about, which is the only
+	// way a test can put a broken state directory in front of this
+	// binary's own startup.
+	serveChildStateDB = "BACKUP_MANAGER_WEB_TEST_SERVE_STATE_DB"
 )
 
 // serveShutdownNotice is the line `serve` prints once its own shutdown
@@ -64,12 +69,16 @@ func TestServeChildProcess(t *testing.T) {
 	if os.Getenv(serveChildEnv) != "1" {
 		t.Skip("child-process entry point: only runs when a parent test re-executes this binary")
 	}
-	os.Exit(run([]string{
+	args := []string{
 		"serve",
 		"--config", os.Getenv(serveChildConfig),
 		"--listen", "127.0.0.1:0",
 		"--auth-store", os.Getenv(serveChildAuthStore),
-	}))
+	}
+	if db := os.Getenv(serveChildStateDB); db != "" {
+		args = append(args, "--state-database", db)
+	}
+	os.Exit(run(args))
 }
 
 // writeServeTestConfig mirrors core/cmd/backup-manager/main_test.go's own
@@ -236,5 +245,111 @@ reading:
 	// nothing at all.
 	if !strings.Contains(stderr.String(), "backup-manager-web: runtime profile") {
 		t.Errorf("serve never logged its startup line either, so this test read no stderr at all\nstderr:\n%s", stderr.String())
+	}
+}
+
+// TestServe_StaysUpWhenAFreshInstallsStateDirectoryIsUnusable is PR
+// #581's review finding at the level it actually bites: the process.
+//
+// #571 made this binary announce the journal --state-database names
+// before it serves the setup flow, and announcing creates a lock file in
+// the state directory. The first version failed the start when that
+// directory could not be used, so a read-only bind mount, a volume
+// mounted after the service starts, or a uid that cannot write
+// /data/state took a fresh install from "serves a setup wizard" to a
+// container that exits and is restarted forever. That is the one start
+// where the operator has nothing but a browser, and it converted a
+// recoverable misconfiguration into an invisible one.
+//
+// This can only be seen from outside the process, like the SIGTERM test
+// above: what is under test is that the binary keeps running and says why
+// in the log, rather than what a function returned.
+func TestServe_StaysUpWhenAFreshInstallsStateDirectoryIsUnusable(t *testing.T) {
+	dir := t.TempDir()
+	// No configuration at all: this is a first install (#176), which is
+	// the only shape that serves a wizard rather than exiting.
+	configPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// A plain file where the state directory has to be. It stands in for
+	// the read-only mount and the wrong-uid volume, and unlike a
+	// permission bit it refuses for root too, so this test says the same
+	// thing when the suite runs in a container.
+	stateDir := filepath.Join(dir, "state")
+	if err := os.WriteFile(stateDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServeChildProcess$")
+	cmd.Env = append(os.Environ(),
+		serveChildEnv+"=1",
+		serveChildConfig+"="+configPath,
+		serveChildAuthStore+"="+filepath.Join(dir, "local-auth.json"),
+		serveChildStateDB+"="+filepath.Join(stateDir, "state.db"),
+	)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the serve child: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	lines := make(chan string, 128)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(stderr)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+
+	var log []string
+	saidWhy, serving := false, false
+	deadline := time.After(60 * time.Second)
+reading:
+	for !saidWhy || !serving {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				break reading
+			}
+			log = append(log, line)
+			if strings.Contains(line, "state directory") {
+				saidWhy = true
+			}
+			if strings.Contains(line, "serving the first-run setup flow") {
+				serving = true
+			}
+		case <-deadline:
+			_ = cmd.Process.Kill()
+			t.Fatalf("the serve child never got as far as serving the setup flow within 60s\nstderr:\n%s", strings.Join(log, "\n"))
+		}
+	}
+
+	if !saidWhy {
+		t.Errorf("the child never said anything about the state directory, so the only diagnosis an operator has is a container that will not stay up\nstderr:\n%s", strings.Join(log, "\n"))
+	}
+	if !serving {
+		t.Fatalf("the child exited instead of serving the first-run setup flow; a fresh install with a state volume it cannot write is now a restart loop\nstderr:\n%s", strings.Join(log, "\n"))
+	}
+
+	// And it is a real, stoppable process rather than one about to exit
+	// on its own: the same graceful stop the test above proves, driven
+	// here to show the wizard was actually being served when the signal
+	// arrived.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("sending SIGTERM: %v", err)
+	}
+	for range lines {
+	}
+	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("waiting for the serve child: %v", err)
+		}
+		t.Fatalf("serve exited %d after the SIGTERM that stopped it, want 0", exitErr.ExitCode())
 	}
 }
