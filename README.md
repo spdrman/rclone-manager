@@ -440,10 +440,21 @@ and the fingerprint being offered, because those two strings are the whole of wh
 to compare. Check the new one against the host itself, the way the wizard's verify step did
 the first time, then add `--acknowledge-host-key-change` (or
 `"acknowledge_host_key_change": true` on the API, or **Save anyway** in the Web UI).
-Re-sending the line the set already trusts changes no trust and is never refused. It is a
-separate acknowledgement from `--acknowledge-repoint` on purpose: one says "this is the same
-data at a new address" and the other says "this is the same host with a new key", and one
-flag for both would let an operator who meant one of them quietly grant the other.
+Changing `--port` in the same edit does not exempt it: a port is how you reach the same
+machine. It is a separate acknowledgement from `--acknowledge-repoint` on purpose: one says
+"this is the same data at a new address" and the other says "this is the same host with a
+new key", and one flag for both would let an operator who meant one of them quietly grant
+the other.
+
+The line pins one plain host key for this set's own host, so three things are refused
+outright rather than acknowledged: a marker such as `@cert-authority` (trusting whatever a
+key vouches for is a different decision from trusting a server, and the fingerprint this
+prints cannot describe it), a line naming some other host (it would leave the set unable to
+check its own), and, unless you acknowledge it, a line that would drop a key the set is
+already pinning. That last one is the ordinary shape of a host answering with two key
+algorithms: `ssh-keyscan` writes a line each, this field carries one, and narrowing the set
+to that one is something to mean rather than to discover later as a key mismatch.
+Re-sending the only line on record changes no trust and is never refused.
 
 **`backup-set create` asks the same question, for the same reason.** A backup set is
 identified by its source and its name, so `backup-set remove` frees that id up and a set

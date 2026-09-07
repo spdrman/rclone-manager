@@ -184,10 +184,15 @@ export interface BackupSetPatch {
    *  An id no import produced is refused with SSH_KEY_NOT_FOUND. */
   sshKeyId?: string;
   /** The exact known_hosts line this set should trust from now on, as
-   *  probeHostKey returns it. One that pins a DIFFERENT key from the one
-   *  on record is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED
-   *  unless `acknowledgeHostKeyChange` says otherwise; re-sending the
-   *  line already trusted changes no trust and is never refused. */
+   *  probeHostKey returns it. It pins ONE plain host key for THIS set's
+   *  own host: a marker such as @cert-authority, and a line naming some
+   *  other host, are both refused with INVALID_REQUEST. One that changes
+   *  what the set trusts for its own address is refused with
+   *  BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED unless
+   *  `acknowledgeHostKeyChange` says otherwise, and that covers a key on
+   *  record this one line would stop pinning as well as a new key being
+   *  pinned. Re-sending the only line on record changes no trust and is
+   *  never refused. */
   knownHostsLine?: string;
   /** Confirms an edit that moves this set to different data. Needed only
    *  when `host`, `remoteFolder` or `destination` actually change on a
@@ -196,11 +201,17 @@ export interface BackupSetPatch {
    *  It is not a property of the backup set: it answers one refusal, for
    *  one request. */
   acknowledgeRepoint?: boolean;
-  /** Confirms trusting a DIFFERENT host key for the same host. A separate
-   *  answer from `acknowledgeRepoint` on purpose: that one says "this is
-   *  the same data at a new address" and this one says "this is the same
-   *  host with a new key", and one flag for both would let an operator who
-   *  meant one of them quietly grant the other. */
+  /** Confirms changing what host keys this set trusts for its own
+   *  address: a different key being pinned, or a key on record that the
+   *  one line sent would stop pinning. Changing `port` does not exempt an
+   *  edit from it. A separate answer from `acknowledgeRepoint` on purpose:
+   *  that one says "this is the same data at a new address" and this one
+   *  says "this is the same host with a new key", and one flag for both
+   *  would let an operator who meant one of them quietly grant the other.
+   *
+   *  It answers for the value it was shown alongside, so the retry after a
+   *  refusal re-sends the body that was refused rather than re-reading the
+   *  form (BackupSetDetailPage's `refusal` state). */
   acknowledgeHostKeyChange?: boolean;
 }
 
