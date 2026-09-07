@@ -41,9 +41,11 @@ import (
 // backup set within whatever sources match Source.
 //
 // Set is spelled either way round (issue #569). "api-server/var-backups"
-// is the id every surface that PRINTS a backup set prints: this listing's
-// own first column, `sources`, `status`, and the operand `retention`
-// takes. "var-backups" is the older spelling and still works, but only
+// is the id every surface that PRINTS a backup set prints: `sources`,
+// `status`, and the heading `retention` puts over each set, which is also
+// the operand it takes. It is NOT the id in this listing's own first
+// column, which is a whole artifact id and one field longer.
+// "var-backups" is the older spelling and still works, but only
 // while exactly one source configures that name; FR-7 makes identity
 // source-plus-set, so a name two sources share names neither of them and
 // resolve refuses it rather than picking one or answering with both.

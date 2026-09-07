@@ -119,10 +119,12 @@ const (
 // TestArtifacts_BackupSetTakesTheCompositeIdEveryOtherSurfacePrints is
 // issue #569's first half.
 //
-// The id in this command's own first column, in `sources`, in `status` and
-// in `retention`'s operand is `source/set`. Typing that at the one flag
-// whose whole job is to select a backup set was a refusal, and the refusal
-// named the set as unconfigured, which was untrue of it.
+// The id `sources` prints, `status` reports under, and `retention` heads
+// each section with is `source/set`, and it is the operand `retention`
+// takes. Typing that at the one flag whose whole job is to select a backup
+// set was a refusal, and the refusal named the set as unconfigured, which
+// was untrue of it. (This command's own first column is one field longer
+// than that: it is the whole artifact id, file name and all.)
 func TestArtifacts_BackupSetTakesTheCompositeIdEveryOtherSurfacePrints(t *testing.T) {
 	configPath := twoSourceDeployment(t)
 

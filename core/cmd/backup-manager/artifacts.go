@@ -19,11 +19,16 @@ import (
 // filter, see internal/app.ArtifactFilter's doc): the terse, one-line-per-
 // artifact form an operator scans to see what state everything is in.
 //
-// --backup-set takes the "source/backup-set" id this listing prints in its
-// own first column, and a bare set name where exactly one source
-// configures it (issue #569). Both spellings resolve in one place, in the
-// app layer, so this command and the id it hands a running engine cannot
-// end up disagreeing about which backup set was asked for.
+// --backup-set takes the "source/backup-set" id `sources`, `status` and
+// `retention` name a backup set by, and a bare set name where exactly one
+// source configures it (issue #569). Both spellings resolve in one place,
+// in the app layer, so this command and the id it hands a running engine
+// cannot end up disagreeing about which backup set was asked for.
+//
+// Not the id in this listing's own first column, which is a whole ARTIFACT
+// id and one field longer. That is worth naming here rather than leaving
+// implicit, because the note beside this flag used to point at exactly
+// that column and it was the one string an operator must not paste in.
 //
 // With exactly one operand, <source/backup-set/name> (the same id form
 // `validate` takes), it switches to a detail view of that one artifact:
@@ -49,17 +54,31 @@ func cmdArtifacts(args []string) int {
 		return usageError("artifacts takes at most one argument: <source/backup-set/name>")
 	}
 	// Issue #569. --backup-set takes the whole "source/backup-set" id now,
-	// so it can carry a source of its own, and a --source naming a
-	// different one is two flags asking for two different things. Decided
-	// here, on the command line alone and before anything is opened,
-	// because that pair is a contradiction on every deployment rather
-	// than on this one: it is the same kind of mistake as passing a
-	// filter and an operand together, and it gets the same 2. What is
-	// NOT decided here is whether either name exists, which is a
-	// question about this deployment and belongs where the configuration
-	// is (internal/app.ArtifactFilter.resolve).
-	if named, _, ok := strings.Cut(*setFlag, "/"); ok && *sourceFlag != "" && *sourceFlag != named {
-		return usageError("artifacts: --backup-set %s names source %s, which --source %s contradicts", *setFlag, named, *sourceFlag)
+	// so it can carry a source of its own. Two things about that pair are
+	// settled here, on the command line alone and before anything is
+	// opened, because both are wrong on every deployment rather than on
+	// this one, and the usage block's table gives that a 2: a value with
+	// a separator in it that is not an id at all, and a --source naming a
+	// different source than the id does. What is NOT settled here is
+	// whether either name exists, which is a question about this
+	// deployment and belongs where the configuration is
+	// (internal/app.ArtifactFilter.resolve), on the table's row 1.
+	//
+	// The shape check goes through splitBackupSetID, the same function
+	// `retention`, `backup-set create/patch/remove/retention` and
+	// `unconfigured clear` all read this operand's shape with, so every
+	// place an operator can type a backup set id agrees about what one is
+	// and refuses the same things the same way. It used to reach
+	// internal/app and come back through fail() as a 1 carrying "app:
+	// backup set ...", which is a sentence about this deployment printed
+	// after its journal was opened, for a command line no deployment
+	// would have accepted.
+	if named, _, ok := splitBackupSetID(*setFlag); ok {
+		if *sourceFlag != "" && *sourceFlag != named {
+			return usageError("artifacts: --backup-set %s names source %s, which --source %s contradicts", *setFlag, named, *sourceFlag)
+		}
+	} else if strings.Contains(*setFlag, "/") {
+		return usageError("artifacts: --backup-set %q is not a backup set id; a backup set id is exactly source/name, and an artifact id pasted whole has the file name on the end of it", *setFlag)
 	}
 
 	ctx := context.Background()
