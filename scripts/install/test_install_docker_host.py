@@ -1244,6 +1244,37 @@ class TestWhatCountsAsInstalled(unittest.TestCase):
         self.assertFalse(self.verdict("running healthy", 502, (200, "")))
 
 
+class TestTheFirstRunEpilogIsOnlyForAFirstRun(unittest.TestCase):
+    """Issue #588. The three sentences after "Installed." tell an operator
+    that no configuration was written and to go through the setup flow,
+    which is true of a fresh install and false of an upgrade.
+
+    Upgrading a real NAS printed them over a deployment that had just kept
+    its config.yaml, both backup sets and its administrator record.
+    Following them means hunting the engine log for an enrolment link for
+    an account that already exists, and reasonably concluding the upgrade
+    lost the configuration."""
+
+    def test_nothing_is_said_about_first_run_when_a_configuration_is_already_there(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        (args.config_dir / "config.yaml").write_text("sources: []\n", encoding="utf-8")
+        lines = installer.first_run_epilog(args)
+        self.assertEqual(lines, [],
+                         "an upgrade that kept its configuration must not be told to go and create one")
+
+    def test_the_first_run_flow_is_still_explained_when_there_is_no_configuration(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        lines = installer.first_run_epilog(args)
+        self.assertTrue(lines, "a fresh install still needs to be pointed at the setup flow")
+        joined = "\n".join(lines)
+        self.assertIn("No config.yaml was written", joined)
+        self.assertIn("enroll", joined)
+
+
 class TestVersionOrdering(unittest.TestCase):
     """The installer could not previously tell an upgrade from a
     downgrade from a reinstall, because it never read what was running.
@@ -1259,6 +1290,24 @@ class TestVersionOrdering(unittest.TestCase):
         """A colon in a reference is not always a tag separator."""
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.2"), "0.3.2")
+
+    def test_the_carried_version_is_described_relative_to_what_is_installed(self):
+        """Issue #588. compare_versions answers where the INSTALLED version
+        sits, and this sentence puts the answer in brackets after the
+        version the INSTALLER carries, so the two have to be asked in that
+        order or the sentence says the opposite of what is true.
+
+        Upgrading a real NAS from 0.3.1 to 0.3.2 printed "This installer
+        carries 0.3.2 (older)", which is the one sentence that makes
+        somebody stop a correct upgrade."""
+        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.3.2")
+        self.assertIn("0.3.2 (newer)", line)
+        self.assertNotIn("0.3.2 (older)", line)
+        # And the other direction, which is a real downgrade.
+        self.assertIn("0.3.1 (older)",
+                      installer.describe_what_is_here(2, 2, "0.3.2", "", "0.3.1"))
+        self.assertIn("0.3.2 (same)",
+                      installer.describe_what_is_here(1, 1, "0.3.2", "", "0.3.2"))
 
     def test_ordering_is_numeric_and_not_lexical(self):
         self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
