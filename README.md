@@ -1377,8 +1377,11 @@ is a different instant: that one is when the artifact finished committing locall
 field matching the discovery timestamp is `retention_timestamp`.)
 
 Two ways to see what a policy would do before it does it:
-`backup-manager retention --dry-run`, which also takes per-run overrides for the timezone,
-the week start and each tier so you can compare policies without editing config; and
+`backup-manager retention --dry-run`, over every configured set or over the one you name
+(`backup-manager retention <source/backup-set> --dry-run`, which refuses an id that names
+no configured set rather than answering about a different one), and which also takes
+per-run overrides for the timezone, the week start and each tier so you can compare
+policies without editing config; and
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 

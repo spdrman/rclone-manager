@@ -152,6 +152,11 @@ commands:
                                                   through the API's retention preview/apply pair, against a reviewed plan_id.
                                                   Each retention flag overrides the loaded config's own resolved value for
                                                   this preview only
+  retention <source/backup-set> [--dry-run] [the same retention override flags]
+                                                  preview that one backup set's decisions instead of every configured
+                                                  set's. An id that names no configured backup set is refused and
+                                                  nothing is printed, rather than answered about a set nobody asked
+                                                  about (#568)
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   validate <source/backup-set/artifact> [--content]
