@@ -441,3 +441,142 @@ func writeFileFor(t *testing.T, path, content string) string {
 	}
 	return path
 }
+
+// Issue #571: the announcement a process makes when it is about to serve
+// an install that has never been configured.
+//
+// AnnounceServing above reads the journal out of a configuration, so on a
+// fresh install it is a no-op and the setup flow serves invisibly. The four
+// cases below are the whole of what AnnounceServingFirstRun changes about
+// that, and the first is the defect itself.
+
+// TestAnnounceServingFirstRun_IsFoundOnAnInstanceWithNoConfiguration is
+// #571 stated at this layer: a process serving a deployment it has no
+// configuration for is findable by the question a `backup-set create`
+// asks, which is DetectRunningEngineForJournal against the journal
+// --state-database names.
+func TestAnnounceServingFirstRun_IsFoundOnAnInstanceWithNoConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dbPath := filepath.Join(dir, "state", "state.db")
+
+	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = release() })
+
+	engine, err := DetectRunningEngineForJournal(dbPath)
+	if err != nil {
+		t.Fatalf("DetectRunningEngineForJournal: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("nothing was found while a process serves this deployment's first-run setup flow, so a `backup-set create` here writes a configuration that process will never read (issue #571)")
+	}
+	if engine.StateDatabase != dbPath {
+		t.Errorf("engine.StateDatabase = %q, want %q", engine.StateDatabase, dbPath)
+	}
+
+	// The state directory was not there when this started, which is a
+	// first-ever start against a fresh volume. An announcement that needed
+	// it to exist already would refuse exactly that case.
+	if _, err := os.Stat(dbPath + servingLockSuffix); err != nil {
+		t.Errorf("the serving lock was not created beside a journal in a directory that did not exist yet: %v", err)
+	}
+
+	// And it is given back, so a restarted container is not refused by the
+	// announcement its predecessor made.
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	engine, err = DetectRunningEngineForJournal(dbPath)
+	if err != nil {
+		t.Fatalf("DetectRunningEngineForJournal after the release: %v", err)
+	}
+	if engine != nil {
+		t.Errorf("%+v is still reported as serving after the announcement was given back", engine)
+	}
+}
+
+// TestAnnounceServingFirstRun_PrefersTheJournalTheConfigurationNames is the
+// half that keeps a configured deployment behaving exactly as it did. A
+// process that HAS a configuration announces about the journal that file
+// names, and the first-run default is never looked at: reading it there
+// would let a stale --state-database rename the deployment out from under
+// an engine that knows better.
+func TestAnnounceServingFirstRun_PrefersTheJournalTheConfigurationNames(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	configPath := writeConfigFileFor(t, dir, dbPath)
+	elsewhere := filepath.Join(dir, "elsewhere", "state.db")
+
+	release, err := AnnounceServingFirstRun(configPath, elsewhere)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = release() })
+
+	engine, err := DetectRunningEngine(configPath)
+	if err != nil {
+		t.Fatalf("DetectRunningEngine: %v", err)
+	}
+	if engine == nil || engine.StateDatabase != dbPath {
+		t.Fatalf("DetectRunningEngine = %+v, want the journal %s the configuration names", engine, dbPath)
+	}
+	if _, err := os.Stat(filepath.Dir(elsewhere)); !os.IsNotExist(err) {
+		t.Errorf("the first-run default %s was acted on by a process that has a configuration (stat err = %v)", elsewhere, err)
+	}
+}
+
+// TestAnnounceServingFirstRun_SaysNothingAboutAConfigurationItCannotRead
+// is the line between "not set up yet" and "set up wrongly", which is the
+// same line ErrConfigAbsent draws.
+//
+// A configuration that EXISTS and does not parse belongs to a process that
+// is about to exit over it, and the journal it names is not necessarily the
+// packaged default. Announcing about that default would take a lock on, and
+// mint an identity beside, a deployment nobody asked about, and would do it
+// on the way out of a process that never served anything.
+func TestAnnounceServingFirstRun_SaysNothingAboutAConfigurationItCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeFileFor(t, filepath.Join(dir, "config.yaml"), "state:\n  database: [this is not a path\n")
+	dbPath := filepath.Join(dir, "state", "state.db")
+
+	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = release() })
+
+	engine, err := DetectRunningEngineForJournal(dbPath)
+	if err != nil {
+		t.Fatalf("DetectRunningEngineForJournal: %v", err)
+	}
+	if engine != nil {
+		t.Errorf("%+v was announced for a deployment whose configuration exists and cannot be read; that is a deployment set up wrongly, not one waiting to be set up", engine)
+	}
+	if _, err := os.Stat(filepath.Dir(dbPath)); !os.IsNotExist(err) {
+		t.Errorf("a state directory was created for a configuration this process is about to exit over (stat err = %v)", err)
+	}
+}
+
+// TestAnnounceServingFirstRun_RefusesASecondEngine is the same exclusion
+// AnnounceServing already has, checked on the first-run path because that
+// is where a supervisor restarting a container lands: two provider
+// processes over one journal would run two setup flows and two schedulers
+// over one deployment.
+func TestAnnounceServingFirstRun_RefusesASecondEngine(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dbPath := filepath.Join(dir, "state", "state.db")
+
+	release, err := AnnounceServingFirstRun(configPath, dbPath)
+	if err != nil {
+		t.Fatalf("AnnounceServingFirstRun: %v", err)
+	}
+	t.Cleanup(func() { _ = release() })
+
+	if _, err := AnnounceServingFirstRun(configPath, dbPath); !errors.Is(err, ErrAlreadyServing) {
+		t.Fatalf("second AnnounceServingFirstRun error = %v, want errors.Is(_, ErrAlreadyServing)", err)
+	}
+}

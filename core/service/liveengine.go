@@ -188,6 +188,12 @@ func DetectRunningEngineForJournal(dbPath string) (*RunningEngine, error) {
 // serving invisibly is the failure mode this whole file exists to
 // prevent.
 //
+// A process that goes on serving with no configuration, rather than
+// exiting, must not take that no-op: an instance serving the first-run
+// setup flow is serving, and #571 is what it costs when nothing can find
+// it. AnnounceServingFirstRun below is the entry point for that caller,
+// and a provider app that serves setup has to call it instead of this one.
+//
 // # Where this deployment gets its name
 //
 // This is also the one place that mints a deployment identity (#555,
@@ -218,6 +224,89 @@ func AnnounceServing(configPath string) (func() error, error) {
 	if !ok {
 		return func() error { return nil }, nil
 	}
+	return announceServingJournal(dbPath)
+}
+
+// AnnounceServingFirstRun is AnnounceServing for the one process that
+// starts serving before it has a configuration to name a journal with: a
+// provider app on a fresh install, which serves the setup flow rather than
+// exiting (#176) and gains its first configuration through an HTTP POST.
+//
+// # The gap it closes
+//
+// Issue #571, found on a real NAS. AnnounceServing above is a no-op on an
+// instance with no configuration, because there is no journal to announce
+// about, so a `backup-set create` typed at that host found nothing serving,
+// took the first-configuration path, wrote config.yaml, exited 0 and
+// printed the set. The engine went on serving setup and answering
+// 503 not_ready until somebody restarted it, so the CLI showed a backup set
+// the Web UI did not have. That is #535 in its original words, arriving on
+// the ordinary path an operator installing fresh and configuring from the
+// command line walks straight down.
+//
+// The fix is that a process about to serve knows which journal it will
+// serve before it knows anything else: firstRunDatabase is the
+// --state-database its own packaging fixes, and it is the same value the
+// configuration setup writes will name (FirstRunDefaults.StateDatabase),
+// so announcing about it now is announcing about the deployment this
+// process is going to be. It is also the same value the CLI's own
+// --state-database carries, which is what makes the announcement findable:
+// DetectRunningEngineForJournal already asks about exactly this journal for
+// exactly this reason.
+//
+// # What it does not do
+//
+// It does not invent a journal for a process that has one. A configuration
+// that names a journal wins, always, so a configured deployment behaves
+// exactly as it did before and firstRunDatabase is never looked at.
+//
+// And it can only be found by somebody asking about the same journal. The
+// packaged deployment fixes both ends to the same path (this app's
+// --state-database and the CLI's carry the same default, and
+// container/compose.yaml overrides neither), so the shape that gets past
+// this is a hand-tuned deployment where $STATE_DATABASE was moved for the
+// engine and the create was typed without a matching --state-database.
+// That is the same shape a mistyped --config has always had, and it is
+// named here rather than left for somebody to rediscover.
+//
+// It does not guess for a configuration that EXISTS and cannot be read.
+// That is a deployment that is set up wrongly rather than one that is not
+// set up (ErrConfigAbsent draws the same line, and OpenConfigAndJournal
+// draws it with the same stat on the same resolved path), and a process
+// about to exit over a broken config.yaml has no business taking a lock on,
+// and minting an identity beside, a journal that may not be the one that
+// file names.
+//
+// # Why the state directory is made here
+//
+// acquireServingLock creates its lock file, and it cannot create it in a
+// directory that is not there. A first-ever start against a fresh volume is
+// exactly that directory not being there, so this runs the same
+// validateStateDir step §46.1's startup sequence runs, which creates a
+// missing directory and refuses one that exists and cannot be used.
+//
+// A refusal here fails the start, which is AnnounceServing's rule rather
+// than a new one: an engine that serves a setup flow nothing can find is
+// the failure #571 is about, and a state directory that cannot be written
+// is a deployment that could not have completed setup anyway. Loud at the
+// start beats silent until the end of a wizard.
+func AnnounceServingFirstRun(configPath, firstRunDatabase string) (func() error, error) {
+	if dbPath, ok := journalNamedBy(configPath); ok {
+		return announceServingJournal(dbPath)
+	}
+	if firstRunDatabase == "" || !configAbsent(configPath) {
+		return func() error { return nil }, nil
+	}
+	if err := validateStateDir(firstRunDatabase); err != nil {
+		return nil, err
+	}
+	return announceServingJournal(firstRunDatabase)
+}
+
+// announceServingJournal is the announcement itself, shared by the two
+// entry points above so that "which journal" is the only thing they can
+// differ about.
+func announceServingJournal(dbPath string) (func() error, error) {
 	lock, err := acquireServingLock(dbPath + servingLockSuffix)
 	if err != nil {
 		return nil, err
@@ -231,6 +320,20 @@ func AnnounceServing(configPath string) (func() error, error) {
 			fmt.Errorf("this deployment could not be given an identity, so clients cannot confirm which deployment they are writing to and every routed write against it will be refused: %w", err))
 	}
 	return lock.release, nil
+}
+
+// configAbsent reports whether configPath names nothing at all, which is
+// the one startup state that means "not set up yet" rather than "set up
+// wrongly" (firstrun.go's ErrConfigAbsent).
+//
+// The stat is on the RESOLVED path for OpenConfigAndJournal's own reason:
+// --config may name the packaged configuration DIRECTORY (#196), and
+// statting the directory would find it present on a completely empty
+// install, so the one shape that most needs this answer is the one shape
+// that would never get it.
+func configAbsent(configPath string) bool {
+	_, err := os.Stat(config.ResolvePath(configPath))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // ConfigWriteGuard is a configuration write's exclusive claim on a

@@ -7,8 +7,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -16,10 +18,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
@@ -534,6 +539,14 @@ func TestAnUnroutedMutationBesideALiveEngineRefusesAndTheWebUIIsUnchanged(t *tes
 	got := runCLI(t, bin, nil, createArgs(configPath, writePrivateKey(t), newSetID)...)
 	if got.code == 0 {
 		t.Fatalf("a create beside a live engine with no route to it exited 0, so it wrote the file behind that engine's back:\n%s", got)
+	}
+	// The code, not merely a nonzero one. #551 gave this refusal a code of
+	// its own so a script never has to read the prose, and the second
+	// create on a fresh install has to reach the same one the first now
+	// does (TestAFirstCreateFromTheCLICannotLandBehindTheSetupFlow), or an
+	// operator's script would branch differently on the same news.
+	if got.code != exitEngineHoldsDeployment {
+		t.Errorf("the refusal exited %d, want %d:\n%s", got.code, exitEngineHoldsDeployment, got)
 	}
 	if !strings.Contains(got.output(), "mode: engine-attached") {
 		t.Errorf("the refusal did not say which mode it was in:\n%s", got)
@@ -1383,4 +1396,359 @@ func TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt(t *testing.T) {
 	if after := view.backupSets(); !equal(after, theirsBefore) {
 		t.Errorf("the other deployment on this host moved on a write aimed somewhere else\nbefore: %v\nafter:  %v", theirsBefore, after)
 	}
+}
+
+// Issue #571: the one shape EPIC #536 documented and did not close, driven
+// rather than reasoned about.
+//
+// An install that has never been configured serves the first-run setup flow
+// (#176), and until #571 it announced nothing, because `AnnounceServing`
+// reads the journal out of a configuration that is not there yet. So the
+// probe every configuration write in the CLI makes had nothing to find, a
+// `backup-set create` took the first-configuration path, wrote config.yaml,
+// exited 0 and printed the set, and the engine went on serving setup and
+// answering 503 until somebody restarted it. That is #535 in its original
+// words, on the ordinary path an operator installing fresh and configuring
+// from the command line walks straight down.
+//
+// # Why the real provider binary, and not the composition startStack makes
+//
+// startStack above mirrors the ordering apps/generic's main.go uses for a
+// deployment that HAS a configuration, and that is fine there because the
+// thing under test is what the CLI does next to an announcement. Here the
+// announcement itself is the subject: what is being checked is that the
+// process serving the setup flow announces at all, and a test that made its
+// own announcement would be checking its own copy of main.go. So the engine
+// below is the real `backup-manager-web serve`, started as a subprocess
+// against a directory with no configuration in it, exactly as the container
+// starts it.
+
+// buildWeb builds the provider binary the container image runs as its
+// engine. It is the counterpart of buildCLI, and it exists for the reason
+// above: the first-run announcement is main.go's to make.
+func buildWeb(t *testing.T, root string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "backup-manager-web")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
+	cmd.Dir = filepath.Join(root, "apps", "generic")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build backup-manager-web: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// firstRunStack is a deployment in the state an installer leaves behind:
+// no config.yaml at all, an administrator already enrolled, and the real
+// engine up and serving the setup flow.
+type firstRunStack struct {
+	configPath    string
+	stateDatabase string
+	engineURL     string
+
+	// log is everything the engine has printed so far, so a failure here
+	// carries the process's own account of what it did rather than only
+	// the CLI's.
+	log func() string
+}
+
+// startFirstRunStack performs steps 1 and 2 of #571: install, then enrol an
+// administrator through the Web UI. Nothing writes a configuration, which
+// is #176's whole point and the state the rest of this test is about.
+func startFirstRunStack(t *testing.T, webBin string) *firstRunStack {
+	t.Helper()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	// The container's own shape: the state directory is a bind mount, so it
+	// exists before anything starts, and the local-auth store sits inside it
+	// (container/compose.yaml mounts $STATE_DIR at /data/state and
+	// apps/common/auth/local keeps local-auth.json there).
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", stateDir, err)
+	}
+	stateDatabase := filepath.Join(stateDir, "state.db")
+	storePath := filepath.Join(stateDir, "local-auth.json")
+
+	// Step 2, done the way `backup-manager-web auth create-admin` does it,
+	// because this test needs a password to sign in with. An operator
+	// redeems the bootstrap token instead and ends up with the same record.
+	if _, err := local.CreateAdmin(local.CreateAdminConfig{
+		StorePath: storePath,
+		Username:  testAdmin,
+		Password:  testPassword,
+	}); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+
+	addr := freeAddr(t)
+	out := &syncBuffer{}
+	cmd := exec.Command(webBin, "serve",
+		"--config", configPath,
+		"--state-database", stateDatabase,
+		"--auth-store", storePath,
+		"--listen", addr,
+		"--profile", "generic",
+	)
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting backup-manager-web: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+
+	base := "http://" + addr
+	waitForLive(t, base, out)
+	return &firstRunStack{
+		configPath:    configPath,
+		stateDatabase: stateDatabase,
+		engineURL:     base,
+		log:           out.String,
+	}
+}
+
+// freeAddr picks a loopback address nothing is listening on. The engine
+// takes an address rather than handing one back, so the port has to be
+// chosen out here.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("releasing the reserved port: %v", err)
+	}
+	return addr
+}
+
+// syncBuffer collects a subprocess's output while the test reads it. The
+// child writes from its own goroutine, so an ordinary bytes.Buffer here is
+// a data race the race detector would (rightly) fail the suite over.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForLive blocks until the engine answers its liveness probe, which is
+// unauthenticated and is served by a first-run instance exactly as it is by
+// a configured one.
+func waitForLive(t *testing.T, base string, log *syncBuffer) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(base + "/health/live")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the engine at %s never answered /health/live:\n%s", base, log.String())
+}
+
+// notReady reports whether the engine is answering the 503 an instance with
+// no backend answers. It is the fact #571 opens with, and it is read
+// without credentials because that is what the probe is.
+func notReady(t *testing.T, base string) bool {
+	t.Helper()
+	resp, err := http.Get(base + "/health/ready")
+	if err != nil {
+		t.Fatalf("GET %s/health/ready: %v", base, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusServiceUnavailable
+}
+
+// backupSetsOrUnconfigured is backupSets for a deployment that may have no
+// configuration at all.
+//
+// A first-run instance serves a route table with no /backup-sets on it and
+// answers 503 NOT_CONFIGURED to everything else (apps/common/webhost's
+// newUnconfiguredRouter), so "this engine has no world yet" comes back as an
+// empty list rather than as a fatal. That is what makes the two routes
+// comparable across the moment a deployment is configured, which is the
+// moment #571 is about.
+func (b *browser) backupSetsOrUnconfigured() []string {
+	b.t.Helper()
+	resp, err := b.client.Get(b.base + "/api/v1/backup-sets")
+	if err != nil {
+		b.t.Fatalf("GET /api/v1/backup-sets: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		b.t.Fatalf("GET /api/v1/backup-sets returned %d: %s", resp.StatusCode, raw)
+	}
+	var answer apicontract.ListBackupSetsResponse
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		b.t.Fatalf("decoding /api/v1/backup-sets: %v\n%s", err, raw)
+	}
+	ids := make([]string, 0, len(answer.BackupSets))
+	for _, bs := range answer.BackupSets {
+		ids = append(ids, bs.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// cliBackupSets is the same question asked of the other route: the backup
+// sets `sources` prints.
+//
+// A configuration that is not there is an empty world rather than an error
+// to report, which is what lets this be compared against the engine's answer
+// on a deployment that has never been configured. A `sources` that refuses
+// for any OTHER reason is a fatal, so an empty answer here always means
+// "nothing is configured" and never "the read fell over".
+func cliBackupSets(t *testing.T, bin, configPath string) []string {
+	t.Helper()
+	got := runCLI(t, bin, nil, "sources", "--config", configPath)
+	if got.code != 0 {
+		if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		t.Fatalf("`sources` refused on a deployment that has a configuration:\n%s", got)
+	}
+	var ids []string
+	for _, line := range strings.Split(got.stdout, "\n") {
+		if !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.Contains(fields[0], "/") {
+			continue
+		}
+		ids = append(ids, fields[0])
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// exitEngineHoldsDeployment is the code the binary's own usage block
+// documents for a write refused because something else is serving this
+// deployment (#551). Spelled out here rather than imported, because package
+// main cannot be imported and because the code is a contract a script reads.
+const exitEngineHoldsDeployment = 3
+
+// TestAFirstCreateFromTheCLICannotLandBehindTheSetupFlow is issue #571.
+//
+// The property is not "a refusal appeared". It is that after a CLI create,
+// no surface reports a world another surface does not have: the engine's own
+// list and the CLI's own list have to be the same list, whichever way the
+// command went. A guard that refused and left the file written would satisfy
+// an exit-code assertion and fail this one.
+//
+// The second case is the control that keeps the first from being satisfied
+// by refusing everything. A genuinely bare host, with nothing serving and no
+// state directory yet, still writes its first configuration from the command
+// line, which is the case the direct path exists for and the one the
+// installer's own worked examples show.
+func TestAFirstCreateFromTheCLICannotLandBehindTheSetupFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real CLI against the real first-run engine")
+	}
+	root := repoRoot(t)
+	bin := buildCLI(t, root)
+
+	t.Run("beside an engine serving the setup flow", func(t *testing.T) {
+		live := startFirstRunStack(t, buildWeb(t, root))
+		view := signIn(t, live.engineURL)
+
+		// The state #571 was reported from, asserted rather than assumed.
+		// Without these three the case below could pass on a deployment
+		// that was already configured, which is a different issue with a
+		// different answer.
+		if _, err := os.Stat(live.configPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("this deployment already has a configuration at %s (stat err = %v), so it is not the fresh install #571 is about", live.configPath, err)
+		}
+		if !notReady(t, live.engineURL) {
+			t.Fatalf("the engine is ready before anything has configured it, so it is not serving the setup flow:\n%s", live.log())
+		}
+		if sets := view.backupSetsOrUnconfigured(); len(sets) != 0 {
+			t.Fatalf("the engine already lists backup sets on a deployment with no configuration: %v", sets)
+		}
+
+		got := runCLI(t, bin, nil, createArgs(live.configPath, writePrivateKey(t), newSetID,
+			"--state-database", live.stateDatabase)...)
+
+		engineSets := view.backupSetsOrUnconfigured()
+		cliSets := cliBackupSets(t, bin, live.configPath)
+		if !equal(cliSets, engineSets) {
+			t.Fatalf("the CLI and the engine serving this deployment describe different worlds after a `backup-set create`, which is issue #535 on a fresh install.\nCLI:    %v\nengine: %v\n%s\nengine log:\n%s",
+				cliSets, engineSets, got, live.log())
+		}
+
+		// And the refusal is the one #538, #542 and #551 already promise
+		// for the second create, so a fresh install is not a deployment
+		// with refusals of its own shape.
+		if got.code != exitEngineHoldsDeployment {
+			t.Errorf("the create exited %d, want %d so a script can tell this apart from an ordinary failure:\n%s", got.code, exitEngineHoldsDeployment, got)
+		}
+		if !strings.Contains(got.output(), "mode: engine-attached") {
+			t.Errorf("the create did not announce which world it believed it was in:\n%s", got)
+		}
+		if !strings.Contains(got.output(), "refused here rather than downgraded") {
+			t.Errorf("the refusal did not say that nothing was written:\n%s", got)
+		}
+		if _, err := os.Stat(live.configPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a refused create wrote %s underneath the engine serving the setup flow (stat err = %v)", live.configPath, err)
+		}
+		// The setup flow is still there, which is the remedy the operator
+		// actually has: an instance torn down by this refusal would have
+		// traded one silent divergence for an install nobody can finish.
+		if !notReady(t, live.engineURL) {
+			t.Errorf("the engine stopped serving the setup flow after a refused create:\n%s", live.log())
+		}
+	})
+
+	t.Run("with nothing serving, a bare host still writes its first configuration", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "config.yaml")
+		// Deliberately a directory that does not exist. A first-ever start
+		// against a fresh volume is exactly this, and a fix that needed the
+		// state directory to be there already would refuse the one case the
+		// first-configuration path exists for.
+		stateDatabase := filepath.Join(dir, "state", "state.db")
+
+		got := runCLI(t, bin, nil, createArgs(configPath, writePrivateKey(t), newSetID,
+			"--state-database", stateDatabase)...)
+		if got.code != 0 {
+			t.Fatalf("a first create on a host with nothing serving was refused:\n%s", got)
+		}
+		if !strings.Contains(got.output(), "mode: direct") {
+			t.Errorf("the create did not announce direct mode on a deployment nothing is serving:\n%s", got)
+		}
+		if _, err := os.Stat(configPath); err != nil {
+			t.Fatalf("the create reported success and wrote no configuration to %s: %v\n%s", configPath, err, got)
+		}
+		if sets := cliBackupSets(t, bin, configPath); !contains(sets, newSetID) {
+			t.Errorf("the first configuration does not hold the set the create reported: %v\n%s", sets, got)
+		}
+	})
 }

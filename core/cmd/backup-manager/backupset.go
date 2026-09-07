@@ -142,11 +142,13 @@ func backupSetVerbNames() []string {
 // one piece of work rather than two halves.
 //
 // The first configuration a create writes on an instance that has no
-// config.yaml yet has no route for a different reason: finding a process
-// serving the journal --state-database names says that deployment is
-// already configured, and POST /system/first-run is not an operation to
-// send an already configured engine. Both refuse beside a serving
-// process, exactly as every configuration write did before #543.
+// config.yaml yet has no route for a different reason: the only request
+// that would carry it is POST /system/first-run, which an engine accepts
+// once and only while it is still unconfigured, and a process found
+// serving the journal --state-database names is either past that moment or
+// standing in the setup flow the operator can finish themselves. Both
+// refuse beside a serving process, exactly as every configuration write did
+// before #543.
 //
 // That is issue #535: a `backup-set create` through docker exec against a
 // live server succeeded, `sources` listed both sets, and the Web UI showed
@@ -611,28 +613,28 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	// the configuration: there is no configuration here to read a journal
 	// path out of, which is the entire reason this branch was taken.
 	//
-	// Two ordinary mistakes land here against a LIVE deployment, and both
-	// used to exit 0 after writing a configuration nothing would ever
-	// read: a mistyped --config, and a config.yaml renamed out from under
-	// a running engine. --state-database is what still identifies the
-	// deployment in both, because it carries the same packaged default
-	// the first-run wizard writes, so a create that does not name one is
-	// still asking about the right journal.
+	// Three things land here against a LIVE deployment, and all three used
+	// to exit 0 after writing a configuration nothing would ever read: a
+	// mistyped --config, a config.yaml renamed out from under a running
+	// engine, and a genuinely fresh install whose engine is serving the
+	// first-run setup flow, which is #571. --state-database is what
+	// identifies the deployment in all three, because it carries the same
+	// packaged default apps/generic's own --state-database does, so a
+	// create that does not name one is still asking about the right
+	// journal, and a first-run engine is now announcing about exactly that
+	// journal (core/service's AnnounceServingFirstRun).
 	//
 	// A genuine first run is untouched by this, and that is the half that
-	// had to stay true: a bare host has no journal, a host serving the
-	// setup wizard has not opened one yet, and neither announces itself
-	// as serving anything. Both still write their first configuration
-	// from here.
+	// had to stay true: a bare host has no serving lock file beside a
+	// journal that does not exist, so the question comes back "nothing is
+	// serving" and the first configuration is written from here, which is
+	// the whole reason this path exists.
 	//
 	// It announces its mode too (#542), for the same reason it has to
 	// ask at all: this was the one configuration write in the binary with
 	// no route through openBackupService, so leaving it out would leave
 	// exactly one write that never says which world it believed it was
-	// in. What the decision can see here is narrower than elsewhere and
-	// liveengine.go says so out loud, but announcing the mode it did
-	// decide is the honest answer and is strictly more than the nothing
-	// this path said before.
+	// in.
 	guard, err := enterFirstConfigWriteMode(configFile, stateDatabase, os.Stdout, os.Stderr)
 	if err != nil {
 		return fail(err)

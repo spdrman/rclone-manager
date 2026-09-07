@@ -514,9 +514,17 @@ func cmdServe(args []string) int {
 	// liveengine.go has the whole arrangement.
 	//
 	// On a first-run instance there is no configuration to name a journal
-	// yet, so this is a no-op and the announcement happens in Activate
-	// below instead, once setup has written one.
-	stopServing, err := service.AnnounceServing(*configPath)
+	// yet, and that used to mean no announcement at all until setup had
+	// written one. Issue #571 is what that cost: an operator who installed
+	// fresh, enrolled an administrator and then typed `backup-set create`
+	// got a set written into a config.yaml the process below will never
+	// read, exit 0, and a Web UI still answering 503. So the journal
+	// --state-database names is handed over as well, because it is what
+	// this process is going to serve either way: the configuration setup
+	// writes names exactly that path, and the CLI's own --state-database
+	// carries the same packaged default, which is what makes the
+	// announcement something a `backup-set create` on this host can find.
+	stopServing, err := service.AnnounceServingFirstRun(*configPath, *stateDatabase)
 	if err != nil {
 		return failServing(err)
 	}
@@ -564,35 +572,33 @@ func cmdServe(args []string) int {
 		}
 		engineConfig.FirstRun = firstRun
 		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
-			// The announcement the branch above could not make: there was
-			// no configuration to name a journal when this process
-			// started, and setup has just written one. From here on this
-			// instance is a running engine like any other, and a CLI
-			// write aimed at it has to be able to find it.
+			// There is no announcement here any more, and its absence is
+			// the fix for #571 rather than an omission. This used to be
+			// the first moment this process could say what it served,
+			// which left the whole of the setup flow invisible to a
+			// `backup-set create` on the same host. The announcement is
+			// now made before the setup flow is served at all, for the
+			// journal --state-database names, and CreateInitialConfig
+			// writes that same path into state.database (FirstRunDefaults
+			// is where both read it from), so what this process serves
+			// from here on is the deployment it already announced.
 			//
-			// No failServing here, and it is not an oversight: this
-			// process is not exiting. It is serving a setup flow, and a
-			// refusal here is reported to the operator through the API
-			// as restart_required (FirstRunEngine.activate), with the
-			// configuration already durably written. There is no exit
-			// status to carry #551's news on, and inventing one would
-			// mean tearing down a server for a fact the person in front
-			// of it can already read.
-			stopActivated, serveErr := service.AnnounceServing(*configPath)
-			if serveErr != nil {
-				return nil, nil, serveErr
-			}
+			// Announcing a second time would not be harmless either: the
+			// serving lock is taken EXCLUSIVELY and flock attaches to the
+			// open file description, so a second acquire in this process
+			// is a second description, and it would wait out the lock
+			// timeout and then be refused as ErrAlreadyServing by the
+			// announcement this process is already holding.
+			//
+			// A failure below is returned rather than fatal, and that is
+			// not an oversight: this process is not exiting. It is serving
+			// a setup flow, and a refusal here reaches the operator through
+			// the API as restart_required (FirstRunEngine.activate), with
+			// the configuration already durably written, so a restart
+			// genuinely does finish the job.
 			opened, closeFn, openErr := service.Open(ctx, *configPath)
 			if openErr != nil {
-				_ = stopActivated()
 				return nil, nil, openErr
-			}
-			closeBoth := func() error {
-				closeErr := closeFn()
-				if stopErr := stopActivated(); stopErr != nil && closeErr == nil {
-					closeErr = stopErr
-				}
-				return closeErr
 			}
 			// Alerting is decided from the configuration setup just
 			// wrote, exactly as it is for a process that started with
@@ -600,7 +606,7 @@ func cmdServe(args []string) int {
 			// deployment shape where the alerts block does nothing until
 			// a restart.
 			enableAlerts(opened, platformAdapter)
-			return opened, closeBoth, nil
+			return opened, closeFn, nil
 		}
 
 		engine, engErr := serve.NewFirstRunEngine(engineConfig)

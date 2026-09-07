@@ -117,8 +117,10 @@ setting, clearing and reporting a set's policy all exist. What was not wanted wa
 write while the report beside it went on reading this host's own file, which would leave one
 verb answering out of two worlds, so the whole verb stays on the direct path until both halves
 move together. The other is the first `config.yaml` a `create` writes on an instance that does
-not have one yet: finding a process serving the journal `--state-database` names says that
-deployment is already configured, which is not a deployment to send a first-run request to.
+not have one yet: the only request that could carry it is `POST /system/first-run`, which an
+engine accepts once and only while it is still unconfigured, so a process found serving the
+journal `--state-database` names is either past that moment or is the setup flow the operator
+can finish themselves.
 
 The address is three environment variables, which are the whole of the configuration this
 needs:
@@ -458,10 +460,18 @@ deployment or the hundredth edit of an existing one. Write the file, run `check`
 `backup-set create` holds that line rather than breaking it. On a machine with no
 `config.yaml` it writes the first one, through the same `FirstRun.CreateInitialConfig` the
 wizard's route calls, and `--state-database` names the journal that first configuration
-points at (defaulting to `/data/state/state.db`, the packaged mount). An operator standing
-at a freshly installed NAS therefore has one command to type, not a wizard to open, and the
-two surfaces still reach the same code. Same code, two processes: see the note under the
-command table above for what that does and does not mean against a server already running.
+points at (defaulting to `/data/state/state.db`, the packaged mount). So an operator on a
+host where no engine is up has one command to type rather than a wizard to open, and the two
+surfaces still reach the same code.
+
+What decides whether that command writes is the same thing that decides it for every other
+configuration write, and it is worth reading before typing it at a packaged install (issue
+#571). A container serving the first-run setup flow is serving this deployment: it announces
+the journal `--state-database` names before it serves a request, so a `create` typed beside
+it is refused with exit 3 and nothing written, exactly as the second create on that machine
+would be. Finish setup in the browser, or stop the engine and run the command. It is only a
+host with nothing serving that journal, which is a bare machine or one whose container is
+down, where the first configuration is written from the command line.
 
 **Enabling or disabling a backup set is a config-file field.** `POST
 /backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`
