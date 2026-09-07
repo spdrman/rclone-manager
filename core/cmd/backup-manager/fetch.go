@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -16,13 +17,34 @@ import (
 // verify/commit/delete sequence RunCycle would for this one backup set).
 func cmdFetch(args []string) int {
 	fs, cfgPath := newFlagSet("fetch")
-	sourceFlag := fs.String("source", "", "the source to fetch (required)")
-	setFlag := fs.String("backup-set", "", "the backup set to fetch (required)")
+	sourceFlag := fs.String("source", "", "the source to fetch (required unless --backup-set names it)")
+	setFlag := fs.String("backup-set", "", "the backup set to fetch, named <source/backup-set> or with --source (required)")
 	dryRun := fs.Bool("dry-run", false, "list what discovery would find, without transferring or recording anything")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *sourceFlag == "" || *setFlag == "" {
+
+	// Issue #569 was reported against `artifacts`, and this is the same
+	// flag on the same binary: --backup-set takes the "source/backup-set"
+	// id every surface that prints a backup set prints, so an operator can
+	// paste the id they were just shown rather than splitting it by hand
+	// and getting "no configured backup set named
+	// production/production/nightly" for their trouble.
+	//
+	// The ambiguity half of #569 cannot arise here and nothing resolves
+	// anything: this command has always needed a source, so the pair it
+	// looks a backup set up by is exact either way. All that changes is
+	// which of the two flags the source is allowed to arrive in, and a
+	// --source naming a different one than the id does is refused as the
+	// contradiction it is rather than one of them quietly winning.
+	source, set := *sourceFlag, *setFlag
+	if named, bare, ok := strings.Cut(set, "/"); ok {
+		if source != "" && source != named {
+			return usageError("fetch: --backup-set %s names source %s, which --source %s contradicts", set, named, source)
+		}
+		source, set = named, bare
+	}
+	if source == "" || set == "" {
 		return usageError("fetch requires --source and --backup-set")
 	}
 
@@ -37,7 +59,7 @@ func cmdFetch(args []string) int {
 		logStartup(ctx, svc.Logger, app.BuildVersionInfo(version, commit))
 	}
 
-	result, err := svc.Fetch(ctx, *sourceFlag, *setFlag, *dryRun)
+	result, err := svc.Fetch(ctx, source, set, *dryRun)
 	if err != nil {
 		return fail(err)
 	}

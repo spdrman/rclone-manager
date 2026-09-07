@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -18,6 +18,12 @@ import (
 // --source/--backup-set select (both optional; omitting either widens the
 // filter, see internal/app.ArtifactFilter's doc): the terse, one-line-per-
 // artifact form an operator scans to see what state everything is in.
+//
+// --backup-set takes the "source/backup-set" id this listing prints in its
+// own first column, and a bare set name where exactly one source
+// configures it (issue #569). Both spellings resolve in one place, in the
+// app layer, so this command and the id it hands a running engine cannot
+// end up disagreeing about which backup set was asked for.
 //
 // With exactly one operand, <source/backup-set/name> (the same id form
 // `validate` takes), it switches to a detail view of that one artifact:
@@ -32,7 +38,7 @@ import (
 func cmdArtifacts(args []string) int {
 	fs, cfgPath := newFlagSet("artifacts")
 	sourceFlag := fs.String("source", "", "only artifacts from this source")
-	setFlag := fs.String("backup-set", "", "only artifacts from this backup set")
+	setFlag := fs.String("backup-set", "", "only artifacts from this backup set, named <source/backup-set> or by set name alone where that is unambiguous")
 	// Flags may come before or after the operand, exactly like validate's
 	// own operand (see parseFlagsAroundOperands in setup.go for why).
 	operands, err := parseFlagsAroundOperands(fs, args)
@@ -41,6 +47,19 @@ func cmdArtifacts(args []string) int {
 	}
 	if len(operands) > 1 {
 		return usageError("artifacts takes at most one argument: <source/backup-set/name>")
+	}
+	// Issue #569. --backup-set takes the whole "source/backup-set" id now,
+	// so it can carry a source of its own, and a --source naming a
+	// different one is two flags asking for two different things. Decided
+	// here, on the command line alone and before anything is opened,
+	// because that pair is a contradiction on every deployment rather
+	// than on this one: it is the same kind of mistake as passing a
+	// filter and an operand together, and it gets the same 2. What is
+	// NOT decided here is whether either name exists, which is a
+	// question about this deployment and belongs where the configuration
+	// is (internal/app.ArtifactFilter.resolve).
+	if named, _, ok := strings.Cut(*setFlag, "/"); ok && *sourceFlag != "" && *sourceFlag != named {
+		return usageError("artifacts: --backup-set %s names source %s, which --source %s contradicts", *setFlag, named, *sourceFlag)
 	}
 
 	ctx := context.Background()
@@ -86,7 +105,8 @@ func cmdArtifacts(args []string) int {
 	// (issue #391), which is what `backup-set remove` tells the operator
 	// this command will still list. The app layer honours the flag only
 	// for a filter naming nothing.
-	records, err := svc.ListArtifacts(ctx, app.ArtifactFilter{Source: *sourceFlag, Set: *setFlag, IncludeUnconfigured: true})
+	filter := app.ArtifactFilter{Source: *sourceFlag, Set: *setFlag, IncludeUnconfigured: true}
+	records, err := svc.ListArtifacts(ctx, filter)
 	if err != nil {
 		return fail(err)
 	}
@@ -98,7 +118,7 @@ func cmdArtifacts(args []string) int {
 	// equivalent; comparing the unfiltered listings in that case is a
 	// wider question than the command asked, which is the safe direction
 	// to be wrong in.
-	filterID := filterSetID(cfg, *sourceFlag, *setFlag)
+	filterID := filter.ResolvedSetID(cfg.Sources)
 	compare := records
 	if filterID == "" && (*sourceFlag != "" || *setFlag != "") {
 		compare, err = svc.ListArtifacts(ctx, app.ArtifactFilter{IncludeUnconfigured: true})
@@ -144,35 +164,6 @@ func cmdArtifacts(args []string) int {
 		fmt.Println("advances them. `backup-manager unconfigured` says what they hold and what can be done about it.")
 	}
 	return 0
-}
-
-// filterSetID is the "source/set" id this listing's flags name, or the
-// empty string when they name none or more than one.
-//
-// `--backup-set` takes a bare set name and a deployment may configure that
-// name under several sources, which is why this resolves against the
-// loaded configuration rather than pasting the two flags together: an
-// ambiguous name has no single id, and inventing one would ask the engine
-// about a backup set the operator did not mean.
-func filterSetID(cfg *config.Config, source, set string) string {
-	if set == "" {
-		return ""
-	}
-	var found []string
-	for _, src := range cfg.Sources {
-		if source != "" && src.Name != source {
-			continue
-		}
-		for _, bs := range src.BackupSets {
-			if bs.Name == set {
-				found = append(found, bs.ID.String())
-			}
-		}
-	}
-	if len(found) == 1 {
-		return found[0]
-	}
-	return ""
 }
 
 // unconfiguredSetIDs is the set of backup set ids the journal remembers
