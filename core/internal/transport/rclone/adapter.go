@@ -487,6 +487,29 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 // version is that operations.CommonHash picks the first type both ends
 // share and that is never the one this boundary speaks, so a claim about
 // it here could only ever be read as more than it is.
+//
+// # The doubled .partial an operator sees in a failure message
+//
+// rclone adds a partial name of its own on top of the one this project
+// already chose, so a copy into backup.dump.partial actually writes
+// backup.dump.partial.<8 hex>.partial and renames it at the end. That
+// second name is not random and this is worth knowing rather than
+// rediscovering: fs/operations/copy.go's checkPartial derives the hex from
+// a crc32 of the destination name and fs.Fingerprint of the source object,
+// so two copies of ONE remote object into ONE destination always land on
+// the same temp file, and local.Object.Update opens it O_CREATE|O_TRUNC.
+//
+// Two overlapping copies of the same artifact therefore do not race
+// harmlessly on separate files, they share one: the loser gets ENOENT from
+// the rename or the chtimes because the winner has already renamed the
+// file away, and a winner whose bytes are truncated under it hashes an
+// empty destination and reports "corrupted on transfer". Issue #570 caught
+// all three shapes in one cycle on a live deployment. Nothing in this
+// adapter can prevent that, because the exclusion has to be above it (see
+// internal/lifecycle/transfer.go's TransferSupersededError for what the
+// engine does with the wreckage); what this note is for is the operator or
+// the maintainer reading .partial.ac832174.partial in a log and looking
+// for the code that built the name, which is not here.
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
