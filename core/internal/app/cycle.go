@@ -119,6 +119,70 @@ func (r BackupSetCycleResult) StoppedForEditing() bool {
 	return errors.Is(r.Err, ErrBackupSetHeldForEditing)
 }
 
+// How a pass over one backup set ENDED, in the three words a screen has
+// to be able to tell apart.
+//
+// The distinction stopped/failed is SystemicFailure's, for
+// SystemicFailure's reason, and this is that reason carried one step
+// further out: to a person, not to an exit code. What is new here is that
+// "did it end badly" is a fact in its own right rather than something a
+// reader assembles out of a failure count and a fraction. Those two are
+// both zero and absent for a pass whose reconcile or discovery failed,
+// because that pass never reached an artifact to count or a row to plan,
+// so a surface reading only those two draws the earliest failure there is
+// exactly the way it draws a set with nothing to do.
+const (
+	SetOutcomeOK      = "ok"
+	SetOutcomeFailed  = "failed"
+	SetOutcomeStopped = "stopped"
+)
+
+// SetOutcomes lists every outcome a pass can end in, in the order
+// api/v1/openapi.json declares them. It exists so a surface serving these
+// strings can be compared with the contract rather than restating it; see
+// the test in apps/common/webhost that holds the two together.
+var SetOutcomes = []string{
+	SetOutcomeOK,
+	SetOutcomeFailed,
+	SetOutcomeStopped,
+}
+
+// Outcome is how this pass ended, as one of the SetOutcome constants.
+//
+// A cancelled pass is stopped rather than failed for the same reason an
+// edit hold is: the context ending is this manager being asked to stop,
+// and a report that spells being asked to stop the way it spells a source
+// that has gone unreachable is a false alarm. Everything else with an
+// error, and every pass that left artifacts in a terminal failure state,
+// is failed.
+func (r BackupSetCycleResult) Outcome() string {
+	switch {
+	case r.StoppedForEditing() || errors.Is(r.Err, context.Canceled):
+		return SetOutcomeStopped
+	case r.Err != nil || r.FailedArtifacts > 0:
+		return SetOutcomeFailed
+	default:
+		return SetOutcomeOK
+	}
+}
+
+// SetOutcomeObserver is the optional half of ProgressObserver: an
+// observer that also wants to be told how each set's pass ended.
+//
+// Optional, and asked for with a type assertion, because a reading and a
+// verdict are wanted by different consumers. A CLI drawing a bar wants
+// only the readings; a per-set panel that has to tell "finished" from
+// "stopped at reconcile" needs the verdict and cannot derive it, and
+// widening ProgressObserver itself would make every implementation carry
+// a method most of them have nothing to do with.
+//
+// It is called once per set, after that set's pass has ended, on the
+// goroutine running the cycle, so the same three rules obs.Sink states
+// apply: do not block, do not fail the cycle, be safe under concurrency.
+type SetOutcomeObserver interface {
+	ObserveSetOutcome(backupSetID, outcome string)
+}
+
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
 // configured backup set this cycle reached, in config order, plus the
 // cycle's own timing.
@@ -353,9 +417,21 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	// whose reconcile or discovery failed is still a set this cycle is
 	// done with, and leaving it uncounted would freeze "set 2 of 5" for
 	// the rest of the run.
+	//
+	// The verdict goes out in the same defer, and after the count, for
+	// the same "however this returns" reason: every early return below
+	// has already put its reason on result, and a pass that ended badly
+	// with nothing to count is exactly the one a reader cannot work out
+	// from the readings alone. Observing it is optional, so an observer
+	// that only wants readings is unaffected.
 	prog := progressFrom(ctx)
 	prog.enterSet(bs.ID.String())
-	defer prog.finishSet()
+	defer func() {
+		prog.finishSet()
+		if o, ok := ProgressObserverFrom(ctx).(SetOutcomeObserver); ok {
+			o.ObserveSetOutcome(bs.ID.String(), result.Outcome())
+		}
+	}()
 
 	if err := stopReason(); err != nil {
 		result.Err = err

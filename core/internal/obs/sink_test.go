@@ -247,3 +247,99 @@ func TestWithDoesNotShareItsBoundFieldsBackwards(t *testing.T) {
 		t.Error("a field bound on a derived Logger appeared on the parent's own event, so With is mutating rather than deriving")
 	}
 }
+
+// TestWithBoundFieldsAreRedactedEverywhereTheyLand is #295's rule applied
+// to the one place it was not.
+//
+// With recorded its attributes at the moment it was called and the tap
+// prepended them to every record unfiltered, so a Logger built by
+// With(...).WithRedaction(...) shipped an endpoint straight past the
+// redactor into both the JSON line and the tap. That was latent while the
+// tap fed a container log; it stopped being latent when GET
+// /api/v1/activity/live began serving the same fields to a browser.
+func TestWithBoundFieldsAreRedactedEverywhereTheyLand(t *testing.T) {
+	var out bytes.Buffer
+	sink := &recordingSink{}
+	logger := New(&out, LevelInfo).
+		With("endpoint", "backup-agent@nas.internal:2222").
+		WithRedaction(NewRedactor(Endpoint{Host: "nas.internal", Port: 2222, User: "backup-agent"}))
+
+	logger.CycleStart(context.Background(), "c1")
+
+	got := sink.all()
+	if len(got) != 0 {
+		t.Fatalf("this logger has no sink yet and the recorder saw %d records", len(got))
+	}
+	if strings.Contains(out.String(), "nas.internal") {
+		t.Errorf("an endpoint bound by With reached the log line unredacted:\n  %s", strings.TrimSpace(out.String()))
+	}
+
+	out.Reset()
+	tapped := New(&out, LevelInfo).
+		WithSink(sink).
+		With("endpoint", "backup-agent@nas.internal:2222").
+		WithRedaction(NewRedactor(Endpoint{Host: "nas.internal", Port: 2222, User: "backup-agent"}))
+	tapped.CycleStart(context.Background(), "c1")
+
+	got = sink.all()
+	if len(got) != 1 {
+		t.Fatalf("the sink saw %d records, and one event was logged", len(got))
+	}
+	v, ok := fieldValue(got[0], "endpoint")
+	if !ok {
+		t.Fatal("the bound field never reached the tap at all")
+	}
+	if strings.Contains(v, "nas.internal") {
+		t.Errorf("the tap was handed %q; every field here is now served to a browser by GET /api/v1/activity/live, so an unredacted one is an endpoint on a screen", v)
+	}
+}
+
+// TestABoundBackupSetIsTheOneEveryReaderAgreesOn closes the other half of
+// the same gap.
+//
+// contextBackupSet looked for an existing backup_set among the event's own
+// attrs and never among the ones With had bound, so a Logger carrying one
+// got a second copy appended from the context. The tap files a record
+// under the FIRST backup_set it sees and encoding/json keeps the LAST of
+// two identical keys, so the strip an event landed on and the set the log
+// line named could be different sets.
+func TestABoundBackupSetIsTheOneEveryReaderAgreesOn(t *testing.T) {
+	var out bytes.Buffer
+	sink := &recordingSink{}
+	logger := New(&out, LevelInfo).WithSink(sink).With("backup_set", "api-server/var-backups")
+
+	// A context scoped to a DIFFERENT set, which is the shape that makes
+	// the disagreement visible.
+	logger.CycleStart(WithBackupSet(context.Background(), "production/postgres"), "c1")
+
+	got := sink.all()
+	if len(got) != 1 {
+		t.Fatalf("the sink saw %d records, and one event was logged", len(got))
+	}
+	seen := 0
+	for _, f := range got[0].Fields {
+		if f.Key == "backup_set" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("the record carries %d backup_set fields. A reader taking the first and a reader taking the last then disagree about which set the event belongs to, which is a line filed under one strip and printed under another",
+			seen)
+	}
+
+	var line map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &line); err != nil {
+		t.Fatalf("decoding the log line: %v", err)
+	}
+	tapped, _ := fieldValue(got[0], "backup_set")
+	if line["backup_set"] != tapped {
+		t.Errorf("the log line says backup_set=%v and the tap was told %q; one event cannot belong to two sets", line["backup_set"], tapped)
+	}
+	// The Logger's own binding wins, for the reason contextBackupSet
+	// already gives: a caller that named its set is the authority on it,
+	// and a cycle-scoped context value overwriting that turns a correct
+	// field into a wrong one.
+	if tapped != "api-server/var-backups" {
+		t.Errorf("the bound set was overwritten by the context's: %q", tapped)
+	}
+}

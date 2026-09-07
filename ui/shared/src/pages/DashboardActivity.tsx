@@ -52,6 +52,16 @@ const PAGE_BUFFER = 300;
  *  that. */
 const FALLBACK_POLL_MS = 10_000;
 
+/** How many events one poll asks for per set.
+ *
+ * The contract's own ceiling, deliberately, and it is the number that
+ * keeps the cursor whole. The service hands back the OLDEST slice above
+ * the cursor and says when a limit cut it short, so a smaller number is
+ * safe but means catching up over several polls; asking for the ceiling
+ * means the answer is never cut short at all, because the service's own
+ * buffer holds no more than this. */
+const POLL_LIMIT = 200;
+
 /**
  * Folds a new reading into what the page already holds.
  *
@@ -71,12 +81,45 @@ export function mergeActivity(previous: SetActivity | undefined, next: SetActivi
   return {
     ...next,
     events,
+    // A gap is a fact about the buffer, not about the reading that
+    // noticed it. Once lines have been lost this page's window has a hole
+    // in it for as long as it holds those lines, and a later reading
+    // answering a caught-up cursor cleanly does not fill it in.
+    dropped: previous.dropped || next.dropped,
     // The page's own window can start later than the service's buffer
     // does, and the strip reads this to decide whether to say lines were
     // dropped. Reporting the service's bound while showing fewer lines
     // would claim continuity the page does not have.
     oldestSequence: Math.max(next.oldestSequence, events.length > 0 ? events[0].sequence : 0)
   };
+}
+
+/**
+ * Whether this reading came from a different process than the one the
+ * page has been following.
+ *
+ * The cursor is a sequence number and the sequence counter is per
+ * process: it starts again at zero on every start. So a tab that reached
+ * 412 asks a freshly started service for everything after 412, is told
+ * correctly that there is nothing, and goes on showing a dead cycle's log
+ * for as long as it stays open. Restarts are routine here, which makes
+ * this the difference between a panel that says what is happening and one
+ * that says what was happening the last time the engine was up.
+ *
+ * The epoch is the answer that cannot be fooled, because it is not a
+ * counter and never climbs back past its old value. The sequence
+ * comparison beside it is the fallback for a service too old to send one,
+ * and it is sound for the same reason: within one process the highest
+ * sequence only grows, so a reading below a cursor that service itself
+ * handed out is a rewind no live feed can produce.
+ */
+export function feedRestarted(previous: { epoch: string | null; cursor: number }, next: LiveActivity): boolean {
+  if (next.epoch && previous.epoch) return next.epoch !== previous.epoch;
+  // A page holding nothing has no cursor to have been rewound, and a
+  // reading with no sets in it is a deployment with no sets rather than a
+  // feed that went backwards.
+  if (previous.cursor === 0 || next.sets.length === 0) return false;
+  return next.sets.reduce((highest, s) => Math.max(highest, s.latestSequence), 0) < previous.cursor;
 }
 
 /** The highest sequence anywhere in the page's buffer. It is the cursor
@@ -102,13 +145,32 @@ export function DashboardActivity({ sets }: { sets: BackupSet[] | null }) {
   // refreshing".
   const cursor = useRef(0);
 
-  const live = useAsync<LiveActivity>(() => api.getLiveActivity({ since: cursor.current }), [api]);
+  // The process the cursor above belongs to. It rides on a ref for the
+  // same reason the cursor does, and it is read before the cursor is
+  // used rather than after: see feedRestarted.
+  const epoch = useRef<string | null>(null);
+
+  const live = useAsync<LiveActivity>(
+    () => api.getLiveActivity({ since: cursor.current, limit: POLL_LIMIT }),
+    [api]
+  );
 
   useEffect(() => {
-    if (!live.data) return;
+    const data = live.data;
+    if (!data) return;
+    // Decided out here rather than inside the updater, because it is a
+    // decision about two readings rather than about the state, and an
+    // updater React is free to run twice must not be where a ref is
+    // rewound.
+    const restarted = feedRestarted({ epoch: epoch.current, cursor: cursor.current }, data);
+    epoch.current = data.epoch || null;
+    if (restarted) cursor.current = 0;
     setHeld((current) => {
-      const merged = new Map(current);
-      for (const set of live.data!.sets) merged.set(set.setId, mergeActivity(current.get(set.setId), set));
+      // A restart drops everything held: those lines describe a cycle in
+      // a process that no longer exists, and keeping them under a live
+      // panel is the panel saying work is in flight that is not.
+      const merged = restarted ? new Map<string, SetActivity>() : new Map(current);
+      for (const set of data.sets) merged.set(set.setId, mergeActivity(merged.get(set.setId), set));
       cursor.current = cursorOf(merged);
       return merged;
     });
@@ -149,9 +211,15 @@ export function DashboardActivity({ sets }: { sets: BackupSet[] | null }) {
           <ErrorState {...live.error} onRetry={live.reload} />
         </div>
       ) : null}
+      {/* A failed poll makes every reading below it a reading from the
+          past, and the strips are told so rather than left drawing a
+          pulsing bar and a byte rate that both assert the process is
+          alive. That is the one thing nobody knows while the poll is
+          failing, and it is the whole distinction this panel exists to
+          draw. */}
       {sets.map((set, i) => (
         <div key={set.id} style={{ borderTop: i === 0 ? undefined : "1px solid var(--border)" }}>
-          <ActivityStrip set={set} activity={held.get(set.id) ?? null} />
+          <ActivityStrip set={set} activity={held.get(set.id) ?? null} stale={live.error !== null} />
         </div>
       ))}
     </section>

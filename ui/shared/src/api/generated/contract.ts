@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "1f0b5a2704a27464019bb3d7d0aaf6d31328cff6abfef0aabf11fad911e1468d";
+export const CONTRACT_SHA256 = "fcb92ad83ba543e8f49e5a60bf0aa2bcfdf5b9c49a29a831c5d9ad6d09873268";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1523,6 +1523,7 @@ export interface WireLiveActivityField {
  *  and is exactly as readable from a terminal as from a browser. The
  *  cursor on the request is what keeps polling cheap. */
 export interface WireLiveActivityResponse {
+  epoch: string;
   observed_at: string;
   poll_after_ms: number;
   sets: WireLiveActivitySet[];
@@ -1543,14 +1544,17 @@ export interface WireLiveActivitySet {
   bytes_per_second?: number;
   bytes_total?: number;
   bytes_transferred?: number;
+  dropped: boolean;
   events: WireLiveActivityEvent[];
   failures: number;
   finished_at?: string;
   latest_sequence: number;
   oldest_sequence: number;
+  outcome?: "ok" | "failed" | "stopped";
   progress_basis: "artifacts" | "unknown";
   stage?: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
   started_at?: string;
+  truncated: boolean;
 }
 
 /** The one manager-wide storage reading: what the backup root's

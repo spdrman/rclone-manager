@@ -78,17 +78,44 @@ type liveActivitySetResponse struct {
 	BytesTotal       *int64 `json:"bytes_total,omitempty"`
 	BytesPerSecond   *int64 `json:"bytes_per_second,omitempty"`
 
-	Failures   int    `json:"failures"`
+	Failures int `json:"failures"`
+
+	// Outcome is how the last pass ENDED, and it is a different fact from
+	// Failures beside it. A pass whose reconcile or discovery failed
+	// never reached an artifact, so it leaves Failures at zero and
+	// ArtifactsTotal absent, and a client drawing its headline from those
+	// two alone paints the earliest failure there is the way it paints a
+	// set with nothing to do. Omitted until a pass has ended.
+	Outcome string `json:"outcome,omitempty"`
+
 	StartedAt  string `json:"started_at,omitempty"`
 	FinishedAt string `json:"finished_at,omitempty"`
 
-	Events         []liveActivityEventResponse `json:"events"`
-	OldestSequence int64                       `json:"oldest_sequence"`
-	LatestSequence int64                       `json:"latest_sequence"`
+	Events []liveActivityEventResponse `json:"events"`
+
+	// Truncated and Dropped are the two ways this tail can be less than
+	// what the caller asked for, and they are always present rather than
+	// omitted-when-false: a client reading an absent key as "nothing is
+	// missing" reads a server that stopped sending them the same way, and
+	// the whole point of both is that silence about a gap is what this
+	// feed must never do.
+	Truncated bool `json:"truncated"`
+	Dropped   bool `json:"dropped"`
+
+	OldestSequence int64 `json:"oldest_sequence"`
+	LatestSequence int64 `json:"latest_sequence"`
 }
 
 type liveActivityResponse struct {
 	ObservedAt string `json:"observed_at"`
+
+	// Epoch names the process this reading came from and changes on every
+	// start. It is what lets a client notice a restart: the sequence
+	// counter its cursor is built from is per-process and starts again at
+	// zero, so a browser that kept polling across one would ask for
+	// everything after a number the new process has not reached, be told
+	// there is nothing new, and go on showing a dead cycle's log.
+	Epoch string `json:"epoch"`
 
 	// PollAfterMS is milliseconds rather than a duration string because
 	// it goes straight into a client's timer, and a client that has to
@@ -134,6 +161,7 @@ func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 
 	resp := liveActivityResponse{
 		ObservedAt:  formatTime(live.ObservedAt),
+		Epoch:       live.Epoch,
 		PollAfterMS: int(live.PollAfter.Milliseconds()),
 		// A non-nil empty slice, so a deployment with no backup sets
 		// serialises "sets": [] rather than null and a client has one
@@ -159,7 +187,10 @@ func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
 		BytesTotal:         s.BytesTotal,
 		BytesPerSecond:     s.BytesPerSecond,
 		Failures:           s.Failures,
+		Outcome:            s.Outcome,
 		Events:             make([]liveActivityEventResponse, 0, len(s.Events)),
+		Truncated:          s.Truncated,
+		Dropped:            s.Dropped,
 		OldestSequence:     s.OldestSequence,
 		LatestSequence:     s.LatestSequence,
 	}

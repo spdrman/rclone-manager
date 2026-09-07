@@ -78,17 +78,22 @@ function activityFor(setId: string, over: Partial<SetActivity> = {}): SetActivit
     bytesTotal: null,
     bytesPerSecond: null,
     failures: 0,
+    outcome: null,
     startedAt: null,
     finishedAt: null,
     events: [],
+    truncated: false,
+    dropped: false,
     oldestSequence: 0,
     latestSequence: 0,
     ...over
   };
 }
 
+/** One epoch throughout, because everything in this file is one process.
+ *  A restart is its own case and lives in dashboard-activity-restart.tsx. */
 function feed(sets: SetActivity[], pollAfterMs = 10_000): LiveActivity {
-  return { observedAt: "2026-08-29T02:01:20+02:00", pollAfterMs, sets };
+  return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets };
 }
 
 function renderStrips(api: BackupManagerApi, sets: BackupSet[] | null = [BASE_SET, SECOND_SET]) {
@@ -197,13 +202,16 @@ describe("the strips on the dashboard", () => {
     renderStrips({ ...createMockApi(), getLiveActivity });
     await act(async () => {});
 
-    // The first look asks for everything the service still holds.
-    expect(getLiveActivity).toHaveBeenCalledWith({ since: 0 });
+    // The first look asks for everything the service still holds, and
+    // for as much of it as the contract allows in one answer: the
+    // service hands back the OLDEST slice above the cursor, so a smaller
+    // limit is safe but means catching up over several polls.
+    expect(getLiveActivity).toHaveBeenCalledWith({ since: 0, limit: 200 });
 
     await act(async () => {
       vi.advanceTimersByTime(1100);
     });
-    expect(getLiveActivity).toHaveBeenLastCalledWith({ since: 42 });
+    expect(getLiveActivity).toHaveBeenLastCalledWith({ since: 42, limit: 200 });
   });
 
   it("keeps the lines it already had when a later reading only carries what is new", async () => {

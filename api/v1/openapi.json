@@ -3022,6 +3022,16 @@
             "type": "integer",
             "description": "How many of this set's artifacts ended this pass in a terminal failure state. It describes the pass, not the set's history, so it resets when a new pass begins: last night's two failures are not tonight's, and a strip carrying them forward would keep an operator looking at a problem already dealt with."
           },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed",
+              "stopped"
+            ],
+            "x-go-omitempty": true,
+            "description": "How this set's last finished pass ENDED, which is a different fact from how many of its artifacts failed. A pass whose reconcile or discovery failed never reaches an artifact at all, so it leaves failures at zero and artifacts_total absent, and a strip reading only those two would draw it as a set that has nothing to do. stopped is a pass an operator stopped (an edit hold, a cancellation) and is deliberately not failed: in a product whose job is to be believed about backups, spelling an ordinary edit the same way as a source that has gone unreachable is a false alarm. Absent until a pass has ended here."
+          },
           "started_at": {
             "type": "string",
             "format": "date-time",
@@ -3040,6 +3050,14 @@
             },
             "description": "The tail, oldest first, filtered by whatever cursor the caller sent. Empty is an empty array, never an absent key."
           },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether limit cut this reading short. The events above are the OLDEST held that are newer than the cursor, never the newest, because a cursor a client advances past a gap is a client that never sees the middle of a burst again. True means the rest is still held: ask again with the sequence this reading ends at."
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Whether lines this cursor had not reached yet fell out of the bounded buffer before this read did. True means the tail above is not continuous with what the caller already holds, and a client should say so rather than presenting a gap as continuity. The full record is the durable feed at GET /activity."
+          },
           "oldest_sequence": {
             "type": "integer",
             "format": "int64"
@@ -3057,6 +3075,8 @@
           "progress_basis",
           "failures",
           "events",
+          "truncated",
+          "dropped",
           "oldest_sequence",
           "latest_sequence"
         ]
@@ -3069,6 +3089,10 @@
           "observed_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "epoch": {
+            "type": "string",
+            "description": "An opaque name for the process this reading came from. It changes on every start, and the sequence counter the cursor is built from starts again at zero with it, so a client that kept polling across a restart would otherwise ask for everything after a sequence the new process has not reached yet and be told, correctly and uselessly, that there is nothing new. Compare it with the one the last reading carried: a different value means drop the cursor and everything held behind it, because the cycle those lines described no longer exists."
           },
           "poll_after_ms": {
             "type": "integer",
@@ -3083,6 +3107,7 @@
         },
         "required": [
           "observed_at",
+          "epoch",
           "poll_after_ms",
           "sets"
         ]
@@ -7506,7 +7531,7 @@
               "type": "integer",
               "format": "int64"
             },
-            "description": "The highest sequence the caller has already seen. Only events after it come back, which is what makes polling this cheap. Omitted, unparseable or non-positive means whatever the server still holds."
+            "description": "The highest sequence the caller has already seen. Only events after it come back, which is what makes polling this cheap, and they come back oldest first so this cursor is always safe to advance to the last one handed over. Omitted, unparseable or non-positive means whatever the server still holds. Compare the response's epoch before reusing a cursor: the sequence counter is per process and starts again at zero, so a cursor kept across a restart asks for what the new process has not reached yet."
           },
           {
             "name": "limit",
@@ -7516,7 +7541,7 @@
               "type": "integer",
               "format": "int32"
             },
-            "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does."
+            "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does. It pages rather than truncates: the events returned are the OLDEST above the cursor and the response says whether it was cut short, so a caller that asks again from where the last one ended sees every line rather than skipping the middle of a burst."
           }
         ],
         "responses": {

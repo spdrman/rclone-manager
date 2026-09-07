@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +133,36 @@ const (
 	LiveActivityBasisUnknown   = "unknown"
 )
 
+// How a set's pass ENDED, which is a different question from how many of
+// its artifacts failed.
+//
+// The two came apart the moment a pass could stop before it reached an
+// artifact. A set whose reconcile or discovery failed never gets as far as
+// the walk, so it leaves the failure count at zero and the denominator
+// absent, and a strip reading only those two draws it as a set with
+// nothing to do. Cancelled is its own answer for internal/app's own
+// reason (see BackupSetCycleResult.SystemicFailure): a pass an operator
+// stopped by taking an edit hold is something this manager was asked to
+// do, and spelling it the way a source that has gone unreachable is
+// spelled is a false alarm in a product whose job is to be believed about
+// backups.
+// They are internal/app's own constants rather than a second spelling of
+// them, the way OperationStages (progress.go) re-exports app.Stages: this
+// package serves the verdict the cycle reached, and a copy of a closed
+// vocabulary is a copy that drifts.
+const (
+	LiveActivityOutcomeOK      = app.SetOutcomeOK
+	LiveActivityOutcomeFailed  = app.SetOutcomeFailed
+	LiveActivityOutcomeStopped = app.SetOutcomeStopped
+)
+
+// LiveActivityOutcomes lists every outcome this feed can report, in the
+// order api/v1/openapi.json declares them. It exists so the contract's
+// enum and this package's vocabulary are compared rather than both being
+// written down and trusted; see the test in apps/common/webhost that holds
+// the two together.
+var LiveActivityOutcomes = append([]string(nil), app.SetOutcomes...)
+
 // LiveActivityField is one field of an event, already rendered and already
 // redacted (obs.Field). It is a pair rather than a map because the order
 // the event logged them in is the order that reads best.
@@ -197,6 +230,12 @@ type LiveActivitySet struct {
 	// begins, because it describes the pass rather than the set's history.
 	Failures int
 
+	// Outcome is how the last pass over this set ENDED, one of the
+	// LiveActivityOutcome constants, and empty until one has. It is not
+	// derivable from Failures: see those constants for the two passes
+	// that end badly with nothing to count.
+	Outcome string
+
 	// StartedAt and FinishedAt bound the pass this strip describes. Both
 	// are nil until a pass has actually started, and FinishedAt is nil
 	// while one is running.
@@ -206,6 +245,18 @@ type LiveActivitySet struct {
 	// Events is the tail, oldest first, filtered by whatever cursor the
 	// caller sent.
 	Events []LiveActivityEvent
+
+	// Truncated says Limit cut this reading short and the rest is still
+	// held. Events above are the OLDEST held that are newer than the
+	// cursor, so a caller that wants the whole tail asks again from the
+	// sequence this one ends at and loses nothing on the way.
+	Truncated bool
+
+	// Dropped says lines this caller's cursor had not reached yet fell
+	// out of the bounded buffer before this read did. They are gone, and
+	// the tail above is NOT continuous with whatever the caller already
+	// holds.
+	Dropped bool
 
 	// OldestSequence and LatestSequence are the bounds of what is still
 	// held for this set, NOT of the slice above. A client whose cursor is
@@ -218,6 +269,17 @@ type LiveActivitySet struct {
 // LiveActivity is one reading of the whole feed.
 type LiveActivity struct {
 	ObservedAt time.Time
+
+	// Epoch names the process this reading came from, and it changes on
+	// every start. The sequence counter a cursor is built from is
+	// per-process and starts again at zero with it, so a client that kept
+	// its cursor across a restart would ask for everything after a number
+	// the new process has not reached and be told, correctly and
+	// uselessly, that there is nothing new: it would hold a dead cycle's
+	// lines on screen and show none of the live ones. A client compares
+	// this with the one its last reading carried and, on a difference,
+	// drops the cursor and everything behind it.
+	Epoch string
 
 	// PollAfter is how long this process suggests waiting before asking
 	// again. See the two constants above for why the server decides.
@@ -269,19 +331,38 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 		limit = liveActivityMaxLimit
 	}
 
-	out := LiveActivity{ObservedAt: now(), PollAfter: liveActivityIdlePoll}
 	st := b.state.Load()
+	var ids []string
 	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
 			id := src.Name + "/" + bs.Name
 			if req.BackupSetID != "" && id != req.BackupSetID {
 				continue
 			}
-			set := b.activity.snapshot(id, req.Since, limit)
-			if set.Active {
-				out.PollAfter = liveActivityBusyPoll
-			}
-			out.Sets = append(out.Sets, set)
+			ids = append(ids, id)
+		}
+	}
+
+	// Every set, under ONE lock acquisition. The client holds a single
+	// cursor and it is the highest sequence anywhere in the reading, so a
+	// reading assembled bucket by bucket with the lock released between
+	// them would hand back buckets sampled at different moments: the
+	// cursor lands on the latest of them and whatever arrived for an
+	// earlier bucket meanwhile is filtered out of the next poll and never
+	// returned to anybody. One reading is one moment.
+	out := LiveActivity{
+		ObservedAt: now(),
+		Epoch:      b.activity.epochID(),
+		PollAfter:  liveActivityIdlePoll,
+		Sets:       b.activity.snapshotAll(ids, req.Since, limit),
+	}
+	for _, set := range out.Sets {
+		// Truncated asks for the busy cadence for the same reason Active
+		// does: this process knows there is more to hand over, and
+		// waiting out the idle interval to hand it over is the client
+		// falling further behind on purpose.
+		if set.Active || set.Truncated {
+			out.PollAfter = liveActivityBusyPoll
 		}
 	}
 	return out, nil
@@ -298,6 +379,11 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 // produce: a transfer's rate, and how far through its own rows a set's
 // pass has got.
 type liveActivity struct {
+	// epoch names this process's feed and never changes, so it is read
+	// without the lock. See LiveActivity.Epoch for what a client does
+	// with it.
+	epoch string
+
 	mu  sync.Mutex
 	seq int64
 
@@ -326,20 +412,50 @@ type liveActivitySetState struct {
 	bytesTotal         *int64
 	bytesPerSecond     *int64
 	failures           int
+	outcome            string
 	startedAt          *time.Time
 	finishedAt         *time.Time
 }
 
 func newLiveActivity() *liveActivity {
 	return &liveActivity{
+		epoch:      newLiveActivityEpoch(),
 		deployment: newLiveActivityRing(liveActivityBufferSize),
 		sets:       make(map[string]*liveActivitySetState),
 	}
 }
 
+// newLiveActivityEpoch mints the name one process's feed goes by.
+//
+// Random rather than a clock, because the only property that matters is
+// that two starts never collide, and a clock read twice inside one tick
+// collides quietly. It falls back to the clock if the system source
+// refuses, which is the same fail-safe-rather-than-fail-loud policy the
+// rest of the observability path holds to: a feed that cannot mint a name
+// should still serve, and the worst a repeated name costs is the restart
+// detection this exists for, which is exactly where the sequence
+// comparison beside it still catches the case.
+func newLiveActivityEpoch() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 16)
+}
+
+// epochID is the feed's epoch, nil-receiver-safe like everything else a
+// half-built service can reach.
+func (l *liveActivity) epochID() string {
+	if l == nil {
+		return ""
+	}
+	return l.epoch
+}
+
 var (
-	_ obs.Sink             = (*liveActivity)(nil)
-	_ app.ProgressObserver = (*liveActivity)(nil)
+	_ obs.Sink               = (*liveActivity)(nil)
+	_ app.ProgressObserver   = (*liveActivity)(nil)
+	_ app.SetOutcomeObserver = (*liveActivity)(nil)
 )
 
 // RecordEvent is obs.Sink. It runs on whichever goroutine reached the
@@ -412,6 +528,25 @@ func (l *liveActivity) ObserveProgress(p app.Progress) {
 	st.bytesPerSecond = copyInt64(p.BytesPerSecond)
 }
 
+// ObserveSetOutcome is app.SetOutcomeObserver: how one set's pass ended,
+// which is a fact no reading carries.
+//
+// The strip's headline used to be drawn from the failure count and the
+// fraction alone, and both of those are zero and absent for a pass that
+// failed before it reached an artifact, so the earliest failure there is
+// drew as a set with nothing to do. This is the verdict itself, recorded
+// against the set it belongs to and cleared by the next pass over it (see
+// beginPass) for the same reason the failure count is: last night's
+// verdict is not tonight's.
+func (l *liveActivity) ObserveSetOutcome(backupSetID, outcome string) {
+	if l == nil || backupSetID == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.setLocked(backupSetID).outcome = outcome
+}
+
 // beginCycle and endCycle bracket one run of the engine.
 //
 // They exist because "is this set being worked on" cannot be derived from
@@ -482,6 +617,7 @@ func (st *liveActivitySetState) beginPass(at time.Time) {
 	st.bytesTotal = nil
 	st.bytesPerSecond = nil
 	st.failures = 0
+	st.outcome = ""
 	started := at
 	st.startedAt = &started
 	st.finishedAt = nil
@@ -495,12 +631,34 @@ func (st *liveActivitySetState) beginPass(at time.Time) {
 // error" lands after the transition that failed rather than wherever a
 // per-bucket counter happened to put it.
 func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivitySet {
+	sets := l.snapshotAll([]string{id}, since, limit)
+	return sets[0]
+}
+
+// snapshotAll builds every named set's strip under ONE lock acquisition.
+//
+// That is not an optimisation, it is the correctness of the cursor. A
+// caller holds one cursor across every set in a reading, so two buckets
+// read at two different moments hand it a cursor that is ahead of one of
+// them: see LiveActivity's own comment for what that loses.
+func (l *liveActivity) snapshotAll(ids []string, since int64, limit int) []LiveActivitySet {
+	out := make([]LiveActivitySet, 0, len(ids))
 	if l == nil {
-		return LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown}
+		for _, id := range ids {
+			out = append(out, LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown})
+		}
+		return out
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	for _, id := range ids {
+		out = append(out, l.snapshotLocked(id, since, limit))
+	}
+	return out
+}
 
+// snapshotLocked is snapshot's body. The caller holds l.mu.
+func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveActivitySet {
 	out := LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown}
 	st := l.sets[id]
 	if st != nil {
@@ -513,6 +671,7 @@ func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivityS
 		out.BytesTotal = copyInt64(st.bytesTotal)
 		out.BytesPerSecond = copyInt64(st.bytesPerSecond)
 		out.Failures = st.failures
+		out.Outcome = st.outcome
 		out.StartedAt = copyTime(st.startedAt)
 		out.FinishedAt = copyTime(st.finishedAt)
 		if st.artifactsTotal != nil {
@@ -525,7 +684,8 @@ func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivityS
 		own = st.ring
 	}
 	out.OldestSequence, out.LatestSequence = boundsOf(own, l.deployment)
-	out.Events = mergeTail(own, l.deployment, since, limit)
+	out.Events, out.Truncated = mergeTail(own, l.deployment, since, limit)
+	out.Dropped = droppedSince(since, own, l.deployment)
 	return out
 }
 
@@ -535,6 +695,14 @@ func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivityS
 type liveActivityRing struct {
 	events []LiveActivityEvent
 	cap    int
+
+	// evicted is the sequence of the newest event this buffer has ever
+	// discarded, or 0 if it has discarded none. It is what lets a read
+	// tell a caller its cursor fell off the back: comparing against the
+	// oldest event still held cannot, because a buffer that has never
+	// overflowed also starts above 1 whenever the other buffer holds the
+	// earlier lines.
+	evicted int64
 }
 
 func newLiveActivityRing(capacity int) *liveActivityRing {
@@ -544,6 +712,7 @@ func newLiveActivityRing(capacity int) *liveActivityRing {
 func (r *liveActivityRing) add(e LiveActivityEvent) {
 	r.events = append(r.events, e)
 	if len(r.events) > r.cap {
+		r.evicted = r.events[len(r.events)-r.cap-1].Sequence
 		// Re-slice onto a fresh backing array rather than sliding within
 		// the old one: keeping the old array alive would hold on to every
 		// string in the dropped events for as long as this buffer lives.
@@ -573,15 +742,23 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	return oldest, latest
 }
 
-// mergeTail returns the newest limit events across own and deployment
-// that are newer than since, oldest first.
+// mergeTail returns the OLDEST limit events across own and deployment
+// that are newer than since, oldest first, and whether limit cut it short.
 //
 // It merges rather than concatenates because the two buffers interleave in
 // time and a strip reads top to bottom: the line before an error is
 // usually what explains it, and that line is often the other buffer's.
 // One shared sequence counter is what makes the merge a comparison of two
 // numbers rather than a comparison of two clocks.
-func mergeTail(own, deployment *liveActivityRing, since int64, limit int) []LiveActivityEvent {
+//
+// Oldest is what makes the limit safe. A client advances its cursor to the
+// newest sequence it was handed, so a reading that answers a cursor with
+// the newest few events is telling the client to skip everything under
+// them: any burst larger than the limit loses its middle, permanently,
+// with nothing in the response saying so. Handing back the oldest instead
+// turns the limit into a page rather than a gap, and the flag says there
+// is another page to ask for.
+func mergeTail(own, deployment *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
 	a, b := ringEvents(own), ringEvents(deployment)
 	merged := make([]LiveActivityEvent, 0, len(a)+len(b))
 	i, j := 0, 0
@@ -601,15 +778,33 @@ func mergeTail(own, deployment *liveActivityRing, since int64, limit int) []Live
 			kept = append(kept, e)
 		}
 	}
+	truncated := false
 	if limit > 0 && len(kept) > limit {
-		kept = kept[len(kept)-limit:]
+		kept = kept[:limit]
+		truncated = true
 	}
 	// A fresh slice, because the one above still points into the merge
 	// buffer and a caller must never hold a window onto anything this
 	// package will write again.
 	out := make([]LiveActivityEvent, len(kept))
 	copy(out, kept)
-	return out
+	return out, truncated
+}
+
+// droppedSince reports whether anything newer than since has already been
+// thrown away by one of the buffers a strip reads from.
+//
+// It is the honest half of a bounded tail. A client that polls with a
+// cursor and gets a slice back has no way to tell "nothing else happened"
+// from "the rest is gone", and presenting the second as the first is a log
+// that looks continuous and is not.
+func droppedSince(since int64, rings ...*liveActivityRing) bool {
+	for _, r := range rings {
+		if r != nil && r.evicted > since {
+			return true
+		}
+	}
+	return false
 }
 
 func ringEvents(r *liveActivityRing) []LiveActivityEvent {

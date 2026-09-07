@@ -473,9 +473,12 @@ const IDLE_ACTIVITY = {
   bytesTotal: null,
   bytesPerSecond: null,
   failures: 0,
+  outcome: null,
   startedAt: null,
   finishedAt: null,
   events: [],
+  truncated: false,
+  dropped: false,
   oldestSequence: 0,
   latestSequence: 0
 } satisfies Omit<SetActivity, "setId">;
@@ -511,6 +514,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 28,
     progressBasis: "artifacts",
     failures: 2,
+    outcome: "failed",
     startedAt: "2026-08-29T00:16:00+02:00",
     finishedAt: "2026-08-29T00:16:55+02:00",
     events: [
@@ -524,6 +528,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
   {
     ...IDLE_ACTIVITY,
     setId: "production/billing-mysql",
+    outcome: "ok",
     artifactsCompleted: 18,
     artifactsTotal: 18,
     progressBasis: "artifacts",
@@ -535,6 +540,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
   {
     ...IDLE_ACTIVITY,
     setId: "media/weekly-archive",
+    outcome: "ok",
     artifactsCompleted: 51,
     artifactsTotal: 51,
     progressBasis: "artifacts",
@@ -1372,6 +1378,10 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getLiveActivity: (options) =>
       delay({
         observedAt: "2026-08-29T02:01:20+02:00",
+        // One process, one epoch. A mock that changed it between calls
+        // would have every surface built against it believe the service
+        // restarts on every poll.
+        epoch: "mock-process",
         // The cadence the service would ask for while something is
         // moving. A mock that answered with the idle one would let a
         // surface be built against a poll that never keeps up.

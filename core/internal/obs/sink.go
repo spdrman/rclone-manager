@@ -65,6 +65,20 @@ type Record struct {
 //
 // See this file's doc for the three rules an implementation has to hold
 // to: do not block, do not log, be safe under concurrency.
+//
+// # What a Sink changed about who can read a log line
+//
+// There is a fourth thing to know, and it is about the caller rather than
+// the implementation. Before this tap existed, an event's fields reached
+// exactly one place: the process's own stdout, read by whoever can read
+// the container's log. GET /api/v1/activity/live (issue #573) serves the
+// same fields to any authenticated session, so anything logged is now on
+// an API surface, and "it only goes in the log" has stopped being a
+// reason a value is safe to put in a field. Redaction is applied on the
+// way here for exactly that reason (emit, logger.go, including the
+// attributes With bound), and a new field carrying a credential, a
+// remote's address or a customer path is now a disclosure rather than a
+// line in a file.
 type Sink interface {
 	RecordEvent(Record)
 }
@@ -141,40 +155,54 @@ const fieldBackupSet = "backup_set"
 // be worse still, since encoding/json keeps the last of two and the
 // severity-shadowing bug DiskPressure's own doc records is the same
 // mistake one field along.
-func contextBackupSet(ctx context.Context, attrs []slog.Attr) (slog.Attr, bool) {
+//
+// "The event named a set" covers what With bound as well as what this
+// call passed, and it did not used to. A Logger built by
+// With("backup_set", ...) got a second copy appended from the context,
+// and the two readers of one event then disagreed about which set it
+// belonged to: the tap files a record under the first backup_set it sees
+// and encoding/json keeps the last, so a line could be filed under one
+// strip and printed under another.
+func contextBackupSet(ctx context.Context, attrs ...[]slog.Attr) (slog.Attr, bool) {
 	id := BackupSetFrom(ctx)
 	if id == "" {
 		return slog.Attr{}, false
 	}
-	for _, a := range attrs {
-		if a.Key == fieldBackupSet {
-			return slog.Attr{}, false
+	for _, list := range attrs {
+		for _, a := range list {
+			if a.Key == fieldBackupSet {
+				return slog.Attr{}, false
+			}
 		}
 	}
 	return slog.String(fieldBackupSet, id), true
 }
 
-// boundFields flattens the alternating-key/value and slog.Attr forms With
-// accepts, so attributes attached there reach a Sink as well as the log
-// line.
+// boundAttrs flattens the alternating-key/value and slog.Attr forms With
+// accepts into the one form emit can carry.
 //
-// Without this a Logger built by With would write a field to stdout that
-// the tap could not see, and the two readers of one event stream would
-// disagree about what an event carried. Malformed trailing arguments are
-// dropped rather than rendered as slog's own !BADKEY: this list is for a
-// screen, and a placeholder key is noise on it.
-func boundFields(args []any) []Field {
-	var out []Field
+// Holding them as attrs rather than as an already-rendered list is what
+// lets emit put them through the same redaction, the same duplicate-key
+// rule and the same flattening every other attribute goes through. They
+// used to be rendered at With time, which put them ahead of redaction:
+// a Logger built by With(...).WithRedaction(...) shipped an endpoint
+// straight past the redactor, into the log line and into the tap.
+//
+// Malformed trailing arguments are dropped rather than rendered as slog's
+// own !BADKEY: this list ends up on a screen, and a placeholder key is
+// noise on it.
+func boundAttrs(args []any) []slog.Attr {
+	var out []slog.Attr
 	for i := 0; i < len(args); {
 		switch v := args[i].(type) {
 		case slog.Attr:
-			out = append(out, Field{Key: v.Key, Value: v.Value.String()})
+			out = append(out, v)
 			i++
 		case string:
 			if i+1 >= len(args) {
 				return out
 			}
-			out = append(out, Field{Key: v, Value: slog.AnyValue(args[i+1]).String()})
+			out = append(out, slog.Any(v, args[i+1]))
 			i += 2
 		default:
 			return out

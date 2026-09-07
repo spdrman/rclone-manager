@@ -75,9 +75,12 @@ const IDLE: SetActivity = {
   bytesTotal: null,
   bytesPerSecond: null,
   failures: 0,
+  outcome: null,
   startedAt: null,
   finishedAt: null,
   events: [],
+  truncated: false,
+  dropped: false,
   oldestSequence: 0,
   latestSequence: 0
 };
@@ -299,5 +302,119 @@ describe("the fraction", () => {
   it("rounds the way the mockup does", () => {
     expect(artifactFraction(TRANSFERRING)).toBe(63);
     expect(artifactFraction({ ...FAILING })).toBe(93);
+  });
+});
+
+/**
+ * A reading nobody can refresh (issue #573 review, defect 3).
+ *
+ * Keeping the last good reading on screen is right: blanking a panel an
+ * operator is reading is a worse answer than an old one. What was wrong
+ * is that the old one did not read as old WHERE the reading is. The pill
+ * pulsed, the bar swept, a byte rate stood beside a time estimate, and
+ * every one of those is a claim that the process is alive right now,
+ * which is the exact thing nobody knows while the poll is failing. The
+ * fraction stays, because it is still the last true thing measured.
+ */
+describe("a reading that is no longer refreshing", () => {
+  it("stops asserting the process is alive, and keeps what was actually measured", () => {
+    render(<ActivityStrip set={SET} activity={TRANSFERRING} stale />);
+    const region = screen.getByRole("region", { name: /activity for api-server \/ var-backups/i });
+
+    // The rate and the estimate are both claims about now.
+    expect(within(region).queryByText(/MB\/s/)).not.toBeInTheDocument();
+    expect(within(region).queryByText(/left$/)).not.toBeInTheDocument();
+    expect(within(region).queryByText(/in progress/i)).not.toBeInTheDocument();
+
+    // The headline says which of the two things this panel exists to
+    // tell apart is actually true.
+    expect(within(region).getByText(/not reporting/i)).toBeInTheDocument();
+
+    // And the fraction, which was measured and has not stopped being
+    // what was measured.
+    expect(within(region).getByText(/26 of 41 artifacts/i)).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "63");
+  });
+
+  it("says the same thing to a reader who cannot see the animation", () => {
+    const { container } = render(<ActivityStrip set={SET} activity={TRANSFERRING} stale />);
+    // The sweep and the spinner are the two "it is alive" signals that
+    // carry no words at all, so they are the two a stale reading must
+    // not draw.
+    expect(container.querySelector(".activity-bar__fill--busy")).toBeNull();
+    expect(container.querySelector(".activity-spinner")).toBeNull();
+  });
+
+  it("draws all of it while the reading is current", () => {
+    const { container } = render(<ActivityStrip set={SET} activity={TRANSFERRING} />);
+    expect(screen.getByText(/4 MB\/s/)).toBeInTheDocument();
+    expect(container.querySelector(".activity-bar__fill--busy")).not.toBeNull();
+    expect(screen.getByText("TRANSFERRING")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A pass that ended badly with nothing to count (issue #573 review,
+ * defect 4).
+ *
+ * The headline was drawn from the failure count and the fraction, and
+ * both are zero and absent for the pass that goes wrong earliest: a set
+ * whose reconcile or discovery failed never reaches an artifact. So the
+ * worst outcome the engine can produce drew as an em-dash, an ok-toned
+ * bar and "Idle, last cycle finished 2m ago". The error was in the log
+ * the whole time, which is not where an eye lands.
+ */
+describe("a pass that ended badly", () => {
+  const FAILED_AT_RECONCILE: SetActivity = {
+    ...IDLE,
+    outcome: "failed",
+    finishedAt: "2026-09-07T00:16:55Z",
+    events: [
+      event({ sequence: 1, level: "error", event: "error", scope: "set", message: "error", fields: { op: "reconcile", error: "the source refused the connection" } })
+    ],
+    oldestSequence: 1,
+    latestSequence: 1
+  };
+
+  it("does not read as an idle set that had nothing to do", () => {
+    strip(FAILED_AT_RECONCILE);
+    const region = screen.getByRole("region", { name: /activity for api-server \/ var-backups/i });
+    expect(within(region).queryByText(/^Idle$/)).not.toBeInTheDocument();
+    expect(within(region).getByText(/needs attention/i)).toBeInTheDocument();
+    expect(within(region).getByText(/did not finish/i)).toBeInTheDocument();
+  });
+
+  it("colours the bar from the outcome rather than from a failure count of zero", () => {
+    const { container } = strip(FAILED_AT_RECONCILE);
+    expect(container.querySelector(".activity-bar__fill--ok")).toBeNull();
+    expect(container.querySelector(".activity-bar__fill--danger")).not.toBeNull();
+  });
+
+  it("tells a pass somebody stopped apart from a pass that broke", () => {
+    strip({ ...IDLE, outcome: "stopped", artifactsCompleted: 26, artifactsTotal: 41, progressBasis: "artifacts", finishedAt: "2026-09-07T00:16:55Z" });
+    const region = screen.getByRole("region", { name: /activity for api-server \/ var-backups/i });
+    expect(within(region).getByText("STOPPED")).toBeInTheDocument();
+    expect(within(region).getByText(/was stopped before it finished/i)).toBeInTheDocument();
+    // Not an alarm: an operator taking an edit hold is this manager
+    // doing what it was asked, and it must not be spelled the way an
+    // unreachable source is.
+    expect(within(region).queryByText(/needs attention/i)).not.toBeInTheDocument();
+    // And fifteen artifacts it never attempted are not a green 63%.
+    expect(within(region).getByText(/26 of 41 artifacts/i)).toBeInTheDocument();
+  });
+
+  it("shows failures accumulating in the headline while the pass is still running", () => {
+    strip({ ...TRANSFERRING, failures: 2 });
+    const region = screen.getByRole("region", { name: /activity for api-server \/ var-backups/i });
+    // The step is still the most specific true thing, so it stays named.
+    expect(within(region).getByText("TRANSFERRING")).toBeInTheDocument();
+    // But a whole cycle in which failures are invisible in the headline
+    // is a whole cycle an operator has no reason to look closer at.
+    expect(within(region).getByText(/2 artifacts failed/i)).toBeInTheDocument();
+  });
+
+  it("says lines are missing when the service says its buffer lost them", () => {
+    strip({ ...TRANSFERRING, dropped: true });
+    expect(screen.getByText(/earlier lines are not held here/i)).toBeInTheDocument();
   });
 });

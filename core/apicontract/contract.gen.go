@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "1f0b5a2704a27464019bb3d7d0aaf6d31328cff6abfef0aabf11fad911e1468d"
+const ContractSHA256 = "fcb92ad83ba543e8f49e5a60bf0aa2bcfdf5b9c49a29a831c5d9ad6d09873268"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1220,6 +1220,7 @@ type LiveActivityField struct {
 // and is exactly as readable from a terminal as from a browser. The
 // cursor on the request is what keeps polling cheap.
 type LiveActivityResponse struct {
+	Epoch       string            `json:"epoch"`
 	ObservedAt  string            `json:"observed_at"`
 	PollAfterMs int               `json:"poll_after_ms"`
 	Sets        []LiveActivitySet `json:"sets"`
@@ -1240,14 +1241,17 @@ type LiveActivitySet struct {
 	BytesPerSecond     *int64              `json:"bytes_per_second,omitempty"`
 	BytesTotal         *int64              `json:"bytes_total,omitempty"`
 	BytesTransferred   *int64              `json:"bytes_transferred,omitempty"`
+	Dropped            bool                `json:"dropped"`
 	Events             []LiveActivityEvent `json:"events"`
 	Failures           int                 `json:"failures"`
 	FinishedAt         string              `json:"finished_at,omitempty"`
 	LatestSequence     int64               `json:"latest_sequence"`
 	OldestSequence     int64               `json:"oldest_sequence"`
+	Outcome            string              `json:"outcome,omitempty"`
 	ProgressBasis      string              `json:"progress_basis"`
 	Stage              string              `json:"stage,omitempty"`
 	StartedAt          string              `json:"started_at,omitempty"`
+	Truncated          bool                `json:"truncated"`
 }
 
 // ManagerStorage is the one manager-wide storage reading: what the backup root's

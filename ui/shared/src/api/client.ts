@@ -1126,9 +1126,12 @@ function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
     bytesTotal: s.bytes_total ?? null,
     bytesPerSecond: s.bytes_per_second ?? null,
     failures: s.failures,
+    outcome: s.outcome ?? null,
     startedAt: s.started_at ?? null,
     finishedAt: s.finished_at ?? null,
     events: s.events.map(fromWireLiveActivityEvent),
+    truncated: s.truncated,
+    dropped: s.dropped,
     oldestSequence: s.oldest_sequence,
     latestSequence: s.latest_sequence
   };
@@ -1137,6 +1140,7 @@ function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
 function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
   return {
     observedAt: r.observed_at,
+    epoch: r.epoch,
     pollAfterMs: r.poll_after_ms,
     sets: r.sets.map(fromWireLiveActivitySet)
   };

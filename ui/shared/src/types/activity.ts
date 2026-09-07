@@ -51,6 +51,16 @@ export interface SetActivityEvent {
   fields: Record<string, string>;
 }
 
+/** How a set's last pass ENDED, which is a different fact from how many
+ *  of its artifacts failed. A pass whose reconcile or discovery failed
+ *  never reaches an artifact, so it counts no failures and plans no rows,
+ *  and a headline drawn from those two alone paints the earliest failure
+ *  there is the way it paints a set with nothing to do. "stopped" is a
+ *  pass an operator stopped (an edit hold, a cancellation) and is
+ *  deliberately not "failed": spelling an ordinary edit the way an
+ *  unreachable source is spelled is a false alarm. */
+export type PassOutcome = "ok" | "failed" | "stopped";
+
 export interface SetActivity {
   setId: string;
   /** Whether a cycle is inside this set in the serving process right now.
@@ -73,9 +83,22 @@ export interface SetActivity {
    *  failure. It resets when a new pass begins, because last night's two
    *  failures are not tonight's. */
   failures: number;
+  /** How the last pass over this set ended, or null until one has. See
+   *  PassOutcome: it is not derivable from `failures`. */
+  outcome: PassOutcome | null;
   startedAt: string | null;
   finishedAt: string | null;
   events: SetActivityEvent[];
+  /** Whether the limit cut this reading short and the rest is still held.
+   *  `events` is the OLDEST slice above the cursor, never the newest, so
+   *  a client that asks again from where this one ends loses nothing on
+   *  the way. */
+  truncated: boolean;
+  /** Whether lines this cursor had not reached fell out of the service's
+   *  bounded buffer first. The tail is then NOT continuous with what the
+   *  page already holds, and it says so rather than drawing the hole as
+   *  an unbroken log. */
+  dropped: boolean;
   /** The bounds of what the service still holds for this set, not of
    *  `events`. The buffer is bounded on purpose, so a reader whose oldest
    *  line is above the first sequence knows lines were dropped and can say
@@ -86,6 +109,14 @@ export interface SetActivity {
 
 export interface LiveActivity {
   observedAt: string;
+  /** An opaque name for the process this reading came from, changing on
+   *  every start. The cursor is a sequence number and the sequence
+   *  counter is per process, so a page that kept its cursor across a
+   *  restart would ask for everything after a number the live process has
+   *  not reached, be told there is nothing new, and go on showing a dead
+   *  cycle's log. A different epoch is the signal to drop the cursor and
+   *  everything held behind it. */
+  epoch: string;
   /** How long the service suggests waiting before asking again. The
    *  service decides because it is the one that knows whether anything is
    *  moving: a client picking its own interval would either hammer a NAS

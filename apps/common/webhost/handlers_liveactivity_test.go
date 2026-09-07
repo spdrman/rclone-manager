@@ -379,6 +379,13 @@ func TestLiveActivity_ScopesAndBasesAreExactlyTheContractsEnums(t *testing.T) {
 	}{
 		{"LiveActivityEvent", "scope", []string{service.LiveActivityScopeDeployment, service.LiveActivityScopeSet}},
 		{"LiveActivitySet", "progress_basis", []string{service.LiveActivityBasisArtifacts, service.LiveActivityBasisUnknown}},
+		// The stage names are the SAME closed set OperationProgress.stage
+		// already declares, and they are registered here for the reason
+		// internal/retention's managed-complete guard exists: a closed
+		// vocabulary written down twice is a closed vocabulary that
+		// drifts, and this feed is the second place it is written down.
+		{"LiveActivitySet", "stage", service.OperationStages},
+		{"LiveActivitySet", "outcome", service.LiveActivityOutcomes},
 	} {
 		declared := doc.Components.Schemas[c.schema].Properties[c.property].Enum
 		if len(declared) == 0 {
@@ -394,5 +401,65 @@ func TestLiveActivity_ScopesAndBasesAreExactlyTheContractsEnums(t *testing.T) {
 				t.Errorf("%s.%s value %d: the contract says %q, core/service says %q", c.schema, c.property, i, declared[i], c.want[i])
 			}
 		}
+	}
+}
+
+// TestLiveActivity_SerializesTheFactsThatKeepTheFeedHonest covers the
+// four fields a client cannot do without and that nothing above reaches:
+// which process this reading came from, how the last pass ended, whether
+// a limit cut the reading short, and whether the caller's cursor fell off
+// the back of the buffer.
+//
+// They matter on the wire rather than only in core/service because each
+// one exists to stop a browser presenting a claim it cannot support: a
+// dead process's log shown as live, a failed pass shown as an idle one, a
+// page shown as the end of the feed, and a hole shown as continuity.
+func TestLiveActivity_SerializesTheFactsThatKeepTheFeedHonest(t *testing.T) {
+	router, backend := newLiveActivityTestRouter(t)
+	set := transferringSet()
+	set.Outcome = service.LiveActivityOutcomeFailed
+	set.Truncated = true
+	set.Dropped = true
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 38, 0, time.UTC),
+		Epoch:      "7f3a91c2d0b45e68",
+		PollAfter:  time.Second,
+		Sets:       []service.LiveActivitySet{set},
+	})
+
+	body := getLiveActivity(t, router, "")
+	if body["epoch"] != "7f3a91c2d0b45e68" {
+		t.Errorf("the reading carries epoch %v; without it a client that polled across a restart holds a dead process's lines and asks for everything after a sequence the live one has not reached",
+			body["epoch"])
+	}
+	got := liveSets(t, body)[0]
+	if got["outcome"] != service.LiveActivityOutcomeFailed {
+		t.Errorf("the set serialises outcome %v, want %q", got["outcome"], service.LiveActivityOutcomeFailed)
+	}
+	if got["truncated"] != true {
+		t.Errorf("the set serialises truncated %v, and this reading was cut short", got["truncated"])
+	}
+	if got["dropped"] != true {
+		t.Errorf("the set serialises dropped %v, and this caller's cursor fell off the back of the buffer", got["dropped"])
+	}
+
+	// The two flags are always present, never absent-meaning-false: a
+	// client reading an absent key as "no gap" is a client that would
+	// read a server that stopped sending them the same way.
+	plain := transferringSet()
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 38, 0, time.UTC),
+		Epoch:      "7f3a91c2d0b45e68",
+		PollAfter:  time.Second,
+		Sets:       []service.LiveActivitySet{plain},
+	})
+	quiet := liveSets(t, getLiveActivity(t, router, ""))[0]
+	for _, key := range []string{"truncated", "dropped"} {
+		if v, ok := quiet[key]; !ok || v != false {
+			t.Errorf("a reading with nothing wrong serialises %q as %v (present=%v), want an explicit false", key, v, ok)
+		}
+	}
+	if _, ok := quiet["outcome"]; ok {
+		t.Errorf("a set whose pass has not ended serialises an outcome anyway (%v); absent is how the feed says it has no verdict yet", quiet["outcome"])
 	}
 }

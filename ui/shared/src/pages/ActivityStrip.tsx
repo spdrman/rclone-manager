@@ -33,6 +33,7 @@
  * every configured set, and an idle one says when its last cycle finished.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { BackupSet } from "@shared/types/backup";
 import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
 import { bytes, clock, rate, relativeAge } from "@shared/utilities/format";
@@ -234,21 +235,49 @@ function remaining(activity: SetActivity): string | null {
   return "about " + Math.round(seconds / 3600) + "h left";
 }
 
+/** "2 artifacts failed", in one place, because it is said in three. */
+function failureWords(failures: number): string {
+  return failures + (failures === 1 ? " artifact failed" : " artifacts failed");
+}
+
 function fractionWords(activity: SetActivity): string | null {
   if (activity.progressBasis !== "artifacts" || activity.artifactsTotal === null) return null;
   return activity.artifactsCompleted + " of " + activity.artifactsTotal + " artifacts";
 }
 
-/** The pill. While a pass is running it names the step, because that is
- *  the most specific true thing; when nothing is running it defers to the
- *  set's own health verdict, which is the fact the rest of the dashboard
- *  already states. */
-function pill(set: BackupSet, activity: SetActivity): { tone: StatusTone; glyph: string; label: string; pulse: boolean } {
+/**
+ * The pill. While a pass is running it names the step, because that is the
+ * most specific true thing; when nothing is running it says how the pass
+ * ended, and only then defers to the set's own health verdict, which is
+ * the fact the rest of the dashboard already states.
+ *
+ * Two of those clauses were missing and both of them said the opposite of
+ * the truth. A stale reading kept pulsing the step, which is a claim the
+ * process is alive and is exactly what nobody knows while the poll is
+ * failing. And a pass that ended badly with nothing to count (a reconcile
+ * or a discovery that failed never reaches an artifact) fell through to
+ * the set's stored health, which is still whatever last night's cycle
+ * left it as.
+ */
+function pill(set: BackupSet, activity: SetActivity, stale: boolean): { tone: StatusTone; glyph: string; label: string; pulse: boolean } {
   if (activity.active) {
-    return { tone: "accent", glyph: "●", label: (activity.stage ?? "working").toUpperCase(), pulse: true };
+    // "Not reporting", in the panel's own words. The distinction between
+    // that and "nothing is running" is the reason this panel exists, and
+    // a failing poll is precisely the moment it has to be drawn.
+    if (stale) return { tone: "warn", glyph: "▲", label: "NOT REPORTING", pulse: false };
+    // A running pass with failures behind it still names its step, and
+    // still says something is wrong. Waiting until the cycle ends means a
+    // whole cycle in which the headline gives an operator no reason to
+    // look closer.
+    const tone: StatusTone = activity.failures > 0 ? "danger" : "accent";
+    const glyph = activity.failures > 0 ? "✕" : "●";
+    return { tone, glyph, label: (activity.stage ?? "working").toUpperCase(), pulse: true };
   }
-  if (activity.failures > 0) {
+  if (activity.failures > 0 || activity.outcome === "failed") {
     return { tone: "danger", glyph: "✕", label: "NEEDS ATTENTION", pulse: false };
+  }
+  if (activity.outcome === "stopped") {
+    return { tone: "warn", glyph: "▲", label: "STOPPED", pulse: false };
   }
   if (set.state === "healthy") return { tone: "ok", glyph: "●", label: "HEALTHY", pulse: false };
   if (set.state === "failing") return { tone: "danger", glyph: "✕", label: "FAILING", pulse: false };
@@ -263,16 +292,31 @@ function pill(set: BackupSet, activity: SetActivity): { tone: StatusTone; glyph:
  * left" knows whether to wait or intervene, and that is the only thing
  * this line is for.
  */
-function stepSentence(activity: SetActivity): { lead: string; subject: string | null; trail: string } {
+function stepSentence(activity: SetActivity, stale: boolean): { lead: string; subject: string | null; trail: string } {
   const fraction = fractionWords(activity);
+  const stage = activity.stage ?? "working";
+  const stageWords = stage.replace(/-/g, " ");
   if (activity.active) {
+    // A reading nobody can refresh keeps its fraction and loses every
+    // number that is a claim about now. A rate is measured over the last
+    // few seconds and a time remaining is computed from it, so both of
+    // them assert that the process was alive a moment ago, which is the
+    // one fact a failing poll has taken away.
+    if (stale) {
+      const parts: string[] = [];
+      if (fraction) parts.push(fraction);
+      if (activity.failures > 0) parts.push(failureWords(activity.failures));
+      parts.push("this is the last reading, and it is not refreshing");
+      const lead = "Last seen " + stageWords;
+      return { lead: activity.artifact ? lead : lead + "…", subject: activity.artifact, trail: parts.join(" · ") };
+    }
     const parts: string[] = [];
     if (fraction) parts.push(fraction);
     if (activity.bytesPerSecond !== null) parts.push(rate(activity.bytesPerSecond));
     const left = remaining(activity);
     if (left) parts.push(left);
+    if (activity.failures > 0) parts.push(failureWords(activity.failures) + " so far");
     parts.push("in progress");
-    const stage = activity.stage ?? "working";
     const lead = stage.charAt(0).toUpperCase() + stage.slice(1).replace(/-/g, " ");
     return { lead: activity.artifact ? lead : lead + "…", subject: activity.artifact, trail: parts.join(" · ") };
   }
@@ -281,10 +325,25 @@ function stepSentence(activity: SetActivity): { lead: string; subject: string | 
     return {
       lead: how,
       subject: null,
-      trail:
-        activity.failures +
-        (activity.failures === 1 ? " artifact failed" : " artifacts failed") +
-        " · nothing will retry them on its own"
+      trail: failureWords(activity.failures) + " · nothing will retry them on its own"
+    };
+  }
+  // The two passes that end badly with nothing to count. Neither reaches
+  // the clause above, because neither leaves a failed artifact behind: a
+  // reconcile or discovery that failed never got to one, and a pass
+  // somebody stopped left its artifact pre-durable rather than failed.
+  if (activity.outcome === "failed") {
+    return {
+      lead: fraction ? "Stopped after " + fraction : "Stopped",
+      subject: null,
+      trail: "this pass did not finish \u00b7 the log below says where it stopped"
+    };
+  }
+  if (activity.outcome === "stopped") {
+    return {
+      lead: fraction ? "Stopped after " + fraction : "Stopped",
+      subject: null,
+      trail: "this pass was stopped before it finished \u00b7 the rest was not attempted"
     };
   }
   if (activity.finishedAt) {
@@ -398,8 +457,24 @@ function ActivityToolbar({
  * `activity` is null while nothing has loaded, and that renders as
  * "checking", never as idle: "nothing is running" is a claim, and a fetch
  * that has not resolved does not support it.
+ *
+ * `stale` is the same discipline one step along: the poll behind this
+ * reading is failing, so the reading is the last good one rather than a
+ * current one. Keeping it on screen is right (blanking a panel somebody
+ * is reading is a worse answer than an old one), but every signal that
+ * says "alive right now" has to stop: the pulse, the sweep, the spinner,
+ * the byte rate and the time remaining. The fraction stays, because it is
+ * still the last thing that was actually measured.
  */
-export function ActivityStrip({ set, activity }: { set: BackupSet; activity: SetActivity | null }) {
+export function ActivityStrip({
+  set,
+  activity,
+  stale = false
+}: {
+  set: BackupSet;
+  activity: SetActivity | null;
+  stale?: boolean;
+}) {
   const [open, setOpen] = useState(true);
   const label = "Activity for " + set.name;
 
@@ -416,11 +491,23 @@ export function ActivityStrip({ set, activity }: { set: BackupSet; activity: Set
 
   const fraction = artifactFraction(activity);
   const words = fractionWords(activity);
-  const step = stepSentence(activity);
-  const badge = pill(set, activity);
-  const dropped = activity.oldestSequence > 1;
+  const live = activity.active && !stale;
+  const step = stepSentence(activity, stale);
+  const badge = pill(set, activity, stale);
+  // Two ways to have lost lines and both of them mean the same thing to a
+  // reader. The service says so when its own bounded buffer threw away
+  // something this cursor had not reached; oldestSequence covers the
+  // page's own window, which is smaller still.
+  const dropped = activity.dropped || activity.oldestSequence > 1;
 
-  const fillTone = activity.active ? "" : activity.failures > 0 ? " activity-bar__fill--danger" : " activity-bar__fill--ok";
+  const failed = activity.failures > 0 || activity.outcome === "failed";
+  const fillTone = live ? "" : failed ? " activity-bar__fill--danger" : activity.outcome === "stopped" ? "" : " activity-bar__fill--ok";
+  // A stopped pass is neither an alarm nor a clean finish, and there is
+  // no warn-toned fill class to reach for: this is the one place in this
+  // file where a colour is set inline rather than by class, because the
+  // alternative is a design-system rule that exists for one caller.
+  const fillStyle: CSSProperties =
+    !live && !failed && activity.outcome === "stopped" ? { background: "var(--warn)" } : {};
   const barLabel =
     fraction === null
       ? set.name + ": nothing discovered yet, so progress is not measurable"
@@ -458,8 +545,8 @@ export function ActivityStrip({ set, activity }: { set: BackupSet; activity: Set
           aria-label={barLabel}
         >
           <div
-            className={"activity-bar__fill" + (activity.active ? " activity-bar__fill--busy" : "") + fillTone}
-            style={{ width: (fraction ?? 0) + "%" }}
+            className={"activity-bar__fill" + (live ? " activity-bar__fill--busy" : "") + fillTone}
+            style={{ width: (fraction ?? 0) + "%", ...fillStyle }}
           />
         </div>
         <span
@@ -479,7 +566,7 @@ export function ActivityStrip({ set, activity }: { set: BackupSet; activity: Set
           display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap"
         }}
       >
-        {activity.active ? <span className="activity-spinner" aria-hidden="true" /> : null}
+        {live ? <span className="activity-spinner" aria-hidden="true" /> : null}
         <span>{step.lead}</span>
         {step.subject ? <strong style={{ color: "var(--text)" }}>{step.subject}</strong> : null}
         <span>

@@ -20,6 +20,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -486,4 +487,211 @@ func eventField(e LiveActivityEvent, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// TestLiveActivity_ACursoredReadHandsBackTheOldestFirst is the whole
+// point of a cursor, and it is the case a limit quietly broke.
+//
+// A client polls, advances its cursor to the newest sequence it was
+// given, and asks again. So a reading that answers a cursor with the
+// NEWEST few events tells the client to skip everything under them:
+// the middle of any burst larger than the limit is dropped, for good,
+// with the response saying nothing about it. Oldest first is what makes
+// a cursor mean "carry on from here" rather than "jump to the end".
+func TestLiveActivity_ACursoredReadHandsBackTheOldestFirst(t *testing.T) {
+	rec := newLiveActivity()
+	const burst = 120
+	const limit = 10
+	for i := 0; i < burst; i++ {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
+			Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		})
+	}
+
+	// Follow the feed the way a browser does: read, take the highest
+	// sequence handed back, ask again from there.
+	var seen []int64
+	cursor := int64(0)
+	for polls := 0; polls < burst; polls++ {
+		got := rec.snapshot("alpha/nightly", cursor, limit)
+		if len(got.Events) == 0 {
+			break
+		}
+		for _, e := range got.Events {
+			seen = append(seen, e.Sequence)
+		}
+		cursor = got.Events[len(got.Events)-1].Sequence
+	}
+
+	if len(seen) != burst {
+		t.Fatalf("a client polling with a cursor saw %d of the %d events in the burst; a limit that keeps the newest few tells the cursor to skip the middle, and the middle never comes back",
+			len(seen), burst)
+	}
+	for i, seq := range seen {
+		if seq != int64(i+1) {
+			t.Fatalf("the %dth event a client saw has sequence %d, and the feed emitted them 1..%d in order", i, seq, burst)
+		}
+	}
+}
+
+// TestLiveActivity_ReadsEverySetAsOfOneMoment is the other half of the
+// same cursor, and the one that loses events nobody ever saw.
+//
+// A client holds ONE cursor, and it is the highest sequence across every
+// set in the reading. So a reading assembled set by set, with the lock
+// taken and released between them, hands back buckets sampled at
+// different moments: the cursor lands on the latest of them, and
+// whatever arrived for an earlier bucket while the loop was still
+// walking is filtered out of the next poll and never returned to
+// anybody. One reading has to be one moment.
+func TestLiveActivity_ReadsEverySetAsOfOneMoment(t *testing.T) {
+	sets := make([]config.BackupSet, 0, 6)
+	for _, name := range []string{"one", "two", "three", "four", "five", "six"} {
+		sets = append(sets, config.BackupSet{Name: name, ID: mustBackupSetID(t, "alpha", name)})
+	}
+	svc := newTestService(t, config.Source{Name: "alpha", BackupSets: sets})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// Deployment-scoped events, so every set's strip reads the same
+	// buffer and any disagreement between two of them in one reading is
+	// the read having torn rather than the sets genuinely differing.
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	writers.Add(1)
+	go func() {
+		defer writers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				svc.activity.RecordEvent(obs.Record{
+					At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleStart, Message: "cycle starting",
+					Fields: []obs.Field{{Key: "cycle_id", Value: "c1"}},
+				})
+			}
+		}
+	}()
+	defer func() { close(stop); writers.Wait() }()
+
+	for i := 0; i < 400; i++ {
+		live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
+		if err != nil {
+			t.Fatalf("LiveActivity: %v", err)
+		}
+		if len(live.Sets) != len(sets) {
+			t.Fatalf("the reading holds %d sets and the configuration declares %d", len(live.Sets), len(sets))
+		}
+		for _, s := range live.Sets[1:] {
+			if s.LatestSequence != live.Sets[0].LatestSequence {
+				t.Fatalf("one reading reports %s at sequence %d and %s at %d. Every set here reads the same deployment-wide buffer, so two different answers mean the reading was assembled from two different moments, and the client's single cursor will land on the later one and skip whatever the earlier bucket gained in between",
+					live.Sets[0].BackupSetID, live.Sets[0].LatestSequence, s.BackupSetID, s.LatestSequence)
+			}
+		}
+	}
+}
+
+// TestLiveActivity_SaysWhenALimitCutTheReadingShort is the flag that
+// makes the page above safe to act on. A caller handed fewer events than
+// there are has to be able to tell that from having caught up, or it
+// waits out an idle interval while the process is holding lines for it.
+func TestLiveActivity_SaysWhenALimitCutTheReadingShort(t *testing.T) {
+	rec := newLiveActivity()
+	for i := 0; i < 30; i++ {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
+			Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		})
+	}
+
+	cut := rec.snapshot("alpha/nightly", 0, 10)
+	if !cut.Truncated {
+		t.Errorf("a read of 10 out of 30 held events reports truncated=false, so a client cannot tell a page from the end of the feed")
+	}
+	if len(cut.Events) != 10 {
+		t.Errorf("the read handed back %d events for a limit of 10", len(cut.Events))
+	}
+
+	rest := rec.snapshot("alpha/nightly", cut.Events[len(cut.Events)-1].Sequence, 100)
+	if rest.Truncated {
+		t.Errorf("a read that handed back everything newer than the cursor still reports truncated=true")
+	}
+	if len(rest.Events) != 20 {
+		t.Errorf("asking again from the cursor the first page ended at returned %d events, and 20 were left", len(rest.Events))
+	}
+}
+
+// TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer is the other
+// flag, and it is the one the log's own honesty rests on. The buffer is
+// bounded, so a client that fell behind far enough has a hole in what it
+// holds, and a panel that draws that hole as a continuous log is lying
+// about the very thing it exists to show.
+func TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer(t *testing.T) {
+	rec := newLiveActivity()
+	record := func() {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
+			Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		})
+	}
+	for i := 0; i < liveActivityBufferSize; i++ {
+		record()
+	}
+
+	// Nothing has overflowed yet, so a cursor near the start is still
+	// answerable in full.
+	if got := rec.snapshot("alpha/nightly", 5, liveActivityMaxLimit); got.Dropped {
+		t.Errorf("a full but never-overflowed buffer reports a cursor at 5 as having lost lines")
+	}
+
+	for i := 0; i < 60; i++ {
+		record()
+	}
+
+	behind := rec.snapshot("alpha/nightly", 5, liveActivityMaxLimit)
+	if !behind.Dropped {
+		t.Errorf("a cursor at 5 after 60 events overflowed a %d-event buffer reports dropped=false; the lines between are gone and the tail is not continuous with what that client holds",
+			liveActivityBufferSize)
+	}
+	caughtUp := rec.snapshot("alpha/nightly", 250, liveActivityMaxLimit)
+	if caughtUp.Dropped {
+		t.Errorf("a cursor at 250, inside what is still held, reports dropped=true; a marker that fires on a caught-up client is a marker nobody reads")
+	}
+}
+
+// TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount is the
+// strip's headline for the pass that goes wrong earliest.
+//
+// A set whose reconcile or discovery failed never reaches an artifact,
+// so it counts no failures and plans no rows, and a panel drawing its
+// headline from those two paints it exactly the way it paints a set with
+// nothing to do. The pass's own verdict is the fact that separates them.
+func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T) {
+	rec := newLiveActivity()
+	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/nightly"})
+	rec.ObserveSetOutcome("alpha/nightly", app.SetOutcomeFailed)
+
+	set := rec.snapshot("alpha/nightly", 0, 100)
+	if set.Outcome != LiveActivityOutcomeFailed {
+		t.Errorf("the set reports outcome %q after a pass that failed at discovery, want %q", set.Outcome, LiveActivityOutcomeFailed)
+	}
+	if set.Failures != 0 || set.ArtifactsTotal != nil {
+		t.Errorf("this case is about a pass with nothing to count: failures=%d total=%v", set.Failures, set.ArtifactsTotal)
+	}
+
+	// A pass an operator stopped is not a pass that broke, and the strip
+	// has to be able to say so in its own words.
+	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/weekly"})
+	rec.ObserveSetOutcome("alpha/weekly", app.SetOutcomeStopped)
+	if got := rec.snapshot("alpha/weekly", 0, 100).Outcome; got != LiveActivityOutcomeStopped {
+		t.Errorf("a pass stopped for an edit hold reports outcome %q, want %q", got, LiveActivityOutcomeStopped)
+	}
+
+	// And a new pass over the set starts with no verdict at all, the way
+	// the failure count does: last night's outcome is not tonight's.
+	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/nightly"})
+	if got := rec.snapshot("alpha/nightly", 0, 100).Outcome; got != "" {
+		t.Errorf("a fresh pass over alpha/nightly still reports outcome %q from the pass before it", got)
+	}
 }

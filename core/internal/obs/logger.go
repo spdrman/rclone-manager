@@ -72,11 +72,14 @@ type Logger struct {
 	// is what a Logger built by New starts at.
 	sink Sink
 
-	// bound is what With has attached, in the form a Sink reads. base
-	// already carries the same attributes in slog's own form; this copy
-	// exists so the tap and the log line cannot disagree about what an
-	// event carried (see boundFields, sink.go).
-	bound []Field
+	// bound is what With has attached, held as attrs rather than pushed
+	// onto base, so emit is still the only place a string is written
+	// down. That is what puts these through redaction and through the
+	// duplicate-key rule with everything else: attaching them to base
+	// instead would put them ahead of both, which is how a Logger built
+	// by With(...).WithRedaction(...) used to ship an endpoint past the
+	// redactor. See boundAttrs (sink.go).
+	bound []slog.Attr
 }
 
 // New builds a Logger that writes newline-delimited JSON to w, one JSON
@@ -119,8 +122,7 @@ func (l *Logger) With(args ...any) *Logger {
 		return l
 	}
 	cp := *l
-	cp.base = l.base.With(args...)
-	cp.bound = append(append([]Field(nil), l.bound...), boundFields(args)...)
+	cp.bound = append(append([]slog.Attr(nil), l.bound...), boundAttrs(args)...)
 	return &cp
 }
 
@@ -189,32 +191,62 @@ func (l *Logger) emit(ctx context.Context, level Level, event, msg string, attrs
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if extra, ok := contextBackupSet(ctx, attrs); ok {
+	if extra, ok := contextBackupSet(ctx, attrs, l.bound); ok {
 		attrs = append(attrs, extra)
 	}
-	all := make([]slog.Attr, 0, len(attrs)+1)
+	all := make([]slog.Attr, 0, len(attrs)+len(l.bound)+1)
 	all = append(all, slog.String(fieldEvent, event))
-	for _, a := range attrs {
-		if a.Value.Kind() == slog.KindString {
-			a = slog.String(a.Key, l.redact.Filter(a.Value.String()))
+	// What With bound comes first, and only where the event did not say
+	// the same thing itself. The event is the authority on its own
+	// fields, and a duplicate key is worse than either answer: the tap
+	// takes the first and encoding/json keeps the last, so two readers of
+	// one event would disagree.
+	for _, b := range l.bound {
+		if attrNamed(attrs, b.Key) {
+			continue
 		}
-		all = append(all, a)
+		all = append(all, redactAttr(l.redact, b))
+	}
+	for _, a := range attrs {
+		all = append(all, redactAttr(l.redact, a))
 	}
 	msg = l.redact.Filter(msg)
 	l.base.LogAttrs(ctx, level, msg, all...)
 	l.tap(level, event, msg, all[1:])
 }
 
+// attrNamed reports whether attrs already carries key.
+func attrNamed(attrs []slog.Attr, key string) bool {
+	for _, a := range attrs {
+		if a.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// redactAttr runs a string-valued attr through r. Filter is
+// nil-receiver-safe (redact.go), so a deployment that configured no
+// redactor pays a nil check per string attr rather than taking a
+// different code path.
+func redactAttr(r *Redactor, a slog.Attr) slog.Attr {
+	if a.Value.Kind() != slog.KindString {
+		return a
+	}
+	return slog.String(a.Key, r.Filter(a.Value.String()))
+}
+
 // tap hands one already-redacted event to the Sink, if there is one. attrs
 // excludes the event attribute emit prepends, because Record names the
 // event in a field of its own and repeating it in the list would leave
-// every reader to filter it back out.
+// every reader to filter it back out. It already carries whatever With
+// bound, redacted and de-duplicated with the rest, which is what keeps the
+// tap and the log line built from one list rather than two.
 func (l *Logger) tap(level Level, event, msg string, attrs []slog.Attr) {
 	if l.sink == nil {
 		return
 	}
-	fields := make([]Field, 0, len(l.bound)+len(attrs))
-	fields = append(fields, l.bound...)
+	fields := make([]Field, 0, len(attrs))
 	for _, a := range attrs {
 		fields = append(fields, Field{Key: a.Key, Value: a.Value.String()})
 	}
