@@ -949,11 +949,17 @@ const REFUSALS_NEEDING_AN_ANSWER: Record<string, AcknowledgeableRefusal | undefi
 };
 
 /** The banner's heading. The body is always the service's own sentence,
- *  which for the host key carries the two fingerprints being compared;
- *  this is only what the operator is being asked about. */
+ *  which for the host key carries the fingerprints being compared; this is
+ *  only what the operator is being asked about.
+ *
+ *  The host-key heading says "changes" rather than "trusts a different
+ *  key", because the service asks in both directions: a new key being
+ *  pinned, and a key already on record that the one line being sent would
+ *  stop pinning. A heading naming only the first would contradict the
+ *  sentence underneath it for the second. */
 const REFUSAL_TITLE: Record<AcknowledgeableRefusal, string> = {
   repoint: "This change points the backup set at different data",
-  hostKey: "This change trusts a different host key for the same host"
+  hostKey: "This change alters what host keys this backup set trusts"
 };
 
 function fieldFor(key: EditFieldKey): EditField {
