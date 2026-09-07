@@ -105,20 +105,33 @@ export function App() {
     };
   }, [api, auth?.authenticated, setConfigured]);
 
-  const health = useResource(healthNode, () => api.getHealth(), [api]);
-  const version = useResource(versionNode, () => api.getVersion(), [api]);
-  const sets = useResource(setsNode, () => api.listSets(), [api]);
+  // Every read below is authenticated, so none of them is issued until
+  // there is a session to issue it with, and every one of them is issued
+  // the moment there is (the fourth argument to useResource, see its own
+  // doc). Both halves matter and they used to be missing together: these
+  // hooks sit above the authenticated branch further down, so on a
+  // signed-out browser all five were refused, and their deps are `[api]`,
+  // which never changes, so signing in re-issued none of them. A new
+  // operator's first act after creating their account was to open Backup
+  // sets and be told they were not authenticated, permanently, because
+  // the poll that would eventually have covered it is itself switched off
+  // until an instance is known to be configured, and a fresh install is
+  // not.
+  const signedIn = auth?.authenticated ?? false;
+  const health = useResource(healthNode, () => api.getHealth(), [api], signedIn);
+  const version = useResource(versionNode, () => api.getVersion(), [api], signedIn);
+  const sets = useResource(setsNode, () => api.listSets(), [api], signedIn);
   // Owns the one fetch of quarantineNode (#101, matching health/sets
   // above): the header's quarantine badge (countsNode, below) and
   // QuarantinePage's own list both read this same node, via the
   // `quarantine` object passed down here, so they cannot disagree about
   // what is currently quarantined.
-  const quarantine = useResource(quarantineNode, () => api.listQuarantine(), [api]);
+  const quarantine = useResource(quarantineNode, () => api.listQuarantine(), [api], signedIn);
   // B2.1 (#95) — the one fetch of operationsNode. DashboardPage and
   // BackupSetsPage both read the node directly (useCausl), never their own
   // listOperations() call, so a poll tick here is the only thing that can
   // move either page's live operation progress.
-  const operations = useResource(operationsNode, () => api.listOperations(), [api]);
+  const operations = useResource(operationsNode, () => api.listOperations(), [api], signedIn);
 
   const reloadAll = useCallback(() => {
     health.reload();
@@ -131,7 +144,7 @@ export function App() {
   // every one of those four calls refuses with NOT_CONFIGURED on a fresh
   // install, and a 30-second loop of refusals is noise in the log of the
   // operator who is mid-setup.
-  usePolling(30_000, reloadAll, (auth?.authenticated ?? false) && configured === true);
+  usePolling(30_000, reloadAll, signedIn && configured === true);
 
   // counts and readOnly are derived() nodes (state/appNodes.ts): pure
   // functions of the four resources above, recomputed by the graph rather
