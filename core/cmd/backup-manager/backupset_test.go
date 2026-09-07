@@ -193,6 +193,62 @@ func TestRun_BackupSetPatchEmptyStringIsARealValue(t *testing.T) {
 	}
 }
 
+// TestRun_BackupSetPatchRefusesAWindowTheFileWouldNotKeep: `--stable-for`
+// on a set that stays on the rename strategy used to exit 0 having
+// written nothing, because core clears the window of any set not on
+// "stable" and reported the clearing as a success. A command that exits 0
+// for a value it discarded is worse than one that fails, so this pins the
+// refusal, that it names the way through, and that the file is untouched.
+func TestRun_BackupSetPatchRefusesAWindowTheFileWouldNotKeep(t *testing.T) {
+	configPath := writeTestConfig(t)
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	args := []string{"backup-set", "--config", configPath, "patch", "production/postgres-primary",
+		"--stable-for", "45s"}
+	out := captureStderr(t, func() {
+		if got := run(args); got == 0 {
+			t.Errorf("run(%v) = 0, want a non-zero exit: the window would have been discarded", args)
+		}
+	})
+	if !strings.Contains(out, "completion-strategy") && !strings.Contains(out, "completion_strategy") {
+		t.Errorf("the refusal does not say the strategy has to come with it: %q", out)
+	}
+
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("a refused patch rewrote the config file:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+
+	// The control, and the invocation an operator actually wants: the two
+	// flags together move the set and keep the window, read back through a
+	// SECOND run that loads the file fresh.
+	pair := []string{"backup-set", "--config", configPath, "patch", "production/postgres-primary",
+		"--completion-strategy", "stable", "--stable-for", "45s"}
+	captureStdout(t, func() {
+		if got := run(pair); got != 0 {
+			t.Fatalf("run(%v) = %d, want 0", pair, got)
+		}
+	})
+	persisted, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	// The file rather than the command's own report, because the report
+	// is what was lying: the discarded write was described back to the
+	// caller as a success.
+	for _, want := range []string{"strategy: stable", "stable_for: 45s"} {
+		if !strings.Contains(string(persisted), want) {
+			t.Errorf("the persisted config does not carry %q:\n%s", want, persisted)
+		}
+	}
+}
+
 // TestRun_UsageListsTheBackupSetCommand keeps the usage banner honest:
 // it is where an operator learns which commands exist, and the tests
 // repository pins its lines for exactly that reason.

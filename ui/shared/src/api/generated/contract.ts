@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "dbe2ae97bbdc53bcfa6573b290e0fd9de25b7e583fc631f788cce046077cf9a5";
+export const CONTRACT_SHA256 = "13c6a2c5af44c4e6055d33b33382cbc24119039f0d257fb3b087657e98ef261a";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [

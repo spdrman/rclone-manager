@@ -382,7 +382,11 @@ backup-manager backup-set --config ./config.yaml patch production/postgres-prima
 
 Only the flags you pass are changed; anything you leave out is left exactly as it is, which
 is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
-one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+one the Web UI's per-box Save rests on. The one pair that has to travel together is
+`--completion-strategy stable` and `--stable-for`: a set on the stable strategy with a zero
+window is refused, there is no default to supply for it because too short a window copies a
+half-written file, and a `--stable-for` the resulting file would not keep is refused rather
+than accepted and cleared. Both surfaces call the same service method, so they
 cannot drift. The change is validated against the same `config.Validate` a hand-edited file
 goes through at boot and written through the same atomic replace.
 

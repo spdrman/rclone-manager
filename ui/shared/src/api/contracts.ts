@@ -166,9 +166,17 @@ export interface BackupSetPatch {
   remoteFolder?: string;
   destination?: string;
   includePatterns?: string[];
+  /** This and `stableForSeconds` are one setting the server takes as two,
+   *  and a patch moving to "stable-size" has to carry both: a set on that
+   *  method with a zero window is refused, and there is no default the
+   *  server can supply for it. `withCompanions` in backupSetEditFields is
+   *  what keeps the pair together on the way out of the edit form. */
   completionMethod?: CompletionMethod;
-  /** Only meaningful when the completion method in effect after this edit
-   *  is "stable-size". */
+  /** Only stored when the completion method in effect after this edit is
+   *  "stable-size"; anything else clears it. A patch naming a window the
+   *  result would therefore not hold is refused with INVALID_REQUEST
+   *  rather than accepted and dropped, so a 200 here means the value was
+   *  actually kept. */
   stableForSeconds?: number;
   staleAfterSeconds?: number;
   /** The id of a key POST /ssh-keys has already imported, replacing the

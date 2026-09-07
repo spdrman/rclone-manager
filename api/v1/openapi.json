@@ -2318,6 +2318,7 @@
           },
           "completion_strategy": {
             "type": "string",
+            "description": "This and stable_for_seconds are one setting spelled as two properties, and a body moving to \"stable\" has to carry both: a backup set whose strategy is \"stable\" and whose window is zero is refused here exactly as it is at creation, and there is no default for the server to supply, because too short a window copies a half-written file.",
             "enum": [
               "rename",
               "marker",
@@ -2327,7 +2328,7 @@
           },
           "stable_for_seconds": {
             "type": "integer",
-            "description": "Required, and only meaningful, when the completion strategy in effect after this edit is \"stable\".",
+            "description": "Required, and only stored, when the completion strategy in effect after this edit is \"stable\"; an edit that leaves the strategy as anything else clears it, so that an operator's file never holds a number nothing reads. A body naming a window the resulting configuration would therefore NOT hold is refused with INVALID_REQUEST rather than accepted and cleared (issue #572): a 200 for a write that was discarded is an answer other things get built on. Sending 0 alongside a move off \"stable\" is not refused, because that asks for exactly what happens.",
             "x-go-pointer": true
           },
           "stale_after_seconds": {

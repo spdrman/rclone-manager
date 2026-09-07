@@ -703,6 +703,12 @@ describe("issue #350: repointing a set that already has history", () => {
  * and a filled one contributes exactly its own key.
  */
 describe("issue #572: changing a set's SSH key and its trusted host key", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
   it("offers a box for each, and a per-box Save that sends only that box", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet");
@@ -776,3 +782,111 @@ describe("issue #572: changing a set's SSH key and its trusted host key", () => 
     });
   });
 });
+
+/**
+ * The completion method and its window are one setting the server takes as
+ * two fields, and a live browser spec against a real engine found that
+ * neither box could be saved on its own. Saving the method alone was
+ * refused (core will not have a stable set with a zero window, and there
+ * is no default for it to invent); saving the window alone answered 200
+ * and dropped the value, so the operator watched the number they typed
+ * come back as 0. Between the two, the pair was reachable only through
+ * SAVE ALL, which is a thing you find out by failing twice.
+ *
+ * These drive the buttons rather than the handler, because "the pair
+ * travels together" is a claim about what each control sends.
+ */
+describe("issue #572: the completion method and its window save as one setting", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
+  it("carries the window when the method's own Save is pressed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+    expect(target.completionMethod).not.toBe("stable-size");
+
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    fireEvent.change(await screen.findByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save completion method" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("carries the method when the window's own Save is pressed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    fireEvent.change(await screen.findByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save stable for (seconds)" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("carries the method on SAVE ALL when only the window was touched", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await stableSizeSet();
+    await openEditMode(api, target);
+
+    // A set already on stable-size, with only its window edited. The
+    // method is not dirty, so SAVE ALL, which walks the dirty ones, would
+    // send the window alone.
+    fireEvent.change(screen.getByLabelText("Stable for (seconds)"), { target: { value: "45" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 45 });
+  });
+
+  it("says which box is missing rather than sending a pair core would refuse", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    // Choosing stable-size reveals the window holding this set's current
+    // value, which for one that has never been on stable-size is 0. Both
+    // halves of the pair are now in the save, and the window's own parse
+    // refuses a zero before any request is made, so the operator is told
+    // what is missing on the box that is missing it rather than reading a
+    // server refusal about stable_for under the method box. Both controls
+    // behave the same way, because both expand to the same pair.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    expect(((await screen.findByLabelText("Stable for (seconds)")) as HTMLInputElement).value).toBe("0");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save completion method" }));
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByText(/Stable for must be a whole number of seconds greater than zero/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/** The fixture's set that is already on the stable-size method, read
+ *  through its own mock instance for the reason firstSet is. */
+async function stableSizeSet(): Promise<BackupSet> {
+  const sets = await createMockApi().listSets();
+  const found = sets.find((s) => s.completionMethod === "stable-size");
+  if (!found) throw new Error("the mock fixture has no stable-size set, so this suite cannot cover the pair");
+  return found;
+}

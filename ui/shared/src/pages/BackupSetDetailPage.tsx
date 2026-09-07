@@ -49,7 +49,7 @@ import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { BackupSetRetentionCard } from "./BackupSetRetentionCard";
-import { EDIT_FIELDS, readEditFields, visibleEditFields } from "./backupSetEditFields";
+import { EDIT_FIELDS, readEditFields, visibleEditFields, withCompanions } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
@@ -289,11 +289,20 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
    * stay in edit mode when it did not.
    */
   const saveFields = async (
-    keys: EditFieldKey[],
+    requested: EditFieldKey[],
     acknowledge: AcknowledgeableRefusal | null = null,
     exitAfter = false
   ): Promise<boolean> => {
-    if (keys.length === 0) return true;
+    // No draft is edit mode not being open, which is the same "nothing to
+    // save" as an empty key list rather than a failure.
+    if (requested.length === 0 || !draft) return true;
+    // Expanded here, once, rather than on the button that asked: every
+    // save reaches this function, so a pair of boxes that have to travel
+    // together (the completion method and its window) cannot be split by
+    // whichever control happened to be pressed. Idempotent, so the
+    // acknowledgement retry re-sending its own keys expands to the same
+    // set. See withCompanions for what the pair is and why.
+    const keys = withCompanions(requested, draft);
     // The staleness check the dialog already ran, kept and moved here.
     // Inline editing holds the page open longer than a dialog did, so
     // this matters more here, not less.
@@ -306,7 +315,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     const problems: Partial<Record<EditFieldKey, string>> = {};
     for (const key of keys) {
       const field = fieldFor(key);
-      const parsed = field.parse(draft ? draft[key] : "");
+      const parsed = field.parse(draft[key]);
       if (parsed.error) problems[key] = parsed.error;
       else Object.assign(patch, parsed.patch);
     }

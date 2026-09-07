@@ -369,6 +369,11 @@ func applyBackupSetUpdate(bs config.BackupSet, req UpdateBackupSetRequest) confi
 	// strategy (newBackupSetFor), so an edit that moves off "stable"
 	// clears it rather than leaving a number in the operator's file that
 	// nothing reads and the next reader has to work out is dead.
+	//
+	// This clearing is why validateUpdatedBackupSet refuses a request that
+	// NAMES a window this line would then throw away. The two belong
+	// together: without the refusal, the honest bookkeeping here becomes a
+	// 200 for a value the caller watched vanish.
 	if bs.Completion.Strategy != "stable" {
 		bs.Completion.StableFor = 0
 	}
@@ -441,6 +446,33 @@ func validateUpdatedBackupSet(bs config.BackupSet, req UpdateBackupSetRequest) e
 		problems = appendProblem(problems, knownHostsLineProblem(*req.KnownHostsLine))
 	}
 	problems = append(problems, completionProblems(bs.Completion.Strategy, bs.Completion.StableFor.Duration())...)
+	// A window the resulting configuration would not keep is refused
+	// rather than quietly dropped.
+	//
+	// applyBackupSetUpdate clears stable_for whenever the strategy in
+	// effect is not "stable", which is right: a dead number in an
+	// operator's file is worse than none. What was wrong was answering the
+	// caller 200 for it. A request naming stable_for on a set that stays
+	// on "rename" was accepted, cleared, and reported as a success, so the
+	// Web UI, which re-reads the server's own answer, showed the operator
+	// the 45 they had typed coming back as 0 with nothing to explain it. A
+	// success for a discarded write is the kind of answer other things get
+	// built on.
+	//
+	// It is written as "what you sent is not what the file would hold"
+	// rather than as "you may not send stable_for off the stable
+	// strategy", and the difference is deliberate. The second is a rule
+	// about a field being present, and it would refuse a caller who moves
+	// a set off "stable" and spells out that the window goes to zero,
+	// which is a request that gets exactly what it asked for. Comparing
+	// against the edited set also means this cannot drift from the
+	// clearing rule above: whatever that line decides, this compares the
+	// caller's value against its result.
+	if req.StableFor != nil && bs.Completion.StableFor.Duration() != *req.StableFor {
+		problems = append(problems, fmt.Sprintf(
+			"stable_for %s would not be kept: it is only stored under the \"stable\" completion strategy, and this edit leaves completion_strategy as %q. Send completion_strategy \"stable\" in the same edit, or leave stable_for out of it",
+			*req.StableFor, bs.Completion.Strategy))
+	}
 	if req.StaleAfter != nil && bs.StaleAfter.Duration() <= 0 {
 		problems = append(problems, "stale_after must be a positive duration")
 	}

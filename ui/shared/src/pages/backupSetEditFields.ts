@@ -81,6 +81,12 @@ export interface EditField {
    *  The draft rather than the persisted set, so choosing a completion
    *  method reveals its window immediately instead of after a save. */
   shownWhen?(draft: Record<EditFieldKey, string>): boolean;
+  /** Fields this one cannot be persisted without, added to any save that
+   *  carries it (withCompanions below). Only for boxes that are really one
+   *  setting the server takes as two; see the completion pair for the
+   *  whole argument. Companions are added only while they are on screen,
+   *  so this can never resurrect a hidden box. */
+  savesWith?: EditFieldKey[];
   read(set: BackupSet): string;
   parse(raw: string): ParsedField;
 }
@@ -91,6 +97,56 @@ export interface EditField {
  *  so a hidden field can never be part of a patch. */
 export function visibleEditFields(draft: Record<EditFieldKey, string>): EditField[] {
   return EDIT_FIELDS.filter((f) => !f.shownWhen || f.shownWhen(draft));
+}
+
+/**
+ * The keys a save of `keys` actually has to carry.
+ *
+ * The completion method and its window are one setting the server takes as
+ * two fields, and either one sent alone is a save that cannot work. The
+ * method alone is refused, because a stable set with a zero window is
+ * invalid on this path exactly as it is at creation, and there is no
+ * default for core to invent: too short a window copies a half-written
+ * file, so the number has to come from the operator. The window alone is
+ * refused too, because core clears the window of any set not on the stable
+ * strategy, and it used to answer 200 for the value it had just thrown
+ * away. Between those two, the pair was reachable only through SAVE ALL,
+ * which is a thing an operator finds out by failing twice.
+ *
+ * The expansion happens here, in the one place every save goes through,
+ * rather than on the per-box button, for two reasons that are not the same
+ * one. SAVE ALL walks the dirty fields, so a set already on stable-size
+ * whose window alone was edited would send the window on its own. And
+ * expanding in one place is what keeps the acknowledgement retry, which
+ * re-sends the keys a refused save carried, from re-splitting a pair the
+ * first attempt had joined.
+ *
+ * What it also buys, which is worth saying because it looks like a
+ * regression until you see it: a save of the method now parses the window
+ * too, so choosing stable-size on a set whose window is still 0 fails
+ * locally, on the window box, instead of making a request core answers
+ * with a sentence about stable_for rendered under the method box.
+ *
+ * A companion that is not on screen is never added, which is the same rule
+ * dirty-checking already follows: a hidden box must not be able to reach a
+ * patch. The key asked for is always kept, companion or not.
+ */
+export function withCompanions(
+  keys: EditFieldKey[],
+  draft: Record<EditFieldKey, string>
+): EditFieldKey[] {
+  const onScreen = new Set(visibleEditFields(draft).map((f) => f.key));
+  const out: EditFieldKey[] = [];
+  const add = (key: EditFieldKey) => {
+    if (!out.includes(key)) out.push(key);
+  };
+  for (const key of keys) {
+    add(key);
+    for (const companion of EDIT_FIELDS.find((f) => f.key === key)?.savesWith ?? []) {
+      if (onScreen.has(companion)) add(companion);
+    }
+  }
+  return out;
 }
 
 const COMPLETION_OPTIONS: { value: CompletionMethod; label: string }[] = [
@@ -181,6 +237,14 @@ export const EDIT_FIELDS: EditField[] = [
     help: FIELD_HELP.editSetCompletion,
     control: "select",
     options: COMPLETION_OPTIONS,
+    // The window rides with it whenever it is on screen. Core refuses a
+    // set whose strategy is "stable" and whose window is zero, exactly as
+    // it refuses one at creation, so a save carrying the method alone is
+    // one that can only fail on every set not already on stable-size:
+    // moving TO stable-size means arriving with a window, and there is no
+    // default for core to invent, because too short a window copies a
+    // half-written file.
+    savesWith: ["stableFor"],
     read: (s) => s.completionMethod,
     parse: (raw) => ({ patch: { completionMethod: raw as CompletionMethod } })
   },
@@ -197,6 +261,13 @@ export const EDIT_FIELDS: EditField[] = [
     // without this one is a control whose "Stable file size" option is
     // unusable on every set that is not already on it.
     shownWhen: (draft) => draft.completion === "stable-size",
+    // And the method rides back, which is the other half of the same
+    // defect. Core clears the window of any set not on "stable", so a save
+    // carrying the window alone, made while the DRAFT says stable-size but
+    // the persisted set still says rename, is a write the file discards.
+    // It used to answer 200 for that; it now refuses, and this is what
+    // keeps the box from having to be refused at all.
+    savesWith: ["completion"],
     read: (s) => String(s.stableForSeconds),
     parse: (raw) => {
       const trimmed = raw.trim();
