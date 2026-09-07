@@ -615,6 +615,22 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // a PATCH could rewrite the file, one set's re-trust could land on
 // another set's anchor.
 //
+// The line is synced, and so is the directory entry, before this returns.
+// It is the same invariant stagedKnownHosts states for the edit path and
+// for the same reason: the configuration written afterwards NAMES this
+// file, so a crash between the two must not be able to leave a
+// configuration pointing at a trust anchor whose bytes never landed.
+// config.Validate does not stat known_hosts, so a daemon would come back
+// up green and the set would fail at connect time.
+//
+// Unlike the edit path this writes the canonical name in place rather than
+// a fresh one, and a truncate-then-write is not itself crash-safe. That is
+// the right trade here and not an oversight: the only way the name is
+// already taken is a set that was REMOVED from the configuration, so
+// nothing live is reading what is being truncated, and a fresh name per
+// create would mean a set's file was named after nothing an operator can
+// recognise in a directory listing.
+//
 // It takes configPath rather than hanging off *BackupService for the
 // reason keysDirIn above gives.
 func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error) {
@@ -625,7 +641,22 @@ func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := fsyncDir(dir); err != nil {
 		return "", err
 	}
 	return path, nil
