@@ -389,20 +389,28 @@ func trustedFingerprints(t *testing.T, path string) []string {
 	return out
 }
 
-// # The trust file, rather than the field
+// # The trust FILE, rather than the field
 //
 // Everything above this line is about the fingerprint comparison the
-// feature is built around. Everything below it is about the other half of
-// a known_hosts line, which the first version of this code threw away: the
-// marker, the host patterns, and every entry in the file that the one line
-// offered is not.
+// feature is built around, and every one of those tests passed while six
+// separate defects sat under them. Four independent adversarial reviews of
+// PR #580 turned them up, and they group into two.
 //
-// Four separate adversarial reviews of PR #580 found the same shape four
-// times, from four directions, which is why they are here as one group. A
-// known_hosts line is a marker, a set of host patterns and a key, and a
-// comparison that reads only the key answers a question nobody asked. Each
-// test below was written against the code that had the defect and watched
-// to fail for the defect's own reason, not for a proxy.
+// Four are the rest of the known_hosts line, which the first version of
+// this code threw away. A line is a marker, a set of host patterns and a
+// key; only the key was compared, so a certificate authority could arrive
+// described as one fingerprint, a line naming somebody else's host could
+// pass as "the key already trusted", a port change could look like an
+// address nothing was pinned for, and a file holding two algorithms could
+// lose one to a save that changed nothing.
+//
+// Two are the file itself, which stopped being written once and started
+// being rewritten: a name that two different backup sets could share, and
+// a commit ordering that could leave a configuration durably naming a
+// trust anchor nobody wrote.
+//
+// Each test below was written against the code that had its defect and
+// watched to fail for that defect's own reason, not for a proxy.
 
 // newHostPublicKey generates one throwaway ed25519 host key and hands back
 // the public half, for the tests that have to render it against more than
