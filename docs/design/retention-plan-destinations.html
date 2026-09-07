@@ -1,0 +1,433 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Custom retention plans that choose where the copies go</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --shadow-pop:0 8px 24px rgba(20,20,18,.12),0 2px 6px rgba(20,20,18,.08);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1460px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-5)}
+h1{font-size:16px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0;max-width:98ch}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5);align-items:start}
+.full{grid-column:1 / -1}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+.card__header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);
+  padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border)}
+.card__title{font-weight:600;font-size:13.5px}
+.card__meta{color:var(--text-3);font-size:12px;font-family:var(--font-mono)}
+.body{padding:var(--space-4) var(--space-5)}
+.note{color:var(--text-2);font-size:12.5px;margin:0 0 var(--space-3)}
+.hint{font-size:11.5px;color:var(--text-3);margin-top:4px}
+label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;
+  border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.pill--run{background:var(--accent-quiet);color:var(--accent)}
+.pill--ok{background:var(--ok-quiet);color:var(--ok)}
+.pill--err{background:var(--danger-quiet);color:var(--danger)}
+.pill--warn{background:var(--warn-quiet);color:var(--warn)}
+.pill--quiet{background:var(--surface-3);color:var(--text-3)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* tier table */
+.tiers{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.thead,.trow{display:grid;grid-template-columns:124px 112px 68px 1fr 132px;gap:var(--space-3);
+  align-items:center;padding:9px var(--space-3)}
+.thead{background:var(--surface-2);border-bottom:1px solid var(--border);
+  font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--text-3);text-transform:uppercase}
+.trow{border-bottom:1px solid var(--border);background:var(--surface)}
+.trow:last-child{border-bottom:0}
+.trow--open{background:var(--accent-quiet)}
+.input{height:30px;padding:0 9px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);font-size:12.5px;color:var(--text);display:flex;align-items:center}
+.input--mono{font-family:var(--font-mono);font-size:12px}
+.input--sel{justify-content:space-between;gap:6px}
+.input--sel::after{content:"";width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid var(--text-3);flex:none}
+.input--focus{border-color:var(--accent);box-shadow:0 0 0 3px oklch(0.52 0.09 255 / .12)}
+.dsum{font-size:12px;color:var(--text-2);font-family:var(--font-mono)}
+.dsum b{color:var(--text);font-weight:600}
+
+/* the open destination menu */
+.menu{position:relative}
+.menu__pop{margin-top:6px;border:1px solid var(--border-strong);border-radius:var(--radius-lg);
+  background:var(--surface);box-shadow:var(--shadow-pop);overflow:hidden}
+.menu__group{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-3);padding:8px var(--space-3) 4px;background:var(--surface-2);
+  border-top:1px solid var(--border)}
+.menu__group:first-child{border-top:0}
+.opt{display:flex;align-items:flex-start;gap:var(--space-3);padding:8px var(--space-3);
+  border-top:1px solid var(--border)}
+.opt:first-of-type{border-top:0}
+.opt--on{background:var(--accent-quiet)}
+.opt--off{opacity:.62}
+.opt__ico{width:24px;height:24px;border-radius:var(--radius-sm);background:var(--surface-3);flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:var(--text-2)}
+.opt__name{font-size:12.5px;font-weight:600}
+.opt__why{font-size:11.5px;color:var(--text-2);margin-top:1px}
+.opt__grow{flex:1}
+.opt__tick{color:var(--accent);font-weight:700}
+
+/* banners */
+.banner{display:flex;gap:var(--space-3);padding:var(--space-3) var(--space-5);font-size:12.5px;
+  border-bottom:1px solid var(--border)}
+.banner--warn{background:var(--warn-quiet)}
+.banner--err{background:var(--danger-quiet)}
+.banner--ok{background:var(--ok-quiet)}
+.banner--info{background:var(--accent-quiet)}
+.banner b{display:block;margin-bottom:2px}
+.banner p{margin:0;color:var(--text-2)}
+.banner--warn b{color:oklch(0.42 0.10 70)}
+.banner--err b{color:var(--danger)}
+.banner--ok b{color:var(--ok)}
+.banner--info b{color:var(--accent)}
+
+/* consent */
+.consent{border:1px solid oklch(0.86 0.06 70);background:var(--warn-quiet);border-radius:var(--radius-lg);
+  padding:var(--space-3)}
+.consent p{margin:0 0 var(--space-2);font-size:12.5px;color:oklch(0.36 0.06 70)}
+.ack{display:flex;align-items:flex-start;gap:var(--space-2);font-size:12.5px;font-weight:600;
+  color:oklch(0.36 0.06 70)}
+.box{width:14px;height:14px;border:1.5px solid oklch(0.62 0.09 70);border-radius:3px;flex:none;margin-top:2px;
+  background:var(--surface)}
+
+/* preflight rows */
+.pf{display:flex;align-items:center;gap:var(--space-3);padding:8px var(--space-3);
+  border:1px solid var(--border);border-radius:var(--radius-lg);margin-top:var(--space-2);background:var(--surface)}
+.pf__name{font-family:var(--font-mono);font-size:12px;font-weight:600}
+.pf .grow{flex:1}
+.btn{height:28px;padding:0 12px;border-radius:var(--radius-sm);border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text-2);font:inherit;font-size:12px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--off{opacity:.45}
+.actions{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-5);
+  border-top:1px solid var(--border);background:var(--surface-2)}
+.actions .grow{flex:1}
+
+/* impact table */
+.imp{width:100%;border-collapse:collapse;font-size:12.5px}
+.imp th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--text-3);padding:0 var(--space-3) 6px;border-bottom:1px solid var(--border)}
+.imp td{padding:8px var(--space-3);border-bottom:1px solid var(--border);color:var(--text-2);vertical-align:top}
+.imp tr:last-child td{border-bottom:0}
+.imp .m{font-family:var(--font-mono);font-size:11.5px;color:var(--text)}
+.arrow{color:var(--text-3)}
+
+/* terminal */
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11px;line-height:1.7;
+  padding:var(--space-3) var(--space-5);border-top:1px solid var(--border);overflow:hidden}
+.term .t{color:#6f736a}
+.term .i{color:#9aa39b}
+.term .w{color:oklch(0.78 0.12 75)}
+.term .e{color:oklch(0.72 0.16 25)}
+.term .g{color:oklch(0.72 0.11 155)}
+.term .cur{display:inline-block;width:7px;height:11px;background:#d7d9d2;vertical-align:-2px;
+  animation:blink 1.1s steps(2,start) infinite}
+@keyframes blink{50%{opacity:0}}
+.yaml{background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:var(--space-3);font-family:var(--font-mono);font-size:11.5px;line-height:1.7;color:var(--text-2);
+  white-space:pre;overflow:hidden}
+.yaml .k{color:var(--accent)}
+.yaml .c{color:var(--text-3)}
+</style>
+<div class="wrap">
+  <div>
+    <h1>A retention plan picks its destinations</h1>
+    <p class="sub">A plan already says how long to keep a copy. This adds where the copy lives, chosen from the
+      same three kinds of place in the global plan and in a backup set's own: this machine, a destination the
+      deployment already declares, or one configured through the wizard for this plan alone. The plan sets a
+      default; a tier may override it, because the schema this writes to is per tier.</p>
+  </div>
+
+  <div class="grid">
+
+    <!-- PANE 1: the plan editor with the menu open -->
+    <section class="card full">
+      <div class="card__header">
+        <div><div class="card__title">Settings &rsaquo; Retention plan</div>
+          <div class="card__meta">the deployment default, inherited by every backup set that declares none</div></div>
+        <span class="pill pill--run"><span class="dot"></span>EDITING &middot; NOT SAVED</span>
+      </div>
+      <div class="body">
+        <div style="display:grid;grid-template-columns:300px 1fr;gap:var(--space-5);align-items:start">
+          <div>
+            <label>Default destination for this plan</label>
+            <div class="input input--sel input--mono">This machine</div>
+            <div class="hint">Every tier below starts here. A tier that says something else overrides it, and the
+              plan default is what "Inherit" resolves to.</div>
+            <div style="height:var(--space-4)"></div>
+            <label>Timezone</label>
+            <div class="input input--mono">Europe/London</div>
+            <div style="height:var(--space-3)"></div>
+            <label>Week starts on</label>
+            <div class="input input--sel input--mono">Monday</div>
+          </div>
+          <div>
+            <div class="tiers">
+              <div class="thead"><span>Tier</span><span>Granularity</span><span>Keep</span>
+                <span>Destination</span><span>Copies there</span></div>
+              <div class="trow">
+                <span class="input input--mono">daily</span>
+                <span class="input input--sel input--mono">day</span>
+                <span class="input input--mono">7</span>
+                <span class="dsum">Inherit &rarr; <b>This machine</b></span>
+                <span class="pill pill--quiet">7 artifacts</span>
+              </div>
+              <div class="trow">
+                <span class="input input--mono">weekly</span>
+                <span class="input input--sel input--mono">week</span>
+                <span class="input input--mono">4</span>
+                <span class="dsum">Inherit &rarr; <b>This machine</b></span>
+                <span class="pill pill--quiet">4 artifacts</span>
+              </div>
+              <div class="trow trow--open">
+                <span class="input input--mono">monthly</span>
+                <span class="input input--sel input--mono">month</span>
+                <span class="input input--mono">12</span>
+                <span class="input input--sel input--mono input--focus">offsite_s3</span>
+                <span class="pill pill--ok"><span class="dot"></span>12 artifacts</span>
+              </div>
+            </div>
+
+            <div class="menu">
+              <div class="menu__pop">
+                <div class="menu__group">On this machine</div>
+                <div class="opt">
+                  <span class="opt__ico">HD</span>
+                  <div><div class="opt__name">This machine</div>
+                    <div class="opt__why">Each backup set's own local_path. Always available, and the only
+                      destination that needs no credential.</div></div>
+                  <span class="opt__grow"></span>
+                </div>
+                <div class="opt opt--off">
+                  <span class="opt__ico">HD</span>
+                  <div><div class="opt__name">A second local disk &middot; /mnt/archive-hdd</div>
+                    <div class="opt__why">Not available yet. A saved local volume is a destination this product
+                      does not have; today local means the backup set's own path and nothing else.</div></div>
+                  <span class="opt__grow"></span>
+                  <span class="pill pill--quiet">NOT BUILT</span>
+                </div>
+
+                <div class="menu__group">Declared for the whole deployment</div>
+                <div class="opt opt--on">
+                  <span class="opt__ico">S3</span>
+                  <div><div class="opt__name">offsite_s3</div>
+                    <div class="opt__why">nas-backups/monthly &middot; us-east-1 &middot; STANDARD_IA &middot;
+                      verified 4 minutes ago</div></div>
+                  <span class="opt__grow"></span>
+                  <span class="opt__tick">&check;</span>
+                </div>
+                <div class="opt opt--off">
+                  <span class="opt__ico">S3</span>
+                  <div><div class="opt__name">cold_vault</div>
+                    <div class="opt__why">nas-archive/annual &middot; eu-west-1 &middot; GLACIER. Listed and not
+                      selectable: an archive class cannot take delivery, so a tier pointed here would never get a
+                      copy it could read back, and the configuration would refuse to load.</div></div>
+                  <span class="opt__grow"></span>
+                  <span class="pill pill--warn">READS NEED A RESTORE</span>
+                </div>
+
+                <div class="menu__group">Just for this plan</div>
+                <div class="opt">
+                  <span class="opt__ico">+</span>
+                  <div><div class="opt__name">Configure an S3 destination for this plan&hellip;</div>
+                    <div class="opt__why">Opens the same four-step wizard, and saves a destination the deployment
+                      list will also show. There is one namespace of destinations, not two.</div></div>
+                  <span class="opt__grow"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANE 2: consent + preflight before save -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Before this save takes effect</div>
+          <div class="card__meta">the consent and the proof, in that order</div></div>
+        <span class="pill pill--warn"><span class="dot"></span>1 NEW MAPPING</span>
+      </div>
+      <div class="body">
+        <p class="note"><b>monthly</b> is about to start sending its artifacts to
+          <span style="font-family:var(--font-mono)">offsite_s3</span>. That mapping is new, so this asks once.</p>
+        <div class="consent">
+          <p>Backups that only this tier keeps will live only on that storage medium. After a backup uploads and
+            I verify it, I delete the copy on this machine. That deletion is what the setting is for, and once
+            this is saved it happens automatically whenever retention runs, with no further prompt.</p>
+          <div class="ack"><span class="box"></span>
+            <span>I understand that the copy on this machine gets deleted.</span></div>
+        </div>
+        <div style="height:var(--space-4)"></div>
+        <label>Prove the destination first</label>
+        <div class="pf">
+          <span class="pf__name">offsite_s3</span>
+          <span class="grow"></span>
+          <span class="pill pill--ok"><span class="dot"></span>8 OF 8 CHECKS PASSED</span>
+          <button class="btn">Verify again</button>
+        </div>
+        <div class="hint">Offered here rather than only in settings, because this is the moment an operator is
+          about to commit artifacts to a place. A plan whose destination has never verified can still be saved,
+          and the tier row says so until it has.</div>
+      </div>
+      <div class="actions">
+        <span class="card__meta">config revision 41 &rarr; 42</span>
+        <span class="grow"></span>
+        <button class="btn">Discard</button>
+        <button class="btn btn--primary">Save plan</button>
+      </div>
+    </section>
+
+    <!-- PANE 3: what happens to what is already retained -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">What changes for copies that already exist</div>
+          <div class="card__meta">shown before the save, not discovered after it</div></div>
+        <span class="pill pill--run"><span class="dot"></span>PREVIEW</span>
+      </div>
+      <div class="banner banner--info">
+        <div><b>Changing where a tier sends copies does not move the copies it already made in one go.</b>
+          <p>Each artifact moves on the next cycle that reaches it, one at a time, upload first and local delete
+            only after the upload is read back and confirmed. At no instant does an artifact have no confirmed
+            readable copy. Nothing here is destructive on its own.</p></div>
+      </div>
+      <div class="body" style="padding-left:var(--space-3);padding-right:var(--space-3)">
+        <table class="imp">
+          <tr><th>Artifacts</th><th>Where they are</th><th>What the save does</th></tr>
+          <tr><td class="m">12 &middot; monthly</td>
+            <td class="m">This machine <span class="arrow">&rarr;</span> offsite_s3</td>
+            <td>Uploaded and verified over the next cycles, then the local copy is deleted. Bounded by
+              max_moves_per_cycle, so this does not become one enormous night.</td></tr>
+          <tr><td class="m">148 &middot; monthly</td>
+            <td class="m">offsite_s3 <span class="arrow">&rarr;</span> This machine</td>
+            <td>Would be downloaded back. Refused for now: this needs 41 GB free on the backup volume and there
+              is 12 GB. The tier keeps its current destination and the plan does not save.</td></tr>
+          <tr><td class="m">9 &middot; annual</td>
+            <td class="m">no tier selects them</td>
+            <td>Untouched, and still counted. These are the artifacts nothing governs, and a plan edit neither
+              adopts them nor deletes them.</td></tr>
+        </table>
+      </div>
+      <div class="term">
+        <div><span class="t">02:11:07</span> <span class="i">plan preview: 3 tiers, 2 destinations, 169 artifacts considered</span></div>
+        <div><span class="t">02:11:07</span> <span class="g">12 moves planned: local &rarr; offsite_s3</span></div>
+        <div><span class="t">02:11:07</span> <span class="e">148 moves refused: offsite_s3 &rarr; local needs 41 GB, 12 GB free</span></div>
+        <div><span class="t">02:11:07</span> <span class="w">9 artifacts governed by no tier; see `backup-manager retention`</span><span class="cur"></span></div>
+      </div>
+    </section>
+
+    <!-- PANE 4: the per-set custom plan -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">api-server / var-backups &rsaquo; Retention</div>
+          <div class="card__meta">the same editor, one backup set's own plan</div></div>
+        <span class="pill pill--ok"><span class="dot"></span>CUSTOM PLAN</span>
+      </div>
+      <div class="banner banner--warn">
+        <div><b>This set is retained under a plan of its own, so the deployment plan does not reach it.</b>
+          <p>Clearing this returns the set to the deployment plan, and the deployment plan's destinations come
+            with it. That is a change of destination too, and it gets the same preview.</p></div>
+      </div>
+      <div class="body">
+        <div class="tiers">
+          <div class="thead"><span>Tier</span><span>Granularity</span><span>Keep</span>
+            <span>Destination</span><span>Copies there</span></div>
+          <div class="trow">
+            <span class="input input--mono">daily</span>
+            <span class="input input--sel input--mono">day</span>
+            <span class="input input--mono">14</span>
+            <span class="dsum">Inherit &rarr; <b>This machine</b></span>
+            <span class="pill pill--quiet">14 artifacts</span>
+          </div>
+          <div class="trow">
+            <span class="input input--mono">monthly</span>
+            <span class="input input--sel input--mono">month</span>
+            <span class="input input--mono">24</span>
+            <span class="input input--sel input--mono">tenant_a_s3</span>
+            <span class="pill pill--ok"><span class="dot"></span>24 artifacts</span>
+          </div>
+        </div>
+        <div class="hint">tenant_a_s3 was configured from this page, through the wizard, for this plan. It is a
+          declared destination like any other afterwards: it appears in the deployment list, it can be verified
+          there, and another plan may point at it.</div>
+        <div style="height:var(--space-4)"></div>
+        <div class="yaml"><span class="c"># config.yaml, this backup set's own retention block</span>
+<span class="k">retention</span>:
+  <span class="k">tiers</span>:
+    - {<span class="k">name</span>: daily,   <span class="k">granularity</span>: day,   <span class="k">keep</span>: 14}          <span class="c"># no medium key: local</span>
+    - {<span class="k">name</span>: monthly, <span class="k">granularity</span>: month, <span class="k">keep</span>: 24, <span class="k">medium</span>: tenant_a_s3}</div>
+      </div>
+      <div class="actions">
+        <button class="btn">Use the deployment plan instead</button>
+        <span class="grow"></span>
+        <button class="btn btn--primary">Save plan</button>
+      </div>
+    </section>
+
+    <!-- PANE 5: the destination is gone -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Settings &rsaquo; Retention plan</div>
+          <div class="card__meta">a tier whose destination stopped answering</div></div>
+        <span class="pill pill--err"><span class="dot"></span>DESTINATION UNREACHABLE</span>
+      </div>
+      <div class="banner banner--err">
+        <div><b>monthly sends copies to offsite_s3, and offsite_s3 last refused this deployment's key.</b>
+          <p>The plan is still in force and nothing about it changed. What stops is the moving and the pruning
+            against those copies, because a copy this deployment cannot confirm is never treated as one it may
+            delete the last local copy on the strength of. Pointing the tier back at this machine is allowed,
+            and it schedules downloads rather than deletions.</p></div>
+      </div>
+      <div class="body">
+        <div class="tiers">
+          <div class="thead"><span>Tier</span><span>Granularity</span><span>Keep</span>
+            <span>Destination</span><span>Copies there</span></div>
+          <div class="trow">
+            <span class="input input--mono">daily</span>
+            <span class="input input--sel input--mono">day</span>
+            <span class="input input--mono">7</span>
+            <span class="dsum">Inherit &rarr; <b>This machine</b></span>
+            <span class="pill pill--quiet">7 artifacts</span>
+          </div>
+          <div class="trow">
+            <span class="input input--mono">monthly</span>
+            <span class="input input--sel input--mono">month</span>
+            <span class="input input--mono">12</span>
+            <span class="input input--sel input--mono" style="border-color:oklch(0.78 0.09 25)">offsite_s3</span>
+            <span class="pill pill--err"><span class="dot"></span>148 UNREACHABLE</span>
+          </div>
+        </div>
+        <div class="pf">
+          <span class="pf__name">offsite_s3</span>
+          <span class="grow"></span>
+          <span class="pill pill--err"><span class="dot"></span>REACH FAILED (AUTHENTICATION)</span>
+          <button class="btn">Fix credentials</button>
+          <button class="btn">Verify again</button>
+        </div>
+      </div>
+      <div class="term">
+        <div><span class="t">03:00:12</span> <span class="i">retention cycle: 3 tiers evaluated</span></div>
+        <div><span class="t">03:00:12</span> <span class="e">offsite_s3 unreachable: 148 placements cannot be confirmed</span></div>
+        <div><span class="t">03:00:12</span> <span class="w">0 prunes and 0 moves planned for monthly this cycle</span></div>
+        <div><span class="t">03:00:12</span> <span class="i">daily and weekly ran normally on this machine</span><span class="cur"></span></div>
+      </div>
+    </section>
+
+  </div>
+</div>

@@ -1,0 +1,511 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S3 destination selector and authentication wizard</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1460px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-5)}
+h1{font-size:16px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0;max-width:96ch}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5);align-items:start}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+.card__header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);
+  padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border)}
+.card__title{font-weight:600;font-size:13.5px}
+.card__meta{color:var(--text-3);font-size:12px;font-family:var(--font-mono)}
+.body{padding:var(--space-4) var(--space-5)}
+.note{color:var(--text-2);font-size:12.5px;margin:0 0 var(--space-3)}
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;
+  border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.pill--run{background:var(--accent-quiet);color:var(--accent)}
+.pill--ok{background:var(--ok-quiet);color:var(--ok)}
+.pill--err{background:var(--danger-quiet);color:var(--danger)}
+.pill--warn{background:var(--warn-quiet);color:var(--warn)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.dot--pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* wizard rail */
+.rail{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-5);
+  background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-3)}
+.rail b{font-weight:600}
+.rail .s{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:var(--radius-pill);
+  border:1px solid var(--border);background:var(--surface)}
+.rail .s--done{color:var(--ok);border-color:oklch(0.86 0.05 155)}
+.rail .s--now{color:var(--accent);border-color:oklch(0.84 0.05 255);background:var(--accent-quiet);font-weight:600}
+.rail .arrow{color:var(--text-3);opacity:.6}
+
+/* forms */
+.field{margin-bottom:var(--space-3)}
+.field:last-child{margin-bottom:0}
+label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px}
+.hint{font-size:11.5px;color:var(--text-3);margin-top:4px}
+.input{width:100%;height:32px;padding:0 10px;border:1px solid var(--border-strong);
+  border-radius:var(--radius-sm);background:var(--surface);font:inherit;font-size:13px;color:var(--text);
+  display:flex;align-items:center}
+.input--mono{font-family:var(--font-mono);font-size:12px}
+.input--ghost{color:var(--text-3)}
+.input--sel{justify-content:space-between}
+.input--sel::after{content:"";width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid var(--text-3)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--space-3)}
+
+/* provider chips */
+.chips{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.chip{height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:var(--radius-pill);
+  background:var(--surface);font-size:12.5px;color:var(--text-2);display:inline-flex;align-items:center;gap:6px}
+.chip--on{border-color:var(--accent);background:var(--accent-quiet);color:var(--accent);font-weight:600}
+
+/* credential source radios */
+.src{border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--space-3);
+  margin-bottom:var(--space-2);background:var(--surface-2)}
+.src--on{border-color:var(--accent);background:var(--accent-quiet)}
+.src__head{display:flex;align-items:flex-start;gap:var(--space-2)}
+.radio{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:2px;
+  background:var(--surface)}
+.radio--on{border-color:var(--accent);border-width:4px}
+.src__name{font-size:12.5px;font-weight:600}
+.src__why{font-size:11.5px;color:var(--text-2);margin-top:2px}
+.src__body{margin-top:var(--space-3);padding-left:22px}
+.badge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.04em;
+  padding:1px 6px;border-radius:var(--radius-sm);background:var(--ok-quiet);color:var(--ok);margin-left:6px}
+
+/* verification checks */
+.checks{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.chk{display:grid;grid-template-columns:18px 106px 156px 1fr;gap:var(--space-3);align-items:baseline;
+  padding:8px var(--space-3);border-bottom:1px solid var(--border);font-size:12.5px;background:var(--surface)}
+.chk:last-child{border-bottom:0}
+.chk__ico{font-family:var(--font-mono);font-weight:700;text-align:center;line-height:1.2}
+.chk__step{font-family:var(--font-mono);font-size:11.5px;color:var(--text-2)}
+.chk__out{font-family:var(--font-mono);font-size:11px;font-weight:700;letter-spacing:.02em}
+.chk__detail{color:var(--text-2);font-size:12px}
+.ok .chk__ico,.ok .chk__out{color:var(--ok)}
+.bad .chk__ico,.bad .chk__out{color:var(--danger)}
+.bad{background:var(--danger-quiet)}
+.skip{background:var(--surface-2)}
+.skip .chk__ico,.skip .chk__out,.skip .chk__detail{color:var(--text-3)}
+.busy .chk__ico,.busy .chk__out{color:var(--accent)}
+.spinner{width:11px;height:11px;border:2px solid var(--border-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* terminal, same treatment as activity-terminal.html */
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11px;line-height:1.7;
+  padding:var(--space-3) var(--space-5);border-top:1px solid var(--border);overflow:hidden}
+.term .t{color:#6f736a}
+.term .i{color:#9aa39b}
+.term .w{color:oklch(0.78 0.12 75)}
+.term .e{color:oklch(0.72 0.16 25)}
+.term .g{color:oklch(0.72 0.11 155)}
+.term .cur{display:inline-block;width:7px;height:11px;background:#d7d9d2;vertical-align:-2px;
+  animation:blink 1.1s steps(2,start) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* footers, banners */
+.actions{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-5);
+  border-top:1px solid var(--border);background:var(--surface-2)}
+.actions .grow{flex:1}
+.btn{height:30px;padding:0 14px;border-radius:var(--radius-sm);border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text-2);font:inherit;font-size:12.5px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--off{opacity:.45}
+.btn--danger{background:var(--surface);border-color:oklch(0.78 0.09 25);color:var(--danger)}
+.banner{display:flex;gap:var(--space-3);padding:var(--space-3) var(--space-5);font-size:12.5px;
+  border-bottom:1px solid var(--border)}
+.banner--err{background:var(--danger-quiet);color:var(--danger)}
+.banner--warn{background:var(--warn-quiet);color:oklch(0.42 0.10 70)}
+.banner--ok{background:var(--ok-quiet);color:var(--ok)}
+.banner b{display:block;margin-bottom:2px}
+.banner p{margin:0;color:var(--text-2)}
+.banner--err p{color:oklch(0.40 0.08 25)}
+.banner--warn p{color:oklch(0.38 0.06 70)}
+
+/* destination list */
+.dest{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--border)}
+.dest:last-of-type{border-bottom:0}
+.dest__ico{width:26px;height:26px;border-radius:var(--radius-sm);background:var(--surface-3);
+  display:flex;align-items:center;justify-content:center;font-size:12px;flex:none;color:var(--text-2)}
+.dest__name{font-size:13px;font-weight:600}
+.dest__meta{font-family:var(--font-mono);font-size:11.5px;color:var(--text-3)}
+.dest .grow{flex:1}
+
+/* yaml preview */
+.yaml{background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:var(--space-3);font-family:var(--font-mono);font-size:11.5px;line-height:1.7;color:var(--text-2);
+  white-space:pre;overflow:hidden}
+.yaml .k{color:var(--accent)}
+.yaml .c{color:var(--text-3)}
+.full{grid-column:1 / -1}
+.caption{font-size:12px;color:var(--text-3);margin:var(--space-1) 0 0}
+</style>
+<div class="wrap">
+  <div>
+    <h1>S3 destinations: the selector, and the wizard behind it</h1>
+    <p class="sub">The engine already talks S3. What is missing is a way to declare a destination without
+      hand-editing <span style="font-family:var(--font-mono)">config.yaml</span>, and a way to prove one works
+      before it is saved. Panes read left to right, top to bottom. No pane writes anything until the last one.</p>
+  </div>
+
+  <div class="grid">
+
+    <!-- PANE 1: the selector -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Settings &rsaquo; Storage destinations</div>
+          <div class="card__meta">the global list, shared by every retention plan</div></div>
+        <span class="pill pill--ok"><span class="dot"></span>2 DECLARED</span>
+      </div>
+      <div class="dest">
+        <div class="dest__ico">S3</div>
+        <div><div class="dest__name">offsite_s3</div>
+          <div class="dest__meta">s3 &middot; nas-backups/monthly &middot; us-east-1 &middot; STANDARD_IA</div></div>
+        <span class="grow"></span>
+        <span class="pill pill--ok"><span class="dot"></span>VERIFIED 4m AGO</span>
+        <button class="btn">Verify</button>
+        <button class="btn">Edit</button>
+      </div>
+      <div class="dest">
+        <div class="dest__ico">S3</div>
+        <div><div class="dest__name">cold_vault</div>
+          <div class="dest__meta">s3 &middot; nas-archive/annual &middot; eu-west-1 &middot; GLACIER</div></div>
+        <span class="grow"></span>
+        <span class="pill pill--warn"><span class="dot"></span>READS NEED A RESTORE</span>
+        <button class="btn">Verify</button>
+        <button class="btn">Edit</button>
+      </div>
+      <div class="dest">
+        <div class="dest__ico">HD</div>
+        <div><div class="dest__name">This machine</div>
+          <div class="dest__meta">each backup set's own local_path &middot; always present &middot; not removable</div></div>
+        <span class="grow"></span>
+        <span class="pill pill--ok"><span class="dot"></span>BUILT IN</span>
+      </div>
+      <div class="actions">
+        <button class="btn btn--primary">Add a destination</button>
+        <span class="grow"></span>
+        <span class="card__meta">writes storage_mediums[] in config.yaml</span>
+      </div>
+    </section>
+
+    <!-- PANE 2: endpoint and bucket -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Add a destination</div>
+          <div class="card__meta">nothing is saved until step 4</div></div>
+        <span class="pill pill--run"><span class="dot dot--pulse"></span>STEP 1 OF 4</span>
+      </div>
+      <div class="rail">
+        <span class="s s--now">1 &nbsp;Endpoint</span><span class="arrow">&rsaquo;</span>
+        <span class="s">2 &nbsp;Credentials</span><span class="arrow">&rsaquo;</span>
+        <span class="s">3 &nbsp;Verify</span><span class="arrow">&rsaquo;</span>
+        <span class="s">4 &nbsp;Save</span>
+      </div>
+      <div class="body">
+        <div class="field">
+          <label>Provider</label>
+          <div class="chips">
+            <span class="chip chip--on">Amazon S3</span>
+            <span class="chip">MinIO</span>
+            <span class="chip">Backblaze B2</span>
+            <span class="chip">Wasabi</span>
+            <span class="chip">Other S3-compatible</span>
+          </div>
+          <div class="hint">A preset only fills the endpoint field in. The value is handed to rclone unexamined,
+            because the list of legal regions and endpoints belongs to the provider, not to this product.</div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Destination id</label>
+            <div class="input input--mono">offsite_s3</div>
+            <div class="hint">lower_snake_case; this is the name a retention tier will use</div></div>
+          <div class="field"><label>Region</label>
+            <div class="input input--mono">us-east-1</div></div>
+        </div>
+        <div class="field"><label>Endpoint <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+          <div class="input input--mono input--ghost">leave empty for the AWS endpoint for this region</div></div>
+        <div class="row2">
+          <div class="field"><label>Bucket</label>
+            <div class="input input--mono">nas-backups</div></div>
+          <div class="field"><label>Prefix <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+            <div class="input input--mono">monthly</div></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Storage class</label>
+            <div class="input input--sel input--mono">STANDARD_IA</div></div>
+          <div class="field"><label>Upload verification</label>
+            <div class="input input--sel input--mono">readback</div>
+            <div class="hint">readback re-downloads and re-hashes before the local copy goes</div></div>
+        </div>
+      </div>
+      <div class="actions"><span class="grow"></span>
+        <button class="btn">Cancel</button>
+        <button class="btn btn--primary">Next: credentials</button></div>
+    </section>
+
+    <!-- PANE 3: credentials -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Add a destination &rsaquo; offsite_s3</div>
+          <div class="card__meta">config.yaml has no field a secret fits in, and never will</div></div>
+        <span class="pill pill--run"><span class="dot dot--pulse"></span>STEP 2 OF 4</span>
+      </div>
+      <div class="rail">
+        <span class="s s--done">1 &nbsp;Endpoint</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--now">2 &nbsp;Credentials</span><span class="arrow">&rsaquo;</span>
+        <span class="s">3 &nbsp;Verify</span><span class="arrow">&rsaquo;</span>
+        <span class="s">4 &nbsp;Save</span>
+      </div>
+      <div class="body">
+        <p class="note">Whichever of these you pick, what lands in the configuration file is a
+          <b>reference</b>: a path, a variable name, or a command. The four options are the three the
+          schema already accepts, plus an import that turns a pasted key into the first one.</p>
+
+        <div class="src src--on">
+          <div class="src__head"><span class="radio radio--on"></span>
+            <div><div class="src__name">Paste a key and let me store it<span class="badge">RECOMMENDED</span></div>
+              <div class="src__why">I write it to a 0600 file beside config.yaml and keep only the id, the same
+                thing importing an SSH private key already does.</div></div></div>
+          <div class="src__body">
+            <div class="row2">
+              <div class="field"><label>Access key id</label>
+                <div class="input input--mono">EXAMPLE-NOT-A-REAL-KEY</div></div>
+              <div class="field"><label>Secret access key</label>
+                <div class="input input--mono">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</div></div>
+            </div>
+            <div class="hint">Discarded from this page the moment step 3 answers. It is never logged, never echoed
+              back, and never returned by any read of the configuration.</div>
+          </div>
+        </div>
+
+        <div class="src">
+          <div class="src__head"><span class="radio"></span>
+            <div><div class="src__name">A credentials file already on this machine</div>
+              <div class="src__why">AWS shared-credentials format. rclone opens it, so the secret never enters
+                this process at all.</div></div></div>
+        </div>
+        <div class="src">
+          <div class="src__head"><span class="radio"></span>
+            <div><div class="src__name">An environment variable</div>
+              <div class="src__why">Named here, read at connection time. Nothing about its value is stored.</div></div></div>
+        </div>
+        <div class="src">
+          <div class="src__head"><span class="radio"></span>
+            <div><div class="src__name">A command that prints them</div>
+              <div class="src__why">An argv array, run directly and never through a shell. This is how a secrets
+                manager gets adopted without this product depending on one.</div></div></div>
+        </div>
+      </div>
+      <div class="actions"><span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary">Next: verify</button></div>
+    </section>
+
+    <!-- PANE 4: verification, passing -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Add a destination &rsaquo; offsite_s3</div>
+          <div class="card__meta">a real object, written and read back and deleted</div></div>
+        <span class="pill pill--ok"><span class="dot"></span>READY TO SAVE</span>
+      </div>
+      <div class="rail">
+        <span class="s s--done">1 &nbsp;Endpoint</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--done">2 &nbsp;Credentials</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--now">3 &nbsp;Verify</span><span class="arrow">&rsaquo;</span>
+        <span class="s">4 &nbsp;Save</span>
+      </div>
+      <div class="body">
+        <div class="checks">
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">credentials</span>
+            <span class="chk__out">passed</span><span class="chk__detail">obtained from the imported file</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">reach</span>
+            <span class="chk__out">passed</span><span class="chk__detail">the endpoint answered and holds nas-backups</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">deliverable</span>
+            <span class="chk__out">passed</span><span class="chk__detail">STANDARD_IA can take delivery of an artifact</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">write</span>
+            <span class="chk__out">passed</span><span class="chk__detail">probe object put under monthly/.rclone-manager-preflight/</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">read_back</span>
+            <span class="chk__out">passed</span><span class="chk__detail">read back and compared byte for byte</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">storage_class</span>
+            <span class="chk__out">passed</span><span class="chk__detail">came back as STANDARD_IA, the class asked for</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">verification</span>
+            <span class="chk__out">passed</span><span class="chk__detail">readback is achievable here</span></div>
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">delete</span>
+            <span class="chk__out">passed</span><span class="chk__detail">probe deleted and confirmed gone</span></div>
+        </div>
+      </div>
+      <div class="term">
+        <div><span class="t">00:41:02</span> <span class="i">preflight offsite_s3: resolving credential reference</span></div>
+        <div><span class="t">00:41:03</span> <span class="i">HEAD nas-backups &rarr; 200 (region us-east-1)</span></div>
+        <div><span class="t">00:41:04</span> <span class="i">PUT monthly/.rclone-manager-preflight/2f9c&hellip; (117 bytes, STANDARD_IA)</span></div>
+        <div><span class="t">00:41:05</span> <span class="g">GET matched 117 of 117 bytes</span></div>
+        <div><span class="t">00:41:05</span> <span class="g">DELETE confirmed, nothing left behind</span><span class="cur"></span></div>
+      </div>
+      <div class="actions"><span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary">Next: save</button></div>
+    </section>
+
+    <!-- PANE 5: verification refused -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Add a destination &rsaquo; offsite_s3</div>
+          <div class="card__meta">the refusal path, and nothing was written</div></div>
+        <span class="pill pill--err"><span class="dot"></span>NOT SAVED</span>
+      </div>
+      <div class="banner banner--err">
+        <div><b>The bucket nas-backups does not exist at this endpoint, or this key cannot see it.</b>
+          <p>Steps after this one were never tried, so nothing below claims anything about them. Fix the
+            bucket or the key policy and verify again. Save stays disabled.</p></div>
+      </div>
+      <div class="body">
+        <div class="checks">
+          <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">credentials</span>
+            <span class="chk__out">passed</span><span class="chk__detail">obtained from the imported file</span></div>
+          <div class="chk bad"><span class="chk__ico">&times;</span><span class="chk__step">reach</span>
+            <span class="chk__out">failed(configuration)</span><span class="chk__detail">the endpoint answered but does not hold this bucket</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">deliverable</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">write</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">read_back</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">storage_class</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">verification</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+          <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">delete</span>
+            <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+        </div>
+      </div>
+      <div class="term">
+        <div><span class="t">00:44:11</span> <span class="i">preflight offsite_s3: credential obtained from file reference</span></div>
+        <div><span class="t">00:44:12</span> <span class="e">HEAD nas-backups &rarr; 404 NoSuchBucket</span></div>
+        <div><span class="t">00:44:12</span> <span class="e">reach: failed (configuration)</span></div>
+        <div><span class="t">00:44:12</span> <span class="w">6 later checks skipped: they would prove nothing without a bucket</span><span class="cur"></span></div>
+      </div>
+      <div class="actions"><span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn">Verify again</button>
+        <button class="btn btn--primary btn--off">Next: save</button></div>
+    </section>
+
+    <!-- PANE 6: save -->
+    <section class="card">
+      <div class="card__header">
+        <div><div class="card__title">Add a destination &rsaquo; offsite_s3</div>
+          <div class="card__meta">what gets written, shown before it is written</div></div>
+        <span class="pill pill--run"><span class="dot dot--pulse"></span>STEP 4 OF 4</span>
+      </div>
+      <div class="rail">
+        <span class="s s--done">1 &nbsp;Endpoint</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--done">2 &nbsp;Credentials</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--done">3 &nbsp;Verify</span><span class="arrow">&rsaquo;</span>
+        <span class="s s--now">4 &nbsp;Save</span>
+      </div>
+      <div class="body">
+        <p class="note">Declaring a destination moves nothing on its own. Artifacts arrive here only once a
+          retention tier names it, which is a separate decision with a disclosure of its own.</p>
+        <div class="yaml"><span class="c"># config.yaml, added</span>
+<span class="k">storage_mediums</span>:
+  - <span class="k">id</span>: offsite_s3
+    <span class="k">type</span>: s3
+    <span class="k">region</span>: us-east-1
+    <span class="k">bucket</span>: nas-backups
+    <span class="k">prefix</span>: monthly
+    <span class="k">storage_class</span>: STANDARD_IA
+    <span class="k">credentials</span>:
+      <span class="k">file</span>: /etc/backup-manager/s3_credentials/9b41c7e2 <span class="c"># 0600, written by step 2</span></div>
+        <div class="hint" style="margin-top:var(--space-3)">There is no access_key_id key here and there is no
+          secret_access_key key here. A configuration file carrying either is a parse error, before validation
+          even runs.</div>
+      </div>
+      <div class="actions"><span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary">Save destination</button></div>
+    </section>
+
+    <!-- PANE 7: re-verification of an in-use destination -->
+    <section class="card full">
+      <div class="card__header">
+        <div><div class="card__title">Settings &rsaquo; Storage destinations &rsaquo; offsite_s3</div>
+          <div class="card__meta">re-verifying a destination that artifacts already live on</div></div>
+        <span class="pill pill--err"><span class="dot"></span>VERIFY FAILED &middot; 148 COPIES AFFECTED</span>
+      </div>
+      <div class="banner banner--err">
+        <div><b>I cannot reach offsite_s3, and 148 artifacts have their only confirmed copy there.</b>
+          <p>Nothing has been deleted and nothing will be. A copy I cannot confirm is not a copy I treat as gone:
+            those artifacts read as <span style="font-family:var(--font-mono)">unreachable</span> until this
+            destination answers again, retention will not prune against them, and no source copy anywhere gets
+            reclaimed on the strength of a placement I could not verify. Editing this destination is allowed.
+            Removing it is refused while a copy names it.</p></div>
+      </div>
+      <div class="body">
+        <div class="row2">
+          <div>
+            <div class="checks">
+              <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">credentials</span>
+                <span class="chk__out">passed</span><span class="chk__detail">obtained from the file reference</span></div>
+              <div class="chk bad"><span class="chk__ico">&times;</span><span class="chk__step">reach</span>
+                <span class="chk__out">failed(authentication)</span><span class="chk__detail">the endpoint rejected this key</span></div>
+              <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">deliverable</span>
+                <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+              <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">write</span>
+                <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+              <div class="chk skip"><span class="chk__ico">&ndash;</span><span class="chk__step">read_back</span>
+                <span class="chk__out">skipped</span><span class="chk__detail">never tried</span></div>
+            </div>
+          </div>
+          <div>
+            <p class="note" style="margin-top:0"><b>What is affected, listed rather than counted</b></p>
+            <div class="dest" style="padding-left:0;padding-right:0">
+              <div class="dest__ico">!</div>
+              <div><div class="dest__name">api-server / var-backups</div>
+                <div class="dest__meta">96 artifacts &middot; monthly tier &middot; only copy is here</div></div>
+              <span class="grow"></span><span class="pill pill--err"><span class="dot"></span>UNREACHABLE</span>
+            </div>
+            <div class="dest" style="padding-left:0;padding-right:0">
+              <div class="dest__ico">!</div>
+              <div><div class="dest__name">nas-media / photos</div>
+                <div class="dest__meta">52 artifacts &middot; monthly tier &middot; only copy is here</div></div>
+              <span class="grow"></span><span class="pill pill--err"><span class="dot"></span>UNREACHABLE</span>
+            </div>
+            <p class="hint">Nothing on this list is reported as lost. Unreachable means this deployment currently
+              has no way to ask, which is a different sentence and a different colour from "the copy is gone".</p>
+          </div>
+        </div>
+      </div>
+      <div class="term">
+        <div><span class="t">01:02:44</span> <span class="i">preflight offsite_s3 (requested from settings)</span></div>
+        <div><span class="t">01:02:45</span> <span class="e">HEAD nas-backups &rarr; 403 Forbidden</span></div>
+        <div><span class="t">01:02:45</span> <span class="e">reach: failed (authentication)</span></div>
+        <div><span class="t">01:02:45</span> <span class="w">148 placements on offsite_s3 marked unreachable; no prune will run against them</span></div>
+        <div><span class="t">01:02:45</span> <span class="i">removal of offsite_s3 refused while any copy names it</span><span class="cur"></span></div>
+      </div>
+      <div class="actions">
+        <button class="btn">Edit credentials</button>
+        <button class="btn">Verify again</button>
+        <span class="grow"></span>
+        <button class="btn btn--danger btn--off">Remove destination</button>
+        <span class="card__meta">refused: 148 copies name it</span>
+      </div>
+    </section>
+
+  </div>
+</div>
