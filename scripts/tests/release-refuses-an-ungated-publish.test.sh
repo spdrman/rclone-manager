@@ -401,11 +401,11 @@ fi
 # The script above can be perfect and gate nothing if `publish` does not
 # wait for it, which is one word to delete and invisible in a diff that
 # also touches the job.
-python3 - "$WORKFLOW" "$JOB" <<'PY'
+python3 - "$WORKFLOW" "$JOB" "$SCRIPT" "$REPO_ROOT/.github/workflows/ci.yml" <<'PY'
 import re
 import sys
 
-workflow, job = sys.argv[1], sys.argv[2]
+workflow, job, script, ci = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 lines = open(workflow, encoding="utf-8").read().splitlines()
 
 jobs = []
@@ -478,6 +478,38 @@ check(
     id_token_jobs == ["publish"],
     "publish is still the only job that holds id-token: write, so the signing identity is unchanged",
     f"id-token: write is held by {id_token_jobs}. GitHub builds the Fulcio certificate SAN from the workflow and ref of the run that asks for the token, so a second job minting one signs under an identity the documented `cosign verify` command does not pin, which is #510",
+)
+
+# The name of the check run is a literal in release.yml and the `name:` of
+# a job in ci.yml, in two files, with nothing holding them together. That
+# is exactly the shape of #510, where the signing identity and the trigger
+# that produces it were separate strings and one of them moved: the
+# symptom there was a genuinely signed image reported as unverifiable, and
+# the symptom here is a release refused because the job it looks for was
+# renamed, or worse, a rename that quietly leaves the search looking for
+# nothing.
+gate_name = ""
+m = re.search(r'^\s*GATE = "([^"]+)"\s*$', open(script, encoding="utf-8").read(), re.MULTILINE)
+if m:
+    gate_name = m.group(1)
+
+ci_job_names = re.findall(r'^    name:\s*(.+?)\s*$', open(ci, encoding="utf-8").read(), re.MULTILINE)
+
+check(
+    gate_name != "",
+    f"the job looks for a check run named {gate_name!r}",
+    "the extracted script declares no GATE name, so this test cannot tell which check run it hunts for and the comparison below would be against an empty string",
+)
+check(
+    len(ci_job_names) >= 10,
+    f"ci.yml declares {len(ci_job_names)} job names, so the parser is reading it",
+    f"only {len(ci_job_names)} job names came out of ci.yml, which is fewer than it has ever had: the parser has stopped matching and the comparison below would pass against nothing",
+)
+check(
+    gate_name in ci_job_names,
+    f"and ci.yml has a job called {gate_name!r} to produce it",
+    f"release.yml looks for a check run named {gate_name!r} and no job in ci.yml is called that (the names there are {ci_job_names}). "
+    "GitHub names a check run after the job's `name:`, so the search finds nothing on every commit, and a search that finds nothing refuses every release. Rename one and rename the other",
 )
 
 print()
