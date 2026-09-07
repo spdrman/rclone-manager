@@ -113,6 +113,14 @@ const (
 	keyTransferredSuffix     = ":transferred"
 	keyFailedCollisionSuffix = ":failed:collision"
 	keyFailedCopySuffix      = ":failed:copy"
+
+	// keyCopyUnclaimedSuffix is the one write an attempt makes when its
+	// copy failed and it could not claim the artifact (failUnclaimedCopy).
+	// It gets a suffix of its own for the same reason the two FAILED keys
+	// do: a charge and a verdict are different writes about the same
+	// attempt, and sharing a key would make the second one a replay of the
+	// first.
+	keyCopyUnclaimedSuffix = ":copy:unclaimed"
 )
 
 // TransferParams is what Transfer needs beyond Deps: the artifact being
@@ -298,10 +306,16 @@ func FinalArtifactPath(localDir string, artifact model.ArtifactID) (string, erro
 //     TRANSFERRING claim it would be stamping a verdict from or because the
 //     row moved while the copy ran (failCopy).
 //
-// Nothing is written on any of them. The artifact already has a state,
+// No verdict is written on any of them. The artifact already has a state,
 // another attempt put it there, and that state is the answer both `status`
 // and `artifacts` will be giving an operator, so this one names it rather
 // than claiming a verdict of its own. Issue #570 is what it cost not to.
+//
+// The last of the three does write something, and it is not a verdict: it
+// charges the attempt against the artifact's own FR-22 counter, so a copy
+// no attempt can ever claim reaches FAILED after a bounded number of
+// cycles instead of being retried forever with nothing counting it. See
+// failUnclaimedCopy.
 func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, error) {
 	if d.Journal == nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer needs a Journal")
@@ -385,6 +399,20 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 		return state.Outcome{}, &TransferSupersededError{Artifact: p.Artifact, Current: State(started.Record.State)}
 	}
 
+	// claimed is "this call is the one that started this copy", and it is
+	// what decides whether a failure below is this attempt's to record. It
+	// takes both halves: the journal APPLIED this attempt's write rather
+	// than replaying somebody's earlier one, and the row this attempt found
+	// was not already at TRANSFERRING, so the write it applied is the one
+	// that moved the artifact there.
+	//
+	// The second half is not redundant with the first. A same-state write
+	// (TRANSFERRING -> TRANSFERRING) applies happily under a fresh key, so
+	// without it an attempt that lost the race would be handed a claim on
+	// its next cycle by nothing more than the retry counter moving, which
+	// is precisely what failCopy's bound does move. See failCopy.
+	claimed := started.Applied && State(rec.State) != Transferring
+
 	// Deliberate cleanup of whatever a prior, interrupted attempt left
 	// behind. See the package doc's "Orphaned .partial on restart" section
 	// for why this always runs rather than trusting or resuming it.
@@ -409,7 +437,7 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 			// later retry to resume from. See the package doc.
 			return state.Outcome{}, fmt.Errorf("lifecycle: transfer: cancelled: %w", copyErr)
 		}
-		return failCopy(ctx, d, p, copyErr, started)
+		return failCopy(ctx, d, p, copyErr, claimed, started.Record)
 	}
 
 	// The copy itself succeeded, but ctx may have been cancelled in the
@@ -482,14 +510,13 @@ func failCollision(ctx context.Context, d Deps, p TransferParams, from, path str
 // FAILED transition and returns the underlying error, wrapped so
 // errors.Is/As against copyErr still work.
 //
-// # Only the attempt that made the claim gets to spend it
+// # Only the attempt that started the copy gets to end it
 //
-// started is this call's own TRANSFERRING outcome, and started.Applied is
-// the question this function turns on: did the journal apply THIS attempt's
-// TRANSFERRING write, or did it replay one that was already there? A
-// verdict is only ever recorded for the first, because only the first can
-// honestly say the TRANSFERRING it is writing FAILED from is describing its
-// own copy.
+// claimed is Transfer's own answer to "did this call put the artifact at
+// TRANSFERRING", and it is the question this function turns on. A verdict
+// is only ever recorded for a claimed attempt, because only that attempt
+// can honestly say the TRANSFERRING it is writing FAILED from is describing
+// its own copy.
 //
 // Two live attempts derive the same keys (internal/app's attemptKey is the
 // artifact plus its retry count and nothing in it tells two of them apart),
@@ -516,33 +543,56 @@ func failCollision(ctx context.Context, d Deps, p TransferParams, from, path str
 // between the pin and the check, a verdict is only ever written by the
 // attempt whose own copy it describes.
 //
-// # What the refusals hand back, and what they cost
+// # What a refused verdict hands back
 //
-// Nothing is recorded on either refusal, on purpose. The artifact is not
-// failed, its row already says what it is, and the record an operator acts
-// on is that row plus this error in the FR-23 log. supersededBy and
-// supersededClaim are what turn a refused write into a sentence naming the
+// Nothing is recorded when the write is refused, on purpose. The artifact
+// is not failed, its row already says what it is, and the record an
+// operator acts on is that row plus this error in the FR-23 log.
+// supersededBy is what turns a refused write into a sentence naming the
 // state the artifact is really in.
 //
-// The cost lands on the other side of the same coin and it is deliberate.
-// An attempt resuming after a crash replays its own TRANSFERRING key too,
+// # The claimless side, and why it is bounded
+//
+// An attempt resuming after a crash cannot claim the artifact either,
 // because the key is stable across a resume and that is what makes resuming
-// work at all, so it cannot stamp FAILED either: an artifact whose copy
-// fails permanently after a mid-copy restart sits at TRANSFERRING, retried
-// and logged every cycle, until something moves its retry count. The
-// journal cannot tell that attempt apart from a second live one, nothing in
-// this package can, and of the two ways of being wrong, retrying a copy
-// somebody is watching the log for is the one that cannot lose a backup.
-func failCopy(ctx context.Context, d Deps, p TransferParams, copyErr error, started state.Outcome) (state.Outcome, error) {
-	if !started.Applied {
-		return state.Outcome{}, supersededClaim(ctx, d, p.Artifact, State(started.Record.State), copyErr)
+// work at all. The journal cannot tell that attempt apart from a second
+// live one, nothing in this package can, and refusing the verdict is the
+// side of that which cannot lose a backup.
+//
+// Left there it would trade one silent outage for another: a copy that
+// fails permanently after a mid-copy crash would be retried every cycle,
+// counted by nothing (`status` counts FAILED), and rendered as work in
+// flight by anything reading a TRANSFERRING row. That is issue #570's own
+// complaint wearing different clothes, so failUnclaimedCopy charges the
+// attempt and, once the budget is spent, records the verdict after all.
+func failCopy(ctx context.Context, d Deps, p TransferParams, copyErr error, claimed bool, row state.Record) (state.Outcome, error) {
+	if !claimed {
+		return failUnclaimedCopy(ctx, d, p, copyErr, row)
 	}
+	return recordCopyFailure(ctx, d, p, copyErr, copyErr.Error(), nil)
+}
+
+// recordCopyFailure is the FAILED write both verdict paths make, shared so
+// there is exactly one place that spells out the transition and exactly one
+// reading of a refusal.
+//
+// From is pinned to TRANSFERRING for both of them. A verdict recorded from
+// wherever the row happened to get to would write a failure over an
+// artifact that already has a durable local copy, which is the one move
+// machine.go's table refuses outright, and pinning it is what leaves the
+// journal's CAS as the thing that answers instead. detail is what an
+// operator reads off the row afterwards (internal/app's FailureReason is
+// literally this text), so the two callers word it differently: one
+// describes a copy that failed, the other describes a copy that failed on
+// every one of several attempts none of which could claim the artifact.
+func recordCopyFailure(ctx context.Context, d Deps, p TransferParams, copyErr error, detail string, retry *state.RetryUpdate) (state.Outcome, error) {
 	if _, err := Advance(ctx, d, state.Transition{
 		Artifact: p.Artifact,
 		Key:      p.AttemptKey + keyFailedCopySuffix,
 		From:     string(Transferring),
 		To:       string(Failed),
-		Detail:   copyErr.Error(),
+		Detail:   detail,
+		Retry:    retry,
 	}); err != nil {
 		if superseded := supersededBy(ctx, d, p.Artifact, err, copyErr); superseded != nil {
 			return state.Outcome{}, superseded
@@ -551,6 +601,155 @@ func failCopy(ctx context.Context, d Deps, p TransferParams, copyErr error, star
 	}
 	return state.Outcome{}, fmt.Errorf("lifecycle: transfer: copy failed: %w", copyErr)
 }
+
+// failUnclaimedCopy is what a copy failure gets when no attempt in this
+// call put the artifact at TRANSFERRING, and it is the bound on the claim
+// check rather than an exception to it.
+//
+// # The mechanism is issue #419's, not a new one
+//
+// #419 had the same shape one step further down the pipeline: an attempt
+// that could not COMPLETE has to be charged for it, or an artifact nothing
+// can finish sits in an in-progress state forever with nothing counting it.
+// Its answer was to count the attempt on the journal row's own FR-22
+// counter and hand the artifact over once the budget is spent, and
+// quarantine.go's package doc asked for that counter to be shared rather
+// than duplicated, so this shares it: the charge is a same-state write
+// (TRANSFERRING -> TRANSFERRING, which Validate allows as an idempotent
+// no-op) carrying a RetryUpdate and the reason.
+//
+// Moving the counter is load-bearing twice over. It is what makes the next
+// cycle a different logical attempt, so its charge gets a key of its own
+// instead of replaying this one, and it is what an operator reads on the
+// row while this is going on (state.Record.LastError).
+//
+// # Why the verdict is FAILED here where #419 chose QUARANTINED
+//
+// #419 argued FAILED means "a permanent, non-retryable error" and that
+// recording a transient one there both lies and strands the artifact. That
+// argument does not reach this path, because the classification has already
+// happened: retry.Do retried every Transient failure inside this attempt,
+// so a copy error that reaches failCopy at all is one this product has
+// already called non-retryable. FAILED is what that means, `status` counts
+// it, and retryfailed.go is the operator's way back. TRANSFERRING ->
+// QUARANTINED is not even a declared edge, and inventing one to report a
+// permanent copy failure would say something less true, not more.
+//
+// # Two conditions, and why the second one is not decoration
+//
+// The verdict needs the budget spent AND at least one earlier charge
+// recorded during this same occupancy of TRANSFERRING. The budget alone is
+// not enough, because RetryCount is shared: an artifact an operator has
+// released from quarantine a few times arrives here with the counter
+// already past the budget, and on the budget alone its very first claimless
+// failure would write a verdict over an attempt that may still be copying,
+// which is the exact burial the claim check exists to prevent. Dating this
+// occupancy's own charges against it costs one query and makes a
+// single-cycle verdict structurally impossible.
+//
+// What is left is a winner that is still copying after the whole budget has
+// been spent on consecutive cycles, and that one is accepted with its eyes
+// open: an artifact no attempt has been able to claim for that many cycles
+// running is not a healthy transfer (each of those cycles cleared the
+// .partial and started again over the same rclone temp file, see the
+// adapter's own note on why two copies of one object share it), and leaving
+// it invisible is the defect this bound exists to close. A winner that
+// FINISHES before then can never be buried, because the FAILED write is
+// still pinned to From TRANSFERRING and the journal's CAS refuses it.
+func failUnclaimedCopy(ctx context.Context, d Deps, p TransferParams, copyErr error, row state.Record) (state.Outcome, error) {
+	attempt := row.RetryCount + 1
+	budget := copyClaimBudget(p.Policy)
+	reason := copyErr.Error()
+	charged := fmt.Sprintf(
+		"the copy failed and this attempt could not claim %s (attempt %d of %d): %s",
+		p.Artifact, attempt, budget, reason)
+
+	if attempt >= budget && chargedThisTransferring(ctx, d, p.Artifact) {
+		return recordCopyFailure(ctx, d, p, copyErr,
+			fmt.Sprintf(
+				"the copy failed on %d consecutive attempts and none of them could claim this artifact's TRANSFERRING record, so this is recorded as FAILED rather than left in progress with nothing counting it: %s",
+				attempt, reason),
+			&state.RetryUpdate{Count: attempt, LastError: charged})
+	}
+
+	if _, err := Advance(ctx, d, state.Transition{
+		Artifact: p.Artifact,
+		Key:      p.AttemptKey + keyCopyUnclaimedSuffix,
+		From:     string(Transferring),
+		To:       string(Transferring),
+		Detail:   charged,
+		Retry:    &state.RetryUpdate{Count: attempt, LastError: charged},
+	}); err != nil {
+		if superseded := supersededBy(ctx, d, p.Artifact, err, copyErr); superseded != nil {
+			return state.Outcome{}, superseded
+		}
+		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: copy failed (%v), and charging the attempt also failed: %w", copyErr, err)
+	}
+
+	superseded := supersededClaim(ctx, d, p.Artifact, State(row.State), copyErr)
+	superseded.Attempt, superseded.Budget = attempt, budget
+	return state.Outcome{}, superseded
+}
+
+// chargedThisTransferring reports whether this artifact has already been
+// charged for a claimless copy failure since it last genuinely entered
+// TRANSFERRING.
+//
+// The two queries answer exactly the two halves. LastTransition finds the
+// most recent TRANSFERRING -> TRANSFERRING edge, which only this file ever
+// writes, and LastEnteredAt deliberately ignores same-state writes (see its
+// own doc), so it dates the occupancy rather than the charges inside it.
+//
+// Every failure answers "no", which is the safe direction here: a journal
+// that cannot answer must not be the reason an artifact gets a verdict
+// written over a copy that may still be running. The artifact keeps being
+// charged, and an operator reads the reason off the row either way.
+func chargedThisTransferring(ctx context.Context, d Deps, artifact model.ArtifactID) bool {
+	last, ok, err := d.Journal.LastTransition(ctx, artifact, string(Transferring), string(Transferring))
+	if err != nil || !ok {
+		return false
+	}
+	entered, ok, err := d.Journal.LastEnteredAt(ctx, artifact, string(Transferring))
+	if err != nil {
+		return false
+	}
+	// A charge with nothing to date it against still happened. The row can
+	// carry a state whose entry predates its transition history (a
+	// truncated log, a row rebuilt by reconciliation), and reading that as
+	// "never charged" would be the one shape that never reaches a verdict.
+	if !ok {
+		return true
+	}
+	return !last.Before(entered)
+}
+
+// copyClaimBudget is how many consecutive charged attempts an artifact gets
+// before a claimless copy failure is recorded as FAILED.
+//
+// It is the operator's own retry ceiling, from the policy this step was
+// already handed, for the reason #419 gives for deriving its stall budget
+// from the same number: there is exactly one answer in this product to "how
+// many times is this worth trying", it belongs to the operator, and a second
+// one invented here would be the number that did not change when they
+// changed theirs.
+//
+// The floor is where this differs, and it has to. #419 reads an unbounded
+// policy (MaxAttempts 0) as no tolerance at all, because reaching an
+// operator immediately is the safe direction for a verification nobody can
+// finish. Here the harm runs the other way: a verdict written on the first
+// claimless failure is the burial this whole path exists to prevent, so a
+// policy that declines to bound anything, or bounds it below two, gets two.
+func copyClaimBudget(p retry.Policy) int {
+	if p.MaxAttempts > minCopyClaimBudget {
+		return p.MaxAttempts
+	}
+	return minCopyClaimBudget
+}
+
+// minCopyClaimBudget is two because one is the number that would put this
+// back where it started: a single claimless failure writing a verdict over
+// an attempt that may still be copying.
+const minCopyClaimBudget = 2
 
 // TransferSupersededError reports that a transfer attempt stopped speaking
 // for its artifact partway through: the journal has the artifact somewhere
@@ -586,6 +785,17 @@ type TransferSupersededError struct {
 	// It is unwrapped, so errors.Is and errors.As against a transport
 	// error still work through this.
 	Cause error
+
+	// Attempt and Budget are the bookkeeping from the one path that
+	// charges the artifact for this, a copy that failed under an attempt
+	// which could not claim it (failUnclaimedCopy). They are zero
+	// everywhere else, because the other producers record nothing at all
+	// and so have nothing to count. Both are here for the same reason
+	// VerificationStalledError carries the same pair: an operator reading
+	// "this attempt did not speak for the artifact" needs to know whether
+	// it is the first one or the last one before a verdict.
+	Attempt int
+	Budget  int
 }
 
 // Error says what this attempt saw, what it did NOT record, and what the
@@ -604,6 +814,12 @@ func (e *TransferSupersededError) Error() string {
 		return fmt.Sprintf(
 			"lifecycle: transfer: refusing to copy %s: this attempt was already recorded and the journal has since moved the artifact to %q, so a copy now would write over an artifact this attempt no longer speaks for",
 			e.Artifact, e.Current,
+		)
+	}
+	if e.Attempt > 0 {
+		return fmt.Sprintf(
+			"lifecycle: transfer: this attempt no longer speaks for %s (%v), so nothing was recorded as FAILED: the journal holds the artifact at %q, and this attempt is charged against its retry budget (attempt %d of %d, at which a copy that keeps failing is recorded as FAILED)",
+			e.Artifact, e.Cause, e.Current, e.Attempt, e.Budget,
 		)
 	}
 	return fmt.Sprintf(
