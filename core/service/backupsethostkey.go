@@ -85,6 +85,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -280,11 +281,34 @@ func pinnedHostKeys(path, addr string, offered ssh.PublicKey) (matched bool, wan
 // runs before the first byte of the edit is persisted. Proceeding on "I
 // could not check" is how a set ends up trusting a new key because its old
 // one was unreadable, which is the one outcome an attacker would choose.
+//
+// It says WHY without saying WHERE. The whole error used to be interpolated
+// in, and every error a failed open or a failed parse produces carries the
+// path in it, so a refusal an operator was meant to act on was also handing
+// out this process's own filesystem layout. That layout is deliberately not
+// on the wire anywhere else: SSHKeyRef's own doc makes the rule, and the
+// HTTP layer echoes this sentence verbatim on the strength of it being
+// built from this package's own text and the caller's own values.
 func unreadableTrustRefusal(err error) error {
 	return fmt.Errorf(
-		"%w: what this backup set trusts now could not be read (%v), so nothing here can tell a rebuilt host from an impersonated one. Check the fingerprint against the host itself, then re-send with acknowledge_host_key_change to proceed",
-		ErrHostKeyChangeNotAcknowledged, err,
+		"%w: what this backup set trusts now could not be read (%s), so nothing here can tell a rebuilt host from an impersonated one. Check the fingerprint against the host itself, then re-send with acknowledge_host_key_change to proceed",
+		ErrHostKeyChangeNotAcknowledged, describeTrustReadFailure(err),
 	)
+}
+
+// describeTrustReadFailure names the reason a trust file could not be read
+// in the three shapes an operator can act on, and nothing else. Anything it
+// cannot classify falls to the general sentence rather than to the error's
+// own text, because the error's own text is where the path is.
+func describeTrustReadFailure(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "the file this set names as its known_hosts is not there"
+	case errors.Is(err, fs.ErrPermission):
+		return "this process is not allowed to read the file this set names as its known_hosts"
+	default:
+		return "the file this set names as its known_hosts is not a readable known_hosts file"
+	}
 }
 
 // hostKeyChangeRefusal is the refusal itself: what is on record at addr,

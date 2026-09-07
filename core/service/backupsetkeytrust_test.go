@@ -340,6 +340,14 @@ func TestUpdateBackupSet_UnreadableTrustOnRecordIsRefused(t *testing.T) {
 	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
 	}
+	// The whole error used to be interpolated into this sentence, and
+	// every error a failed open produces carries the path in it, so a
+	// refusal the HTTP layer echoes verbatim was also handing out this
+	// process's own filesystem layout. SSHKeyRef's doc makes the rule that
+	// a caller outside core/ never learns it.
+	if msg := err.Error(); strings.Contains(msg, knownHostsPath) || strings.Contains(msg, filepath.Dir(configPath)) {
+		t.Errorf("the refusal names this deployment's own filesystem layout:\n%s", msg)
+	}
 
 	// The control, because a refusal with no way past it would be a
 	// refusal rather than an acknowledgement: saying so out loud works.
