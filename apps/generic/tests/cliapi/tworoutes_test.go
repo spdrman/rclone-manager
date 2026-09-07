@@ -1752,3 +1752,140 @@ func TestAFirstCreateFromTheCLICannotLandBehindTheSetupFlow(t *testing.T) {
 		}
 	})
 }
+
+// post sends one authenticated, CSRF-carrying JSON request, exactly the
+// way the Web UI's own fetch does, and hands back the status and the raw
+// body so a caller can decode or complain about whichever it gets.
+func (b *browser) post(path string, payload any) (int, []byte) {
+	b.t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		b.t.Fatalf("encoding a %s body: %v", path, err)
+	}
+	req, err := http.NewRequest(http.MethodPost, b.base+path, bytes.NewReader(raw))
+	if err != nil {
+		b.t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(local.CSRFHeaderName, b.csrf())
+	resp, err := b.client.Do(req)
+	if err != nil {
+		b.t.Fatalf("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
+}
+
+// importSSHKey is the wizard's first write: key material in, a reference
+// back, and nothing but the reference used afterwards.
+func (b *browser) importSSHKey(keyPath string) string {
+	b.t.Helper()
+	pem, err := os.ReadFile(keyPath)
+	if err != nil {
+		b.t.Fatalf("ReadFile(%s): %v", keyPath, err)
+	}
+	code, body := b.post("/api/v1/ssh-keys", apicontract.ImportSSHKeyRequest{PrivateKeyPEM: string(pem)})
+	if code != http.StatusCreated && code != http.StatusOK {
+		b.t.Fatalf("importing a key into the setup flow returned %d: %s", code, body)
+	}
+	var answer apicontract.ImportSSHKeyResponse
+	if err := json.Unmarshal(body, &answer); err != nil {
+		b.t.Fatalf("decoding the imported key: %v\n%s", err, body)
+	}
+	if answer.ID == "" {
+		b.t.Fatalf("the setup flow imported a key and named no id: %s", body)
+	}
+	return answer.ID
+}
+
+// TestTheWizardsReadOnlyChoiceSurvivesTheFirstRunSave drives the setup
+// flow the way a browser does and reads the result back off the engine.
+//
+// `completeFirstRun` assembles its service.CreateBackupSetRequest field by
+// field and dropped `read_only`, so an operator who ticked "read only" in
+// the wizard on a fresh install got a set that was not read only, with
+// nothing anywhere saying so. Read-only is the declaration that stops this
+// manager ever deleting the remote copies (#282, #316) and the wizard
+// offers it as a safety choice, so a silent discard leaves somebody
+// believing they asked for the safer posture when they did not.
+//
+// The exhaustive guard is apps/common/webhost's
+// TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven, which walks
+// backupSetSpec itself and fails on any field with no row, because a
+// hand-built request that omits one field is a shape that omits more. What
+// this adds is the chain that guard cannot reach: the real binary, the real
+// router, a real configuration written to disk, activation in the same
+// process, and the answer the Web UI would then render. That is the level
+// the discrepancy was found at, so it is a level worth being able to fail
+// at.
+func TestTheWizardsReadOnlyChoiceSurvivesTheFirstRunSave(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real first-run engine")
+	}
+	live := startFirstRunStack(t, buildWeb(t, repoRoot(t)))
+	view := signIn(t, live.engineURL)
+
+	spec := apicontract.BackupSetSpec{
+		SourceName:         "api",
+		Name:               "var-backups",
+		Host:               "source.example.internal",
+		Port:               2222,
+		User:               "backupuser",
+		SSHKeyID:           view.importSSHKey(writePrivateKey(t)),
+		KnownHostsLine:     aKnownHostsLine,
+		RemotePath:         "/srv/backups",
+		LocalPath:          filepath.Join(t.TempDir(), "backups"),
+		Include:            []string{"*.dump"},
+		CompletionStrategy: "rename",
+		StaleAfterSeconds:  172800,
+		// The tick under test. Everything above it is here so the save is
+		// a real one rather than a minimal one.
+		ReadOnly: true,
+	}
+
+	code, body := view.post("/api/v1/system/first-run", spec)
+	if code != http.StatusCreated {
+		t.Fatalf("the setup flow refused a valid submission with %d: %s\nengine log:\n%s", code, body, live.log())
+	}
+	var saved apicontract.CompleteFirstRunResponse
+	if err := json.Unmarshal(body, &saved); err != nil {
+		t.Fatalf("decoding the setup response: %v\n%s", err, body)
+	}
+	if saved.RestartRequired {
+		t.Fatalf("the instance could not activate against the configuration it just wrote, so what it serves below is not what this test is about:\n%s", live.log())
+	}
+	if !saved.BackupSet.ReadOnly {
+		t.Errorf("the wizard's own 201 says the set it just created is not read-only, though that is what was asked for:\n%s", body)
+	}
+
+	// And what the Web UI would render, off the engine this process is now
+	// serving, with nothing restarted.
+	sets := view.backupSetsOrUnconfigured()
+	if !contains(sets, "api/var-backups") {
+		t.Fatalf("the setup flow reported success and the engine does not serve the set: %v\nengine log:\n%s", sets, live.log())
+	}
+	served := view.backupSet(t, "api/var-backups")
+	if !served.ReadOnly {
+		t.Errorf("an operator ticked read-only in the wizard and the engine serves a set that will delete remote copies. That declaration is the whole of what read-only is for, and nothing told them it had been dropped.\nasked for: %+v\nserving:   %+v", spec, served)
+	}
+	// A few fields beside it, so a fix that hard-coded read_only true and
+	// dropped something else would not pass here either.
+	if served.RemotePath != spec.RemotePath || served.Port != spec.Port || served.CompletionStrategy != spec.CompletionStrategy || served.StaleAfterSeconds != spec.StaleAfterSeconds {
+		t.Errorf("the engine is serving a set that differs from the one the wizard submitted\nasked for: %+v\nserving:   %+v", spec, served)
+	}
+}
+
+// backupSet reads one set out of what the engine serves, by id.
+func (b *browser) backupSet(t *testing.T, id string) apicontract.BackupSet {
+	t.Helper()
+	var answer apicontract.ListBackupSetsResponse
+	b.get("/api/v1/backup-sets", &answer)
+	for _, bs := range answer.BackupSets {
+		if bs.ID == id {
+			return bs
+		}
+	}
+	t.Fatalf("the engine serves no backup set %s", id)
+	return apicontract.BackupSet{}
+}

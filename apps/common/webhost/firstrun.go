@@ -212,6 +212,18 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 	// field a contract declares and an endpoint ignores is worse than one
 	// it never declared, because a client has no way to find out. See
 	// core/service.FirstRun.CreateInitialConfig's own doc.
+	//
+	// Every OTHER field of that spec has to arrive on the request below,
+	// and this used to drop read_only. An operator who ticked "read only"
+	// in the wizard on a fresh install got a set that was not read only,
+	// with nothing saying so, which is the wrong direction for a mistake
+	// to fall in: read-only is what stops this manager ever deleting the
+	// remote copies (#282, #316) and the wizard offers it as a safety
+	// choice. A request assembled field by field, beside a decoder that
+	// fills in the whole spec, is a shape that loses a field every time
+	// one is added, so firstRunSpecCarriage (firstrun_test.go) walks
+	// backupSetSpec itself and fails on any field with no row rather than
+	// on the field somebody happened to notice.
 	set, err := h.firstRun.CreateInitialConfig(r.Context(), service.CreateBackupSetRequest{
 		SourceName:         body.SourceName,
 		Name:               body.Name,
@@ -228,6 +240,7 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 		StableFor:          secondsToDuration(body.StableForSeconds),
 		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
 		Disabled:           body.Disabled,
+		ReadOnly:           body.ReadOnly,
 		Actor:              actorFromContext(r.Context()),
 	})
 	if err != nil {
