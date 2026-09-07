@@ -938,8 +938,8 @@ func TestTransferRefusesWhenItsTransferringKeyReplaysOverAnArtifactThatMovedOn(t
 
 	_, err := Transfer(context.Background(), deps, params)
 
-	superseded, ok := AsTransferSuperseded(err)
-	if !ok {
+	var superseded *TransferSupersededError
+	if !errors.As(err, &superseded) {
 		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
 	}
 	if superseded.Current != RemoteRetained {
@@ -984,8 +984,8 @@ func TestCopyFailureAfterAnotherAttemptFinishedTheArtifactIsReportedNotClaimed(t
 		Artifact: artifact, LocalDir: dir, AttemptKey: "attempt-1", Policy: fastPolicy(),
 	})
 
-	superseded, ok := AsTransferSuperseded(err)
-	if !ok {
+	var superseded *TransferSupersededError
+	if !errors.As(err, &superseded) {
 		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
 	}
 	if superseded.Current != RemoteRetained {
@@ -1002,5 +1002,169 @@ func TestCopyFailureAfterAnotherAttemptFinishedTheArtifactIsReportedNotClaimed(t
 	}
 	if j.currentState() != string(RemoteRetained) {
 		t.Fatalf("journal state = %q, want %q: a durable, retained artifact must not be stamped FAILED by an attempt that lost", j.currentState(), RemoteRetained)
+	}
+
+	// Which refusal fired matters as much as the fact one did. This attempt
+	// pinned From to TRANSFERRING, so the transition table let the move
+	// through (TRANSFERRING -> FAILED is a legal edge) and the write reached
+	// the journal, where the row's own state turned it down. That is the
+	// journal's CAS, one of the two independent refusals standing between a
+	// losing attempt and an artifact that already has a durable local copy,
+	// and a fix that stopped asking would take it out of the path
+	// altogether. The collision test above holds the other one.
+	if failed := j.transitionsTo(Failed); len(failed) != 1 {
+		t.Fatalf("%d FAILED transitions reached the journal, want 1: the CAS has to be the thing that refuses this one", len(failed))
+	}
+}
+
+// TestCopyFailureDoesNotStampFailedOverAWinnerThatIsStillCopying is the
+// ordering the field report actually describes, and the one pinning From to
+// TRANSFERRING does not cover on its own.
+//
+// The loser fails in milliseconds, because the winner renamed its .partial
+// out from under it, while the winner is still copying gigabytes. So the row
+// is exactly where the loser's FAILED write expects it: TRANSFERRING is a
+// legal predecessor of FAILED and the journal's CAS matches, and the verdict
+// lands on a winner that is mid-flight. What comes of that is the artifact
+// ending FAILED with a complete good copy sitting at .partial for the next
+// attempt to delete, which is the sentence #570 was filed about.
+//
+// The two attempts share a key because internal/app's attemptKey is the
+// artifact plus its retry count and nothing in it tells two live attempts
+// apart, so the loser's TRANSFERRING write is a replay of the winner's. That
+// replay is the whole signal: an attempt that did not put the artifact at
+// TRANSFERRING itself has no claim to stamp a verdict from it.
+func TestCopyFailureDoesNotStampFailedOverAWinnerThatIsStillCopying(t *testing.T) {
+	artifact := testArtifact(t)
+	dir := t.TempDir()
+
+	j := newFakeTransferJournal(artifact, "backups/backup-2026-08-27.dump.zst")
+
+	// The winning attempt recorded TRANSFERRING under the shared key and is
+	// still moving bytes, so the row sits there for as long as its copy
+	// takes. It goes through Advance rather than forceState because a
+	// winner that could not have reached this state legally would prove
+	// nothing about a loser arriving behind it.
+	if _, err := Advance(context.Background(), Deps{Journal: j}, state.Transition{
+		Artifact: artifact,
+		Key:      "attempt-1" + keyTransferringSuffix,
+		From:     string(Discovered),
+		To:       string(Transferring),
+	}); err != nil {
+		t.Fatalf("seeding the winning attempt's TRANSFERRING: %v", err)
+	}
+
+	copyErr := transport.NewError(transport.NotFound, "copy_to_local",
+		errors.New("rename backup-2026-08-27.dump.zst.partial.ac832174.partial: no such file or directory"))
+	tr := &fakeTransport{copyFunc: func(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+		return transport.TransferResult{}, copyErr
+	}}
+
+	_, err := Transfer(context.Background(), Deps{Journal: j, Transport: tr}, TransferParams{
+		Artifact: artifact, LocalDir: dir, AttemptKey: "attempt-1", Policy: fastPolicy(),
+	})
+
+	var superseded *TransferSupersededError
+	if !errors.As(err, &superseded) {
+		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
+	}
+	if superseded.Current != Transferring {
+		t.Errorf("superseded.Current = %q, want %q: the refusal has to name where the artifact actually is", superseded.Current, Transferring)
+	}
+	if !errors.Is(err, copyErr) {
+		t.Error("the copy failure is no longer reachable through the returned error; it is the only account of what this attempt actually saw")
+	}
+
+	// The verdict is the assertion. A FAILED here is a verdict about an
+	// artifact somebody else is still copying, and it also blocks the
+	// winner's own TRANSFERRED, which is how the good copy ends up
+	// abandoned at .partial.
+	if j.currentState() != string(Transferring) {
+		t.Fatalf("journal state = %q, want %q: a losing attempt must not stamp a verdict over a winner that is still copying", j.currentState(), Transferring)
+	}
+	if failed := j.transitionsTo(Failed); len(failed) != 0 {
+		t.Fatalf("recorded %d FAILED transitions, want 0: an attempt with no claim on the artifact must not even ask", len(failed))
+	}
+}
+
+// TestFinalNameCollisionOnAnArtifactAnotherAttemptFinishedIsReportedNotClaimed
+// covers the likelier half of #570, and the half the collision path was
+// still emitting the issue's own sentence on.
+//
+// A winning attempt renames its .partial to the final name, so an attempt
+// arriving after it finished hits the collision guard before it ever reaches
+// the TRANSFERRING write. failCollision declares From = whatever the row
+// says, and for an artifact already carried to REMOTE_RETAINED the refusal
+// therefore comes from machine.go's table rather than from the journal's
+// CAS. Both are refusals of the same shape and only one of them used to be
+// classified, so what an operator got was "(and recording FAILED also
+// failed: ... REMOTE_RETAINED -> FAILED is not a legal transition)" over an
+// artifact that is durable and retained.
+func TestFinalNameCollisionOnAnArtifactAnotherAttemptFinishedIsReportedNotClaimed(t *testing.T) {
+	artifact := testArtifact(t)
+	dir := t.TempDir()
+
+	j := newFakeTransferJournal(artifact, "backups/backup-2026-08-27.dump.zst")
+	// The winning attempt finished: the artifact is durable and retained
+	// and its bytes are sitting at the final name.
+	j.forceState(RemoteRetained)
+	final, err := finalPath(dir, artifact)
+	if err != nil {
+		t.Fatalf("finalPath: %v", err)
+	}
+	knownGood := []byte("the winning attempt's copy")
+	if err := os.WriteFile(final, knownGood, 0o600); err != nil {
+		t.Fatalf("seeding the winner's final-name file: %v", err)
+	}
+
+	tr := &fakeTransport{copyFunc: writingCopy([]byte("must never be written"))}
+	_, err = Transfer(context.Background(), Deps{Journal: j, Transport: tr}, TransferParams{
+		Artifact: artifact, LocalDir: dir, AttemptKey: "attempt-2",
+	})
+
+	var superseded *TransferSupersededError
+	if !errors.As(err, &superseded) {
+		t.Fatalf("Transfer error = %v, want a *TransferSupersededError", err)
+	}
+	if superseded.Current != RemoteRetained {
+		t.Errorf("superseded.Current = %q, want %q", superseded.Current, RemoteRetained)
+	}
+	if strings.Contains(err.Error(), "recording FAILED also failed") {
+		t.Errorf("the refused write is being reported as the outcome, which is #570's own sentence: %v", err)
+	}
+	if !strings.Contains(err.Error(), string(RemoteRetained)) {
+		t.Errorf("the error never names the state the artifact is in: %v", err)
+	}
+
+	// The collision itself stays reachable: it is the only thing that says
+	// which file an operator has to go and look at.
+	var collision *FinalNameCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("err = %v, want a *FinalNameCollisionError still reachable through it", err)
+	}
+	if collision.Path != final {
+		t.Errorf("collision.Path = %q, want %q", collision.Path, final)
+	}
+
+	// FR-30's floor, twice. The artifact has a durable local copy, so
+	// nothing may record a failure over it, and nothing may touch the file.
+	if j.currentState() != string(RemoteRetained) {
+		t.Fatalf("journal state = %q, want %q: a durable, retained artifact must not be stamped FAILED", j.currentState(), RemoteRetained)
+	}
+	if failed := j.transitionsTo(Failed); len(failed) != 0 {
+		t.Fatalf("%d FAILED transitions reached the journal, want 0: the transition table has to refuse this one before the journal is touched at all", len(failed))
+	}
+	if err := Validate(RemoteRetained, Failed); err == nil {
+		t.Fatal("REMOTE_RETAINED -> FAILED is legal again; that refusal is one of the two things standing between a losing attempt and an artifact that is already durable")
+	}
+	if tr.callCount() != 0 {
+		t.Errorf("CopyToLocal was called %d time(s); a collision must be refused before any copy is attempted", tr.callCount())
+	}
+	got, readErr := os.ReadFile(final)
+	if readErr != nil {
+		t.Fatalf("reading the final-name file after the refusal: %v", readErr)
+	}
+	if string(got) != string(knownGood) {
+		t.Fatalf("the winner's file was modified: got %q, want %q", got, knownGood)
 	}
 }
