@@ -54,12 +54,14 @@ const FALLBACK_POLL_MS = 10_000;
 
 /** How many events one poll asks for per set.
  *
- * The contract's own ceiling, deliberately, and it is the number that
- * keeps the cursor whole. The service hands back the OLDEST slice above
- * the cursor and says when a limit cut it short, so a smaller number is
- * safe but means catching up over several polls; asking for the ceiling
- * means the answer is never cut short at all, because the service's own
- * buffer holds no more than this. */
+ * The contract's own ceiling, deliberately. Every limit is safe now that
+ * the service hands back the OLDEST slice above the cursor and says when
+ * one cut a reading short, so this is about how many polls catching up
+ * takes rather than about whether anything is lost. The ceiling makes
+ * that at most two: a strip reads the set's own buffer and the
+ * deployment-wide one, each bounded at this size, so only a reading with
+ * both of them full above the cursor is cut short at all, and the service
+ * asks for the busy cadence when it is. */
 const POLL_LIMIT = 200;
 
 /**
@@ -107,11 +109,14 @@ export function mergeActivity(previous: SetActivity | undefined, next: SetActivi
  * that says what was happening the last time the engine was up.
  *
  * The epoch is the answer that cannot be fooled, because it is not a
- * counter and never climbs back past its old value. The sequence
- * comparison beside it is the fallback for a service too old to send one,
- * and it is sound for the same reason: within one process the highest
- * sequence only grows, so a reading below a cursor that service itself
- * handed out is a rewind no live feed can produce.
+ * counter at all: a counter climbs, so a busy new process eventually
+ * passes the number the dead one left a cursor at and starts looking
+ * live again while its early lines have already been skipped. A name
+ * minted per process cannot do that. The sequence comparison beside it
+ * is the fallback for a service too old to send one, and within its own
+ * window it is sound: the highest sequence only grows inside one
+ * process, so a reading below a cursor that service itself handed out is
+ * a rewind no live feed can produce.
  */
 export function feedRestarted(previous: { epoch: string | null; cursor: number }, next: LiveActivity): boolean {
   if (next.epoch && previous.epoch) return next.epoch !== previous.epoch;
@@ -145,9 +150,10 @@ export function DashboardActivity({ sets }: { sets: BackupSet[] | null }) {
   // refreshing".
   const cursor = useRef(0);
 
-  // The process the cursor above belongs to. It rides on a ref for the
-  // same reason the cursor does, and it is read before the cursor is
-  // used rather than after: see feedRestarted.
+  // The process the cursor above belongs to, on a ref for the same reason
+  // the cursor is: it changes on every poll and nothing renders from it.
+  // A cursor without one is a number with no idea which counter it came
+  // from, which is the whole of the bug this pairs with.
   const epoch = useRef<string | null>(null);
 
   const live = useAsync<LiveActivity>(

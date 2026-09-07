@@ -17,6 +17,13 @@
  * holds the number still for a long time, and that distinction is the
  * whole reason an operator is looking at this panel.
  *
+ * Which is exactly why the gradient stops when the reading does. "The
+ * process is alive" is a claim about now, and while the poll behind a
+ * reading is failing that is the one thing nobody knows. The `stale` prop
+ * is how this strip is told, and it takes down the gradient, the pulse,
+ * the spinner, the byte rate and the time remaining with it. The fraction
+ * stays: it was measured, and it has not stopped being what was measured.
+ *
  * # It says what it counts
  *
  * "26 of 41 artifacts" rather than "63%". The service reports two counts
@@ -285,6 +292,34 @@ function pill(set: BackupSet, activity: SetActivity, stale: boolean): { tone: St
 }
 
 /**
+ * What the bar is coloured by, which is what the pass actually did rather
+ * than what its failure count happens to be.
+ *
+ * Four answers, and three of them used to collapse into one. A pass that
+ * failed at reconcile counts no failures, so it drew ok-toned and green;
+ * a pass somebody stopped mid-walk drew the same, with a bar sitting at
+ * whatever fraction it reached; and a reading that stopped refreshing
+ * kept sweeping, which is the animation whose whole job is to say the
+ * process is alive.
+ *
+ * Stopped is set inline rather than by class because the design system
+ * has no warn-toned fill and adding one for a single caller is a rule
+ * that exists for nobody else.
+ */
+function barFill(activity: SetActivity, live: boolean, stale: boolean): { className: string; style: CSSProperties } {
+  if (live) return { className: " activity-bar__fill--busy", style: {} };
+  // A pass that was in flight when the readings stopped is not a
+  // finished one. It keeps the accent a moving bar wears and loses only
+  // the sweep, which was the part claiming it is still moving.
+  if (activity.active && stale) return { className: "", style: {} };
+  if (activity.failures > 0 || activity.outcome === "failed") {
+    return { className: " activity-bar__fill--danger", style: {} };
+  }
+  if (activity.outcome === "stopped") return { className: "", style: { background: "var(--warn)" } };
+  return { className: " activity-bar__fill--ok", style: {} };
+}
+
+/**
  * The sentence under the bar: what is happening, named concretely.
  *
  * Never a spinner over the word "Working". An operator who can read
@@ -336,14 +371,14 @@ function stepSentence(activity: SetActivity, stale: boolean): { lead: string; su
     return {
       lead: fraction ? "Stopped after " + fraction : "Stopped",
       subject: null,
-      trail: "this pass did not finish \u00b7 the log below says where it stopped"
+      trail: "this pass did not finish · the log below says where it stopped"
     };
   }
   if (activity.outcome === "stopped") {
     return {
       lead: fraction ? "Stopped after " + fraction : "Stopped",
       subject: null,
-      trail: "this pass was stopped before it finished \u00b7 the rest was not attempted"
+      trail: "this pass was stopped before it finished · the rest was not attempted"
     };
   }
   if (activity.finishedAt) {
@@ -499,15 +534,7 @@ export function ActivityStrip({
   // something this cursor had not reached; oldestSequence covers the
   // page's own window, which is smaller still.
   const dropped = activity.dropped || activity.oldestSequence > 1;
-
-  const failed = activity.failures > 0 || activity.outcome === "failed";
-  const fillTone = live ? "" : failed ? " activity-bar__fill--danger" : activity.outcome === "stopped" ? "" : " activity-bar__fill--ok";
-  // A stopped pass is neither an alarm nor a clean finish, and there is
-  // no warn-toned fill class to reach for: this is the one place in this
-  // file where a colour is set inline rather than by class, because the
-  // alternative is a design-system rule that exists for one caller.
-  const fillStyle: CSSProperties =
-    !live && !failed && activity.outcome === "stopped" ? { background: "var(--warn)" } : {};
+  const fill = barFill(activity, live, stale);
   const barLabel =
     fraction === null
       ? set.name + ": nothing discovered yet, so progress is not measurable"
@@ -545,8 +572,8 @@ export function ActivityStrip({
           aria-label={barLabel}
         >
           <div
-            className={"activity-bar__fill" + (live ? " activity-bar__fill--busy" : "") + fillTone}
-            style={{ width: (fraction ?? 0) + "%", ...fillStyle }}
+            className={"activity-bar__fill" + fill.className}
+            style={{ width: (fraction ?? 0) + "%", ...fill.style }}
           />
         </div>
         <span

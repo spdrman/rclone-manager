@@ -146,6 +146,7 @@ const (
 // do, and spelling it the way a source that has gone unreachable is
 // spelled is a false alarm in a product whose job is to be believed about
 // backups.
+//
 // They are internal/app's own constants rather than a second spelling of
 // them, the way OperationStages (progress.go) re-exports app.Stages: this
 // package serves the verdict the cycle reached, and a copy of a closed

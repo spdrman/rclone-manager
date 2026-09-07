@@ -345,6 +345,16 @@ describe("a reading that is no longer refreshing", () => {
     expect(container.querySelector(".activity-spinner")).toBeNull();
   });
 
+  it("does not turn a pass that was in flight into a finished-looking one", () => {
+    const { container } = render(<ActivityStrip set={SET} activity={TRANSFERRING} stale />);
+    // The bar loses the sweep and keeps the colour work-in-progress
+    // wears. An ok-toned bar at 63% would say this pass got there and
+    // stopped there cleanly, which is a second claim nobody can make
+    // while the poll is failing.
+    expect(container.querySelector(".activity-bar__fill--ok")).toBeNull();
+    expect(container.querySelector(".activity-bar__fill--danger")).toBeNull();
+  });
+
   it("draws all of it while the reading is current", () => {
     const { container } = render(<ActivityStrip set={SET} activity={TRANSFERRING} />);
     expect(screen.getByText(/4 MB\/s/)).toBeInTheDocument();
