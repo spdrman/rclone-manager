@@ -15,25 +15,30 @@
 // never changes, which is what section 3.7 requires and what
 // apps/generic/tests/uibundle proves.
 //
-// Deliberately NOT wired into container/Dockerfile, and the arithmetic
-// says over the budget, not inside it.
+// At #167 this was deliberately NOT wired into container/Dockerfile,
+// because the arithmetic said over the budget rather than inside it. Each
+// bundle was about 352 KiB (360,448 bytes), the gate was 1.05x a recorded
+// baseline image of 43,008,762 bytes so the ceiling was 45,159,200, and
+// against that change's own measured image of 43,074,298 the headroom was
+// 2,084,902 bytes. The canonical image already carried the generic
+// bundle, so shipping the rest meant six more at 2,162,688 bytes, over
+// the ceiling by about 78 KB, and all seven over by about 438 KB. (The
+// older "inside by roughly 12 KB" reading came from measuring against the
+// baseline image rather than the one that change actually produced, which
+// is the trap: the headroom moves every time the binary grows.)
 //
-// Each bundle is about 352 KiB (360,448 bytes). The gate is 1.05x the
-// recorded baseline image of 43,008,762 bytes, so the ceiling is
-// 45,159,200. Which image the headroom is measured from is the whole
-// question, and it moves every time the binary grows: against this
-// change's own measured image of 43,074,298 (docs/runtime-contract.md's
-// metrics table) the headroom is 2,084,902 bytes. The canonical image
-// already carries the generic bundle, so shipping the rest means six
-// more at 2,162,688 bytes, which is OVER the ceiling by about 78 KB. All
-// seven would be over by about 438 KB. The older "inside by roughly
-// 12 KB" reading came from measuring against the baseline image rather
-// than the one this change actually produces.
-//
-// So this is not a coin toss on a gate, it is a gate that fails.
-// Converting each adapter to ship its own bundle is #169's work, and the
-// image-size question is worth re-measuring there rather than
-// pre-empting here.
+// #169 and #180 then did wire it in, and this comment claimed otherwise
+// for long enough for #635 to find it. container/Dockerfile's
+// frontend-build stage runs `npm run build:bundles truenas unraid
+// openmediavault proxmox synology`, and the runtime stage copies
+// dist-bundles/ to /ui/bundles. Five, not seven: generic is compiled into
+// the binary and ugos ships in EPIC D's UPK, so those two have a carrier
+// already. Measured out of the built image on 2026-09-08, the five hold
+// 3,503,996 bytes, about 700,799 each, which is twice the 352 KiB above,
+// because #632 put 139,744 bytes of woff2 into every bundle and EPIC F, G
+// and H grew the JS chunk. The conclusion did not move with the numbers:
+// seven is still more than the headroom. docs/perf/ carries what the
+// image measures today, and is the only place worth trusting for it.
 import { spawnSync } from "node:child_process";
 import { rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";

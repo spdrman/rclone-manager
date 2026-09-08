@@ -166,10 +166,19 @@ COPY apps/ ./apps/
 #
 # Five, not seven. `generic` is compiled into the binary already and
 # duplicating it here would buy nothing; `ugos` is EPIC D's, and its UPK
-# carries its own. Seven at roughly 347 KB each would be about 2.4 MB
-# against a gated 5% image budget of about 2.15 MB, so "ship them all" was
-# never available; five is 1.74 MB, which is inside it with room, and
-# docs/perf/ records the measurement rather than the estimate.
+# carries its own. The arithmetic that settled that at #180: seven at
+# roughly 347 KB each would have been about 2.4 MB against a gated 5%
+# image budget of about 2.15 MB, so "ship them all" was never available,
+# and the five came to 1,802,482 bytes.
+#
+# Those are #180's numbers and a bundle is no longer that size. Copied
+# back out of the built image on 2026-09-08 (#635), the five directories
+# under /ui/bundles hold 3,503,996 bytes, about 700,799 each. Two things
+# moved: the seven IBM Plex woff2 faces #632 added are 139,744 bytes of
+# every one of them, and the JS chunk grew with EPIC F, G and H. The
+# conclusion outlived the numbers (five fits, seven still would not), but
+# read the ratio rather than the byte counts, and read docs/perf/ for
+# what the image measures today.
 RUN cd ui/shared && npm run build:bundles truenas unraid openmediavault proxmox synology
 
 # LAST, and the order is load-bearing. `build:bundles` runs `npm run

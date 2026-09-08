@@ -26,8 +26,11 @@ import (
 // #167 removed the constraint by making bundle selection a run-time
 // decision (--ui-dir, then --ui-root/<profile>, then embedded, failing
 // closed). It did not ship the packaging, and deliberately: seven bundles
-// at roughly 347 KB each is about 2.4 MB against a gated 5% image budget
+// at roughly 347 KB each was about 2.4 MB against a gated 5% image budget
 // of about 2.15 MB, so "put them all in the image" was never available.
+// Those are #167's numbers; a bundle measured about 700,799 bytes on
+// 2026-09-08 (#635), against a budget that moved with the baseline, and
+// the conclusion is the same either way.
 //
 // #169 ships it, per adapter, and there are exactly three mechanisms
 // because there are exactly three kinds of carrier:

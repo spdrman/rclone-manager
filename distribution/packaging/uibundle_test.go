@@ -21,10 +21,14 @@ import (
 // half, and the reason it is a test rather than a line in a README is the
 // budget it lives under.
 //
-// The image size is gated at 1.05x of a recorded baseline. Seven bundles
-// at roughly 347 KB each is about 2.4 MB against about 2.15 MB of
-// headroom, so the image can only carry the ones that have no other
-// carrier: an adapter that is metadata and nothing else. Both halves of
+// The image size is gated at 1.05x of a recorded baseline, so the image
+// can only carry the bundles that have no other carrier: an adapter that
+// is metadata and nothing else. #180 settled that on seven bundles at
+// roughly 347 KB each being about 2.4 MB against about 2.15 MB of
+// headroom. A bundle is bigger now, measured out of the built image on
+// 2026-09-08 at about 700,799 bytes (#635), and the budget moved with
+// the baseline, so read the shape rather than those byte counts: seven
+// is still more than the headroom, five is still inside it. Both halves of
 // that sentence have to stay true, and each fails differently. Carrying
 // too few silently reinstates #180 for whichever adapter was dropped,
 // because serve-ui then refuses to start rather than serving the wrong
@@ -93,13 +97,14 @@ func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 	}
 
 	// And nothing else is in there. A bundle for a provider that has its
-	// own carrier is 347 KB of image nobody serves.
+	// own carrier is about 700 KB of image nobody serves (#635 measured
+	// one at 700,799 bytes on 2026-09-08).
 	for _, provider := range carried {
 		if _, declared := conf.Providers[provider]; !declared {
 			t.Errorf("the image carries a bundle for %q, which is not a provider this matrix declares", provider)
 		}
 		if provider == "generic" {
-			t.Error("the image carries a generic bundle, which is already compiled into the binary; that is 347 KB of duplicate against a gated image-size budget")
+			t.Error("the image carries a generic bundle, which is already compiled into the binary; that is about 700 KB of duplicate against a gated image-size budget")
 		}
 	}
 }
