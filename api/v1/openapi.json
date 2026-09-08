@@ -199,6 +199,45 @@
           ]
         }
       },
+      "ConnectionCheck": {
+        "type": "object",
+        "description": "One step of a connection test. `outcome` is passed, failed or skipped, and skipped is a first-class answer rather than a quiet pass: a surface that renders a skipped authentication as anything but \"this was never tried\" has told an operator their credentials are fine on the strength of a step that never ran. `category` is the machine-readable half a surface branches on; `detail` is a sentence the engine composed and never an underlying transport error's text.",
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "resolve",
+              "connect",
+              "host_key",
+              "authenticate",
+              "list"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "description": "Empty when the step passed or was skipped.",
+            "x-go-omitempty": true
+          },
+          "detail": {
+            "type": "string",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "step",
+          "outcome"
+        ]
+      },
       "TrustedHostKey": {
         "type": "object",
         "description": "ONE host key a backup set actually pins, named the way an operator compares it: the algorithm and the SHA256 fingerprint, the form `ssh-keygen -lf` prints and the wizard's verify step shows. Never the key material, which is a wall of base64 nobody checks by eye.",
@@ -657,7 +696,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -1195,7 +1234,7 @@
       },
       "TestConnectionResponse": {
         "type": "object",
-        "description": "The outcome of a pre-save connection test.",
+        "description": "The outcome of a connection test, as a verdict and as the six steps that produced it. `ok` and `message` mean exactly what they have always meant, so a client reading only those keeps working; `checks` is what the test actually DID, one entry per step and always all of them, in the order they run.",
         "additionalProperties": false,
         "properties": {
           "ok": {
@@ -1203,6 +1242,14 @@
           },
           "message": {
             "type": "string",
+            "x-go-omitempty": true
+          },
+          "checks": {
+            "type": "array",
+            "description": "One entry per step, always all of them, in the order they run: credentials, resolve, connect, host_key, authenticate, list. Empty for the candidate mode, which has no persisted set to resolve a key, a known_hosts file or a remote path from.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionCheck"
+            },
             "x-go-omitempty": true
           }
         },

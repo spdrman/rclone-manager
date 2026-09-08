@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b";
+export const CONTRACT_SHA256 = "953187d9b65a57a057c51a32e86308cbe699868e4c5c8a2e5a556074e75082d4";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1339,6 +1339,21 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
+/** One step of a connection test. `outcome` is passed, failed or
+ *  skipped, and skipped is a first-class answer rather than a quiet
+ *  pass: a surface that renders a skipped authentication as anything
+ *  but "this was never tried" has told an operator their credentials
+ *  are fine on the strength of a step that never ran. `category` is
+ *  the machine-readable half a surface branches on; `detail` is a
+ *  sentence the engine composed and never an underlying transport
+ *  error's text. */
+export interface WireConnectionCheck {
+  category?: string;
+  detail?: string;
+  outcome: "passed" | "failed" | "skipped";
+  step: "credentials" | "resolve" | "connect" | "host_key" | "authenticate" | "list";
+}
+
 /** POST /backup-sets. The backup-set spec, plus the two things only a
  *  create can ask for: that the new set also runs at once, and that
  *  it may take over history already on its id. */
@@ -2008,8 +2023,13 @@ export interface WireTestConnectionRequest {
   user?: string;
 }
 
-/** The outcome of a pre-save connection test. */
+/** The outcome of a connection test, as a verdict and as the six
+ *  steps that produced it. `ok` and `message` mean exactly what they
+ *  have always meant, so a client reading only those keeps working;
+ *  `checks` is what the test actually DID, one entry per step and
+ *  always all of them, in the order they run. */
 export interface WireTestConnectionResponse {
+  checks?: WireConnectionCheck[];
   message?: string;
   ok: boolean;
 }
