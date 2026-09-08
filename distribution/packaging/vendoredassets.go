@@ -191,14 +191,19 @@ var vendoredAttributionMarkers = []string{
 	"Font Awesome",
 }
 
-// vendoredScanRoots are the directories swept for undeclared material.
+// vendoredScanRoots are the paths swept for undeclared material.
 //
-// The UI's source and nothing else, which is a real limit and is stated
-// rather than left to be discovered: this is where vendored artwork
-// lands in this project, because it is the only part of the product that
-// draws anything. Go code takes its third-party material through modules
-// and the inventory already sees all of it.
-var vendoredScanRoots = []string{"ui/shared/src"}
+// The UI's source and the page it is served in, and nothing else, which
+// is a real limit and is stated rather than left to be discovered: this
+// is where vendored artwork lands in this project, because it is the only
+// part of the product that draws anything. Go code takes its third-party
+// material through modules and the inventory already sees all of it.
+//
+// index.html is here as well as src/ because it is the one file a
+// recipient of the built artifact actually receives with an attribution
+// in it, and a sweep that read the source and not the served page would
+// have missed exactly the copy that matters most.
+var vendoredScanRoots = []string{"ui/shared/src", "ui/shared/index.html"}
 
 // VendoredAssetComplaints says every way the vendored-asset register and
 // the tree disagree.
@@ -252,6 +257,11 @@ func VendoredAssetComplaints(c Compliance, read ReadFileFunc) []string {
 		}
 
 		for _, rel := range v.RecordedIn {
+			// A file that carries the attribution is claimed by carrying
+			// it. Without this the sweep below would report index.html,
+			// which names the licence precisely because it is one of the
+			// artifacts recording it.
+			claimed[filepath.ToSlash(rel)] = name
 			data, err := read(rel)
 			if err != nil {
 				out = append(out, fmt.Sprintf("%s's attribution is declared as recorded in %s, which is not in the tree: %v", name, rel, err))
