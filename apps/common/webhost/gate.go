@@ -1,17 +1,42 @@
 package webhost
 
 // The refusal that every deployment of this product is currently living
-// under, and the reason it is not a bug.
+// under, what it actually withholds, and the reason it is not a bug.
 //
-// Nothing shipped in this repository can make a destructive operation run.
-// Not a flag, not an environment variable, not a config key: the only
-// DestructiveGate implementation here reports false and takes no
-// parameters. That is easy to read as an unfinished feature and reach for
-// a way to switch it on, so this file is where the answer lives. Turning
-// it on means writing an implementation that has actually verified #92's
-// trusted-proxy identity check against real hardware, and until somebody
-// has done that, "destructive operations are off" is the honest state
-// rather than a placeholder.
+// # What it does NOT mean, corrected (issue #597)
+//
+// This file used to open with "nothing shipped in this repository can
+// make a destructive operation run", and that sentence was wrong in the
+// way that matters most: it reads as "destructive operations are off",
+// and they are not. `serve` always starts the scheduler
+// (serve.RunEngine), and core/service's runScheduledCycle calls the
+// identical internal/app.Service.RunCycle, taking the same runOnce lock,
+// reaching the identical FR-15 remote delete, on every poll interval,
+// with this gate shut. A deployment with the gate closed is deleting
+// remote sources unattended right now.
+//
+// So what the gate withholds is not destruction. It is an OPERATOR's
+// ability to start work on demand over HTTP: POST /operations (a run
+// cycle, a per-set run, or a restore), the run_immediately tier of
+// creating a backup set, and POST .../retention/apply. Two of those three
+// do work the scheduler already does by itself on a timer. The third,
+// retention apply, is the one the shut gate genuinely prevents, and it
+// has therefore never run in any shipped deployment: local restore points
+// accumulate without bound until FR-21's capacity refusal starts refusing
+// transfers (issue #602).
+//
+// That is worth stating at the top rather than leaving to be worked out,
+// because the wrong reading makes the gate look like a safety property it
+// does not deliver, and makes opening it look more dangerous than it is
+// in one direction and much less dangerous than it is in the other.
+//
+// # Why it is still shut
+//
+// Turning it on means writing an implementation that has actually
+// verified #92's trusted-proxy identity check against real hardware, or
+// established that the running profile has no identity header to spoof in
+// the first place. Until somebody has done one of those, refusing is the
+// honest answer.
 //
 // The shape is chosen to make that hard to undo by accident. A bool on
 // RouterConfig would be flipped by whoever next wires a router and would
@@ -26,12 +51,18 @@ package webhost
 // is already given the headers and the peer address it would need.
 
 // DestructiveGate reports whether the trusted-proxy identity verification
-// required before any destructive/mutating operation may run has actually
-// been established for this deployment (docs/EPIC-B-multi-nas.md §13.3,
-// §13.5). #92 (B1.3) is the work package that performs that verification
-// on real hardware and is expected to add the implementation that flips
-// this to true once it has; until it does, every implementation of this
-// interface this repository ships MUST report false.
+// required before an operator may START destructive work over HTTP has
+// actually been established for this deployment
+// (docs/EPIC-B-multi-nas.md §13.3, §13.5). #92 (B1.3) is the work package
+// that performs that verification on real hardware and is expected to add
+// the implementation that flips this to true once it has; until it does,
+// every implementation of this interface this repository ships MUST
+// report false.
+//
+// "START over HTTP" rather than "run", deliberately: the scheduler runs
+// the same destructive cycle on a timer whatever this reports. See this
+// file's own doc for what a shut gate actually withholds, which is a
+// narrower and more surprising list than it looks.
 //
 // This is deliberately a narrow, single-method interface rather than a
 // bool field on RouterConfig: a bool the caller passes in can be flipped
