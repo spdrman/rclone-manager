@@ -129,7 +129,7 @@ func proveSourceConnection(ctx context.Context, svc sourceConnectionTester, noVe
 		// it is reported as what it is.
 		return fail(err)
 	}
-	printConnectionReport(req.Host, result)
+	printConnectionReport("connection to "+req.Host, result)
 	if !result.OK {
 		fmt.Println("nothing was written: a source that cannot be proven is not a source this manager will back up from")
 		fmt.Println("  --no-verify writes it anyway, marked as unverified, for building configuration offline")
@@ -157,11 +157,13 @@ func proveSourceConnection(ctx context.Context, svc sourceConnectionTester, noVe
 // The column formatting is shared with the destination side's report
 // (outcomeWordOf, medium.go) so that "did this step pass" has one spelling
 // across both halves of the product.
-func printConnectionReport(what string, result service.ConnectionTestResult) {
-	if what == "" {
-		what = "this backup set"
-	}
-	fmt.Printf("connection to %s: %s\n", what, connectionVerdictWord(result.OK))
+//
+// heading is the caller's, so each surface names what it is talking about
+// in the words that surface has: a create has a host and no set id yet,
+// and the check verb has a set id and no reason to repeat a host the
+// configuration already holds.
+func printConnectionReport(heading string, result service.ConnectionTestResult) {
+	fmt.Printf("%s: %s\n", heading, connectionVerdictWord(result.OK))
 	for _, c := range result.Checks {
 		fmt.Printf("  %-14s %-8s %s\n", c.Step, outcomeWordOf(c.Outcome, c.Category), c.Detail)
 	}
@@ -223,7 +225,7 @@ func backupSetTestConnection(f *backupSetFlags, id string) int {
 	if err != nil {
 		return fail(err)
 	}
-	printConnectionReport(id, result)
+	printConnectionReport("backup set "+id, result)
 	if !result.OK {
 		return 1
 	}

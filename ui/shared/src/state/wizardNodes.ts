@@ -38,7 +38,7 @@ import { readOnlyNode } from "./appNodes";
  * this note used to say a connection test did not exist yet. It does now:
  * the Review step runs the six-step check and Save stays disabled until it
  * passes. It stayed local state because it fails the bar above rather than
- * because nobody got to it — the result is about the values on one open
+ * because nobody got to it: the result is about the values on one open
  * form, nothing outside the wizard reads it, and the wizard is closed by
  * the time anything else could care. A changed host key is a fact about a
  * machine two screens report; a candidate check is a fact about a form.

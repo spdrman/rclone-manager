@@ -692,7 +692,8 @@ const wholeSpecCreateBody = `{
 	"stale_after_seconds": 172800,
 	"validator_id": "postgres-custom-format",
 	"disabled": true,
-	"read_only": true
+	"read_only": true,
+	"connection_unverified": true
 }`
 
 // firstRunSpecCarriage is every field of backupSetSpec, paired with what
@@ -731,6 +732,7 @@ var firstRunSpecCarriage = []struct {
 	{"ValidatorID", func(r service.CreateBackupSetRequest) any { return r.ValidatorID }, func(s backupSetSpec) any { return service.ValidatorID(s.ValidatorID) }},
 	{"Disabled", func(r service.CreateBackupSetRequest) any { return r.Disabled }, func(s backupSetSpec) any { return s.Disabled }},
 	{"ReadOnly", func(r service.CreateBackupSetRequest) any { return r.ReadOnly }, func(s backupSetSpec) any { return s.ReadOnly }},
+	{"ConnectionUnverified", func(r service.CreateBackupSetRequest) any { return r.ConnectionUnverified }, func(s backupSetSpec) any { return s.ConnectionUnverified }},
 }
 
 // TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven is the whole

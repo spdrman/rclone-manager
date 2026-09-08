@@ -226,6 +226,44 @@ func TestRun_BackupSetPatchProvesTheConnectionWhenItChangesOne(t *testing.T) {
 	})
 }
 
+// TestRun_BackupSetCreateProvesTheConnectionOnAFreshInstallToo is the
+// case #624 asks about by name: a create against a deployment with
+// nothing running.
+//
+// It is the one path with no engine to route to by construction, because
+// it was taken precisely because there is no config.yaml at all, and it is
+// therefore the path where "silently skip the check and report success"
+// would have been easiest to write and hardest to notice. It uses the
+// durable path instead: the check runs in this process, through the same
+// FirstRun the browser's setup flow calls, and nothing is written when it
+// fails.
+//
+// The assertion is that no configuration exists afterwards. A first
+// configuration written and then reported as a failure would be the worst
+// of the shapes available here: an operator retries, the retry folds into
+// the file the failed attempt left behind, and the deployment is one
+// nobody meant to create.
+func TestRun_BackupSetCreateProvesTheConnectionOnAFreshInstallToo(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	keyPath := writeTestPrivateKey(t)
+
+	args := unreachableCreateArgs(t, configPath, keyPath, "api/postgres",
+		"--state-database", filepath.Join(dir, "state.db"))
+	out := captureStdout(t, func() {
+		if got := run(args); got != 1 {
+			t.Errorf("run(%v) = %d, want 1: a first configuration is still a configuration, and this one names a source that answers nothing", args, got)
+		}
+	})
+
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Errorf("a refused first create left a configuration at %s (stat err = %v), so a retry would fold into a file nobody meant to write", configPath, err)
+	}
+	if !strings.Contains(out, "nothing was written") {
+		t.Errorf("the refusal does not say the configuration was not written:\n%s", out)
+	}
+}
+
 // TestRun_BackupSetTestConnectionIsAVerb closes core/cliecho's own
 // standing gap: the check has been the only thing behind POST
 // /backup-sets/test-connection since #596 and no verb reached it, so the
