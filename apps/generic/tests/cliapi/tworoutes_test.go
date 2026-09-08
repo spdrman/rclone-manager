@@ -1858,6 +1858,15 @@ func TestTheWizardsReadOnlyChoiceSurvivesTheFirstRunSave(t *testing.T) {
 		// The tick under test. Everything above it is here so the save is
 		// a real one rather than a minimal one.
 		ReadOnly: true,
+		// Issue #624: the service proves a first set's connection in front
+		// of the write, and source.example.internal is a name that
+		// resolves nowhere. This case is about the read-only tick surviving
+		// a real save, activation and a read back, not about the check, so
+		// it skips it the way every `backup-set create` in this package
+		// does (createArgs). The check's own cases are in core/service and
+		// apps/common/webhost, and its real-machine proof is
+		// scripts/e2e/two-machine-backup.sh.
+		SkipConnectionCheck: true,
 	}
 
 	code, body := view.post("/api/v1/system/first-run", spec)
