@@ -16,9 +16,16 @@
  * in there unmounts on every navigation and starts again from cursor 0.
  * A sibling never unmounts, so the buffer, the cursor, the epoch, the
  * scroll position and the collapsed state all survive every navigation in
- * the session. Being a flex sibling rather than position: fixed also
- * settles the layout: the content column shrinks instead of being
- * covered, so nothing overlays the last row of a long table.
+ * the session.
+ *
+ * It is fixed to the browser window rather than sitting in flow (#617).
+ * In flow it rode the end of the document, so on any page longer than a
+ * screen the always-on panel scrolled out of view and was only there once
+ * you had already reached the bottom, which is the opposite of what it is
+ * for. Fixed positioning costs the property that arrangement had for
+ * free: nothing below shrinks any more, so the shell reserves
+ * dockReservedHeight() under the content column and the last row of a
+ * long table can still be scrolled clear of the terminal.
  *
  * A full browser reload is allowed to lose the buffer. The engine holds
  * the authoritative tail and this refills from it on mount with since=0,
@@ -85,6 +92,20 @@ const STORAGE = {
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 720;
 const DEFAULT_HEIGHT = 240;
+
+/** The collapsed bar: one line, and the height the panel reserves when it
+ *  is not open. Exported because the shell reserves room for it and a
+ *  second copy of the number would be a second thing to keep in step. */
+export const DOCK_BAR_HEIGHT = 32;
+
+/** The room the panel needs under it. Fixed positioning takes the dock out
+ *  of flow, so nothing below it shrinks on its own any more and the shell
+ *  has to leave this much or the last row of a long table sits behind the
+ *  terminal with no way to scroll it clear. The 8 is the resize handle and
+ *  the border. */
+export function dockReservedHeight(open: boolean, height: number): number {
+  return open ? height + DOCK_BAR_HEIGHT + 8 : DOCK_BAR_HEIGHT;
+}
 
 /** One thing the dock draws: a line, or the rule marking where a process
  *  ended. The rule is an entry rather than a flag on the next line
@@ -337,6 +358,19 @@ export function ActivityDock() {
   useEffect(() => writeStored(STORAGE.open, open ? "1" : "0"), [open]);
   useEffect(() => writeStored(STORAGE.height, String(height)), [height]);
   useEffect(() => writeStored(STORAGE.filter, filter), [filter]);
+
+  // Hand the reserved height to the layout. A custom property rather than
+  // a prop or a context because the only reader is a padding rule one
+  // level up, and the panel is resizable and collapsible: whatever
+  // reserves the room has to move when either changes, and the number is
+  // already here.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--dock-height", dockReservedHeight(open, height) + "px");
+    return () => {
+      root.style.removeProperty("--dock-height");
+    };
+  }, [open, height]);
   useEffect(() => {
     if (!copied) return;
     const id = window.setTimeout(() => setCopied(false), 2000);
@@ -387,12 +421,16 @@ export function ActivityDock() {
     <section
       aria-label="Terminal"
       style={{
-        flex: "none",
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 30,
         display: "flex",
         flexDirection: "column",
         borderTop: "1px solid var(--border)",
         background: "var(--surface)",
-        maxHeight: open ? height + 40 : undefined
+        maxHeight: open ? dockReservedHeight(true, height) : DOCK_BAR_HEIGHT
       }}
     >
       <div

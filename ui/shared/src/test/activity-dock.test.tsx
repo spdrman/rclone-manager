@@ -19,7 +19,9 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import {
   ActivityDock,
+  DOCK_BAR_HEIGHT,
   dockEntries,
+  dockReservedHeight,
   dockPrefix,
   dockText,
   environmentPreamble,
@@ -451,5 +453,61 @@ describe("the panel itself", () => {
     const header = screen.getByText(/^export BACKUP_MANAGER_API_URL=/);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_URL=" + window.location.origin);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_PASSWORD=<your password>");
+  });
+});
+
+describe("where the dock sits (issue #617)", () => {
+  beforeEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* a browser with site data blocked */
+    }
+    document.documentElement.style.removeProperty("--dock-height");
+  });
+
+  // The requirement EPIC G actually asked for: attached to the browser
+  // window, not to the end of the document. As a flex sibling it rode the
+  // bottom of the page, so on anything longer than a screen it scrolled
+  // away and the always-on panel was only there when you were already at
+  // the bottom.
+  it("pins itself to the browser window rather than riding the end of the page", async () => {
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment" })]) })]));
+    const panel = await screen.findByLabelText("Terminal");
+    expect(panel.style.position).toBe("fixed");
+    expect(panel.style.bottom).toBe("0px");
+    expect(panel.style.left).toBe("0px");
+    expect(panel.style.right).toBe("0px");
+  });
+
+  // Fixed positioning takes the panel out of flow, so whatever is under it
+  // has to be told how much room to leave or the last row of a long table
+  // sits behind the terminal permanently. That is the exact objection the
+  // old comments in this file and in AppShell raised against going fixed,
+  // and it is answered by reserving rather than by staying in flow.
+  it("reserves one line collapsed and its whole height expanded", () => {
+    expect(dockReservedHeight(false, 240)).toBe(DOCK_BAR_HEIGHT);
+    expect(dockReservedHeight(false, 999)).toBe(DOCK_BAR_HEIGHT);
+    expect(dockReservedHeight(true, 240)).toBe(240 + DOCK_BAR_HEIGHT + 8);
+    expect(dockReservedHeight(true, 400)).toBe(400 + DOCK_BAR_HEIGHT + 8);
+  });
+
+  it("publishes the height it reserves, and moves it when the viewer collapses the panel", async () => {
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment" })]) })]));
+    await screen.findByLabelText("Terminal");
+
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(
+        dockReservedHeight(true, 240) + "px"
+      )
+    );
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Hide terminal" }).click();
+    });
+
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(DOCK_BAR_HEIGHT + "px")
+    );
   });
 });
