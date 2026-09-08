@@ -48,6 +48,19 @@ type submitOperationRequest struct {
 	Action         string `json:"action"`
 	ConfigRevision string `json:"config_revision"`
 
+	// BackupSetID names the one set a run_backup_set acts on, as the
+	// "source/backup-set" id every surface in this product prints. It is
+	// a flat field rather than a nested parameter object because it is
+	// one string and because the durable operation row has always had a
+	// column for exactly it; see Restore below for why THAT one is
+	// nested.
+	//
+	// Empty for run_cycle, which is deployment-wide, and refused when a
+	// run_cycle carries one, for the reason the Restore check below is
+	// made: a body carrying another action's parameters is a request that
+	// has confused two operations.
+	BackupSetID string `json:"backup_set_id,omitempty"`
+
 	// Restore carries the restore_placement action's own parameters, and
 	// is nil for every other action.
 	//
@@ -286,7 +299,21 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch body.Action {
+	case service.ActionRunBackupSet:
+		h.submitRunBackupSet(w, r, idempotencyKey, body)
+		return
 	case service.ActionRunCycle:
+		if body.BackupSetID != "" {
+			// A run_cycle is deployment-wide by definition, so a body
+			// naming one set is asking for the other action. Refused
+			// rather than ignored: a server that drops the field teaches
+			// a client it is decorative, and the operator who sent it
+			// believes one set ran when every set did.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				fmt.Sprintf("a %q submission named a backup set; %q is the action that runs one set",
+					service.ActionRunCycle, service.ActionRunBackupSet))
+			return
+		}
 		if body.Restore != nil {
 			// A run_cycle carrying restore parameters is a request that
 			// has confused two operations. Ignoring the extra object
@@ -302,8 +329,8 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
-			fmt.Sprintf("unsupported action %q; this release supports %q and %q",
-				body.Action, service.ActionRunCycle, service.ActionRestorePlacement))
+			fmt.Sprintf("unsupported action %q; this release supports %q, %q and %q",
+				body.Action, service.ActionRunCycle, service.ActionRunBackupSet, service.ActionRestorePlacement))
 		return
 	}
 
@@ -417,6 +444,83 @@ func formatTimePtr(t *time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339Nano)
+}
+
+// submitRunBackupSet is POST /api/v1/operations with a run_backup_set
+// action: one pass over exactly the backup set the body names (issue
+// #597, EPIC G's G1.4).
+//
+// It is on this route, behind this gate, in this tier, and each of those
+// three is deliberate. The route, because /operations is where durable,
+// idempotency-keyed, revision-checked long work is started and a second
+// route would give this deployment two answers to how a long job begins.
+// The gate, because a per-set run reaches the identical FR-15 remote
+// delete a cycle does. The tier, because requireDestructiveGate is
+// middleware that runs before this body is decoded, so the route cannot
+// tell the two actions apart even in principle.
+//
+// The refusals it can produce are every one SubmitRunCycle can, plus the
+// two that only make sense once a request names a set: an id this
+// deployment does not configure, and a set an operator is currently
+// holding for editing.
+func (h *handlers) submitRunBackupSet(w http.ResponseWriter, r *http.Request, idempotencyKey string, body submitOperationRequest) {
+	if body.Restore != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("a %q submission carried restore parameters, which it has no use for", service.ActionRunBackupSet))
+		return
+	}
+	if body.BackupSetID == "" {
+		// A malformed request, not a missing resource: "you did not say
+		// which set" and "that set is not here" are different fixes, and
+		// a 404 for the first sends an operator hunting an id they never
+		// sent.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("a %q submission has to say which backup set to run", service.ActionRunBackupSet))
+		return
+	}
+
+	op, err := h.backend.SubmitRunBackupSet(r.Context(), service.RunBackupSetRequest{
+		IdempotencyKey: idempotencyKey,
+		Actor:          actorFromContext(r.Context()),
+		ConfigRevision: body.ConfigRevision,
+		BackupSetID:    body.BackupSetID,
+	})
+	if err != nil {
+		writeRunBackupSetError(w, err, h.backend.ConfigRevision())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, toOperationResponse(op))
+}
+
+// writeRunBackupSetError maps a per-set run's refusals onto their
+// declared statuses.
+//
+// Every message echoed here is core/service's own prose, which is the
+// rule service.ErrInvalidRequest's doc sets out: never an unclassified
+// error, which could carry state-layer or transport text.
+func writeRunBackupSetError(w http.ResponseWriter, err error, revision string) {
+	switch {
+	case errors.Is(err, service.ErrConfigRevisionStale):
+		writeConfigRevisionStale(w, err.Error(), revision)
+	case errors.Is(err, service.ErrIdempotencyKeyConflict):
+		writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_CONFLICT", err.Error())
+	case errors.Is(err, service.ErrOperationAlreadyRunning):
+		writeError(w, http.StatusConflict, "OPERATION_ALREADY_RUNNING", err.Error())
+	case errors.Is(err, service.ErrBackupSetHeldForEditing):
+		// Its own code beside OPERATION_ALREADY_RUNNING rather than
+		// folded into it: both are 409 and both clear on their own, but
+		// one says "wait for the run in flight" and the other says
+		// "leave edit mode", and an operator sent to the wrong one waits
+		// forever.
+		writeError(w, http.StatusConflict, "BACKUP_SET_HELD_FOR_EDITING", err.Error())
+	case errors.Is(err, service.ErrBackupSetNotFound):
+		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+	case errors.Is(err, service.ErrInvalidRequest):
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit operation")
+	}
 }
 
 // submitRestore is POST /api/v1/operations with a restore_placement

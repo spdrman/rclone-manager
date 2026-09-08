@@ -706,7 +706,14 @@ func summarizeCycle(report app.CycleReport) string {
 // So the two counts are read as pointers and a summary missing them is
 // reported as no outcome at all.
 func parseCycleSummary(rec state.Operation) *CycleOutcome {
-	if rec.Action != ActionRunCycle || rec.Status != state.OperationCompleted || rec.Result == "" {
+	// Both run actions, because summarizeFetch (runbackupset.go) records
+	// the same shape on purpose: a per-set run's counts mean the same
+	// thing a cycle's do, and giving them a second format would make
+	// every reader above this layer learn two.
+	if rec.Action != ActionRunCycle && rec.Action != ActionRunBackupSet {
+		return nil
+	}
+	if rec.Status != state.OperationCompleted || rec.Result == "" {
 		return nil
 	}
 	var raw struct {

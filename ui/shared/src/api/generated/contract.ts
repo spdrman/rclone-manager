@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef";
+export const CONTRACT_SHA256 = "36c43e502b878a28eff28442d8538b687f31e1ed59c8d9578d3a0e44e9697a70";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -34,6 +34,7 @@ export const WIRE_ERROR_CODES = [
   "BACKUP_SET_NOT_FOUND",
   "OPERATION_NOT_FOUND",
   "OPERATION_ALREADY_RUNNING",
+  "BACKUP_SET_HELD_FOR_EDITING",
   "IDEMPOTENCY_KEY_CONFLICT",
   "CONFIG_REVISION_STALE",
   "SSH_KEY_NOT_FOUND",
@@ -101,6 +102,7 @@ export const API_ERROR_CODES = [
   "BACKUP_SET_NOT_FOUND",
   "OPERATION_NOT_FOUND",
   "OPERATION_ALREADY_RUNNING",
+  "BACKUP_SET_HELD_FOR_EDITING",
   "IDEMPOTENCY_KEY_CONFLICT",
   "CONFIG_REVISION_STALE",
   "SSH_KEY_NOT_FOUND",
@@ -131,7 +133,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -741,8 +743,8 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      404: ["ARTIFACT_NOT_FOUND", "COPY_NOT_FOUND"],
-      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING", "RESTORE_REFUSED"],
+      404: ["BACKUP_SET_NOT_FOUND", "ARTIFACT_NOT_FOUND", "COPY_NOT_FOUND"],
+      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "RESTORE_REFUSED"],
       500: ["INTERNAL"],
       503: ["RESTORE_UNAVAILABLE"],
     }
@@ -1961,9 +1963,11 @@ export interface WireStorageStatus {
 /** POST /operations. The idempotency key is a header, not a body
  *  field: it is a property of the retry, not of the operation. action
  *  selects which of the parameter objects below is read;
- *  restore_placement reads restore, and run_cycle reads none. */
+ *  restore_placement reads restore, run_backup_set reads
+ *  backup_set_id, and run_cycle reads neither. */
 export interface WireSubmitOperationRequest {
   action: string;
+  backup_set_id?: string;
   config_revision: string;
   restore?: WireRestoreOperationRequest;
 }

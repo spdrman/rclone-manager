@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef"
+const ContractSHA256 = "36c43e502b878a28eff28442d8538b687f31e1ed59c8d9578d3a0e44e9697a70"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -71,6 +71,7 @@ const (
 	ErrorCodeBackupSetNotFound                      ErrorCode = "BACKUP_SET_NOT_FOUND"
 	ErrorCodeOperationNotFound                      ErrorCode = "OPERATION_NOT_FOUND"
 	ErrorCodeOperationAlreadyRunning                ErrorCode = "OPERATION_ALREADY_RUNNING"
+	ErrorCodeBackupSetHeldForEditing                ErrorCode = "BACKUP_SET_HELD_FOR_EDITING"
 	ErrorCodeIdempotencyKeyConflict                 ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
 	ErrorCodeConfigRevisionStale                    ErrorCode = "CONFIG_REVISION_STALE"
 	ErrorCodeSSHKeyNotFound                         ErrorCode = "SSH_KEY_NOT_FOUND"
@@ -110,6 +111,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeBackupSetNotFound,
 	ErrorCodeOperationNotFound,
 	ErrorCodeOperationAlreadyRunning,
+	ErrorCodeBackupSetHeldForEditing,
 	ErrorCodeIdempotencyKeyConflict,
 	ErrorCodeConfigRevisionStale,
 	ErrorCodeSSHKeyNotFound,
@@ -173,6 +175,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeBackupSetNotFound,
 	ErrorCodeOperationNotFound,
 	ErrorCodeOperationAlreadyRunning,
+	ErrorCodeBackupSetHeldForEditing,
 	ErrorCodeIdempotencyKeyConflict,
 	ErrorCodeConfigRevisionStale,
 	ErrorCodeSSHKeyNotFound,
@@ -201,7 +204,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -562,8 +565,8 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			404: {ErrorCodeArtifactNotFound, ErrorCodeCopyNotFound},
-			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning, ErrorCodeRestoreRefused},
+			404: {ErrorCodeBackupSetNotFound, ErrorCodeArtifactNotFound, ErrorCodeCopyNotFound},
+			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeRestoreRefused},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeRestoreUnavailable},
 		},
@@ -1659,9 +1662,11 @@ type StorageStatus struct {
 // SubmitOperationRequest is POST /operations. The idempotency key is a header, not a body
 // field: it is a property of the retry, not of the operation. action
 // selects which of the parameter objects below is read;
-// restore_placement reads restore, and run_cycle reads none.
+// restore_placement reads restore, run_backup_set reads
+// backup_set_id, and run_cycle reads neither.
 type SubmitOperationRequest struct {
 	Action         string                   `json:"action"`
+	BackupSetID    string                   `json:"backup_set_id,omitempty"`
 	ConfigRevision string                   `json:"config_revision"`
 	Restore        *RestoreOperationRequest `json:"restore,omitempty"`
 }

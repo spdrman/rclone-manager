@@ -73,6 +73,14 @@ type BackupServiceClient interface {
 	// re-implementing.
 	SubmitRunCycle(ctx context.Context, req service.RunCycleRequest) (service.Operation, error)
 
+	// SubmitRunBackupSet is the same durable submission narrowed to one
+	// backup set (issue #597): the second action on POST
+	// /api/v1/operations, not a route of its own. It shares
+	// SubmitRunCycle's single-flight lock, so the two cannot overlap and
+	// the loser is refused rather than queued. See
+	// core/service.BackupService.SubmitRunBackupSet.
+	SubmitRunBackupSet(ctx context.Context, req service.RunBackupSetRequest) (service.Operation, error)
+
 	// SubmitRestorePlacement persists and starts a restore of one archived
 	// copy (EPIC E, FR-34). Unlike SubmitRunCycle, nothing about the work
 	// it starts happens in this process: the provider carries on
