@@ -188,6 +188,82 @@
           "either: the bump that removed one is when the offer wants reading again."
         ]
       }
+    ],
+
+    "_vendoredAssetsComment": [
+      "Issue #621. Third-party material this repository carries in its own",
+      "SOURCE rather than resolving through a package manager, which is a third",
+      "kind of thing the two above cannot see: provenance/third-party-licenses.json",
+      "is derived from the Go module graph and ui/shared/package-lock.json, and",
+      "vendored artwork is in neither.",
+      "",
+      "It is a register beside the inventory rather than a row inside it, and",
+      "VendoredAsset's doc comment in vendoredassets.go carries the argument. In",
+      "short: the inventory's one claim about itself is that every row is",
+      "re-derived from the tree on every run, and a hand-written row would have to",
+      "be exempted from that comparison. The cost is that the SPDX SBOM, which is",
+      "built from the inventory, does not carry this either. That is a real gap",
+      "and it is named rather than left to be found.",
+      "",
+      "Nothing here is believed. VendoredAssetComplaints reads the files under",
+      "vendoredInto for the marker, reads the artifacts under recordedIn for the",
+      "five things CC BY 4.0 section 3(a)(1) asks an attribution to carry, and",
+      "sweeps the UI's source for material no entry claims."
+    ],
+    "vendoredAssets": [
+      {
+        "id": "font-awesome-free-icons",
+        "name": "Font Awesome Free",
+        "version": "6.7.2",
+        "creator": "Fonticons, Inc.",
+        "copyright": "Copyright 2024 Fonticons, Inc.",
+        "spdxId": "CC-BY-4.0",
+        "licenceName": "Creative Commons Attribution 4.0 International",
+        "licenceTextUrl": "https://creativecommons.org/licenses/by/4.0/",
+        "modified": false,
+        "modifiedNote": "reproduced verbatim and unmodified",
+        "whatShips": "the SVG path data of fourteen icons, compiled into the web bundle",
+        "vendoredInto": [
+          "ui/shared/src/design-system/icons.tsx"
+        ],
+        "marker": "Font Awesome Free 6.7.2",
+        "linkedInto": [
+          "backup-manager-web"
+        ],
+        "sourceUrl": "https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz",
+        "recordedIn": [
+          "NOTICE",
+          "docs/compliance/bundled-icon-artwork.md",
+          "ui/shared/index.html"
+        ],
+        "rationale": [
+          "The UI drew its icons as Unicode geometric characters until #621, which",
+          "meant the operator's system font decided what a warning triangle was.",
+          "They are Font Awesome Free artwork now, carried as inline SVG paths",
+          "rather than as a dependency, and the three constraints that picked that",
+          "shape are in the icon module's own doc: the product runs on a NAS that",
+          "may have no route off its LAN, the release image size is gated, and the",
+          "package declares a licence EXPRESSION that LicensePolicyComplaints",
+          "refuses as undecided, so a dependency would have needed this written",
+          "down by hand anyway.",
+          "",
+          "Only the icons ship. Font Awesome Free is three licences at once, CC BY",
+          "4.0 for the icons, SIL OFL 1.1 for the webfonts and MIT for the code,",
+          "and whatShips above says which part this product carries because a",
+          "record that did not would claim obligations this project does not have",
+          "while hiding the one it does. No Font Awesome font file and no Font",
+          "Awesome code is in the tree.",
+          "",
+          "The attribution reaches three different readers and that is why it is",
+          "recorded in more than one place. docs/compliance/bundled-icon-artwork.md",
+          "is the full record for somebody with the repository. NOTICE is for",
+          "somebody holding a built artifact, which is the reader CC BY 4.0 section",
+          "3(a) is actually about. ui/shared/index.html carries a short form for",
+          "the same reader in the running page, and Font Awesome's own embedded",
+          "notice sits beside the path data because the licence asks in as many",
+          "words that those comments not be actively removed from files."
+        ]
+      }
     ]
   },
 

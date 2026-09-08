@@ -56,8 +56,10 @@ SVG path data rather than pulled in as a package. It is CC BY 4.0, which is
 an attribution licence, and `docs/compliance/bundled-icon-artwork.md` is
 that attribution: the creator, the release, the licence and its text, a
 statement that nothing is modified, and the fourteen icons themselves.
-Issue #621 is the change that added it, and that file also records why the
-attribution is not in `NOTICE` yet and what closing that takes.
+Issue #621 is the change that added it. `NOTICE` carries the attribution
+too, in its own section: `compliance.json` declares the material,
+`buildNotice` renders it, and `VendoredAssetComplaints` reads the files the
+declaration names rather than taking its word for any of it.
 
 ## The MPL-2.0 components, and how to get their source
 
