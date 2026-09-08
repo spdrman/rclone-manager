@@ -98,7 +98,7 @@ func followActivity(ctx context.Context, mode readDecision, opts followOptions, 
 		case reading.Epoch != epoch:
 			// Said on stderr, so it never lands in a piped feed, and said
 			// before anything from the new process is printed.
-			fmt.Fprintf(errOut, "%sthe process serving this deployment restarted, so this feed starts again: the lines above came from a process that is gone, and its sequence numbers mean nothing to the one answering now\n", modeLinePrefix)
+			_, _ = fmt.Fprintf(errOut, "%sthe process serving this deployment restarted, so this feed starts again: the lines above came from a process that is gone, and its sequence numbers mean nothing to the one answering now\n", modeLinePrefix)
 			epoch = reading.Epoch
 			since = 0
 			// The reading in hand was fetched with the OLD process's
@@ -115,7 +115,7 @@ func followActivity(ctx context.Context, mode readDecision, opts followOptions, 
 				}
 				continue
 			}
-			fmt.Fprintln(out, formatFollowEvent(e))
+			_, _ = fmt.Fprintln(out, formatFollowEvent(e))
 		}
 		if high := highestSequence(reading); high > since {
 			since = high
