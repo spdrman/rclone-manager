@@ -27,29 +27,55 @@ import (
 // They are one fact with two readers, and a fact only one of them can see
 // is how the two come to disagree.
 
-// TestOutcomeVocabularyIsTheOneTheEpicNames pins the four values against
+// TestResultVocabularyIsTheOneTheEpicNames pins the four values against
 // literals typed out again here, for the reason events_test.go's own
 // table gives: an enum compared against itself passes whatever either
 // side becomes, and these strings are on an API surface (the live feed's
 // wire contract) and in a log line that alert rules key off.
-func TestOutcomeVocabularyIsTheOneTheEpicNames(t *testing.T) {
+//
+// "warn", not "warning". Every other tone vocabulary in this repository
+// says warn, starting with the Level sitting beside this on the same
+// line, and one field spelling it differently is a client writing
+// `=== "warn"` against the wrong one of two adjacent enums.
+func TestResultVocabularyIsTheOneTheEpicNames(t *testing.T) {
 	cases := []struct {
 		name string
-		got  Outcome
+		got  Result
 		want string
 	}{
-		{"OutcomeSuccess", OutcomeSuccess, "success"},
-		{"OutcomeWarning", OutcomeWarning, "warning"},
-		{"OutcomeError", OutcomeError, "error"},
-		{"OutcomeInfo", OutcomeInfo, "info"},
+		{"ResultSuccess", ResultSuccess, "success"},
+		{"ResultWarn", ResultWarn, "warn"},
+		{"ResultError", ResultError, "error"},
+		{"ResultInfo", ResultInfo, "info"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {
 			t.Errorf("%s = %q, want %q (this is a breaking change for the live feed's contract and for anything filtering the log)", c.name, c.got, c.want)
 		}
 	}
-	if len(Outcomes) != len(cases) {
-		t.Errorf("Outcomes lists %d values and there are %d constants; the list is what the wire contract's enum is compared against", len(Outcomes), len(cases))
+	if len(Results) != len(cases) {
+		t.Errorf("Results lists %d values and there are %d constants; the list is what the wire contract's enum is compared against", len(Results), len(cases))
+	}
+}
+
+// TestTheResultKeyDoesNotTakeAnEventsOwnFieldName is the reason this is
+// called result at all.
+//
+// The record-level mark used to be written under "outcome", and
+// connection_test has carried a field of its own by that name since issue
+// #596. Making room for the newcomer by renaming the incumbent is
+// backwards: fields are not schema'd, nothing in tests/compat catches it,
+// and a log query matching event=connection_test AND outcome=failed goes
+// silently empty. So the newcomer takes a free name instead, and the
+// incumbent keeps the one it shipped with.
+func TestTheResultKeyDoesNotTakeAnEventsOwnFieldName(t *testing.T) {
+	if fieldResult != "result" {
+		t.Errorf("the record's own mark is written under %q", fieldResult)
+	}
+	for _, taken := range []string{"outcome", "step", "level", "event"} {
+		if fieldResult == taken {
+			t.Errorf("the record's own mark is written under %q, which an event already uses for a field of its own", taken)
+		}
 	}
 }
 
