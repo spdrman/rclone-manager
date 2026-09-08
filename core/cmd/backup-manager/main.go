@@ -215,9 +215,15 @@ commands:
                                                   defaults to 7 and is bounded to 1..30. artifacts <id> lists
                                                   which medium each copy is on
   settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
+                   [--policy-file F] [--acknowledge-medium-disclosure]
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
-                                                  report the live retention/capacity settings, or change one in place;
-                                                  a full retention tier-chain replacement is still a config-file edit
+                                                  report the live retention/capacity settings, or change one in place.
+                                                  --policy-file replaces the deployment's whole retention chain from a
+                                                  file holding the contents of a config.yaml "retention:" block, with "-"
+                                                  reading standard input, spelled the way backup-set retention spells it.
+                                                  A chain that sends a tier somewhere new needs
+                                                  --acknowledge-medium-disclosure, and without it the refusal carries the
+                                                  disclosure (#595)
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]

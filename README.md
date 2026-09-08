@@ -544,7 +544,10 @@ retry` and `quarantine reinstate`. `backup-manager settings` reports the live, r
 FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
 table above has both), and `backup-manager settings patch [flags]` changes one in place,
 hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
-replacement of the *deployment's* policy stays a config-file edit; every other retention and
+replacement of the *deployment's* policy used to stay a config-file edit; since G2.3 (#595)
+it is `settings patch --policy-file`, spelled exactly the way `backup-set retention` spells
+it, because a chain now names where the copies go and "edit the file" is not an equal-power
+route beside a serving process, which refuses a file write outright. Every retention and
 capacity field is reachable through `settings patch` without a restart.
 
 **A backup set's own retention policy is not a config-file edit either (issue #333).**

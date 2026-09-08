@@ -312,10 +312,12 @@ func (r *engineRoute) UpdateSettings(ctx context.Context, req service.UpdateSett
 			WeekStartsOn:         req.Retention.WeekStartsOn,
 			ProtectLastKnownGood: req.Retention.ProtectLastKnownGood,
 		}
-		// Tiers is nil from this CLI, which does not expose a whole-chain
-		// replacement (cmdSettings' own doc says why), and mapped anyway
-		// so that the one type doing the translating does not have a hole
-		// in it the day something else fills that field in.
+		// Tiers used to be nil from this CLI, which did not expose a
+		// whole-chain replacement, and was mapped anyway so that the one
+		// type doing the translating would not have a hole in it the day
+		// something else filled that field in. That day is #595:
+		// `settings patch --policy-file` fills it, and this line is why
+		// the routed half of it needed nothing.
 		for _, t := range req.Retention.Tiers {
 			retention.Tiers = append(retention.Tiers, retentionTierToWire(t))
 		}
