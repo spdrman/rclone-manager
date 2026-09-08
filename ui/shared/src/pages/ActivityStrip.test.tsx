@@ -362,6 +362,46 @@ describe("the tone a line takes", () => {
     expect(done.tone).toBe("error");
   });
 
+  // The engine states the failure half of a lifecycle transition since
+  // #625, so `--severity error` on the CLI can find a backup that did not
+  // happen. The strip already painted these correctly off the state name,
+  // and that must not move: an engine one version behind still sends the
+  // old shape, and the state name is still the fact the wire carries.
+  it("paints a transition into a failure state red whether or not the engine says so", () => {
+    const stated = activityLine(
+      event({
+        sequence: 1,
+        level: "error",
+        event: "lifecycle_transition",
+        outcome: "error",
+        fields: { artifact: "a/b/one.dump", from: "VERIFYING", to: "FAILED", detail: "md5 differs" }
+      })
+    );
+    const derived = activityLine(
+      event({
+        sequence: 2,
+        level: "info",
+        event: "lifecycle_transition",
+        fields: { artifact: "a/b/one.dump", from: "VERIFYING", to: "FAILED", detail: "md5 differs" }
+      })
+    );
+    expect(stated.tone).toBe("error");
+    expect(derived.tone).toBe("error");
+    // And the words are the same either way, so nothing an operator reads
+    // depends on which engine sent it.
+    expect(stated.text).toBe(derived.text);
+    expect(stated.text).toMatch(/^failed: one\.dump/);
+
+    for (const to of ["QUARANTINED", "QUARANTINED_LOST"]) {
+      expect(activityLine(event({ sequence: 3, event: "lifecycle_transition", fields: { artifact: "a/b/one.dump", from: "COMPLETE", to } })).tone).toBe("error");
+    }
+    // The good-news half is still derived from the state name, which is
+    // the one rule #625 deliberately left where it was.
+    expect(
+      activityLine(event({ sequence: 4, event: "lifecycle_transition", fields: { artifact: "a/b/one.dump", from: "VERIFYING", to: "VERIFIED" } })).tone
+    ).toBe("ok");
+  });
+
   it("still falls back to the level for a line that states no outcome", () => {
     expect(activityLine(event({ sequence: 1, level: "error", event: "a_name_this_build_does_not_know", message: "something broke" })).tone).toBe("error");
     expect(activityLine(event({ sequence: 2, level: "info", event: "a_name_this_build_does_not_know", message: "something happened" })).tone).toBe("info");

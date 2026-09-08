@@ -198,6 +198,56 @@ func TestFailedStatesTheErrorAndTheOutcomeTogether(t *testing.T) {
 	}
 }
 
+// TestALifecycleTransitionIntoAFailureIsLoudEnoughToFind is the half of
+// this event the engine does own (issue #625).
+//
+// The catalog's note says a transition states no outcome, because WHICH
+// resting states read as good news is a decision about a screen. That
+// argument covers the good news and not the bad: an artifact that ended
+// an attempt in one of the three states this machine calls exceptional is
+// a backup that did not happen, which is the manager failing at the one
+// thing it is for, and no screen has to be consulted to know it.
+//
+// It arrived at info, so the browser painted it red off its own list of
+// state names and `activity --follow --severity error` showed nothing at
+// all. The two surfaces disagreed about the most important line either of
+// them carries.
+func TestALifecycleTransitionIntoAFailureIsLoudEnoughToFind(t *testing.T) {
+	var out bytes.Buffer
+	sink := &recordingSink{}
+	l := New(&out, LevelDebug).WithSink(sink)
+	ctx := context.Background()
+
+	l.LifecycleTransition(ctx, "alpha/nightly/one.dump", "VERIFYING", "QUARANTINED", "md5 differs", true)
+	l.LifecycleTransition(ctx, "alpha/nightly/two.dump", "DISCOVERED", "TRANSFERRING", "", false)
+
+	got := sink.all()
+	if got[0].Level != LevelError {
+		t.Errorf("a transition into a failure state was emitted at %v; `activity --follow --severity error` is where an operator goes to find a backup that did not happen", got[0].Level)
+	}
+	if got[0].Outcome != OutcomeError {
+		t.Errorf("a transition into a failure state states outcome %q, want %q", got[0].Outcome, OutcomeError)
+	}
+
+	// The ordinary transition is untouched, which is the whole of the
+	// catalog note's argument: this states the failure and still declines
+	// to decide which of the other states are good news.
+	if got[1].Level != LevelInfo {
+		t.Errorf("an ordinary transition was emitted at %v, want %v", got[1].Level, LevelInfo)
+	}
+	if got[1].Outcome != "" {
+		t.Errorf("an ordinary transition states outcome %q, and which resting states read as good news is a decision about a screen", got[1].Outcome)
+	}
+
+	lines := decodeLines(t, &out)
+	if lines[0]["level"] != "ERROR" || lines[0]["outcome"] != string(OutcomeError) {
+		t.Errorf("the log line for a failed transition is level=%v outcome=%v; the tap and the line are one fact with two readers", lines[0]["level"], lines[0]["outcome"])
+	}
+	if _, stated := lines[1]["outcome"]; stated {
+		t.Errorf("the log line for an ordinary transition carries an outcome: %v", lines[1]["outcome"])
+	}
+}
+
 // TestAConditionStatesNoOutcomeBecauseNothingRan is the boundary of this
 // vocabulary, asserted rather than only written down. A filesystem
 // crossing a threshold is a fact about the world this process noticed,
