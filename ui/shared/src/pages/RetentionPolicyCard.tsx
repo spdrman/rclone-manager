@@ -86,9 +86,23 @@ import type { TierDraft } from "./retentionChain";
  * backend's own words, and disabling Save until the box is ticked is a
  * courtesy in front of a gate that holds either way.
  */
-export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
+export function RetentionPolicyCard({
+  readOnly,
+  destinationsRevision = 0
+}: {
+  readOnly: boolean;
+  /** Bumped by the page when the destinations card changes something, so
+   *  this card re-reads the settings it draws the destination list and
+   *  the DEFAULT out of (#634).
+   *
+   *  It is a number in the dependency list rather than a callback,
+   *  because what this card needs is not "run something" but "the read
+   *  you did is out of date". Defaulting to 0 keeps the card usable on
+   *  its own, which is how every test that renders it alone uses it. */
+  destinationsRevision?: number;
+}) {
   const api = useApi();
-  const settings = useAsync<AppSettings>(() => api.getSettings(), [api]);
+  const settings = useAsync<AppSettings>(() => api.getSettings(), [api, destinationsRevision]);
 
   return (
     <section className="card">

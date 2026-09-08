@@ -280,6 +280,64 @@ describe("picking a destination under a retention tier (#622)", () => {
     await waitFor(() => expect(picker(2).value).toBe("made_here"));
   });
 
+  // The stale-read half of #634. The two cards on this page hold separate
+  // reads: the destinations card reloads its own list after "Make
+  // default", and the retention card's copy of the settings is what
+  // "Add tier" reads the default out of. Nothing joined them, so an
+  // operator could move the mark, watch the badge move, add a tier, and
+  // get the destination that was default when the page loaded.
+  //
+  // Driven through the real page and the real buttons, because that is
+  // the whole of the bug: each card is correct on its own and the page is
+  // not. A test that rendered one card could not see it.
+  it("starts a tier added after the default moves on the NEW default", async () => {
+    // The engine answers with the moved default on the next read, which
+    // is what a reload is for. The reporter could not do this in the
+    // browser suite because its mock lives in the page and a reload
+    // rebuilds it; here the api is injected, so the state survives.
+    let mediums: StorageMedium[] = [LOCAL, OFFSITE];
+    const api = {
+      ...createMockApi(),
+      getSettings: vi.fn(() => Promise.resolve(settingsFixture({ mediums }))),
+      listStorageMediums: vi.fn(() => Promise.resolve(mediums)),
+      setDefaultStorageMedium: vi.fn((id: string) => {
+        mediums = mediums.map((m) => ({ ...m, isDefault: m.id === id }));
+        return Promise.resolve(mediums.find((m) => m.id === id)!);
+      })
+    };
+
+    act(() => {
+      graph.commit("test/seed-version", (tx) =>
+        tx.set(versionNode, { data: VERSION, error: null, loading: false })
+      );
+    });
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <PlatformProvider bridge={genericBridge}>
+            <SettingsPage readOnly={false} />
+          </PlatformProvider>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    // The control: before the move, a new tier starts on the drive.
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
+    expect(picker(3).value).toBe(LOCAL_DESTINATION_ID);
+
+    const card = within(screen.getByRole("region", { name: "Storage destinations" }));
+    await waitFor(() => expect(card.getByText("offsite_s3")).toBeTruthy());
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Storage destination offsite_s3" }))
+        .getByRole("button", { name: "Make default" })
+    );
+    await waitFor(() => expect(api.setDefaultStorageMedium).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
+    await waitFor(() => expect(picker(4).value).toBe("offsite_s3"));
+  });
+
   // EPIC G's standing rule, on the control this issue adds. The line an
   // operator reads under the picker is the command that reproduces the
   // click, so somebody who moved one tier by clicking has read the

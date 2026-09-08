@@ -61,9 +61,33 @@ import {
 } from "@shared/pages/storageDestinationCommands";
 import { localDriveDescription } from "@shared/pages/retentionChain";
 
-export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
+export function StorageDestinationsCard({
+  readOnly,
+  onChanged
+}: {
+  readOnly: boolean;
+  /** Called after anything on this card changes the destinations: a
+   *  declaration added, edited or removed, and the default moved.
+   *
+   *  It exists because the retention chain editor beside this card holds
+   *  its OWN read of the same facts, and moving the default is the case
+   *  where the two came apart: the badge moved here, the picker's idea of
+   *  where a new tier starts did not, and both cards were individually
+   *  correct (#634). A card cannot reload a sibling, so the page joins
+   *  them and this is that card's half of the join. */
+  onChanged?(): void;
+}) {
   const api = useApi();
   const mediums = useAsync<StorageMedium[]>(() => api.listStorageMediums(), [api]);
+
+  // One function rather than passing `mediums.reload` and `onChanged`
+  // separately down two paths: every change on this card has to do both,
+  // and a row that remembered one and forgot the other is exactly the
+  // half-refresh #634 is about.
+  function changed() {
+    mediums.reload();
+    onChanged?.();
+  }
   const [editing, setEditing] = useState<StorageMedium | null>(null);
   const [adding, setAdding] = useState(false);
 
@@ -113,7 +137,7 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
                     medium={m}
                     readOnly={readOnly}
                     onEdit={() => setEditing(m)}
-                    onChanged={mediums.reload}
+                    onChanged={changed}
                   />
                 ))}
               </div>
@@ -137,7 +161,7 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
             onClose={() => setAdding(false)}
             onSaved={() => {
               setAdding(false);
-              mediums.reload();
+              changed();
             }}
           />
         ) : null}
@@ -147,7 +171,7 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
             onClose={() => setEditing(null)}
             onSaved={() => {
               setEditing(null);
-              mediums.reload();
+              changed();
             }}
           />
         ) : null}

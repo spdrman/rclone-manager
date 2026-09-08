@@ -19,6 +19,7 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { isNotConfigured } from "@shared/api/failure";
 import {
   chainKey,
+  defaultDestinationId,
   granularityLabel,
   introducedMediumMappings,
   MediumDisclosure,
@@ -607,7 +608,27 @@ function RetentionOverrideEditor({
             onClick={() =>
               setTiers((cur) => [
                 ...cur,
-                toDraft({ name: "", granularity: schema.granularities[0] ?? "day", keep: 1 })
+                // On the deployment's DEFAULT destination, exactly as the
+                // settings page's chain editor seeds its own (#622, and
+                // the omission #634 caught). "Both editors" is #622's own
+                // acceptance wording, and these are the two: a per-set
+                // override is a whole chain in its own right, so a tier
+                // created here is as much a newly created tier as one
+                // created there.
+                //
+                // The default is a deployment-wide fact and this is a
+                // per-set policy, which is the reading that would make
+                // starting on the drive regardless defensible. It is the
+                // wrong one: what the mark governs is where a NEW tier
+                // starts, an operator who set it did so to stop choosing
+                // the same destination repeatedly, and a per-set chain is
+                // where that repetition actually happens.
+                toDraft({
+                  name: "",
+                  granularity: schema.granularities[0] ?? "day",
+                  keep: 1,
+                  medium: defaultDestinationId(mediums)
+                })
               ])
             }
           >
