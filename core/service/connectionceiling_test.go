@@ -16,10 +16,12 @@ package service
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
@@ -56,7 +58,17 @@ func (r *sourceRecordingTransport) DeleteRemote(_ context.Context, _ transport.S
 
 var _ transport.Transport = (*sourceRecordingTransport)(nil)
 
-func cappedRemoteBackupSet(t *testing.T) config.Source {
+// cappedRemoteBackupSet is one backup set pointed at fx, carrying the two
+// fields this file exists to watch: the operator's own connection ceiling
+// and the passphrase source their key needs.
+//
+// It runs against the real SSH fixture (connectiontest_test.go) rather
+// than a made-up host, because since #596 the connection test reaches the
+// transport only after five earlier steps have succeeded against a real
+// server. A fixture naming a host that does not resolve would never get
+// as far as the List this file asserts about, and the assertion would
+// silently stop being made.
+func cappedRemoteBackupSet(t *testing.T, fx sshFixture) config.Source {
 	t.Helper()
 	id, err := model.NewBackupSetID("production", "postgres-primary")
 	if err != nil {
@@ -71,12 +83,12 @@ func cappedRemoteBackupSet(t *testing.T) config.Source {
 		RemotePath: "/backups",
 		Remote: config.Remote{
 			Type:       "sftp",
-			Host:       "production.example.internal",
-			Port:       2222,
+			Host:       fx.host,
+			Port:       fx.port,
 			User:       "backupsvc",
-			KnownHosts: "/etc/backup-manager/known_hosts",
+			KnownHosts: fx.knownHostsFile,
 			Key: config.Key{
-				File:       "/etc/backup-manager/id_ed25519",
+				File:       fx.keyFile,
 				Passphrase: config.Passphrase{Env: "BACKUP_SSH_KEY_PASSPHRASE"},
 			},
 			MaxConnections: 2,
@@ -92,15 +104,20 @@ func cappedRemoteBackupSet(t *testing.T) config.Source {
 // so it can fail where a real cycle succeeds or pass where a real cycle
 // fails. Either way the button lies about the thing it exists to answer.
 func TestTestBackupSetConnectionCarriesTheRemotesOwnCeiling(t *testing.T) {
+	const passphrase = "the fixture key is passphrase protected"
+	fx := startSSHFixture(t, true, false, passphrase)
+	t.Setenv("BACKUP_SSH_KEY_PASSPHRASE", passphrase)
+
 	tr := &sourceRecordingTransport{}
-	svc := New(testConfig(cappedRemoteBackupSet(t)), openTestJournal(t), tr, nil)
+	svc := New(testConfig(cappedRemoteBackupSet(t, fx)), openTestJournal(t), tr, obs.New(io.Discard, obs.LevelInfo))
+	t.Cleanup(func() { _ = svc.Close() })
 
 	got, err := svc.TestBackupSetConnection(context.Background(), "production/postgres-primary")
 	if err != nil {
 		t.Fatalf("TestBackupSetConnection: %v", err)
 	}
 	if !got.OK {
-		t.Fatalf("OK = false (%q) against a transport that answers every list", got.Message)
+		t.Fatalf("OK = false (%q) against a real server that accepts this key and a transport that answers every list: %+v", got.Message, got.Checks)
 	}
 	if !tr.listed {
 		t.Fatal("the transport was never asked to list anything, so there is no Source to assert about")
@@ -109,7 +126,7 @@ func TestTestBackupSetConnectionCarriesTheRemotesOwnCeiling(t *testing.T) {
 	// Control: the fields this literal does copy really did arrive, so a
 	// missing one below is a missing field and not a Source built from
 	// something else entirely.
-	if tr.lastList.Host != "production.example.internal" || tr.lastList.Port != 2222 || tr.lastList.User != "backupsvc" {
+	if tr.lastList.Host != fx.host || tr.lastList.Port != fx.port || tr.lastList.User != "backupsvc" {
 		t.Fatalf("the Source under test is not the configured remote at all: %+v", tr.lastList)
 	}
 
