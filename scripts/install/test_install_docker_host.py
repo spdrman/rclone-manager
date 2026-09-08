@@ -4130,11 +4130,28 @@ class TestTheCarriedReleasePinIsTheRecordedOne(unittest.TestCase):
             f"distribution/packaging/canonical.json.")
 
     def test_the_carried_digest_is_the_recorded_index_digest(self):
+        # .get, not [], and the difference is not tidiness. A release that
+        # is cut and not yet pushed has no index digest to record, so the
+        # manifest omits the key entirely and the installer carries None.
+        # That is a state install_docker_host.py handles deliberately and
+        # says out loud ("... is cut and not pushed, so
+        # container/release-manifest.json records no identity for it"), and
+        # this assertion is that the two AGREE: they agree at None exactly
+        # as much as they agree at a digest.
+        #
+        # Reading the key with [] raised KeyError instead, which is not a
+        # failed assertion but a broken test, and it left origin/main red
+        # on `bash scripts/ci-local.sh` from the moment 0.3.3 was cut
+        # (#639, #640) without being pushed. Found by #635 while running
+        # the gate for something else.
         self.assertEqual(
-            installer.CARRIED_RELEASE_DIGEST, self.manifest()["index_digest"],
+            installer.CARRIED_RELEASE_DIGEST, self.manifest().get("index_digest"),
             f"CARRIED_RELEASE_DIGEST is not the index_digest {self.WHERE} records.\n\n"
             f"This is the value the installer HEADs the registry for and refuses on. A stale one "
-            f"turns a proof into a false alarm on every install.")
+            f"turns a proof into a false alarm on every install.\n\n"
+            f"Both being absent is a pass, and means the release is cut and not yet pushed. One "
+            f"present and the other not is the failure this catches: an installer carrying a digest "
+            f"the manifest does not record, or a pushed release the installer cannot prove.")
 
     def test_the_default_reference_is_the_carried_release(self):
         """The --image default and the carried digest are two halves of
