@@ -608,7 +608,7 @@ copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backup-manager:0.3.2`, and the manifest carries a `registry_digest` of
+`ghcr.io/spdrman/backup-manager:0.3.3`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no
@@ -619,7 +619,7 @@ They are filled in from a real push rather than from the push's own output. That
 back out of ghcr.io, because the push says what it believes it sent and the registry says
 what it holds, and the multi-architecture index those two sat under, `sha256:95e0bd37`,
 was keylessly signed through the release workflow's own OIDC identity with the SBOM
-attested beside it. `0.3.2` gets the same treatment once the workflow pushes it.
+attested beside it. `0.3.3` gets the same treatment once the workflow pushes it.
 `local_image_id_sha256` stays what it always was, the local Docker image ID the
 recording build produced, which resolves nowhere but the machine that built it and is
 never a stand-in for a digest.
