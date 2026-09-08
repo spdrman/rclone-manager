@@ -80,6 +80,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # apps/common already reads the contract from its own tests, and the day a
 # handler imports it that stage would fail the same way.
 COPY core/apicontract/ ./apicontract/
+# core/cliecho is the same shape one package along (issue #599):
+# core/service imports it to record what an API action was equivalent to,
+# so a tree without it fails the build below with exactly the message the
+# comment above describes, and only the image build says so.
+COPY core/cliecho/ ./cliecho/
 COPY core/cmd/ ./cmd/
 COPY core/internal/ ./internal/
 COPY core/service/ ./service/
@@ -203,6 +208,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cd apps/generic && go mod download
 
 COPY core/apicontract/ ./core/apicontract/
+COPY core/cliecho/ ./core/cliecho/
 COPY core/cmd/ ./core/cmd/
 COPY core/internal/ ./core/internal/
 COPY core/service/ ./core/service/
