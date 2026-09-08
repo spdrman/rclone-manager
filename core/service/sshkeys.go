@@ -1,3 +1,23 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+)
+
 // Looking at the keys this deployment can reach (issue #592).
 //
 // # The gap
@@ -52,25 +72,6 @@
 // public half: an algorithm, a SHA256 fingerprint, and the
 // authorized_keys line, which is the one string that turns a failed
 // authentication check into something an operator can fix.
-package service
-
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"time"
-
-	"golang.org/x/crypto/ssh"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-)
 
 // sshDiscoveryDirEnv names an optional directory this deployment mounts
 // read-only for discovery to scan.
