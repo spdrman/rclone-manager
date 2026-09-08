@@ -657,7 +657,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -2948,6 +2948,44 @@
           "value"
         ]
       },
+      "LiveActivityDeployment": {
+        "type": "object",
+        "description": "The log that belongs to no single backup set, served in its own right rather than copied onto every set's feed. A cycle starting covers every set and a capacity check is about a filesystem, so neither belongs on one set's strip; until this bucket existed the only alternatives were dropping those lines (which hides them) or reporting them on every strip, and the second is what shipped, so on a real deployment every set's strip showed the same log and the shared lines crowded out each set's own. It is absent when the caller narrowed the reading to one backup set, because a caller that named a set asked about that set. It is present, and is the whole answer, for a deployment with no configured backup sets at all, which is exactly when a new operator is pressing buttons in a wizard and has nothing else to read.",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityEvent"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the limit cut this reading short and the rest is still held. Always present rather than omitted when false: a client reading an absent key as \"nothing is missing\" reads a server that stopped sending it the same way, and silence about a gap is what this feed must never do."
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Whether lines this caller's cursor had not reached yet fell out of the bounded buffer before this read did. They are gone, and the tail above is not continuous with whatever the caller already holds."
+          },
+          "oldest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The oldest sequence still held in this bucket, which is a bound on the buffer and not on the slice above."
+          },
+          "latest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The newest sequence still held in this bucket."
+          }
+        },
+        "required": [
+          "events",
+          "truncated",
+          "dropped",
+          "oldest_sequence",
+          "latest_sequence"
+        ]
+      },
       "LiveActivityEvent": {
         "type": "object",
         "description": "One line of the live feed. It carries the engine's own event name, the engine's own severity and the event's own fields, because what a moment is worth calling is presentation and belongs to whichever client is presenting: a severity invented on the way to the wire would freeze one screen's display decision for every other client. The level is not such a decision, it is what the emitter chose when it decided a line was a warning rather than a note, so it is carried through rather than re-derived.",
@@ -2982,7 +3020,7 @@
               "deployment",
               "set"
             ],
-            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those reach every set's feed marked deployment, rather than being dropped (which would hide them) or pinned to one set (which would put them on the wrong screen)."
+            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those are carried in the response's deployment bucket rather than on any set's feed, so a set's feed answers what that set is doing and the deployment's answers what the whole system is doing. The sequence numbers are one counter across both, so a client holding both can interleave them exactly where they happened."
           },
           "message": {
             "type": "string"
@@ -3155,6 +3193,12 @@
             "items": {
               "$ref": "#/components/schemas/LiveActivitySet"
             }
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/LiveActivityDeployment",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "The deployment-wide log: the events that name no single backup set. Absent when the reading was narrowed to one backup set."
           }
         },
         "required": [
@@ -7596,6 +7640,18 @@
               "format": "int32"
             },
             "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does. It pages rather than truncates: the events returned are the OLDEST above the cursor and the response says whether it was cut short, so a caller that asks again from where the last one ended sees every line rather than skipping the middle of a burst."
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deployment"
+              ]
+            },
+            "description": "Narrow the reading to the deployment-wide bucket and no backup set at all, which is what a terminal following the deployment's own log wants. It is the half of the set/deployment distinction that backup_set cannot express, since naming no set already means every set. Any other value is ignored rather than refused, exactly as an unparseable limit is: a panel an operator went to look at should not be blanked over a query string."
           }
         ],
         "responses": {

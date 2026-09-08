@@ -529,11 +529,19 @@ export function ActivityStrip({
   const live = activity.active && !stale;
   const step = stepSentence(activity, stale);
   const badge = pill(set, activity, stale);
-  // Two ways to have lost lines and both of them mean the same thing to a
-  // reader. The service says so when its own bounded buffer threw away
-  // something this cursor had not reached; oldestSequence covers the
-  // page's own window, which is smaller still.
-  const dropped = activity.dropped || activity.oldestSequence > 1;
+  // Three ways to have lost lines and all of them mean the same thing to
+  // a reader: the service's own ring threw something away above this
+  // cursor, the page trimmed its window, or both. mergeActivity folds all
+  // three into this one flag.
+  //
+  // It used to read `activity.oldestSequence > 1` as well, as a proxy for
+  // the page's window starting after the feed's. That proxy stopped being
+  // one when a set's feed became the set's own ring (issue #593): the
+  // sequence counter is shared across every bucket, so a set whose first
+  // line happens to be the ninth event this process emitted starts at 9
+  // with nothing missing at all, and every strip on a healthy deployment
+  // would have claimed lines were dropped.
+  const dropped = activity.dropped;
   const fill = barFill(activity, live, stale);
   const barLabel =
     fraction === null

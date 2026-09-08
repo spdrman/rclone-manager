@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef"
+const ContractSHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1189,6 +1189,27 @@ type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
 }
 
+// LiveActivityDeployment is the log that belongs to no single backup set, served in its own
+// right rather than copied onto every set's feed. A cycle starting
+// covers every set and a capacity check is about a filesystem, so
+// neither belongs on one set's strip; until this bucket existed the
+// only alternatives were dropping those lines (which hides them) or
+// reporting them on every strip, and the second is what shipped, so
+// on a real deployment every set's strip showed the same log and the
+// shared lines crowded out each set's own. It is absent when the
+// caller narrowed the reading to one backup set, because a caller
+// that named a set asked about that set. It is present, and is the
+// whole answer, for a deployment with no configured backup sets at
+// all, which is exactly when a new operator is pressing buttons in a
+// wizard and has nothing else to read.
+type LiveActivityDeployment struct {
+	Dropped        bool                `json:"dropped"`
+	Events         []LiveActivityEvent `json:"events"`
+	LatestSequence int64               `json:"latest_sequence"`
+	OldestSequence int64               `json:"oldest_sequence"`
+	Truncated      bool                `json:"truncated"`
+}
+
 // LiveActivityEvent is one line of the live feed. It carries the engine's own event name,
 // the engine's own severity and the event's own fields, because what
 // a moment is worth calling is presentation and belongs to whichever
@@ -1225,10 +1246,11 @@ type LiveActivityField struct {
 // and is exactly as readable from a terminal as from a browser. The
 // cursor on the request is what keeps polling cheap.
 type LiveActivityResponse struct {
-	Epoch       string            `json:"epoch"`
-	ObservedAt  string            `json:"observed_at"`
-	PollAfterMs int               `json:"poll_after_ms"`
-	Sets        []LiveActivitySet `json:"sets"`
+	Deployment  *LiveActivityDeployment `json:"deployment,omitempty"`
+	Epoch       string                  `json:"epoch"`
+	ObservedAt  string                  `json:"observed_at"`
+	PollAfterMs int                     `json:"poll_after_ms"`
+	Sets        []LiveActivitySet       `json:"sets"`
 }
 
 // LiveActivitySet is what one backup set is doing right now, and the tail of events
@@ -1837,6 +1859,7 @@ var SchemaTypes = map[string]any{
 	"ListOperationsResponse":      ListOperationsResponse{},
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
+	"LiveActivityDeployment":      LiveActivityDeployment{},
 	"LiveActivityEvent":           LiveActivityEvent{},
 	"LiveActivityField":           LiveActivityField{},
 	"LiveActivityResponse":        LiveActivityResponse{},

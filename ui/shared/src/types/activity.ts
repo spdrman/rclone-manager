@@ -24,9 +24,12 @@ import type { LiveTransferStage } from "@shared/types/operation";
 export type ActivityLevel = "debug" | "info" | "warn" | "error";
 
 /** Whether a line belongs to the backup set carrying it or to the whole
- *  deployment. A cycle starting covers every set, so it reaches every
- *  strip marked "deployment" rather than being dropped (which would hide
- *  it) or pinned to one set (which would put it on the wrong screen). */
+ *  deployment. A cycle starting covers every set, so it belongs to
+ *  neither one strip nor all of them: it arrives in the reading's own
+ *  `deployment` bucket, which the global terminal reads and a set's strip
+ *  does not (issue #593). The sequence numbers are one counter across
+ *  both, so a reader holding both can interleave them exactly where they
+ *  happened. */
 export type ActivityScope = "deployment" | "set";
 
 export interface SetActivityEvent {
@@ -124,4 +127,21 @@ export interface LiveActivity {
    *  the bar jump. */
   pollAfterMs: number;
   sets: SetActivity[];
+  /** The log that belongs to no single backup set: a cycle starting, a
+   *  capacity check, an action somebody took in the browser. Null when
+   *  the reading was narrowed to one set, which is a different fact from
+   *  an empty bucket: one says the deployment has been quiet, the other
+   *  says nobody asked. */
+  deployment: DeploymentActivity | null;
+}
+
+/** The deployment-wide tail. It carries the same honesty flags a set's
+ *  strip does and none of the progress counters, because there is no such
+ *  thing as how far through its own pass a deployment is. */
+export interface DeploymentActivity {
+  events: SetActivityEvent[];
+  truncated: boolean;
+  dropped: boolean;
+  oldestSequence: number;
+  latestSequence: number;
 }

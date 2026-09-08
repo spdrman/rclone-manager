@@ -74,24 +74,30 @@ const POLL_LIMIT = 200;
  * also makes a repeated or overlapping response harmless, which matters
  * because a retried request is not a rare event on a NAS.
  */
-export function mergeActivity(previous: SetActivity | undefined, next: SetActivity): SetActivity {
-  if (!previous) return { ...next, events: next.events.slice(-PAGE_BUFFER) };
+export function mergeActivity(
+  previous: SetActivity | undefined,
+  next: SetActivity,
+  buffer = PAGE_BUFFER
+): SetActivity {
   const bySequence = new Map<number, SetActivityEvent>();
-  for (const e of previous.events) bySequence.set(e.sequence, e);
+  for (const e of previous?.events ?? []) bySequence.set(e.sequence, e);
   for (const e of next.events) bySequence.set(e.sequence, e);
-  const events = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence).slice(-PAGE_BUFFER);
+  const ordered = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+  const events = ordered.slice(-buffer);
   return {
     ...next,
     events,
     // A gap is a fact about the buffer, not about the reading that
     // noticed it. Once lines have been lost this page's window has a hole
     // in it for as long as it holds those lines, and a later reading
-    // answering a caught-up cursor cleanly does not fill it in.
-    dropped: previous.dropped || next.dropped,
+    // answering a caught-up cursor cleanly does not fill it in. The
+    // page's own window is the third way to lose one and it counts the
+    // same: trimming to `buffer` throws lines away exactly as the
+    // service's ring does.
+    dropped: (previous?.dropped ?? false) || next.dropped || ordered.length > events.length,
     // The page's own window can start later than the service's buffer
-    // does, and the strip reads this to decide whether to say lines were
-    // dropped. Reporting the service's bound while showing fewer lines
-    // would claim continuity the page does not have.
+    // does. Reporting the service's bound while showing fewer lines would
+    // claim continuity the page does not have.
     oldestSequence: Math.max(next.oldestSequence, events.length > 0 ? events[0].sequence : 0)
   };
 }

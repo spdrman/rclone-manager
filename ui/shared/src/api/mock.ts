@@ -26,7 +26,7 @@ import type {
   SystemHealth,
   VersionInfo
 } from "@shared/types/operation";
-import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { DeploymentActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 /** Development fixtures. Covers every scenario the brief requires (§42):
  *  healthy / stale / failing sets, active transfer, quarantine, retention
@@ -508,13 +508,12 @@ const LIVE_ACTIVITY: SetActivity[] = [
     bytesPerSecond: 118 * 1024 ** 2,
     startedAt: "2026-08-29T02:00:11+02:00",
     events: [
-      liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting"),
       liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete"),
       liveEvent(3, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", from: "VERIFYING", to: "VERIFIED" }, "info", "set", "lifecycle transition"),
       liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete"),
       liveEvent(5, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-29.dump.zst", from: "DISCOVERED", to: "TRANSFERRING" }, "info", "set", "lifecycle transition")
     ],
-    oldestSequence: 1,
+    oldestSequence: 2,
     latestSequence: 5
   },
   {
@@ -528,12 +527,10 @@ const LIVE_ACTIVITY: SetActivity[] = [
     startedAt: "2026-08-29T00:16:00+02:00",
     finishedAt: "2026-08-29T00:16:55+02:00",
     events: [
-      liveEvent(6, "lifecycle_transition", { artifact: "production/auth-config/dpkg.status.1.gz", from: "VERIFYING", to: "FAILED", detail: "md5 differs: source a70969a2 destination d41d8cd9 (empty)" }, "info", "set", "lifecycle transition"),
-      liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error"),
-      liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error")
+      liveEvent(6, "lifecycle_transition", { artifact: "production/auth-config/dpkg.status.1.gz", from: "VERIFYING", to: "FAILED", detail: "md5 differs: source a70969a2 destination d41d8cd9 (empty)" }, "info", "set", "lifecycle transition")
     ],
     oldestSequence: 6,
-    latestSequence: 8
+    latestSequence: 6
   },
   {
     ...IDLE_ACTIVITY,
@@ -543,7 +540,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 18,
     progressBasis: "artifacts",
     finishedAt: "2026-08-29T01:04:44+02:00",
-    events: [liveEvent(9, "cycle_end", { cycle_id: "c_0" }, "info", "deployment", "cycle finished")],
+    events: [liveEvent(9, "commit", { artifact: "production/billing-mysql/billing-2026-08-29.sql.zst", local_path: "/data/backups/production/billing/billing-2026-08-29.sql.zst" }, "info", "set", "durable commit complete")],
     oldestSequence: 9,
     latestSequence: 9
   },
@@ -560,6 +557,53 @@ const LIVE_ACTIVITY: SetActivity[] = [
     latestSequence: 10
   }
 ];
+
+/** The deployment's own log: what belongs to no single backup set.
+ *
+ * Since #593 these are a bucket of their own rather than a copy inside
+ * every set, and this fixture is where that split is visible without a
+ * running engine. It carries what the global terminal is for: the cycle's
+ * own brackets, an error nothing could attribute, and the actions taken
+ * in the browser with the `backup-manager` command each one is equivalent
+ * to. */
+const LIVE_DEPLOYMENT: DeploymentActivity = {
+  events: [
+    liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting"),
+    liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error"),
+    liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error"),
+    liveEvent(
+      11,
+      "api_action",
+      {
+        actor: "admin",
+        route: "PATCH /api/v1/backup-sets/{source}/{set}",
+        status: "200",
+        command: "backup-manager backup-set patch production/auth-config --stale-after 48h"
+      },
+      "info",
+      "deployment",
+      "backup set updated"
+    ),
+    liveEvent(
+      12,
+      "api_action",
+      {
+        actor: "admin",
+        route: "POST /api/v1/backup-sets/test-connection",
+        status: "200",
+        command_gap: "no backup-manager equivalent yet",
+        command_gap_detail: "there is no verb that tests a connection before a set exists"
+      },
+      "info",
+      "deployment",
+      "connection test succeeded"
+    )
+  ],
+  truncated: false,
+  dropped: false,
+  oldestSequence: 1,
+  latestSequence: 12
+};
 
 const ACTIVITY: ActivityEvent[] = [
   { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "production/auth-config", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
@@ -1396,7 +1440,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         // moving. A mock that answered with the idle one would let a
         // surface be built against a poll that never keeps up.
         pollAfterMs: 1000,
-        sets: (empty ? [] : LIVE_ACTIVITY).filter((a) => !options?.setId || a.setId === options.setId)
+        sets: (empty ? [] : LIVE_ACTIVITY).filter((a) => !options?.setId || a.setId === options.setId),
+        // Absent for a reading narrowed to one set, exactly as the
+        // service omits it: a caller that named a set asked about that
+        // set. Present for a deployment with nothing configured, which is
+        // the case the feed could not answer at all before #599.
+        deployment: options?.setId ? null : LIVE_DEPLOYMENT
       }),
     listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),

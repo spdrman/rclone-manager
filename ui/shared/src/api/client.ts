@@ -1165,7 +1165,20 @@ function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
     observedAt: r.observed_at,
     epoch: r.epoch,
     pollAfterMs: r.poll_after_ms,
-    sets: r.sets.map(fromWireLiveActivitySet)
+    sets: r.sets.map(fromWireLiveActivitySet),
+    // Absent means the reading was narrowed to one set, or came from a
+    // service too old to have a deployment bucket at all. Null rather
+    // than an empty bucket in both cases: an empty one is a claim that
+    // the deployment has said nothing, and neither of those is that.
+    deployment: r.deployment
+      ? {
+          events: r.deployment.events.map(fromWireLiveActivityEvent),
+          truncated: r.deployment.truncated,
+          dropped: r.deployment.dropped,
+          oldestSequence: r.deployment.oldest_sequence,
+          latestSequence: r.deployment.latest_sequence
+        }
+      : null
   };
 }
 

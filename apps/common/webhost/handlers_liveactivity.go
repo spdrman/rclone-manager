@@ -106,6 +106,29 @@ type liveActivitySetResponse struct {
 	LatestSequence int64 `json:"latest_sequence"`
 }
 
+// liveActivityDeploymentResponse is the log that belongs to no single
+// backup set (issue #593).
+//
+// It used to be copied into every set's feed, on the argument that
+// dropping it would hide it and pinning it to one set would put it on the
+// wrong screen. Both of those are true and both alternatives are worse;
+// what was missing was a third place to put it, which is what issue
+// #599's global terminal is. So the shared ring is served here, once,
+// and a set's feed carries that set's own ring alone.
+type liveActivityDeploymentResponse struct {
+	Events []liveActivityEventResponse `json:"events"`
+
+	// The same two honesty flags a set's strip carries, always present
+	// rather than omitted when false, for the same reason: a client
+	// reading an absent key as "nothing is missing" reads a server that
+	// stopped sending them the same way.
+	Truncated bool `json:"truncated"`
+	Dropped   bool `json:"dropped"`
+
+	OldestSequence int64 `json:"oldest_sequence"`
+	LatestSequence int64 `json:"latest_sequence"`
+}
+
 type liveActivityResponse struct {
 	ObservedAt string `json:"observed_at"`
 
@@ -124,6 +147,12 @@ type liveActivityResponse struct {
 	PollAfterMS int `json:"poll_after_ms"`
 
 	Sets []liveActivitySetResponse `json:"sets"`
+
+	// Deployment is omitted, not empty, when this reading was narrowed to
+	// one backup set: a caller that named a set asked about that set, and
+	// an empty bucket would read as "the deployment has said nothing"
+	// rather than "you did not ask".
+	Deployment *liveActivityDeploymentResponse `json:"deployment,omitempty"`
 }
 
 // getLiveActivity is GET /api/v1/activity/live. Read-only (§50), so no
@@ -138,6 +167,13 @@ type liveActivityResponse struct {
 // feed for a set that does not exist reads exactly like a quiet set.
 func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 	req := service.LiveActivityRequest{BackupSetID: r.URL.Query().Get("backup_set")}
+	// scope is advisory in the same way since and limit are: the one
+	// value it takes narrows the reading, and anything else is ignored
+	// rather than refused, because blanking a panel over a query string
+	// is the one thing this feed exists not to do.
+	if r.URL.Query().Get("scope") == service.LiveActivityScopeDeployment {
+		req.DeploymentOnly = true
+	}
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			req.Since = parsed
@@ -171,7 +207,39 @@ func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 	for _, s := range live.Sets {
 		resp.Sets = append(resp.Sets, liveActivitySetOf(s))
 	}
+	if live.Deployment != nil {
+		resp.Deployment = &liveActivityDeploymentResponse{
+			Events:         liveActivityEventsOf(live.Deployment.Events),
+			Truncated:      live.Deployment.Truncated,
+			Dropped:        live.Deployment.Dropped,
+			OldestSequence: live.Deployment.OldestSequence,
+			LatestSequence: live.Deployment.LatestSequence,
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// liveActivityEventsOf renders one bucket's events. Shared by a set's
+// strip and the deployment's bucket, so the two can never drift into
+// describing the same event differently.
+func liveActivityEventsOf(events []service.LiveActivityEvent) []liveActivityEventResponse {
+	out := make([]liveActivityEventResponse, 0, len(events))
+	for _, e := range events {
+		event := liveActivityEventResponse{
+			Sequence: e.Sequence,
+			At:       formatTime(e.At),
+			Level:    e.Level,
+			Event:    e.Event,
+			Scope:    e.Scope,
+			Message:  e.Message,
+			Fields:   make([]liveActivityFieldResponse, 0, len(e.Fields)),
+		}
+		for _, f := range e.Fields {
+			event.Fields = append(event.Fields, liveActivityFieldResponse{Key: f.Key, Value: f.Value})
+		}
+		out = append(out, event)
+	}
+	return out
 }
 
 func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
@@ -188,7 +256,7 @@ func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
 		BytesPerSecond:     s.BytesPerSecond,
 		Failures:           s.Failures,
 		Outcome:            s.Outcome,
-		Events:             make([]liveActivityEventResponse, 0, len(s.Events)),
+		Events:             liveActivityEventsOf(s.Events),
 		Truncated:          s.Truncated,
 		Dropped:            s.Dropped,
 		OldestSequence:     s.OldestSequence,
@@ -199,21 +267,6 @@ func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
 	}
 	if s.FinishedAt != nil {
 		out.FinishedAt = formatTime(*s.FinishedAt)
-	}
-	for _, e := range s.Events {
-		event := liveActivityEventResponse{
-			Sequence: e.Sequence,
-			At:       formatTime(e.At),
-			Level:    e.Level,
-			Event:    e.Event,
-			Scope:    e.Scope,
-			Message:  e.Message,
-			Fields:   make([]liveActivityFieldResponse, 0, len(e.Fields)),
-		}
-		for _, f := range e.Fields {
-			event.Fields = append(event.Fields, liveActivityFieldResponse{Key: f.Key, Value: f.Value})
-		}
-		out.Events = append(out.Events, event)
 	}
 	return out
 }

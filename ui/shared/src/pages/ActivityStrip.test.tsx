@@ -269,8 +269,19 @@ describe("the log's own controls", () => {
   });
 
   it("says when the buffer dropped lines rather than presenting a gap as continuity", () => {
-    strip({ ...TRANSFERRING, oldestSequence: 51, latestSequence: 250 });
+    strip({ ...TRANSFERRING, dropped: true, oldestSequence: 51, latestSequence: 250 });
     expect(screen.getByText(/earlier lines are not held here/i)).toBeInTheDocument();
+  });
+
+  // The control the case above needs since #593. A set's feed is now the
+  // set's own ring and the sequence counter is shared with every other
+  // bucket, so a perfectly healthy set routinely starts at a sequence
+  // well above 1. A strip that read that as a dropped line would say
+  // lines were lost on every set on a working deployment, which is the
+  // fastest way to teach an operator to ignore the notice.
+  it("does not claim lines were dropped just because its first line is not sequence 1", () => {
+    strip({ ...TRANSFERRING, dropped: false, oldestSequence: 51, latestSequence: 250 });
+    expect(screen.queryByText(/earlier lines are not held here/i)).not.toBeInTheDocument();
   });
 });
 

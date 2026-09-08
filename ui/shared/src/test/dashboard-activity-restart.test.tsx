@@ -88,7 +88,7 @@ function activity(events: SetActivityEvent[], latestSequence: number, over: Part
 }
 
 function feed(epoch: string, sets: SetActivity[]): LiveActivity {
-  return { observedAt: "2026-09-07T00:00:20Z", epoch, pollAfterMs: 1000, sets };
+  return { observedAt: "2026-09-07T00:00:20Z", epoch, pollAfterMs: 1000, sets, deployment: null };
 }
 
 describe("noticing that the service restarted", () => {

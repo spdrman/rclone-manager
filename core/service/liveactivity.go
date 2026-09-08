@@ -107,9 +107,27 @@ const (
 //
 // Most events name the set they happened in, or an artifact that does.
 // A few genuinely do not: a cycle starting covers every set, and a
-// capacity check is about a filesystem. Those are reported to every set's
-// strip, marked as deployment-wide, rather than dropped (which would hide
-// them) or pinned to one set (which would put them on the wrong screen).
+// capacity check is about a filesystem.
+//
+// Those used to be reported to EVERY set's strip, marked as
+// deployment-wide, because the alternatives on offer were dropping them
+// (which hides them) and pinning them to one set (which puts them on the
+// wrong screen), and both of those are worse. Issue #593 is what that
+// cost: with a bounded tail, the one shared ring crowded out each set's
+// own lines until every strip on a real deployment showed the same log,
+// and a strip that answers "what is the whole system doing" is not the
+// question the strip was put there to answer.
+//
+// The third option did not exist yet. It does now: issue #599's global
+// terminal is docked to the bottom of every page and carries the
+// deployment's own log, so a deployment-wide line has a screen it belongs
+// on. So the split is strict. A set's feed is that set's ring and nothing
+// else, and the deployment's ring is served in its own right (see
+// LiveActivity.Deployment). There is deliberately no allowlist of
+// deployment events that "still belong" on a strip: the permissive
+// version is exactly what made the strips useless, and a line an operator
+// needs beside a set is a line that should name that set when it is
+// emitted rather than be copied onto every strip by this package.
 const (
 	LiveActivityScopeSet        = "set"
 	LiveActivityScopeDeployment = "deployment"
@@ -287,6 +305,45 @@ type LiveActivity struct {
 	PollAfter time.Duration
 
 	Sets []LiveActivitySet
+
+	// Deployment is the log that belongs to no single backup set, served
+	// in its own right rather than copied onto every strip (issue #593).
+	//
+	// Nil means this reading was not asked for it: a caller that narrowed
+	// to one backup set asked about that set, not about the deployment.
+	// A deployment with no configured sets still gets one, which is the
+	// case the old reading could not answer at all: it built its whole
+	// answer by walking the configured sets, so a fresh install answered
+	// with an empty list and the bucket behind it was unreachable, at
+	// exactly the moment a new operator is pressing buttons in a wizard
+	// and most needs to see something.
+	Deployment *LiveActivityDeployment
+}
+
+// LiveActivityDeployment is the deployment-wide tail: the events that
+// name no single backup set.
+//
+// It carries the same four honesty flags a set's strip does and for the
+// same reasons (see LiveActivitySet), and deliberately none of the
+// progress counters: there is no such thing as how far through its own
+// pass a deployment is.
+type LiveActivityDeployment struct {
+	// Events is the tail, oldest first, filtered by whatever cursor the
+	// caller sent.
+	Events []LiveActivityEvent
+
+	// Truncated says Limit cut this reading short and the rest is still
+	// held.
+	Truncated bool
+
+	// Dropped says lines this caller's cursor had not reached yet fell
+	// out of the bounded buffer before this read did.
+	Dropped bool
+
+	// OldestSequence and LatestSequence are the bounds of what is still
+	// held, NOT of the slice above.
+	OldestSequence int64
+	LatestSequence int64
 }
 
 // LiveActivityRequest is what a caller asks for.
@@ -305,6 +362,16 @@ type LiveActivityRequest struct {
 	// Limit bounds how many events come back per set. See
 	// liveActivityDefaultLimit for why it is advisory.
 	Limit int
+
+	// DeploymentOnly narrows the read to the deployment-wide bucket and
+	// no set at all.
+	//
+	// It is the read a terminal following the deployment's own log wants,
+	// and the one half of the set/deployment distinction that a
+	// BackupSetID cannot express: naming no set already means "every
+	// set". Setting both is not an error, and the narrower answer wins:
+	// a caller that named a set asked about that set.
+	DeploymentOnly bool
 }
 
 // LiveActivity reports what every configured backup set is doing.
@@ -334,15 +401,23 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 
 	st := b.state.Load()
 	var ids []string
-	for _, src := range st.inner.Config.Sources {
-		for _, bs := range src.BackupSets {
-			id := src.Name + "/" + bs.Name
-			if req.BackupSetID != "" && id != req.BackupSetID {
-				continue
+	if !req.DeploymentOnly {
+		for _, src := range st.inner.Config.Sources {
+			for _, bs := range src.BackupSets {
+				id := src.Name + "/" + bs.Name
+				if req.BackupSetID != "" && id != req.BackupSetID {
+					continue
+				}
+				ids = append(ids, id)
 			}
-			ids = append(ids, id)
 		}
 	}
+
+	// Whether the deployment's own bucket is part of this reading. A
+	// caller that named a set asked about that set; everybody else gets
+	// it, including a deployment with nothing configured, which is the
+	// whole of the case the old reading could not answer.
+	wantDeployment := req.BackupSetID == ""
 
 	// Every set, under ONE lock acquisition. The client holds a single
 	// cursor and it is the highest sequence anywhere in the reading, so a
@@ -351,11 +426,13 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 	// cursor lands on the latest of them and whatever arrived for an
 	// earlier bucket meanwhile is filtered out of the next poll and never
 	// returned to anybody. One reading is one moment.
+	sets, deployment := b.activity.read(ids, wantDeployment, req.Since, limit)
 	out := LiveActivity{
 		ObservedAt: now(),
 		Epoch:      b.activity.epochID(),
 		PollAfter:  liveActivityIdlePoll,
-		Sets:       b.activity.snapshotAll(ids, req.Since, limit),
+		Sets:       sets,
+		Deployment: deployment,
 	}
 	for _, set := range out.Sets {
 		// Truncated asks for the busy cadence for the same reason Active
@@ -365,6 +442,9 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 		if set.Active || set.Truncated {
 			out.PollAfter = liveActivityBusyPoll
 		}
+	}
+	if out.Deployment != nil && out.Deployment.Truncated {
+		out.PollAfter = liveActivityBusyPoll
 	}
 	return out, nil
 }
@@ -624,38 +704,47 @@ func (st *liveActivitySetState) beginPass(at time.Time) {
 	st.finishedAt = nil
 }
 
-// snapshot builds one set's strip: its counters, plus its own events and
-// the deployment-wide ones merged into a single ordered tail.
-//
-// Merging by sequence is what makes the tail readable. The sequence
-// counter is one counter across every bucket, so "cycle finished with an
-// error" lands after the transition that failed rather than wherever a
-// per-bucket counter happened to put it.
+// snapshot builds one set's strip: its counters and its own events, and
+// nothing that happened in another set or across the deployment.
 func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivitySet {
-	sets := l.snapshotAll([]string{id}, since, limit)
+	sets, _ := l.read([]string{id}, false, since, limit)
 	return sets[0]
 }
 
-// snapshotAll builds every named set's strip under ONE lock acquisition.
+// read builds every named set's strip, and optionally the deployment's
+// own bucket, under ONE lock acquisition.
 //
 // That is not an optimisation, it is the correctness of the cursor. A
-// caller holds one cursor across every set in a reading, so two buckets
-// read at two different moments hand it a cursor that is ahead of one of
-// them: see LiveActivity's own comment for what that loses.
-func (l *liveActivity) snapshotAll(ids []string, since int64, limit int) []LiveActivitySet {
+// caller holds one cursor across every bucket in a reading, so two
+// buckets read at two different moments hand it a cursor that is ahead of
+// one of them: see LiveActivity's own comment for what that loses. The
+// deployment's bucket is inside the same acquisition for exactly that
+// reason, and it is now a bucket a client polls rather than a ring copied
+// into every set (issue #593).
+func (l *liveActivity) read(ids []string, wantDeployment bool, since int64, limit int) ([]LiveActivitySet, *LiveActivityDeployment) {
 	out := make([]LiveActivitySet, 0, len(ids))
 	if l == nil {
 		for _, id := range ids {
 			out = append(out, LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown})
 		}
-		return out
+		if wantDeployment {
+			return out, &LiveActivityDeployment{Events: []LiveActivityEvent{}}
+		}
+		return out, nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, id := range ids {
 		out = append(out, l.snapshotLocked(id, since, limit))
 	}
-	return out
+	if !wantDeployment {
+		return out, nil
+	}
+	deployment := &LiveActivityDeployment{}
+	deployment.OldestSequence, deployment.LatestSequence = boundsOf(l.deployment)
+	deployment.Events, deployment.Truncated = tailOf(l.deployment, since, limit)
+	deployment.Dropped = droppedSince(since, l.deployment)
+	return out, deployment
 }
 
 // snapshotLocked is snapshot's body. The caller holds l.mu.
@@ -684,9 +773,12 @@ func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveAct
 	if st != nil {
 		own = st.ring
 	}
-	out.OldestSequence, out.LatestSequence = boundsOf(own, l.deployment)
-	out.Events, out.Truncated = mergeTail(own, l.deployment, since, limit)
-	out.Dropped = droppedSince(since, own, l.deployment)
+	// This set's own ring, and only it. See the scope constants for what
+	// merging the deployment's ring in here cost, and for where those
+	// events go instead.
+	out.OldestSequence, out.LatestSequence = boundsOf(own)
+	out.Events, out.Truncated = tailOf(own, since, limit)
+	out.Dropped = droppedSince(since, own)
 	return out
 }
 
@@ -724,9 +816,10 @@ func (r *liveActivityRing) add(e LiveActivityEvent) {
 }
 
 // boundsOf reports the lowest and highest sequence still held across the
-// buffers a strip reads from. Empty buffers contribute nothing, so a set
-// with no events of its own reports the deployment feed's bounds rather
-// than a zero that would read as "nothing has ever happened".
+// buffers it is given. Empty buffers contribute nothing, so a bucket that
+// has never held an event reports 0..0, which is what "nothing has
+// happened here" has to look like now that a set's strip reads its own
+// ring alone (issue #593).
 func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	for _, r := range rings {
 		if r == nil || len(r.events) == 0 {
@@ -743,14 +836,17 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	return oldest, latest
 }
 
-// mergeTail returns the OLDEST limit events across own and deployment
-// that are newer than since, oldest first, and whether limit cut it short.
+// tailOf returns the OLDEST limit events in r that are newer than since,
+// oldest first, and whether limit cut it short.
 //
-// It merges rather than concatenates because the two buffers interleave in
-// time and a strip reads top to bottom: the line before an error is
-// usually what explains it, and that line is often the other buffer's.
-// One shared sequence counter is what makes the merge a comparison of two
-// numbers rather than a comparison of two clocks.
+// One ring, since issue #593. It used to merge a set's ring with the
+// deployment's, on the argument that the two interleave in time and the
+// line before an error is often the other buffer's. That argument is
+// still true and it is why the deployment's bucket carries the same
+// sequence numbers: a client holding both can interleave them itself,
+// which is what the global terminal does. What it may not do is put the
+// whole deployment log on every set's strip, which is what merging here
+// meant.
 //
 // Oldest is what makes the limit safe. A client advances its cursor to the
 // newest sequence it was handed, so a reading that answers a cursor with
@@ -759,22 +855,10 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 // with nothing in the response saying so. Handing back the oldest instead
 // turns the limit into a page rather than a gap, and the flag says there
 // is another page to ask for.
-func mergeTail(own, deployment *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
-	a, b := ringEvents(own), ringEvents(deployment)
-	merged := make([]LiveActivityEvent, 0, len(a)+len(b))
-	i, j := 0, 0
-	for i < len(a) || j < len(b) {
-		switch {
-		case j == len(b) || (i < len(a) && a[i].Sequence < b[j].Sequence):
-			merged = append(merged, a[i])
-			i++
-		default:
-			merged = append(merged, b[j])
-			j++
-		}
-	}
-	kept := merged[:0]
-	for _, e := range merged {
+func tailOf(r *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
+	held := ringEvents(r)
+	kept := make([]LiveActivityEvent, 0, len(held))
+	for _, e := range held {
 		if e.Sequence > since {
 			kept = append(kept, e)
 		}
@@ -784,8 +868,8 @@ func mergeTail(own, deployment *liveActivityRing, since int64, limit int) ([]Liv
 		kept = kept[:limit]
 		truncated = true
 	}
-	// A fresh slice, because the one above still points into the merge
-	// buffer and a caller must never hold a window onto anything this
+	// A fresh slice rather than a window onto the ring's own backing
+	// array, because a caller must never hold one onto anything this
 	// package will write again.
 	out := make([]LiveActivityEvent, len(kept))
 	copy(out, kept)

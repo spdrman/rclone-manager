@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef";
+export const CONTRACT_SHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1491,6 +1491,27 @@ export interface WireListValidatorsResponse {
   validators: WireValidator[];
 }
 
+/** The log that belongs to no single backup set, served in its own
+ *  right rather than copied onto every set's feed. A cycle starting
+ *  covers every set and a capacity check is about a filesystem, so
+ *  neither belongs on one set's strip; until this bucket existed the
+ *  only alternatives were dropping those lines (which hides them) or
+ *  reporting them on every strip, and the second is what shipped, so
+ *  on a real deployment every set's strip showed the same log and the
+ *  shared lines crowded out each set's own. It is absent when the
+ *  caller narrowed the reading to one backup set, because a caller
+ *  that named a set asked about that set. It is present, and is the
+ *  whole answer, for a deployment with no configured backup sets at
+ *  all, which is exactly when a new operator is pressing buttons in a
+ *  wizard and has nothing else to read. */
+export interface WireLiveActivityDeployment {
+  dropped: boolean;
+  events: WireLiveActivityEvent[];
+  latest_sequence: number;
+  oldest_sequence: number;
+  truncated: boolean;
+}
+
 /** One line of the live feed. It carries the engine's own event name,
  *  the engine's own severity and the event's own fields, because what
  *  a moment is worth calling is presentation and belongs to whichever
@@ -1527,6 +1548,7 @@ export interface WireLiveActivityField {
  *  and is exactly as readable from a terminal as from a browser. The
  *  cursor on the request is what keeps polling cheap. */
 export interface WireLiveActivityResponse {
+  deployment?: WireLiveActivityDeployment;
   epoch: string;
   observed_at: string;
   poll_after_ms: number;

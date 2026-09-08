@@ -93,7 +93,7 @@ function activityFor(setId: string, over: Partial<SetActivity> = {}): SetActivit
 /** One epoch throughout, because everything in this file is one process.
  *  A restart is its own case and lives in dashboard-activity-restart.tsx. */
 function feed(sets: SetActivity[], pollAfterMs = 10_000): LiveActivity {
-  return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets };
+  return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets, deployment: null };
 }
 
 function renderStrips(api: BackupManagerApi, sets: BackupSet[] | null = [BASE_SET, SECOND_SET]) {
