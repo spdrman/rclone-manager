@@ -1,3 +1,13 @@
+package packaging
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
 // The third category of third-party material: what this repository
 // carries in its own source (issue #621).
 //
@@ -46,15 +56,6 @@
 // attribution and that no entry claims is refused, so vendoring
 // something else without declaring it is a red build rather than a
 // discrepancy nobody looks for.
-package packaging
-
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-)
 
 // VendoredAsset is one piece of third-party material this repository
 // carries inside its own source.
