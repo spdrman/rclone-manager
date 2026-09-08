@@ -184,10 +184,17 @@ export function App() {
         // this (the dashboard and the backup-sets list) already offer
         // "Add backup set", and a banner repeating it puts the same
         // primary action on one page twice.
+        // Not dismissible (#620), and for a reason the tone hides: this
+        // sits ABOVE <Routes>, so it is mounted once for the session and
+        // no navigation unmounts it. A dismissal here would last until a
+        // hard reload, and its body says "Until that is done nothing is
+        // backed up". An operator who clears that and forgets believes
+        // they have backups they do not have.
         <WarningBanner
           tone="info"
           eyebrow="First run"
           title="Backup Manager has no configuration yet"
+          dismissible={false}
         >
           {"Add your first backup set, under Backup sets, and Backup Manager writes its " +
             "configuration for you. Until that is done nothing is backed up, and the " +
@@ -196,10 +203,16 @@ export function App() {
       )}
 
       {readOnly && version.data ? (
+        // Not dismissible (#620), same position above the outlet and a
+        // sharper consequence: this is the only thing on screen saying why
+        // every management control is disabled. Cleared, the refusal is
+        // still in force and nothing explains it, which turns a stated
+        // refusal into an application that silently does nothing.
         <WarningBanner
           tone="warn"
           title="Backup Manager update required"
           eyebrow="Version mismatch"
+          dismissible={false}
         >
           {"This interface was built for a different version of the /api/v1 " +
             "contract than the backup service speaks, so management actions " +

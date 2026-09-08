@@ -34,6 +34,7 @@ import { FieldHelp } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { RetentionBadges, RetentionPolicyBadge } from "@shared/components/RetentionBadge";
 import { StatusBadge } from "@shared/components/StatusBadge";
+import { Icon } from "@shared/design-system/icons";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
@@ -185,8 +186,8 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                           color: a.validation === "verified" ? "var(--text)" : "var(--danger)"
                         }}
                       >
-                        <span aria-hidden="true" style={{ color: a.validation === "verified" ? "var(--ok)" : "var(--danger)" }}>
-                          {a.validation === "verified" ? "\u2713" : "\u25b2"}
+                        <span aria-hidden="true" style={{ color: a.validation === "verified" ? "var(--ok)" : "var(--danger)", display: "inline-flex" }}>
+                          <Icon name={a.validation === "verified" ? "success" : "warning"} />
                         </span>
                         {a.validation === "verified" ? "Verified" : a.validation === "failed" ? "Failed" : "Pending"}
                       </span>
@@ -205,7 +206,9 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
           </div>
           {ungoverned > 0 ? (
             <div className="card__footer" style={NOTE_STYLE}>
-              <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u25b2"}</span>
+              <span aria-hidden="true" style={{ color: "var(--warn)", lineHeight: 1.5 }}>
+                <Icon name="warning" />
+              </span>
               <span>
                 {(ungoverned === 1 ? "One backup above belongs" : ungoverned + " backups above belong") +
                   " to a backup set whose configuration was removed. No retention policy selects them, so" +
@@ -216,7 +219,9 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
           ) : null}
           {unreported > 0 ? (
             <div className="card__footer" style={NOTE_STYLE}>
-              <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u25b2"}</span>
+              <span aria-hidden="true" style={{ color: "var(--warn)", lineHeight: 1.5 }}>
+                <Icon name="warning" />
+              </span>
               <span>
                 {"This server did not say which retention policy governs " +
                   (unreported === 1 ? "one backup above" : unreported + " backups above") +
@@ -302,9 +307,9 @@ function MediumCell({ artifact }: { artifact: BackupArtifact }) {
         {artifact.placements.map((p) => p.medium).join(", ")}
       </span>
       {unreachable ? (
-        <StatusBadge tone="warn" glyph={"\u25b2"}>Out of reach</StatusBadge>
+        <StatusBadge tone="warn" icon="warning">Out of reach</StatusBadge>
       ) : needsRestore ? (
-        <StatusBadge tone="warn" glyph={"\u25b2"}>Needs a restore</StatusBadge>
+        <StatusBadge tone="warn" icon="warning">Needs a restore</StatusBadge>
       ) : null}
     </div>
   );

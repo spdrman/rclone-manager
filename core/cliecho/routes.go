@@ -47,6 +47,14 @@ const (
 	gapRunBackupSet = "`backup-manager fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
 
 	gapDeploymentScope = "there is no flag that narrows `activity --follow` to the deployment's own events: --backup-set names one set, and naming none already means every set"
+
+	// Issue #624. The candidate half of the connection check has no verb
+	// and deliberately gets none, which is a decision rather than the next
+	// gap to close. A candidate is a form somebody is still typing: its
+	// values exist nowhere, so the command would have to carry all of
+	// them, and the moment they are worth carrying is the create, which
+	// proves the connection before it writes anything.
+	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `backup-manager backup-set create` proves the connection before it writes, and `backup-manager backup-set test-connection <source/backup-set>` re-checks one that exists"
 )
 
 // positiveQuery reads a query parameter that is a count, and reports 0
@@ -204,13 +212,41 @@ var routes = map[string]entry{
 		},
 	},
 	key("POST", "/backup-sets/test-connection"): {
-		// Issue #596 built the check itself: the service now answers this
-		// route with six named steps rather than a boolean, and
-		// `medium preflight`'s two-column layout is what prints a Report
-		// of Checks. What is still missing is the verb, and naming it
-		// here is the point of a `why` line: "no equivalent" is not
-		// actionable, "this verb has to exist" is.
-		why: "there is no verb that tests a connection on its own. `backup-manager backup-set test-connection <source/backup-set>` is the one this route needs: the check is written and this route is its only caller",
+		// This entry was a `why` line for two issues. #596 built the
+		// check, so the route answered with six named steps rather than a
+		// boolean, and nothing could reach it from a terminal; the gap
+		// sentence named the verb that had to exist rather than saying
+		// "no equivalent", which is what makes a gap actionable. #624
+		// shipped that verb, so this is a builder now.
+		//
+		// Only the PERSISTED mode has one. A candidate check is the step
+		// the wizard runs while an operator is still filling a form in,
+		// against values that exist nowhere yet: the equivalent command
+		// would have to carry the whole unsaved form, and what a terminal
+		// can do with it is run the create, which verifies before it
+		// writes. So the candidate mode refuses with the reason rather
+		// than printing a command that checks something else.
+		build: func(a Action) *cmd {
+			var req apicontract.TestConnectionRequest
+			if !decode(a.Body, &req) {
+				return nil
+			}
+			if req.BackupSetID == "" {
+				return newCmd().refuse(gapCandidateConnection)
+			}
+			return newCmd("backup-set", "test-connection", req.BackupSetID)
+		},
+		why:      "there is no verb that checks a source that has not been saved yet",
+		refusals: []string{gapCandidateConnection},
+		// `backup-set` is named as the counterexample rather than as the
+		// gap: the refusal's whole point is that the thing to run instead
+		// is `backup-set create`, which proves the connection before it
+		// writes, or `backup-set test-connection` once the set exists.
+		namesShippedVerbs: []string{"backup-set"},
+		examples: []Action{
+			{Body: []byte(`{"backup_set_id":"api-server/var-backups"}`)},
+			{Body: []byte(`{"host":"10.0.0.14","user":"backups","ssh_key_id":"key_1","known_hosts_line":"10.0.0.14 ssh-ed25519 AAAAC3Nz","remote_path":"/var/backups"}`)},
+		},
 	},
 	key("PATCH", "/backup-sets/{source}/{set}"): {
 		build: func(a Action) *cmd {

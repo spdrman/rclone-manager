@@ -122,6 +122,43 @@ func TestActivityFollow_PrintsTheLinesTheEngineHolds(t *testing.T) {
 	}
 }
 
+// TestActivityFollow_PrintsHowEachLineWent is CLI parity for issue #625.
+//
+// The terminal in the browser echoes the command that produced an action
+// and colours the line by the outcome the engine stated, so a command
+// line that printed everything BUT that outcome would be a second, worse
+// account of the same moment: the two surfaces are meant to tell one
+// story, and this is the field the story is now told in.
+func TestActivityFollow_PrintsHowEachLineWent(t *testing.T) {
+	e := startFakeEngine(t, writeTestConfig(t))
+	start := liveEvent(1, "info", "cycle_start", "cycle starting")
+	start.Action = "cycle"
+	start.ActionID = "cycle-42"
+	done := liveEvent(2, "info", "cycle_end", "cycle finished")
+	done.Action = "cycle"
+	done.ActionID = "cycle-42"
+	done.Result = "success"
+	e.holdLiveActivity(oneLiveReading("epoch-1", 2, start, done))
+
+	out, _, err := followFor(t, e, followOptions{}, 120*time.Millisecond)
+	if err != nil {
+		t.Fatalf("followActivity: %v", err)
+	}
+	if !strings.Contains(out, "success") {
+		t.Errorf("the follow output does not say how the cycle went; a completion that only says it finished is the gap #625 is about:\n%s", out)
+	}
+	// The start does not claim one. An action that has not finished has
+	// not gone any way yet, and printing a value there would make the
+	// column meaningless on exactly the lines a reader is waiting on.
+	first, _, ok := strings.Cut(out, "\n")
+	if !ok {
+		t.Fatalf("the follow output is a single line:\n%s", out)
+	}
+	if strings.Contains(first, "success") {
+		t.Errorf("the start line carries a result:\n%s", first)
+	}
+}
+
 func TestActivityFollow_TheCursorAdvancesSoNothingIsPrintedTwice(t *testing.T) {
 	e := startFakeEngine(t, writeTestConfig(t))
 	// Two readings and then silence: the second is repeated for every

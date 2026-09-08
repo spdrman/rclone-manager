@@ -98,6 +98,15 @@ func validCreateReq(t *testing.T, svc *BackupService, name string) CreateBackupS
 		LocalPath:          filepath.Join(t.TempDir(), name),
 		Include:            []string{"*.dump"},
 		CompletionStrategy: "marker",
+		// Every create built from this carries the skip, and that is a
+		// statement about scope rather than a workaround. CreateBackupSet
+		// proves the connection in front of the write since PR #628's
+		// review, and this fixture's host is a name that answers nothing,
+		// so without the skip every case in this package that needs a set
+		// to exist would drive #624's refusal instead of whatever it is
+		// about. The check has its own cases, in
+		// backupsetcreatecheck_test.go, and they turn the skip back off.
+		SkipConnectionCheck: true,
 	}
 }
 

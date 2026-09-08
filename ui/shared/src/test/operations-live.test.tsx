@@ -29,6 +29,7 @@ import type { Operation, SystemHealth } from "@shared/types/operation";
 const noop = () => {};
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "set_test",
   source: "production",
   set: "postgres-primary",

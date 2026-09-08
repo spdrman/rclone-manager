@@ -12,6 +12,7 @@ import type {
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
+import { Banner } from "@shared/components/Banner";
 import { FieldHelp, HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
@@ -455,13 +456,13 @@ function RetentionPolicyEditor({
       ) : null}
 
       {saved ? (
-        <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+        <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
           <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"✓"}</span>
           <span>
             Retention policy saved. It is in effect now, with no restart. Saving rewrites the
             server&rsquo;s configuration file, which does not preserve comments in it.
           </span>
-        </div>
+        </Banner>
       ) : null}
 
       <div>

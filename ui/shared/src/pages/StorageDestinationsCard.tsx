@@ -48,6 +48,7 @@ import type {
   StorageMediumUsage
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
+import { Banner } from "@shared/components/Banner";
 import { ErrorState } from "@shared/components/EmptyState";
 import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
@@ -357,9 +358,9 @@ function DestinationRow({
       />
 
       {failure ? (
-        <div className="banner banner--warn" style={{ fontSize: 13 }}>
+        <Banner tone="warn" style={{ fontSize: 13 }} dismissKey={failure.message}>
           {failure.message}
-        </div>
+        </Banner>
       ) : null}
 
       {failedVerification ? (
@@ -394,7 +395,14 @@ function FailedVerificationBanner({
   const onlyCopy = (usage?.backupSets ?? []).reduce((n, s) => n + s.onlyCopyHere, 0);
 
   return (
-    <div className="banner banner--warn" style={{ display: "block", fontSize: 13 }}>
+    // Not dismissible (#620), and this is the pane the opt-out was
+    // written for. Every sentence in it is a claim about what has NOT
+    // happened, and the doc above says why that matters: the failure this
+    // exists to prevent is an operator reading a red verification as "my
+    // backups are gone" and doing something drastic. A close control here
+    // would let the one thing standing between them and that reading be
+    // put away in a click.
+    <Banner tone="warn" dismissible={false} style={{ display: "block", fontSize: 13 }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>
         {affected > 0
           ? `I cannot reach ${medium.id}, and ${affected} ${affected === 1 ? "copy is" : "copies are"} recorded there.`
@@ -424,7 +432,7 @@ function FailedVerificationBanner({
             : "No backup references this destination yet, so a failing check here costs nothing but the next move that would have used it."}
         </p>
       )}
-    </div>
+    </Banner>
   );
 }
 

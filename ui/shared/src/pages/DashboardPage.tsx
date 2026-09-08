@@ -26,6 +26,7 @@ import { useCausl } from "@shared/state/graph";
 import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import type { CycleOutcome, SystemHealth } from "@shared/types/operation";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthSummary } from "@shared/components/HealthSummary";
 import { MetricCard } from "@shared/components/MetricCard";
@@ -264,9 +265,13 @@ export function DashboardPage({
                 {storage.data ? (
                   <StorageGauge storage={storage.data} />
                 ) : storage.error ? (
-                  <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                  <Banner
+                    tone="danger"
+                    style={{ fontSize: "var(--text-sm)" }}
+                    dismissKey={storage.error.message}
+                  >
                     {"Storage capacity is unavailable (" + storage.error.message + ")."}
-                  </div>
+                  </Banner>
                 ) : (
                   <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking storage…</p>
                 )}
@@ -277,7 +282,17 @@ export function DashboardPage({
       ) : null}
 
       {staleSet ? (
-        <WarningBanner tone="warn" title={"Stale \u00b7 " + staleSet.name}>
+        <WarningBanner
+          tone="warn"
+          title={"Stale \u00b7 " + staleSet.name}
+          // Named rather than left to the derived key, because what this
+          // reports is one set's note and both halves move independently:
+          // a different set can go stale under the same words, and the
+          // same set's note can change under the same title. Nothing
+          // unmounts while a set stays stale, so a dismissal that ignored
+          // either half would swallow the next thing it said (#620).
+          dismissKey={staleSet.source + "/" + staleSet.set + "\u001f" + staleSet.stateNote}
+        >
           {staleSet.stateNote}
         </WarningBanner>
       ) : null}
@@ -304,9 +319,13 @@ export function DashboardPage({
               should stay visible under the notice rather than being
               replaced by it. */}
           {operations.error ? (
-            <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+            <Banner
+              tone="danger"
+              style={{ fontSize: "var(--text-sm)" }}
+              dismissKey={operations.error.message}
+            >
               Live operation status is unavailable ({operations.error.message}).
-            </div>
+            </Banner>
           ) : null}
           {active === null
             ? (operations.error
@@ -413,16 +432,16 @@ function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
       >
         <h2 className="eyebrow">Last run cycle</h2>
         {barren ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing got through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing got through</StatusBadge>
         ) : barrenMoves ? (
           // A cycle can back everything up perfectly and put none of it
           // where the chain says it belongs, and this is the badge for
           // exactly that: the backups happened, the moves did not.
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing moved</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing moved</StatusBadge>
         ) : short ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Some did not get through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Some did not get through</StatusBadge>
         ) : (
-          <StatusBadge tone="ok" glyph={"\u25cf"}>All through</StatusBadge>
+          <StatusBadge tone="ok" icon="status-active">All through</StatusBadge>
         )}
       </div>
       <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>

@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "4c10e9b51ce6bc81203f8071cb59ce140d5c07a336ef1c106269f3d90a1c0c69"
+const ContractSHA256 = "04ed9f8c3312872ee2accb9189e0a7443ea97b5bd934877703fe955657e1b515"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -98,6 +98,7 @@ const (
 	ErrorCodeMediumExists                           ErrorCode = "MEDIUM_EXISTS"
 	ErrorCodeStorageCredentialNotFound              ErrorCode = "STORAGE_CREDENTIAL_NOT_FOUND"
 	ErrorCodeSSHKeyCandidateNotFound                ErrorCode = "SSH_KEY_CANDIDATE_NOT_FOUND"
+	ErrorCodeBackupSetConnectionNotProven           ErrorCode = "BACKUP_SET_CONNECTION_NOT_PROVEN"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -143,6 +144,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
+	ErrorCodeBackupSetConnectionNotProven,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -212,6 +214,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
+	ErrorCodeBackupSetConnectionNotProven,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -219,7 +222,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeMediumIsDefault},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeBackupSetConnectionNotProven, ErrorCodeMediumIsDefault},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -340,7 +343,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged},
+			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
 		},
@@ -388,7 +391,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
-			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -851,7 +854,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			409: {ErrorCodeAlreadyConfigured},
+			409: {ErrorCodeAlreadyConfigured, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -991,6 +994,7 @@ type AuthErrorResponse struct {
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
 	CompletionStrategy       string           `json:"completion_strategy"`
+	ConnectionUnverified     bool             `json:"connection_unverified,omitempty"`
 	Disabled                 bool             `json:"disabled"`
 	Host                     string           `json:"host"`
 	ID                       string           `json:"id"`
@@ -1098,22 +1102,23 @@ type BackupSetRetention struct {
 // so the wizard that collects these answers can never be right about
 // one operation and wrong about the other.
 type BackupSetSpec struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	Include            []string `json:"include"`
-	KnownHostsLine     string   `json:"known_hosts_line"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	ReadOnly           bool     `json:"read_only"`
-	RemotePath         string   `json:"remote_path"`
-	SourceName         string   `json:"source_name"`
-	SSHKeyID           string   `json:"ssh_key_id"`
-	StableForSeconds   int      `json:"stable_for_seconds"`
-	StaleAfterSeconds  int      `json:"stale_after_seconds"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	CompletionStrategy  string   `json:"completion_strategy"`
+	Disabled            bool     `json:"disabled"`
+	Host                string   `json:"host"`
+	Include             []string `json:"include"`
+	KnownHostsLine      string   `json:"known_hosts_line"`
+	LocalPath           string   `json:"local_path"`
+	Name                string   `json:"name"`
+	Port                int      `json:"port"`
+	ReadOnly            bool     `json:"read_only"`
+	RemotePath          string   `json:"remote_path"`
+	SkipConnectionCheck bool     `json:"skip_connection_check"`
+	SourceName          string   `json:"source_name"`
+	SSHKeyID            string   `json:"ssh_key_id"`
+	StableForSeconds    int      `json:"stable_for_seconds"`
+	StaleAfterSeconds   int      `json:"stale_after_seconds"`
+	User                string   `json:"user"`
+	ValidatorID         string   `json:"validator_id"`
 }
 
 // CapabilitiesResponse is GET /system/capabilities. The API expression of the
@@ -1414,6 +1419,22 @@ type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
 }
 
+// LiveActivityAction is one action that started and has not reported an outcome. It is
+// what makes "this announced itself and went quiet" something a
+// surface can say, rather than something an operator would have to
+// notice by reading every line and remembering which starts they had
+// seen. An action still legitimately running appears here too, and
+// that is correct rather than a false alarm: the honest sentence is
+// "started four minutes ago and has not reported an outcome", and
+// whether four minutes is long is a judgement the person reading it
+// is far better placed to make than this service is.
+type LiveActivityAction struct {
+	Action    string `json:"action"`
+	ActionID  string `json:"action_id"`
+	Sequence  int64  `json:"sequence"`
+	StartedAt string `json:"started_at"`
+}
+
 // LiveActivityDeployment is the log that belongs to no single backup set, served in its own
 // right rather than copied onto every set's feed. A cycle starting
 // covers every set and a capacity check is about a filesystem, so
@@ -1428,11 +1449,12 @@ type ListValidatorsResponse struct {
 // all, which is exactly when a new operator is pressing buttons in a
 // wizard and has nothing else to read.
 type LiveActivityDeployment struct {
-	Dropped        bool                `json:"dropped"`
-	Events         []LiveActivityEvent `json:"events"`
-	LatestSequence int64               `json:"latest_sequence"`
-	OldestSequence int64               `json:"oldest_sequence"`
-	Truncated      bool                `json:"truncated"`
+	Dropped           bool                 `json:"dropped"`
+	Events            []LiveActivityEvent  `json:"events"`
+	LatestSequence    int64                `json:"latest_sequence"`
+	OldestSequence    int64                `json:"oldest_sequence"`
+	Truncated         bool                 `json:"truncated"`
+	UnfinishedActions []LiveActivityAction `json:"unfinished_actions"`
 }
 
 // LiveActivityEvent is one line of the live feed. It carries the engine's own event name,
@@ -1444,11 +1466,14 @@ type LiveActivityDeployment struct {
 // when it decided a line was a warning rather than a note, so it is
 // carried through rather than re-derived.
 type LiveActivityEvent struct {
+	Action   string              `json:"action,omitempty"`
+	ActionID string              `json:"action_id,omitempty"`
 	At       string              `json:"at"`
 	Event    string              `json:"event"`
 	Fields   []LiveActivityField `json:"fields"`
 	Level    string              `json:"level"`
 	Message  string              `json:"message"`
+	Result   string              `json:"result,omitempty"`
 	Scope    string              `json:"scope"`
 	Sequence int64               `json:"sequence"`
 }
@@ -1485,25 +1510,26 @@ type LiveActivityResponse struct {
 // either nothing is running or nothing is reporting, with no way to
 // tell which.
 type LiveActivitySet struct {
-	Active             bool                `json:"active"`
-	Artifact           string              `json:"artifact,omitempty"`
-	ArtifactsCompleted int                 `json:"artifacts_completed"`
-	ArtifactsTotal     *int                `json:"artifacts_total,omitempty"`
-	BackupSetID        string              `json:"backup_set_id"`
-	BytesPerSecond     *int64              `json:"bytes_per_second,omitempty"`
-	BytesTotal         *int64              `json:"bytes_total,omitempty"`
-	BytesTransferred   *int64              `json:"bytes_transferred,omitempty"`
-	Dropped            bool                `json:"dropped"`
-	Events             []LiveActivityEvent `json:"events"`
-	Failures           int                 `json:"failures"`
-	FinishedAt         string              `json:"finished_at,omitempty"`
-	LatestSequence     int64               `json:"latest_sequence"`
-	OldestSequence     int64               `json:"oldest_sequence"`
-	Outcome            string              `json:"outcome,omitempty"`
-	ProgressBasis      string              `json:"progress_basis"`
-	Stage              string              `json:"stage,omitempty"`
-	StartedAt          string              `json:"started_at,omitempty"`
-	Truncated          bool                `json:"truncated"`
+	Active             bool                 `json:"active"`
+	Artifact           string               `json:"artifact,omitempty"`
+	ArtifactsCompleted int                  `json:"artifacts_completed"`
+	ArtifactsTotal     *int                 `json:"artifacts_total,omitempty"`
+	BackupSetID        string               `json:"backup_set_id"`
+	BytesPerSecond     *int64               `json:"bytes_per_second,omitempty"`
+	BytesTotal         *int64               `json:"bytes_total,omitempty"`
+	BytesTransferred   *int64               `json:"bytes_transferred,omitempty"`
+	Dropped            bool                 `json:"dropped"`
+	Events             []LiveActivityEvent  `json:"events"`
+	Failures           int                  `json:"failures"`
+	FinishedAt         string               `json:"finished_at,omitempty"`
+	LatestSequence     int64                `json:"latest_sequence"`
+	OldestSequence     int64                `json:"oldest_sequence"`
+	Outcome            string               `json:"outcome,omitempty"`
+	ProgressBasis      string               `json:"progress_basis"`
+	Stage              string               `json:"stage,omitempty"`
+	StartedAt          string               `json:"started_at,omitempty"`
+	Truncated          bool                 `json:"truncated"`
+	UnfinishedActions  []LiveActivityAction `json:"unfinished_actions"`
 }
 
 // ManagerStorage is the one manager-wide storage reading: what the backup root's
@@ -2094,6 +2120,7 @@ type UpdateBackupSetRequest struct {
 	LocalPath                *string   `json:"local_path"`
 	Port                     *int      `json:"port"`
 	RemotePath               *string   `json:"remote_path"`
+	SkipConnectionCheck      bool      `json:"skip_connection_check"`
 	SSHKeyID                 *string   `json:"ssh_key_id"`
 	StableForSeconds         *int      `json:"stable_for_seconds"`
 	StaleAfterSeconds        *int      `json:"stale_after_seconds"`
@@ -2213,6 +2240,7 @@ var SchemaTypes = map[string]any{
 	"ListStorageMediumsResponse":        ListStorageMediumsResponse{},
 	"ListStorageStatusResponse":         ListStorageStatusResponse{},
 	"ListValidatorsResponse":            ListValidatorsResponse{},
+	"LiveActivityAction":                LiveActivityAction{},
 	"LiveActivityDeployment":            LiveActivityDeployment{},
 	"LiveActivityEvent":                 LiveActivityEvent{},
 	"LiveActivityField":                 LiveActivityField{},

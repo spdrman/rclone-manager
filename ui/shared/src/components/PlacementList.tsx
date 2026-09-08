@@ -2,6 +2,9 @@ import type { BackupPlacement, PlacementAccess } from "@shared/types/backup";
 import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import type { StorageSchema } from "@shared/api/contracts";
 import { StatusBadge, type StatusTone } from "@shared/components/StatusBadge";
+import { Icon } from "@shared/design-system/icons";
+import type { IconName } from "@shared/design-system/icons";
+import { Banner } from "@shared/components/Banner";
 import { bytes, stamp } from "@shared/utilities/format";
 
 /**
@@ -41,30 +44,30 @@ import { bytes, stamp } from "@shared/utilities/format";
 /** How each access state is presented. The map is exhaustive over the
  *  generated wire union, so a value added to the contract is a type error
  *  here rather than a row that silently renders nothing. */
-const ACCESS: Record<PlacementAccess, { tone: StatusTone; glyph: string; label: string; detail: string }> = {
+const ACCESS: Record<PlacementAccess, { tone: StatusTone; icon: IconName; label: string; detail: string }> = {
   immediate: {
     tone: "ok",
-    glyph: "\u25cf",
+    icon: "status-active",
     label: "Readable now",
     detail: ""
   },
   requires_restore: {
     tone: "warn",
-    glyph: "\u25b2",
+    icon: "warning",
     label: "Needs a restore",
     detail:
       "This storage class cannot be read on demand. Getting this backup back means asking for a restore first and waiting hours, and the provider reports no progress while it waits."
   },
   restoring: {
     tone: "warn",
-    glyph: "\u25b2",
+    icon: "warning",
     label: "Restore in progress",
     detail:
       "A restore has been asked for and has not finished. The provider reports no percentage, so there is none to show."
   },
   unreachable: {
     tone: "warn",
-    glyph: "\u25b2",
+    icon: "warning",
     label: "Out of reach",
     detail:
       "This deployment has no way to reach that place, so nothing here can confirm this copy. That is not the same as the copy being gone."
@@ -108,8 +111,10 @@ export function PlacementList({
 
       {placements.length === 0 ? (
         <div style={{ padding: "16px 18px" }}>
-          <div className="banner banner--info">
-            <span aria-hidden="true" style={{ color: "var(--text-2)" }}>{"\u25cf"}</span>
+          <Banner tone="info">
+            <span aria-hidden="true" style={{ color: "var(--text-2)", lineHeight: 1.5 }}>
+              <Icon name="status-active" />
+            </span>
             <div>
               <div style={{ fontWeight: 500 }}>No confirmed copy yet</div>
               <p style={{ margin: "4px 0 0", fontSize: "var(--text-sm)", color: "var(--text-2)", maxWidth: "68ch" }}>
@@ -119,7 +124,7 @@ export function PlacementList({
                 a copy.
               </p>
             </div>
-          </div>
+          </Banner>
         </div>
       ) : (
         <div className="table-scroll">
@@ -187,7 +192,7 @@ export function PlacementList({
                       {p.storageClass || <span style={{ color: "var(--text-3)" }}>{"\u2014"}</span>}
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
-                      <StatusBadge tone={access.tone} glyph={access.glyph}>{access.label}</StatusBadge>
+                      <StatusBadge tone={access.tone} icon={access.icon}>{access.label}</StatusBadge>
                       {access.detail ? (
                         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-2)", marginTop: 4, maxWidth: "34ch", whiteSpace: "normal" }}>
                           {access.detail}

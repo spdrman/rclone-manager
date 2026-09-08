@@ -181,10 +181,25 @@ func TestTheGapVerbRuleCatchesTheSentencesThatShipped(t *testing.T) {
 			want: nil,
 		},
 		{
-			// And a subcommand that does not exist under a verb that
-			// does. `backup-set` is dispatched and `test-connection` is
-			// not, so this sentence is a true gap.
+			// This one shipped as a gap and stopped being one, which
+			// makes it the best case in this table: it is the rule doing
+			// the job the rule exists for. `backup-set test-connection`
+			// was a subcommand that did not exist under a verb that did,
+			// so the sentence was a true gap and this case wanted no
+			// verbs; issue #624 built the verb, and the same sentence now
+			// names one this binary ships. Nobody had to remember to come
+			// back and check: the rule went red on the sentence the
+			// moment the verb landed, which is exactly the staleness it
+			// was written to catch.
 			why:  "`backup-manager backup-set test-connection <source/backup-set>` is the one this route needs",
+			want: []string{"backup-set"},
+		},
+		{
+			// And a subcommand that still does not exist under a verb
+			// that does, so the arm above no longer covers on its own
+			// stays covered. `backup-set` is dispatched and `rekey` is
+			// not, which is a true gap rather than a stale sentence.
+			why:  "there is no `backup-manager backup-set rekey <source/backup-set>` that rotates a key on the source host as well as here",
 			want: nil,
 		},
 		{

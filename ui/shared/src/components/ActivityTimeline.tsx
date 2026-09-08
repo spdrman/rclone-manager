@@ -8,18 +8,25 @@
  * is one prop rather than two components so the row layout cannot drift
  * apart between the two places it appears.
  *
- * Warnings and errors are bolded as well as coloured and glyphed, which is
- * the third redundant channel on the one list where scanning for the bad
- * line is the actual task.
+ * Warnings and errors are bolded as well as coloured and marked with
+ * their own icon, which is the third redundant channel on the one list
+ * where scanning for the bad line is the actual task.
  */
 import type { ActivityEvent, Severity } from "@shared/types/operation";
+import { Icon } from "@shared/design-system/icons";
+import type { IconName } from "@shared/design-system/icons";
 import { stamp } from "@shared/utilities/format";
 
-export const SEVERITY: Record<Severity, { glyph: string; color: string }> = {
-  ok: { glyph: "\u2713", color: "var(--ok)" },
-  info: { glyph: "\u00b7", color: "var(--text-3)" },
-  warn: { glyph: "\u25b2", color: "var(--warn)" },
-  error: { glyph: "\u2715", color: "var(--danger)" }
+/** Issue #621 turned this column into artwork, and info is the one row
+ *  that changed shape rather than style: it was a middle dot, which is the
+ *  mark this app uses to SEPARATE things, sitting in a column whose whole
+ *  job is to say what kind of thing a line is. Every other severity had a
+ *  picture and info had a punctuation mark standing in for one. */
+export const SEVERITY: Record<Severity, { icon: IconName; color: string }> = {
+  ok: { icon: "success", color: "var(--ok)" },
+  info: { icon: "info", color: "var(--text-3)" },
+  warn: { icon: "warning", color: "var(--warn)" },
+  error: { icon: "failure", color: "var(--danger)" }
 };
 
 export function ActivityTimeline({
@@ -53,7 +60,7 @@ export function ActivityTimeline({
               {dense ? stamp(e.at).slice(7) : stamp(e.at)}
             </span>
             <span aria-hidden="true" style={{ color: sev.color, textAlign: "center" }}>
-              {sev.glyph}
+              <Icon name={sev.icon} />
             </span>
             <span>
               <span style={{ fontWeight: e.severity === "warn" || e.severity === "error" ? 600 : 400 }}>

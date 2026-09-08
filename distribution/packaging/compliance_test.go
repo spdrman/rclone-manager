@@ -1388,6 +1388,14 @@ func TestTheProseCarriesNoCountNobodyChecks(t *testing.T) {
 			refuse("acceptedNonPermissive["+a.SPDXID+"].rationale", i, line)
 		}
 	}
+	// And the vendored-asset register (#621), which is a third block of
+	// hand-written prose in the same file and would otherwise have been
+	// the one place the rule did not reach.
+	for _, v := range c.License.VendoredAssets {
+		for i, line := range v.Rationale {
+			refuse("vendoredAssets["+v.ID+"].rationale", i, line)
+		}
+	}
 	// And the written offer, which carried the same figure in the same
 	// way and for the same reason.
 	offer, ok := c.Link("source-offer")

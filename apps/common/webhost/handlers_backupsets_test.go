@@ -69,6 +69,38 @@ const validCreateBody = `{
 	"completion_strategy": "marker"
 }`
 
+// TestCreateBackupSet_AnUnprovenConnectionIsRefusedAsDeclared is PR
+// #628's review finding on this route: the service proves a create's
+// connection itself now, and refuses with the same sentinel an unprovable
+// edit already gets, so this handler has to answer the same 409 for it
+// and the contract has to declare that 409 for this operation. A refusal
+// a client is never told about is one it cannot handle, and this is the
+// one a third-party client that never ran the candidate check will meet
+// first.
+func TestCreateBackupSet_AnUnprovenConnectionIsRefusedAsDeclared(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnCreate = fmt.Errorf("%w: nothing answered TCP on 127.0.0.1:2222: connection refused", service.ErrConnectionNotProven)
+
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	code := errorCodeOf(t, rec)
+	if code != "BACKUP_SET_CONNECTION_NOT_PROVEN" {
+		t.Fatalf("code = %q, want BACKUP_SET_CONNECTION_NOT_PROVEN", code)
+	}
+	declared := contractEndpoints()["createBackupSet"].ErrorCodes[http.StatusConflict]
+	found := false
+	for _, c := range declared {
+		if string(c) == code {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the handler returned 409 %q, which api/v1/openapi.json does not declare for createBackupSet at that status (it declares %v)", code, declared)
+	}
+}
+
 // TestCreateBackupSet_Success_Returns201WithBackupSetJSON is the RED
 // plan's request/response contract case: a well-formed create request
 // returns 201 with the persisted backup set's shape, not merely 2xx.

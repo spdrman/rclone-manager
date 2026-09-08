@@ -159,7 +159,7 @@ export function RetentionPolicyBadge({ policy }: { policy: ArtifactRetentionPoli
         ];
   return (
     <span title={title}>
-      <StatusBadge tone="warn" glyph={"\u25b2"}>{label}</StatusBadge>
+      <StatusBadge tone="warn" icon="warning">{label}</StatusBadge>
     </span>
   );
 }

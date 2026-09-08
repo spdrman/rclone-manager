@@ -32,13 +32,15 @@ import (
 // then hangs up.
 //
 // Not an SSH server: what happens after the identification string is
-// this test's business only insofar as it must not hang, and the
+// this test's business only insofar as it must not take long, and the
 // handshake failing is the honest outcome for a socket that is not an
-// SSH server. It closes rather than going quiet because
-// ssh.NewClientConn puts no deadline on a handshake it did not dial, so
-// a server that simply says nothing more would leave every case here
-// waiting forever. The connect step has already recorded its detail by
-// then, which is the whole of what this file is about.
+// SSH server. It closes rather than going quiet so each case here ends on
+// the close rather than on the handshake's deadline. A peer that says
+// nothing more and keeps the socket open is silentpeer_test.go's case,
+// and it took a deadline on the socket to make that one finish at all:
+// ssh.NewClientConn puts none on a handshake it did not dial. The connect
+// step has already recorded its detail by then, which is the whole of
+// what this file is about.
 func bannerServer(t *testing.T, banner string) (host string, port int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

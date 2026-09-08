@@ -126,6 +126,28 @@ describe("what the dock holds", () => {
     const second = foldReading(first, reading({ sets: [set("a/b", [event(2), event(3)])] }));
     expect(second.events.map((e) => e.sequence)).toEqual([1, 2, 3]);
   });
+
+  // A cycle belongs to no single backup set, so a cycle that announced
+  // itself and went quiet has no strip to be reported on: this dock is
+  // the only surface that can say so at all (issue #625).
+  it("carries every bucket's unfinished actions, the deployment's included", () => {
+    const held = foldReading(
+      undefined,
+      reading({
+        sets: [
+          {
+            ...set("a/b", [event(2)]),
+            unfinishedActions: [{ action: "connection_test", actionId: "ct-1", startedAt: "2026-09-07T14:02:00Z", sequence: 2 }]
+          }
+        ],
+        deployment: {
+          ...deployment([event(1, { scope: "deployment", event: "cycle_start" })]),
+          unfinishedActions: [{ action: "cycle", actionId: "c-1", startedAt: "2026-09-07T14:01:00Z", sequence: 1 }]
+        }
+      })
+    );
+    expect((held.unfinishedActions ?? []).map((a) => a.action)).toEqual(["cycle", "connection_test"]);
+  });
 });
 
 describe("what is written in front of a line", () => {

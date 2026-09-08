@@ -221,6 +221,13 @@ func TestFreshInstall_ServesAFirstRunExperienceInsteadOfRefusingToStart(t *testi
 		"local_path":          filepath.Join(t.TempDir(), "backups"),
 		"include":             []string{"*.dump"},
 		"completion_strategy": "marker",
+		// The service proves the first set's connection in front of the
+		// write since PR #628's review, and this host is a name that
+		// answers nothing. This case is about a fresh install serving a
+		// setup flow rather than refusing to start, not about the check,
+		// which has its own cases in core/service and in webhost; the skip
+		// keeps this one measuring what it says it measures.
+		"skip_connection_check": true,
 	})
 	status, body = f.do(t, http.MethodPost, "/api/v1/system/first-run", string(setup))
 	if status != http.StatusCreated {

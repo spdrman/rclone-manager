@@ -51,6 +51,7 @@ const HEALTH: AsyncState<SystemHealth> = {
  *  "No backup sets yet" empty state instead of its panels, and the panel
  *  under test is one of the ones it would not draw. */
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "production/postgres-primary",
   source: "production",
   set: "postgres-primary",

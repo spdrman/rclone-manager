@@ -30,13 +30,18 @@ import { readOnlyNode } from "./appNodes";
  * host key" fact DashboardPage already surfaces from `app.sets`
  * (`haltReason === "host-key-changed"`, see appNodes.ts/setsNode) — a
  * host-trust decision made in this wizard and a host-key change
- * surfaced on the dashboard are the same fact seen from two screens. The
- * wizard does not yet implement a live host-key re-probe or a connection
- * test (see BackupSetWizardPage.tsx's own note on WP 2.3 steps 3 and 5)
- * — this node exists so that when one does land, it has a graph node to
- * commit to already, with the review step's blocking behavior already
- * wired against it. Today only a direct `graph.commit` sets it, standing
- * in for that future probe (or a backend push).
+ * surfaced on the dashboard are the same fact seen from two screens.
+ * Today only a direct `graph.commit` sets it, standing in for a live
+ * host-key re-probe or a backend push.
+ *
+ * The wizard's connection test (issue #624) is deliberately NOT here, and
+ * this note used to say a connection test did not exist yet. It does now:
+ * the Review step runs the six-step check and Save stays disabled until it
+ * passes. It stayed local state because it fails the bar above rather than
+ * because nobody got to it: the result is about the values on one open
+ * form, nothing outside the wizard reads it, and the wizard is closed by
+ * the time anything else could care. A changed host key is a fact about a
+ * machine two screens report; a candidate check is a fact about a form.
  */
 export const wizardHostKeyChangedNode = registerInput<boolean>("wizard.hostKeyChanged", false);
 

@@ -62,6 +62,7 @@ import type {
   StorageMediumSpec
 } from "@shared/api/contracts";
 import { apiErrorOf } from "@shared/api/failure";
+import { Banner } from "@shared/components/Banner";
 import { PasswordInput } from "@shared/components/PasswordInput";
 import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
 import { CommandEcho } from "@shared/pages/CommandEcho";
@@ -262,9 +263,9 @@ export function S3DestinationWizard({
       </div>
 
       {failure ? (
-        <div className="banner banner--warn" style={{ fontSize: 13 }}>
+        <Banner tone="warn" style={{ fontSize: 13 }} dismissKey={failure.message}>
           {failure.message}
-        </div>
+        </Banner>
       ) : null}
 
       {step === 1 ? (
@@ -651,14 +652,20 @@ function VerifyPane({
       </div>
 
       {failed ? (
-        <div className="banner banner--warn" style={{ display: "block", fontSize: 13 }}>
+        // Not dismissible (#620). It is the only thing on screen saying
+        // why Save is off, and its middle sentence is a claim about the
+        // check list BELOW it: steps after the failing one were never
+        // tried. Put this away and that list reads as a complete report
+        // on a destination, which is the misunderstanding it exists to
+        // prevent.
+        <Banner tone="warn" dismissible={false} style={{ display: "block", fontSize: 13 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Not saved.</div>
           <p style={{ margin: 0, maxWidth: "74ch" }}>
             Steps after the failing one were never tried, so nothing below claims anything about
             them. Fix the destination or the key policy and test the connection again. Save stays
             disabled.
           </p>
-        </div>
+        </Banner>
       ) : null}
 
       {busy ? (
@@ -720,15 +727,21 @@ function SavePane({
       </p>
 
       {cannotVerify ? (
-        <div className="banner banner--info" style={{ fontSize: 12.5 }}>
+        // Not dismissible (#620). This is the sentence that says nothing
+        // was proven, sitting directly above Save, and it is the same
+        // claim `medium add --no-verify` makes out loud on the command
+        // line. Its verified counterpart below can be put away, and that
+        // asymmetry is the point: the reassuring half is disposable and
+        // the unproven half is not.
+        <Banner tone="info" dismissible={false} style={{ fontSize: 12.5 }}>
           Not verified before saving: this edit keeps the credential already configured, and a
           candidate cannot be checked with a credential this page cannot read. Verify it from the
           list once it is saved.
-        </div>
+        </Banner>
       ) : verified ? (
-        <div className="banner banner--info" style={{ fontSize: 12.5 }}>
+        <Banner tone="info" style={{ fontSize: 12.5 }}>
           Verified: an object was written to this destination, read back byte for byte, and deleted.
-        </div>
+        </Banner>
       ) : null}
 
       <pre

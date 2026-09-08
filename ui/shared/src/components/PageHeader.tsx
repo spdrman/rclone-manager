@@ -14,6 +14,7 @@
  * growing a prop per case.
  */
 import type { ReactNode } from "react";
+import { Icon } from "@shared/design-system/icons";
 
 export function PageHeader({
   title,
@@ -34,10 +35,17 @@ export function PageHeader({
           onClick={back.onClick}
           style={{
             alignSelf: "flex-start", height: "auto", padding: 0, border: "none",
-            background: "none", color: "var(--accent)", fontSize: "var(--text-sm)"
+            background: "none", color: "var(--accent)", fontSize: "var(--text-sm)",
+            display: "inline-flex", alignItems: "center", gap: 7
           }}
         >
-          {"\u2190 " + back.label}
+          {/* The arrow is a picture now rather than a character in the
+              label (#621), which also fixes something that was wrong
+              before it: a button's accessible name is its text, so this
+              control used to be announced as "left arrow Backups". It is
+              named by its words alone now. */}
+          <Icon name="arrow-left" />
+          {back.label}
         </button>
       ) : null}
       <div

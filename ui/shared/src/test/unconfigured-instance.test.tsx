@@ -62,8 +62,14 @@ async function go(label: string) {
 }
 
 /** Drives the wizard to a state where every save precondition is met:
- *  an imported key, a trusted host key, and the remote-deletion
- *  acknowledgement. Unchanged from the first-run test this replaces. */
+ *  an imported key, a trusted host key, a connection test that passed
+ *  (issue #624), and the remote-deletion acknowledgement.
+ *
+ *  The connection test joined this list rather than getting its own case
+ *  here: setup is the flow where a source that cannot be reached is most
+ *  expensive to discover later, so a first run has the same gate every
+ *  other create has. The gate itself is exercised in
+ *  wizard-connection-test.test.tsx. */
 async function completeSetupForm() {
   await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
   await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
@@ -76,6 +82,8 @@ async function completeSetupForm() {
   await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
 
   await userEvent.click(screen.getByRole("button", { name: "Review" }));
+  await userEvent.click(screen.getByRole("button", { name: /^Test connection$/ }));
+  await waitFor(() => expect(screen.getByText(/This source has been proven/i)).toBeInTheDocument());
   await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
 }
 

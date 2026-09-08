@@ -389,8 +389,9 @@ func (e *fakeEngine) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		// The actor is the SESSION's, never the request's. That is the
 		// whole authorization argument for routing: an engine records who
 		// asked, and the caller does not get to say.
-		Actor:              e.username,
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
+		Actor:               e.username,
+		AcknowledgeRepoint:  body.AcknowledgeRepoint,
+		SkipConnectionCheck: body.SkipConnectionCheck,
 	}
 	result, err := e.svc.CreateBackupSet(r.Context(), req)
 	if err != nil {
@@ -576,6 +577,13 @@ func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 		// one no routed test can catch dropping it.
 		TrustedHostKeys:          toContractTrustedHostKeys(s.TrustedHostKeys),
 		TrustedHostKeyRecordedAt: contractTimeOrEmpty(s.TrustedHostKeyRecordedAt),
+		// Issue #624: whether this set's connection was ever proven.
+		// Carried for the guard's reason, and for one of its own: a
+		// routed `backup-set create --no-verify` prints the set the
+		// engine answered with, so a fixture that dropped this would
+		// report a set as proven on the one path where it deliberately
+		// was not.
+		ConnectionUnverified: s.ConnectionUnverified,
 	}
 }
 
@@ -643,6 +651,7 @@ func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
 			{Algorithm: "control-algorithm", Fingerprint: "SHA256:controlfingerprint"},
 		},
 		TrustedHostKeyRecordedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
+		ConnectionUnverified:     true,
 	}
 
 	// Nothing is exempt today, and that is the point of writing the list

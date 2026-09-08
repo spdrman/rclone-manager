@@ -367,8 +367,14 @@ func (d Deps) observe(step Step, err error) {
 // rather than holding a button down for a minute.
 const connectTimeout = 5 * time.Second
 
-// handshakeTimeout bounds the SSH key exchange in StepHostKey. Longer
-// than the TCP dial because it covers a key exchange on both ends.
+// handshakeTimeout bounds the SSH key exchange in StepHostKey when the
+// caller's context does not bound it sooner. Longer than the TCP dial
+// because it covers a key exchange on both ends.
+//
+// It is applied as a deadline on the socket, and exchangeHostKey says why
+// that is the only place it can go: ssh.NewClientConn reads no timeout and
+// takes no context, so a deadline on the connection is the one thing that
+// interrupts it.
 const handshakeTimeout = 10 * time.Second
 
 // maxIdentificationBytes bounds what readIdentification will buffer. RFC
@@ -520,7 +526,7 @@ func Run(ctx context.Context, target Target, deps Deps) Report {
 	b.pass(StepConnect, connectDetail)
 	b.took(StepConnect, elapsed)
 
-	offered, verifyErr, elapsed, handshakeErr := exchangeHostKey(replay, addr, target.User, deps.Verify)
+	offered, verifyErr, elapsed, handshakeErr := exchangeHostKey(ctx, replay, addr, target.User, deps.Verify)
 	b.took(StepHostKey, elapsed)
 
 	if offered == nil {
@@ -617,7 +623,39 @@ func Run(ctx context.Context, target Target, deps Deps) Report {
 // result, it is the shape of a probe that deliberately holds no
 // credential, which is why handshakeErr matters only when no key was
 // presented at all.
-func exchangeHostKey(conn net.Conn, addr, user string, verify func(string, net.Addr, ssh.PublicKey) error) (offered ssh.PublicKey, verifyErr error, elapsed time.Duration, handshakeErr error) {
+//
+// # Why the bound is a deadline on the socket
+//
+// ssh.NewClientConn takes an open net.Conn and no context, and it never
+// reads ClientConfig.Timeout: in x/crypto only Dial reads that field, to
+// bound the TCP connect Dial makes itself, and the field's own doc says
+// so. An earlier version of this function set the field to
+// handshakeTimeout and was bounded by nothing at all, so a peer that
+// accepted the connection and then sent no identification string (a load
+// balancer in front of a dead backend, an appliance answering on 22, an
+// accept-and-drop firewall) left the exchange in a read that nothing
+// would ever wake. The one caller that runs this check with a
+// process-wide lock held, core/service.UpdateBackupSet, then held that
+// lock until the process was restarted (PR #628 review).
+//
+// The only thing that interrupts NewClientConn is a deadline on the
+// connection it is reading from, because that aborts the read itself. So
+// the bound goes there: the caller's context deadline when it has one and
+// it is sooner, handshakeTimeout otherwise, and a cancelled context
+// becomes an immediate deadline the same way, because a handshake nobody
+// is waiting on should stop rather than run out its clock holding
+// whatever the caller holds. The deadline is cleared on the way out so
+// nothing this function set outlives it on the socket.
+func exchangeHostKey(ctx context.Context, conn net.Conn, addr, user string, verify func(string, net.Addr, ssh.PublicKey) error) (offered ssh.PublicKey, verifyErr error, elapsed time.Duration, handshakeErr error) {
+	deadline := time.Now().Add(handshakeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+
 	started := time.Now()
 	_, _, _, handshakeErr = ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
 		User: user,
@@ -627,7 +665,8 @@ func exchangeHostKey(conn net.Conn, addr, user string, verify func(string, net.A
 			verifyErr = verify(hostname, remote, key)
 			return verifyErr
 		},
-		Timeout: handshakeTimeout,
+		// No Timeout, deliberately: see above. Setting it would document
+		// a bound this call does not have.
 	})
 	return offered, verifyErr, time.Since(started), handshakeErr
 }
@@ -857,9 +896,14 @@ func listProblem(category transport.Category, t Target, path string) string {
 // how you know you reached sshd and not a load balancer), never a
 // verdict. Anything that goes wrong here leaves the banner empty and the
 // stream untouched.
+//
+// The read deadline it sets is left on the socket rather than cleared on
+// the way out. The key exchange that runs next sets its own the moment it
+// starts, so the connection is never without one while it is in use,
+// which is the property PR #628's review found missing: an earlier
+// version cleared it here, and that was the last bound the handshake had.
 func readIdentification(conn net.Conn) (string, net.Conn) {
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 
 	buf := make([]byte, 0, 64)
 	one := make([]byte, 1)
