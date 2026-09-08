@@ -17,6 +17,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Banner } from "@shared/components/Banner";
+import { Icon } from "@shared/design-system/icons";
 
 export function EmptyState({
   title,
@@ -126,7 +127,9 @@ export function ErrorState({
     // be able to mistake for handled.
     <Banner tone="danger" role="alert" dismissible={false} style={{ flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 12 }}>
-        <span aria-hidden="true" style={{ color: "var(--danger)" }}>{"\u2715"}</span>
+        <span aria-hidden="true" style={{ color: "var(--danger)", lineHeight: 1.5 }}>
+          <Icon name="failure" />
+        </span>
         <div>
           <div style={{ fontWeight: 600, fontSize: 13.5 }}>{message}</div>
           {remediation ? (

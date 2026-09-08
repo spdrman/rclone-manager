@@ -29,6 +29,7 @@ import { Banner } from "@shared/components/Banner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { RetentionTierBadges } from "@shared/components/RetentionBadge";
+import { Icon } from "@shared/design-system/icons";
 import { bytes } from "@shared/utilities/format";
 
 function describeApplyError(e: unknown): ApiError {
@@ -358,7 +359,9 @@ export function RetentionPreviewDialog({
           </p>
           {lastKnownGood ? (
             <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
-              <span aria-hidden="true" style={{ color: "var(--ok)" }}>✓</span>
+              <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+                <Icon name="success" />
+              </span>
               <span>The newest known-good backup is protected.</span>
             </Banner>
           ) : null}

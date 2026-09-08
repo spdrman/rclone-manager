@@ -81,7 +81,7 @@ export function BackupDetailPage() {
             <span className="mono" style={{ fontSize: 19 }}>{a.filename}</span>
             <StatusBadge
               tone={a.validation === "verified" ? "ok" : "danger"}
-              glyph={a.validation === "verified" ? "\u2713" : "\u2715"}
+              icon={a.validation === "verified" ? "success" : "failure"}
             >
               {a.validation === "verified" ? "Verified" : "Failed"}
             </StatusBadge>

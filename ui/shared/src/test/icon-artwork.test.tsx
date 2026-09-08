@@ -46,6 +46,7 @@ import { render } from "@testing-library/react";
 import {
   FONT_AWESOME_ICON_LICENCE,
   FONT_AWESOME_LICENCE_URL,
+  FONT_AWESOME_NOTICE,
   FONT_AWESOME_RELEASE,
   ICON_ARTWORK,
   ICON_NAMES,
@@ -56,6 +57,7 @@ import { HEALTH_PRESENTATION, HealthBadge, StatusBadge } from "@shared/component
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { PageHeader } from "@shared/components/PageHeader";
 import iconModule from "@shared/design-system/icons.tsx?raw";
+import indexHtml from "../../index.html?raw";
 import activityStrip from "@shared/pages/ActivityStrip.tsx?raw";
 import type { HealthState } from "@shared/types/backup";
 
@@ -405,8 +407,21 @@ describe("the licence the artwork ships under is recorded", () => {
     // The licence asks for the embedded comments not to be stripped out of
     // the files, in as many words. This module is where those files' path
     // data ended up, so this is where the comment belongs.
-    expect(iconModule).toContain("Font Awesome Free " + FONT_AWESOME_RELEASE);
-    expect(iconModule).toContain("Fonticons, Inc.");
+    expect(FONT_AWESOME_NOTICE).toContain("Font Awesome Free " + FONT_AWESOME_RELEASE);
+    expect(FONT_AWESOME_NOTICE).toContain("Fonticons, Inc.");
     expect(iconModule).toContain(FONT_AWESOME_LICENCE_URL);
+  });
+
+  it("carries the attribution into the page a recipient is served", () => {
+    // The one that is not about the source tree. Everything else in this
+    // group is a file somebody reads in the repository; this is the
+    // attribution reaching whoever has the built artifact and nothing
+    // else, which is who CC BY 4.0 section 3(a) is about. A JavaScript
+    // comment could not do this job: minification removes them, and an
+    // exported constant nothing imports is dropped by the bundler.
+    expect(indexHtml).toContain("Font Awesome Free " + FONT_AWESOME_RELEASE);
+    expect(indexHtml).toContain("Fonticons, Inc.");
+    expect(indexHtml).toContain(FONT_AWESOME_LICENCE_URL);
+    expect(indexHtml).toMatch(/unmodified/i);
   });
 });

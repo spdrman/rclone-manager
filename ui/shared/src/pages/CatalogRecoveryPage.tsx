@@ -22,6 +22,7 @@ import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { Icon } from "@shared/design-system/icons";
 import { useCausl } from "@shared/state/graph";
 import { configuredNode } from "@shared/state/appNodes";
 import type { CatalogScanPreview } from "@shared/api/contracts";
@@ -94,7 +95,9 @@ export function CatalogRecoveryPage({ readOnly }: { readOnly: boolean }) {
               metadata and checksums only.
             </p>
             <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
-              <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+              <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+                <Icon name="success" />
+              </span>
               <span>No files will be deleted, moved, or modified by a scan or a rebuild.</span>
             </Banner>
             <div>
