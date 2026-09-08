@@ -23,6 +23,7 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { describeFailure } from "@shared/api/failure";
 import { isNotConfigured } from "@shared/api/failure";
+import { Icon } from "@shared/design-system/icons";
 import { stamp } from "@shared/utilities/format";
 import type { BackupArtifact, QuarantineReason } from "@shared/types/backup";
 
@@ -252,7 +253,9 @@ export function QuarantinePage({
                       <td>{a.setName}</td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                          <span aria-hidden="true" style={{ color: "var(--danger)" }}>{"\u2715"}</span>
+                          <span aria-hidden="true" style={{ color: "var(--danger)", display: "inline-flex" }}>
+                            <Icon name="failure" />
+                          </span>
                           {a.quarantine ? REASON[a.quarantine.reason] : "\u2014"}
                         </span>
                         {/* The literal sentence the journal recorded when this
@@ -306,7 +309,9 @@ export function QuarantinePage({
                               setConfirming(a);
                             }}
                           >
-                            <span aria-hidden="true" style={{ color: "var(--warn)" }}>▲</span>
+                            <span aria-hidden="true" style={{ color: "var(--warn)", display: "inline-flex" }}>
+                              <Icon name="warning" />
+                            </span>
                             Reinstate…
                           </button>
                         </span>

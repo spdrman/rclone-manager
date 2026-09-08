@@ -7,6 +7,7 @@ import { Banner } from "@shared/components/Banner";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
+import { Icon } from "@shared/design-system/icons";
 import { isNotConfigured } from "@shared/api/failure";
 
 /**
@@ -369,7 +370,9 @@ function CapacityEditor({ loaded, readOnly }: { loaded: CapacitySettings; readOn
 
       {saved ? (
         <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"✓"}</span>
+          <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+            <Icon name="success" />
+          </span>
           <span>Storage capacity settings saved. They are in effect now, with no restart.</span>
         </Banner>
       ) : null}

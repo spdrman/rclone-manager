@@ -28,6 +28,14 @@
  * box there, and it fails silently, with the layout intact and nothing on
  * screen saying a thing is missing.
  *
+ * Worth saying rather than leaving as an implication, because it is still
+ * true of one thing: index.html pulls IBM Plex Sans and IBM Plex Mono from
+ * Google Fonts over the network. On an isolated NAS that request fails and
+ * every surface falls back to a system font, which is the same class of
+ * defect #621 is about, one layer up, and it is not this change's to fix.
+ * The icons no longer depend on it either way: a path does not need a font
+ * to be drawn, which is half of why this shape was picked.
+ *
  * There is a bundle budget and the image size is gated at 1.05x its
  * baseline. Font Awesome's React packages would spend a slice of that on
  * an icon registry, a tree-shaking story and a runtime, to draw fourteen
@@ -81,15 +89,21 @@ export const FONT_AWESOME_ICON_LICENCE = "CC BY 4.0";
 export const FONT_AWESOME_LICENCE_URL = "https://creativecommons.org/licenses/by/4.0/";
 
 /**
- * The comment Font Awesome embeds in every SVG file it ships.
+ * The comment Font Awesome embeds in every SVG file it ships, reproduced
+ * verbatim.
  *
- * Reproduced verbatim, because the licence asks in as many words that
- * these not be actively removed from files, and lifting a path out of the
- * file it came from is the easiest possible way to remove one by accident.
+ * The licence asks in as many words that these not be actively removed
+ * from files, and lifting a path out of the file it came from is the
+ * easiest possible way to remove one by accident. So it travels with the
+ * paths, right here.
  *
- * It is a constant rather than a comment so that a build cannot strip it:
- * minification removes comments, and this is the one line of this module
- * that is a licence obligation rather than an explanation.
+ * It is a constant rather than a `//` comment for one reason only: a test
+ * can read a constant, and icon-artwork.test.tsx does. It is NOT a way of
+ * getting the attribution into the built bundle, and it would be worth
+ * nothing if it claimed to be. An exported constant nothing imports is
+ * exactly what rollup drops. What reaches somebody holding the built
+ * artifact is the comment in index.html, which survives the build and was
+ * checked doing so, and docs/compliance/bundled-icon-artwork.md.
  */
 export const FONT_AWESOME_NOTICE =
   "Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com " +

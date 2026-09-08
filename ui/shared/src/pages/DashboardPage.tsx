@@ -422,16 +422,16 @@ function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
       >
         <h2 className="eyebrow">Last run cycle</h2>
         {barren ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing got through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing got through</StatusBadge>
         ) : barrenMoves ? (
           // A cycle can back everything up perfectly and put none of it
           // where the chain says it belongs, and this is the badge for
           // exactly that: the backups happened, the moves did not.
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing moved</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing moved</StatusBadge>
         ) : short ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Some did not get through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Some did not get through</StatusBadge>
         ) : (
-          <StatusBadge tone="ok" glyph={"\u25cf"}>All through</StatusBadge>
+          <StatusBadge tone="ok" icon="status-active">All through</StatusBadge>
         )}
       </div>
       <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>

@@ -31,11 +31,16 @@
 import type { ReactNode } from "react";
 import { Banner } from "./Banner";
 import type { BannerTone } from "./Banner";
+import { Icon } from "@shared/design-system/icons";
+import type { IconName } from "@shared/design-system/icons";
 
 export type { BannerTone };
 
-const GLYPH: Record<BannerTone, string> = {
-  info: "i", ok: "\u2713", warn: "\u25b2", danger: "\u2715"
+/** Issue #621. The info tone used to be drawn as a lower-case letter i,
+ *  which is not an icon, it is a letter that looks like one at 13px and
+ *  looks like a typo at any other size. */
+const ICON: Record<BannerTone, IconName> = {
+  info: "info", ok: "success", warn: "warning", danger: "failure"
 };
 
 const COLOR: Record<BannerTone, string> = {
@@ -70,7 +75,9 @@ export function WarningBanner({
       // reports look like the same one.
       dismissKey={[tone, eyebrow ?? "", title ?? ""].join("\u001f")}
     >
-      <span aria-hidden="true" style={{ color: COLOR[tone], lineHeight: 1.5 }}>{GLYPH[tone]}</span>
+      <span aria-hidden="true" style={{ color: COLOR[tone], lineHeight: 1.5 }}>
+        <Icon name={ICON[tone]} />
+      </span>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
         {eyebrow ? (
           <div
