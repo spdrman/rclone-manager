@@ -81,6 +81,14 @@ export interface EditField {
    *  The draft rather than the persisted set, so choosing a completion
    *  method reveals its window immediately instead of after a save. */
   shownWhen?(draft: Record<EditFieldKey, string>): boolean;
+  /** This box sends a value but can never read one back, so its `read` is
+   *  a constant "" rather than the set's own value; see this file's own
+   *  doc for the two of them. Anything that reports on a field has to know
+   *  which kind it is holding: an empty baseline on an ordinary box means
+   *  the value is empty, and on one of these it means "keep whatever this
+   *  set already uses", which are two different sentences to put in front
+   *  of an operator (#591). */
+  writeOnly?: boolean;
   /** Fields this one cannot be persisted without, added to any save that
    *  carries it (withCompanions below). Only for boxes that are really one
    *  setting the server takes as two; see the completion pair for the
@@ -286,6 +294,7 @@ export const EDIT_FIELDS: EditField[] = [
     // Write-only: see this file's own doc. "" is not the key's value, it
     // is the absence of an instruction, and the dirty check is what keeps
     // those two from being confused.
+    writeOnly: true,
     read: () => "",
     parse: (raw) => {
       const trimmed = raw.trim();
@@ -304,6 +313,7 @@ export const EDIT_FIELDS: EditField[] = [
     label: "Trusted host key",
     help: FIELD_HELP.editSetKnownHostsLine,
     control: "text",
+    writeOnly: true,
     read: () => "",
     parse: (raw) => {
       const trimmed = raw.trim();
