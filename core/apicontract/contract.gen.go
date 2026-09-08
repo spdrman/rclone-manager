@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b"
+const ContractSHA256 = "953187d9b65a57a057c51a32e86308cbe699868e4c5c8a2e5a556074e75082d4"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1035,6 +1035,21 @@ type ConfigRevisionStaleResponse struct {
 	Error          ErrorBody `json:"error"`
 }
 
+// ConnectionCheck is one step of a connection test. `outcome` is passed, failed or
+// skipped, and skipped is a first-class answer rather than a quiet
+// pass: a surface that renders a skipped authentication as anything
+// but "this was never tried" has told an operator their credentials
+// are fine on the strength of a step that never ran. `category` is
+// the machine-readable half a surface branches on; `detail` is a
+// sentence the engine composed and never an underlying transport
+// error's text.
+type ConnectionCheck struct {
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Outcome  string `json:"outcome"`
+	Step     string `json:"step"`
+}
+
 // CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the two things only a
 // create can ask for: that the new set also runs at once, and that
 // it may take over history already on its id.
@@ -1706,10 +1721,15 @@ type TestConnectionRequest struct {
 	User           string `json:"user"`
 }
 
-// TestConnectionResponse is the outcome of a pre-save connection test.
+// TestConnectionResponse is the outcome of a connection test, as a verdict and as the six
+// steps that produced it. `ok` and `message` mean exactly what they
+// have always meant, so a client reading only those keeps working;
+// `checks` is what the test actually DID, one entry per step and
+// always all of them, in the order they run.
 type TestConnectionResponse struct {
-	Message string `json:"message,omitempty"`
-	OK      bool   `json:"ok"`
+	Checks  []ConnectionCheck `json:"checks,omitempty"`
+	Message string            `json:"message,omitempty"`
+	OK      bool              `json:"ok"`
 }
 
 // TrustedHostKey is ONE host key a backup set actually pins, named the way an operator
@@ -1840,6 +1860,7 @@ var SchemaTypes = map[string]any{
 	"CatalogReportResponse":       CatalogReportResponse{},
 	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
 	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
+	"ConnectionCheck":             ConnectionCheck{},
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
 	"CreateBackupSetResponse":     CreateBackupSetResponse{},
 	"CredentialsRequest":          CredentialsRequest{},

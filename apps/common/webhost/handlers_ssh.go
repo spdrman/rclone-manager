@@ -201,6 +201,29 @@ func (b testConnectionRequest) namesACandidate() bool {
 type testConnectionResponse struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
+
+	// Checks is what the test actually did (issue #596): one entry per
+	// step, always all of them, in the order they run. Additive: `ok`
+	// and `message` mean exactly what they meant, so a client reading
+	// only those keeps working.
+	//
+	// Empty in the candidate mode. A candidate has no persisted set to
+	// resolve a key, a known_hosts file or a remote path from, so the
+	// six questions cannot be asked about it, and answering them anyway
+	// would be inventing five of the answers.
+	Checks []connectionCheckResponse `json:"checks,omitempty"`
+}
+
+// connectionCheckResponse is one step of a connection test on the wire.
+// The four fields are core/internal/sourcecheck's Check, flattened to
+// strings: `outcome` is passed/failed/skipped, `category` is the
+// machine-readable half a client branches on, and `detail` is a sentence
+// the engine composed, never an underlying transport error's text.
+type connectionCheckResponse struct {
+	Step     string `json:"step"`
+	Outcome  string `json:"outcome"`
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 // testConnection is POST /api/v1/backup-sets/test-connection: issue
@@ -274,5 +297,15 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, testConnectionResponse{OK: result.OK, Message: result.Message})
+	// The steps travel exactly as the service reported them, including
+	// the skipped ones. Dropping a skipped step, or filtering to the
+	// interesting ones, is how a client ends up drawing five steps and
+	// letting a reader assume the sixth passed.
+	out := testConnectionResponse{OK: result.OK, Message: result.Message}
+	for _, c := range result.Checks {
+		out.Checks = append(out.Checks, connectionCheckResponse{
+			Step: c.Step, Outcome: c.Outcome, Category: c.Category, Detail: c.Detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
