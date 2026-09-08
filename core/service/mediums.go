@@ -517,6 +517,13 @@ func (b *BackupService) writeStorageMedium(ctx context.Context, spec StorageMedi
 	// It runs after mediumFromSpec so a request naming two credential
 	// sources, or a credentials_id this deployment never minted, is
 	// refused as what it is rather than as an unreachable endpoint.
+	//
+	// The one ordering cost is the same one CreateBackupSet names: a
+	// create whose problem the re-read configuration below would have
+	// found, a duplicate id say, is refused for its endpoint first when
+	// nothing answers and for the duplicate once something does. Those
+	// are two things wrong with one request, and each refusal names its
+	// own.
 	if !mustExist && !spec.SkipConnectionCheck {
 		if err := b.proveStorageMedium(ctx, medium); err != nil {
 			return StorageMediumSummary{}, err

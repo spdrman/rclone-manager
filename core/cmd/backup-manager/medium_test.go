@@ -266,9 +266,17 @@ func TestMediumReadsAreNotRefusedBesideARunningEngine(t *testing.T) {
 			t.Errorf("%s does not go through withMediumRead, so nothing here can say which door it opens", verb)
 		}
 	}
-	for _, verb := range []string{"mediumWrite", "mediumRemove", "mediumImportCredentials"} {
+	// mediumPreflightVerb joined this list with #636, and it is the one
+	// entry here that was on the other side of it. A check that PASSES
+	// clears that destination's unverified mark, which is a configuration
+	// write, so it stopped being a read: a mark cleared in the file beside
+	// a running engine is a change that process never re-reads and would
+	// put back from its own stale copy on the next write. That costs the
+	// verb something the four beside it never had, so it is pinned here
+	// rather than left to a comment.
+	for _, verb := range []string{"mediumWrite", "mediumRemove", "mediumImportCredentials", "mediumPreflightVerb"} {
 		if body := verbBody(t, text, verb); !strings.Contains(body, "withMediumRoute") {
-			t.Errorf("%s does not go through withMediumRoute: a configuration write left in the file beside a running engine is a change that process would never read (#538, #543)", verb)
+			t.Errorf("%s does not go through withMediumRoute: a configuration write left in the file beside a running engine is a change that process would never read (#538, #543, #636)", verb)
 		}
 	}
 }
