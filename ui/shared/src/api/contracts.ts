@@ -411,6 +411,35 @@ export interface HostKeyProbeResult {
 export interface ConnectionTestOutcome {
   ok: boolean;
   message?: string;
+  /**
+   * What the test actually DID, one entry per step and always all of
+   * them, in the order they run (issue #596).
+   *
+   * `ok` and `message` mean exactly what they always meant, so this is
+   * additive in both directions: an older client reading only those two
+   * keeps working, and a newer one against an older engine gets an
+   * absent list rather than a wrong one. Absent is also the honest
+   * answer for the candidate mode, which has no persisted set to resolve
+   * a key, a known_hosts file or a remote path from.
+   */
+  checks?: ConnectionCheck[];
+}
+
+/**
+ * One step of a connection test.
+ *
+ * `skipped` is a first-class outcome and never a quiet pass: a surface
+ * that renders a skipped authentication as anything but "this was never
+ * tried" has told an operator their credentials are fine on the strength
+ * of a step that never ran. `category` is the machine-readable half a
+ * surface branches on; `detail` is a sentence the engine composed and
+ * never an underlying transport error's text.
+ */
+export interface ConnectionCheck {
+  step: "credentials" | "resolve" | "connect" | "host_key" | "authenticate" | "list";
+  outcome: "passed" | "failed" | "skipped";
+  category?: string;
+  detail?: string;
 }
 
 /** The subset of CreateBackupSetRequest's SSH-facing fields a pre-save

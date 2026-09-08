@@ -189,6 +189,47 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
     case "error":
       text = (f.op ? f.op + ": " : "") + (f.error ?? e.message);
       break;
+    case "connection_test": {
+      // One step of a `Test Connection` (issue #596). The engine emits
+      // six of these, one per step, and the whole point of the feature is
+      // that they are six lines rather than one verdict: `host_key
+      // failed` and `authenticate skipped` send an operator to two
+      // different places, and 0.3.2 spelled both of them "could not
+      // connect and list the remote path".
+      //
+      // The step name is padded so the outcomes line up in a column, the
+      // way `medium preflight` already prints a Report. The detail is the
+      // engine's own sentence, never a transport error's text, and it may
+      // carry its own indented lines (the two fingerprints in a host key
+      // mismatch), so it is joined below rather than flattened.
+      const step = (f.step ?? "?").padEnd(13);
+      const outcome = f.outcome ?? "?";
+      text = step + outcome + (f.detail ? "  " + f.detail : "");
+      if (outcome === "failed") tone = "error";
+      else if (outcome === "skipped") tone = tone === "info" ? "warn" : tone;
+      else if (outcome === "passed" && tone === "info") tone = "ok";
+      break;
+    }
+    case "browser_notice": {
+      // A line this BROWSER wrote, not one the engine sent (issue #596,
+      // over G1.4's state/browserNotices seam). A refusal produced in
+      // front of the engine (a CSRF failure, a dead connection) never
+      // reaches the engine's ring at all, so nothing on the server could
+      // have logged it, and a panel that showed only what the engine said
+      // would show nothing at all for exactly the presses that need
+      // explaining.
+      //
+      // Marked as coming from the browser, always. "The engine said this"
+      // and "your browser could not reach the engine to ask" are
+      // different facts, and only one of them is evidence about the NAS.
+      const parts = ["[browser] " + (e.message || "a request from this browser did not go through")];
+      if (f.remediation) parts.push("  " + f.remediation);
+      if (f.correlation_id) parts.push("  correlation id " + f.correlation_id);
+      if (f.command) parts.push(f.command);
+      text = parts.join("\n");
+      if (f.outcome && f.outcome !== "ok" && tone === "info") tone = "warn";
+      break;
+    }
     case "api_action": {
       // Something somebody did through the API rather than something the
       // cycle did (issue #599). The engine composes the summary, the
@@ -521,11 +562,27 @@ function ActivityToolbar({
 export function ActivityStrip({
   set,
   activity,
-  stale = false
+  stale = false,
+  heading = true
 }: {
   set: BackupSet;
   activity: SetActivity | null;
   stale?: boolean;
+  /**
+   * Whether to draw the set's name, its remote and its state pill above
+   * the bar.
+   *
+   * True on the dashboard, where a column of these is the only thing
+   * saying which strip is which. False on the set's OWN page (issue
+   * #596), where the page header two lines up already carries the name,
+   * the host, the remote folder, the read-only flag and the health
+   * badge, and repeating all five inside the panel is five lines of
+   * chrome between an operator and the log they opened the page for.
+   *
+   * The aria-label is unchanged either way, so the panel is still found
+   * and announced as "Activity for <set>" with the heading off.
+   */
+  heading?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const label = "Activity for " + set.name;
@@ -567,24 +624,26 @@ export function ActivityStrip({
 
   return (
     <section aria-label={label}>
-      <div
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: "var(--space-3)", padding: "var(--space-3) var(--space-5)",
-          borderBottom: "1px solid var(--border)"
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: "var(--text-md)" }}>{set.name}</div>
-          <div style={{ color: "var(--text-3)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)" }}>
-            {set.remoteFolder}
-            {set.readOnly ? " · read-only" : ""}
+      {heading ? (
+        <div
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: "var(--space-3)", padding: "var(--space-3) var(--space-5)",
+            borderBottom: "1px solid var(--border)"
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: "var(--text-md)" }}>{set.name}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)" }}>
+              {set.remoteFolder}
+              {set.readOnly ? " · read-only" : ""}
+            </div>
           </div>
+          <StatusBadge tone={badge.tone} glyph={badge.glyph}>
+            {badge.label}
+          </StatusBadge>
         </div>
-        <StatusBadge tone={badge.tone} glyph={badge.glyph}>
-          {badge.label}
-        </StatusBadge>
-      </div>
+      ) : null}
 
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-3) var(--space-5) 0" }}>
         <div

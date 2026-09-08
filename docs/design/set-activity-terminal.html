@@ -166,7 +166,6 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     </div>
 
     <div class="term">
-      <div><span class="t">00:16:22</span> <span class="dep">[deployment]</span> <span class="i">cycle started</span></div>
       <div><span class="t">00:16:29</span> <span class="i">connected to sftp://api-server.example.net:1209 (host key matched known_hosts)</span></div>
       <div><span class="t">00:16:31</span> <span class="i">discovery complete: 41 artifacts, 26 pending</span></div>
       <div><span class="t">00:16:33</span> <span class="i">transfer started: alternatives.tar.0</span></div>
@@ -176,7 +175,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div><span class="t">00:16:41</span> <span class="i">transferred dpkg.status.2.gz (18.4 MB)</span><span class="cur"></span></div>
     </div>
     <div class="legend">
-      <span><span class="swatch" style="background:#7f8bb0"></span>deployment-wide line, drawn as today's behaviour. G1.5 (#593) decides whether it stays</span>
+      <span><span class="swatch" style="background:#7f8bb0"></span>no deployment-wide line: G1.5 (#593) went strict, so a set's feed is that set's ring and the cycle-start line is in the global terminal</span>
       <span><span class="swatch" style="background:oklch(0.72 0.11 155)"></span>good news</span>
       <span><span class="swatch" style="background:oklch(0.72 0.16 25)"></span>failure</span>
     </div>
@@ -296,9 +295,11 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <strong>The global terminal is the same lines, unfiltered.</strong> This one is
       <code>?backup_set=api-server/var-backups</code>; the docked one (G1.2) is the whole feed with a set
       column, and both read one buffer in one process, so a line cannot appear in one and not the other. What
-      belongs on which is G1.5 (#593)'s call: today every set's snapshot merges the shared deployment ring,
-      which is why every strip on the dashboard reads the same, and this page inherits whatever that issue
-      lands rather than deciding it here.
+      belongs on which was G1.5 (#593)'s call and it went strict: a set's feed is that set's own ring and
+      nothing else, with no allowlist of deployment events that "still belong", because the permissive
+      version is exactly what made every strip on the dashboard read the same. So the cycle-start line this
+      mockup used to draw here is in the global terminal now, and this page inherits that decision rather
+      than making a second one.
     </div>
   </div>
 </div>

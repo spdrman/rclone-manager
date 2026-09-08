@@ -77,6 +77,7 @@ import type {
   WireRunningWork,
   WireSettingsResponse,
   WireUpdateCapacitySettings,
+  WireTestConnectionResponse,
   WireVersionResponse
 } from "./generated/contract";
 import type {
@@ -87,6 +88,7 @@ import type {
   BackupSetPatch,
   CapacitySettings,
   CatalogScanPreview,
+  ConnectionCheck,
   ConnectionTestOutcome,
   ConnectionTestParams,
   CreateBackupSetRequest,
@@ -1534,11 +1536,30 @@ export const httpApi: BackupManagerApi = {
   // only the id is the point: this client neither knows nor should have to
   // echo back the key reference and trusted host line the set is
   // configured with.
-  testConnection: (id) =>
-    request<ConnectionTestOutcome>("/backup-sets/test-connection", {
+  testConnection: async (id) => {
+    const wire = await request<WireTestConnectionResponse>("/backup-sets/test-connection", {
       method: "POST",
       body: JSON.stringify({ backup_set_id: id })
-    }),
+    });
+    // The steps come across exactly as the engine reported them, skipped
+    // ones included (issue #596). Filtering to the interesting ones here
+    // is how a surface ends up drawing five steps and letting a reader
+    // assume the sixth passed.
+    return {
+      ok: wire.ok,
+      ...(wire.message ? { message: wire.message } : {}),
+      ...(wire.checks
+        ? {
+            checks: wire.checks.map((c) => ({
+              step: c.step as ConnectionCheck["step"],
+              outcome: c.outcome as ConnectionCheck["outcome"],
+              ...(c.category ? { category: c.category } : {}),
+              ...(c.detail ? { detail: c.detail } : {})
+            }))
+          }
+        : {})
+    };
+  },
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
   setReadOnly: (source, set, readOnly) =>
     post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),

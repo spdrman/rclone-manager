@@ -128,7 +128,13 @@ var routes = map[string]entry{
 		},
 	},
 	key("POST", "/backup-sets/test-connection"): {
-		why: "there is no verb that tests a connection on its own; a terminal finds out by creating the set or by running its cycle",
+		// Issue #596 built the check itself: the service now answers this
+		// route with six named steps rather than a boolean, and
+		// `medium preflight`'s two-column layout is what prints a Report
+		// of Checks. What is still missing is the verb, and naming it
+		// here is the point of a `why` line: "no equivalent" is not
+		// actionable, "this verb has to exist" is.
+		why: "there is no verb that tests a connection on its own. `backup-manager backup-set test-connection <source/backup-set>` is the one this route needs: the check is written and this route is its only caller",
 	},
 	key("PATCH", "/backup-sets/{source}/{set}"): {
 		build: func(a Action) *cmd {

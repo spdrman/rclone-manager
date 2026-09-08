@@ -1310,7 +1310,28 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         billing:
           "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
       }),
-    testConnection: () => delay({ ok: true, fingerprint: SETS[0].trustedHostKeys[0].fingerprint }),
+    // Six steps, not a verdict (issue #596). A mock that answered {ok:
+    // true} alone would let a surface that renders nothing at all look
+    // exactly like one that renders the steps, which is precisely the
+    // state 0.3.2 shipped in.
+    testConnection: () =>
+      delay({
+        ok: true,
+        checks: [
+          { step: "credentials", outcome: "passed", detail: "read the private key this backup set's configured key file names" },
+          { step: "resolve", outcome: "passed", detail: SETS[0].host + " is 203.0.113.24 (A)" },
+          { step: "connect", outcome: "passed", detail: "TCP to 203.0.113.24:" + SETS[0].port + " in 41ms" },
+          {
+            step: "host_key",
+            outcome: "passed",
+            detail:
+              "the server offered " + SETS[0].trustedHostKeys[0].algorithm + " " + SETS[0].trustedHostKeys[0].fingerprint +
+              ", matching the key this backup set trusts on line 1 of its known_hosts"
+          },
+          { step: "authenticate", outcome: "passed", detail: "the server accepted publickey for " + SETS[0].username },
+          { step: "list", outcome: "passed", detail: SETS[0].remoteFolder + " listed, 41 entries" }
+        ]
+      }),
     // Both APPLY to the SETS fixture rather than resolving and leaving it
     // alone, for the reason updateBackupSet's own comment below gives:
     // a mock that answers "fine" without changing anything makes every

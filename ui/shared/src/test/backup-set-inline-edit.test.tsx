@@ -22,7 +22,7 @@
  * claims and only the second one can go wrong here.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
@@ -469,9 +469,12 @@ describe("issue #350: entering edit mode stops the cycle, and says so first", ()
     });
 
     // The warning names what will be stopped, not a bare "are you sure".
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(screen.getByText(/2026-09-01T02-00\.dump/)).toBeTruthy();
-    expect(screen.getByText(/transferring/i)).toBeTruthy();
+    // Scoped to the dialog since #596: the page now carries a live
+    // activity panel that says what stage this set is in as well, and an
+    // unscoped query for the stage matches both.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/2026-09-01T02-00\.dump/)).toBeTruthy();
+    expect(within(dialog).getByText(/transferring/i)).toBeTruthy();
 
     // Nothing has been held and edit mode has not opened yet.
     expect(take).not.toHaveBeenCalled();
