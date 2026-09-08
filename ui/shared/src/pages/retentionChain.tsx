@@ -359,6 +359,21 @@ export function TierRow({
               {mediums.some((m) => m.isLocal) ? null : (
                 <option value={LOCAL_DESTINATION_ID}>The hard drive on this machine</option>
               )}
+              {/* A destination the list does not carry still gets an
+                  option, naming itself and saying so.
+
+                  Three ways a tier arrives pointing at one: a
+                  configuration edited by hand, an engine that answers a
+                  chain and a list a moment apart, and the ordinary case
+                  of a destination created from this very row, where the
+                  tier is pointed at it before the reloaded list comes
+                  back. Without this option the select has no match for
+                  its own value, renders blank, and the next thing the
+                  operator touches silently replaces a destination they
+                  never chose to leave. */}
+              {tier.medium && !mediums.some((m) => m.id === tier.medium) ? (
+                <option value={tier.medium}>{tier.medium + " (not in this deployment's list)"}</option>
+              ) : null}
               {/* The third kind of destination #595 asked for, which does
                   not exist. It is here, named and disabled, rather than
                   left off the menu, and both halves of that are the

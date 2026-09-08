@@ -209,6 +209,73 @@ describe("picking a destination under a retention tier (#622)", () => {
     await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith(LOCAL_DESTINATION_ID));
   });
 
+  // The other half of "without leaving the tier": make one here, and end
+  // up on it. A wizard that saved and left the tier on its old
+  // destination would make the operator repeat the choice they already
+  // expressed by creating the thing, and would send them to the settings
+  // page to finish, which is the detour the picker exists to remove.
+  //
+  // The whole wizard is driven rather than stubbed, because the claim is
+  // about the seam between it and the tier: what the tier ends up on is
+  // the destination the ENGINE answered with, not the draft, so an id the
+  // engine resolved differently is what the tier points at.
+  it("creates a destination from inside the tier and leaves the tier on it", async () => {
+    const created: StorageMedium = { ...OFFSITE, id: "made_here" };
+    // The engine carries the new destination on the NEXT read, which is
+    // what the row's reload is for. Modelled rather than skipped, because
+    // the tier ending up on something the list does not carry is a real
+    // state with its own rendering and this case is about the ordinary
+    // one.
+    let declared: StorageMedium[] = [LOCAL];
+    const api = {
+      ...createMockApi(),
+      getSettings: vi.fn(() => Promise.resolve(settingsFixture({ mediums: declared }))),
+      updateSettings: vi.fn(() => Promise.resolve(settingsFixture())),
+      listStorageMediums: vi.fn(() => Promise.resolve(declared)),
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-1")),
+      preflightStorageMediumCandidate: vi.fn(() =>
+        Promise.resolve({ medium: "made_here", ok: true, checks: [] } as MediumPreflight)
+      ),
+      createStorageMedium: vi.fn(() => {
+        declared = [LOCAL, created];
+        return Promise.resolve(created);
+      })
+    };
+
+    act(() => {
+      graph.commit("test/seed-version", (tx) =>
+        tx.set(versionNode, { data: VERSION, error: null, loading: false })
+      );
+    });
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <PlatformProvider bridge={genericBridge}>
+            <SettingsPage readOnly={false} />
+          </PlatformProvider>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    fireEvent.click(tier(2).getByRole("button", { name: "Add a destination" }));
+
+    fireEvent.change(await screen.findByLabelText("Destination id"), { target: { value: "made_here" } });
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "us-east-1" } });
+    fireEvent.change(screen.getByLabelText("Bucket"), { target: { value: "nas-backups" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: credentials" }));
+
+    fireEvent.change(await screen.findByLabelText("Access key id"), { target: { value: "EXAMPLE-NOT-A-REAL-KEY" } });
+    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: "EXAMPLE-NOT-A-REAL-SECRET" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save destination" }));
+
+    await waitFor(() => expect(api.createStorageMedium).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(picker(2).value).toBe("made_here"));
+  });
+
   // EPIC G's standing rule, on the control this issue adds. The line an
   // operator reads under the picker is the command that reproduces the
   // click, so somebody who moved one tier by clicking has read the
