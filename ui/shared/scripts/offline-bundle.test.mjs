@@ -101,6 +101,17 @@ afterAll(async () => {
   if (server) await new Promise((ok) => server.close(ok));
 });
 
+// Nothing here asserts a Content-Type, and that is measured rather than
+// overlooked. The runtime image is distroless with no /etc/mime.types and
+// Go's mime table has no .woff2 entry, so serve-ui's http.FileServer sniffs
+// these files to application/octet-stream, and SecurityHeaders sends
+// X-Content-Type-Options: nosniff over the top of that. It reads like the
+// combination that would block a font, and it does not: nosniff's blocking
+// covers script-like and stylesheet destinations, not fonts. Checked rather
+// than reasoned about, with a real Chromium against a server forced into
+// exactly that pair of headers, where document.fonts reported IBM Plex Sans
+// 400, IBM Plex Sans 700 and IBM Plex Mono 600 all loaded.
+
 /** Fetch one URL off the loopback server, failing loudly on a 404. */
 async function get(url) {
   const res = await fetch(url);
