@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -785,9 +786,34 @@ func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveAct
 // liveActivityRing is a fixed-capacity, oldest-first buffer. Nothing here
 // grows: an entry beyond capacity displaces the oldest, which is what
 // "bounded" has to mean for a process that runs for months.
+//
+// # Why it is an actual ring
+//
+// It used to be a slice that appended and then re-sliced itself onto a
+// fresh array whenever it went over capacity. Once full that is two
+// allocations and two 200-element copies for every single event, about
+// 73 KB and 7 microseconds, paid inside the feed's mutex on whichever
+// goroutine the cycle had reached the event on: 703 MB through the heap
+// for ten thousand events into one bucket. RecordEvent's own doc promises
+// the opposite ("one lock, one append and a return"), and the promise
+// matters more now than when it was written, because since issue #599
+// every non-GET request on the API records a line here too.
+//
+// So the array is allocated once at its full length and never touched
+// again. head is the slot the next event goes into, count is how many
+// slots hold a live event, and an add on a full ring is one index write.
+// Overwriting the slot is also what releases the displaced event: the
+// whole struct goes, strings and all, so nothing dropped is kept alive
+// by the buffer that dropped it.
+//
+// The cost of that is that the events are no longer one contiguous
+// slice, so nothing outside this file may read them directly: len, at
+// and copyFrom below are the whole accessor surface, and they are what
+// boundsOf, tailOf and snapshotLocked walk.
 type liveActivityRing struct {
 	events []LiveActivityEvent
-	cap    int
+	head   int
+	count  int
 
 	// evicted is the sequence of the newest event this buffer has ever
 	// discarded, or 0 if it has discarded none. It is what lets a read
@@ -799,19 +825,82 @@ type liveActivityRing struct {
 }
 
 func newLiveActivityRing(capacity int) *liveActivityRing {
-	return &liveActivityRing{cap: capacity}
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &liveActivityRing{events: make([]LiveActivityEvent, capacity)}
 }
 
+// add files one event, displacing the oldest once the ring is full.
+//
+// One index write and two increments, no allocation, no copy. See the
+// type's own doc for what this replaced and why.
 func (r *liveActivityRing) add(e LiveActivityEvent) {
-	r.events = append(r.events, e)
-	if len(r.events) > r.cap {
-		r.evicted = r.events[len(r.events)-r.cap-1].Sequence
-		// Re-slice onto a fresh backing array rather than sliding within
-		// the old one: keeping the old array alive would hold on to every
-		// string in the dropped events for as long as this buffer lives.
-		kept := make([]LiveActivityEvent, r.cap)
-		copy(kept, r.events[len(r.events)-r.cap:])
-		r.events = kept
+	if len(r.events) == 0 {
+		// A ring with no capacity holds nothing, so everything put into
+		// it is discarded the moment it arrives and the cursor has to be
+		// told, exactly as it is for anything that falls off the back.
+		r.evicted = e.Sequence
+		return
+	}
+	if r.count == len(r.events) {
+		// Full, so head is sitting on the oldest event and that is the
+		// one about to go.
+		r.evicted = r.events[r.head].Sequence
+	} else {
+		r.count++
+	}
+	r.events[r.head] = e
+	r.head++
+	if r.head == len(r.events) {
+		r.head = 0
+	}
+}
+
+// len is how many events the ring currently holds, and at is the i'th
+// oldest of them. Nil-safe, because a set that has never been written to
+// has no ring at all.
+func (r *liveActivityRing) len() int {
+	if r == nil {
+		return 0
+	}
+	return r.count
+}
+
+func (r *liveActivityRing) at(i int) LiveActivityEvent {
+	return r.events[r.slot(i)]
+}
+
+// slot maps an oldest-first position onto the array index holding it.
+//
+// The oldest live event sits count places behind head, and both wraps
+// are a single subtraction rather than a modulo because i is never more
+// than count and count is never more than the length.
+func (r *liveActivityRing) slot(i int) int {
+	start := r.head - r.count
+	if start < 0 {
+		start += len(r.events)
+	}
+	j := start + i
+	if j >= len(r.events) {
+		j -= len(r.events)
+	}
+	return j
+}
+
+// copyFrom fills dst with len(dst) events starting at the from'th oldest.
+//
+// At most two copies: a ring's contents are contiguous except where they
+// wrap past the end of the array, so this is the same memmove a slice
+// copy would be, without the intermediate slice that used to be sized by
+// what the bucket HELD rather than by what the read returns.
+func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
+	if r == nil || len(dst) == 0 {
+		return
+	}
+	n := copy(dst, r.events[r.slot(from):])
+	if n < len(dst) {
+		copy(dst[n:], r.events[:len(dst)-n])
 	}
 }
 
@@ -822,10 +911,11 @@ func (r *liveActivityRing) add(e LiveActivityEvent) {
 // ring alone (issue #593).
 func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	for _, r := range rings {
-		if r == nil || len(r.events) == 0 {
+		held := r.len()
+		if held == 0 {
 			continue
 		}
-		first, last := r.events[0].Sequence, r.events[len(r.events)-1].Sequence
+		first, last := r.at(0).Sequence, r.at(held-1).Sequence
 		if oldest == 0 || first < oldest {
 			oldest = first
 		}
@@ -856,23 +946,29 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 // turns the limit into a page rather than a gap, and the flag says there
 // is another page to ask for.
 func tailOf(r *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
-	held := ringEvents(r)
-	kept := make([]LiveActivityEvent, 0, len(held))
-	for _, e := range held {
-		if e.Sequence > since {
-			kept = append(kept, e)
-		}
-	}
+	held := r.len()
+	// Binary search rather than a linear filter, and it is legal because
+	// a bucket's sequences increase strictly: l.seq++ and the add into
+	// the bucket happen under one mutex, so no two events in a bucket can
+	// be numbered out of the order they were filed in. That is a property
+	// of the locking rather than of anything declared here, so there is a
+	// test asserting it directly against concurrent writers
+	// (liveactivityring_test.go) and a change to how seq is handed out
+	// fails there rather than quietly returning a wrong answer here.
+	first := sort.Search(held, func(i int) bool { return r.at(i).Sequence > since })
+
+	count := held - first
 	truncated := false
-	if limit > 0 && len(kept) > limit {
-		kept = kept[:limit]
+	if limit > 0 && count > limit {
+		count = limit
 		truncated = true
 	}
-	// A fresh slice rather than a window onto the ring's own backing
-	// array, because a caller must never hold one onto anything this
-	// package will write again.
-	out := make([]LiveActivityEvent, len(kept))
-	copy(out, kept)
+	// One allocation, of exactly what is being handed back, and it is a
+	// fresh array rather than a window onto the ring's own, because a
+	// caller must never hold one onto anything this package will write
+	// again.
+	out := make([]LiveActivityEvent, count)
+	r.copyFrom(out, first)
 	return out, truncated
 }
 
@@ -890,13 +986,6 @@ func droppedSince(since int64, rings ...*liveActivityRing) bool {
 		}
 	}
 	return false
-}
-
-func ringEvents(r *liveActivityRing) []LiveActivityEvent {
-	if r == nil {
-		return nil
-	}
-	return r.events
 }
 
 // copyInt and copyTime hand back a value that shares no memory with the
