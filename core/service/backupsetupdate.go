@@ -286,12 +286,26 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	// reload. A passphrase configured for the OLD key goes with it for the
 	// same reason it would not work: it is the passphrase for a key this
 	// set no longer uses.
+	//
+	// Unless the id names the key the set already uses. ImportSSHKey
+	// persists a key exactly as it was given, still passphrase-protected
+	// if it was, and nothing on this request can set a passphrase source,
+	// so the only way a set has one is that an operator configured it for
+	// this exact file. An edit form that sends every field it shows sends
+	// the ssh_key_id it was showing, and a version of this that replaced
+	// the Key regardless turned that into a set whose next cycle could not
+	// decrypt its own key (PR #628 review). The same file under either
+	// spelling is the same key, and the passphrase stays with it.
 	if req.SSHKeyID != nil {
 		keyFile, err := b.resolveSSHKeyFile(*req.SSHKeyID)
 		if err != nil {
 			return BackupSet{}, err
 		}
-		edited.Remote.Key = config.Key{File: keyFile}
+		var passphrase config.Passphrase
+		if keyFile == edited.Remote.Key.File || keyFile == edited.Remote.KeyFile {
+			passphrase = edited.Remote.Key.Passphrase
+		}
+		edited.Remote.Key = config.Key{File: keyFile, Passphrase: passphrase}
 		edited.Remote.KeyFile = ""
 	}
 
@@ -333,7 +347,7 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	// passes, so the value encoded here is the value that is true if this
 	// edit lands at all.
 	proveConnection := false
-	if changesTheConnection(*target, edited, req) {
+	if changesTheConnection(*target, edited, cfg.KeyEncryption) {
 		if req.SkipConnectionCheck {
 			// Marked rather than silently written, so tomorrow's operator
 			// can tell this edit apart from one that was checked. See

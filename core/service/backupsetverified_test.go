@@ -6,14 +6,18 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // Issue #624 (H2.3): the durable half of "this connection was never
@@ -449,5 +453,254 @@ func TestUpdateBackupSet_ASilentHostCannotHoldTheConfigurationLock(t *testing.T)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("an edit that runs no check has not returned after 10s; the refused check is still holding configMu")
+	}
+}
+
+// fullyConnectedSet is a backup set with EVERY field a connection test
+// reads set to a non-zero value, for the two cases below.
+//
+// It is not a configuration config.Validate would accept: a key names one
+// of File, Env or Command and this names all three, and the same for the
+// passphrase. That is deliberate. connectionSourceFor does not validate,
+// and these cases are about whether every field reaches the check and the
+// comparison, which a fixture that could only set one of each would not
+// be able to ask about the other two.
+func fullyConnectedSet() config.BackupSet {
+	return config.BackupSet{
+		Name: "postgres-primary",
+		Remote: config.Remote{
+			Type:           "sftp",
+			Host:           "nas.internal",
+			Port:           2222,
+			User:           "backup-agent",
+			KnownHosts:     "/etc/backup-manager/known_hosts.d/production_postgres-primary_known_hosts",
+			MaxConnections: 4,
+			Key: config.Key{
+				File:    "/etc/backup-manager/ssh_keys/id_ed25519",
+				Env:     "BACKUP_SSH_KEY",
+				Command: []string{"/usr/local/bin/fetch-key", "postgres-primary"},
+				Passphrase: config.Passphrase{
+					File:    "/etc/backup-manager/ssh_keys/id_ed25519.passphrase",
+					Env:     "BACKUP_SSH_KEY_PASSPHRASE",
+					Command: []string{"/usr/local/bin/fetch-passphrase", "postgres-primary"},
+				},
+			},
+		},
+		RemotePath: "/var/backups/postgres",
+		LocalPath:  "/srv/backups/postgres",
+		Include:    []string{"*.dump"},
+		Completion: config.Completion{Strategy: "rename"},
+		StaleAfter: config.Duration(24 * time.Hour),
+	}
+}
+
+func fullKeyEncryption() config.KeyEncryption {
+	return config.KeyEncryption{
+		File:    "/etc/backup-manager/key-encryption",
+		Env:     "BACKUP_KEY_ENCRYPTION",
+		Command: []string{"/usr/local/bin/fetch-key-encryption"},
+	}
+}
+
+// TestChangesTheConnection_TracksEveryFieldTheCheckProves pins what an
+// edit has to move for UpdateBackupSet to prove the connection first, and
+// what it may move without one.
+//
+// The list it was written against named six things and forgot the
+// seventh. connectionSourceFor's own doc calls the key passphrase's three
+// sources essential, because without them a passphrase-protected set is
+// reported as an unreachable host, and the comparison beside it did not
+// look at them. The update path also replaces the whole config.Key when a
+// request names an ssh_key_id, which clears the passphrase, so re-sending
+// the id a passphrase-protected set already used dropped the passphrase,
+// the comparison saw the same key on both sides, no check ran, no mark
+// was set, and the write landed. The next cycle could not authenticate.
+//
+// The fix is structural rather than a seventh entry, and this case is
+// written to hold it to that: every field the check's Source carries is a
+// field that forces a check when it moves, and every field it does not is
+// a field that does not. A connection ceiling is on the first list, which
+// the old six were not asking about; #355 put it on the Source because a
+// check without it can pass where a cycle fails, and a ceiling that moved
+// is a check that proved a different connection. Nothing on
+// UpdateBackupSetRequest can move it today, so this forces no check that
+// was not forced before, and if a field for it is ever added it will.
+func TestChangesTheConnection_TracksEveryFieldTheCheckProves(t *testing.T) {
+	keyEnc := fullKeyEncryption()
+	cases := []struct {
+		name string
+		edit func(*config.BackupSet)
+		want bool
+	}{
+		{"host", func(bs *config.BackupSet) { bs.Remote.Host = "other.internal" }, true},
+		{"port", func(bs *config.BackupSet) { bs.Remote.Port = 22 }, true},
+		{"user", func(bs *config.BackupSet) { bs.Remote.User = "someone-else" }, true},
+		{"key file", func(bs *config.BackupSet) { bs.Remote.Key.File = "/elsewhere/id_ed25519" }, true},
+		{"key env", func(bs *config.BackupSet) { bs.Remote.Key.Env = "OTHER_KEY" }, true},
+		{"key command", func(bs *config.BackupSet) { bs.Remote.Key.Command = []string{"/usr/local/bin/fetch-key", "other"} }, true},
+		{"key passphrase file", func(bs *config.BackupSet) { bs.Remote.Key.Passphrase.File = "" }, true},
+		{"key passphrase env", func(bs *config.BackupSet) { bs.Remote.Key.Passphrase.Env = "" }, true},
+		{"key passphrase command", func(bs *config.BackupSet) { bs.Remote.Key.Passphrase.Command = nil }, true},
+		{"the whole key replaced, as an ssh_key_id edit does", func(bs *config.BackupSet) {
+			bs.Remote.Key = config.Key{File: bs.Remote.Key.File}
+		}, true},
+		{"trusted line", func(bs *config.BackupSet) { bs.Remote.KnownHosts = "/elsewhere/known_hosts" }, true},
+		{"remote path", func(bs *config.BackupSet) { bs.RemotePath = "/var/backups/other" }, true},
+		{"connection ceiling", func(bs *config.BackupSet) { bs.Remote.MaxConnections = 1 }, true},
+
+		{"local path", func(bs *config.BackupSet) { bs.LocalPath = "/srv/elsewhere" }, false},
+		{"include", func(bs *config.BackupSet) { bs.Include = []string{"*.sql"} }, false},
+		{"completion", func(bs *config.BackupSet) {
+			bs.Completion = config.Completion{Strategy: "stable", StableFor: config.Duration(90 * time.Second)}
+		}, false},
+		{"stale_after", func(bs *config.BackupSet) { bs.StaleAfter = config.Duration(36 * time.Hour) }, false},
+		{"validator", func(bs *config.BackupSet) { bs.Validation.ValidatorID = "trailer-marker" }, false},
+		{"the mark itself", func(bs *config.BackupSet) { bs.ConnectionUnverified = true }, false},
+		{"nothing", func(*config.BackupSet) {}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := fullyConnectedSet()
+			after := fullyConnectedSet()
+			tc.edit(&after)
+			if got := changesTheConnection(before, after, keyEnc); got != tc.want {
+				if tc.want {
+					t.Errorf("moving %s is reported as not changing the connection, so an edit of it runs no check, sets no mark, and lands", tc.name)
+				} else {
+					t.Errorf("moving %s is reported as changing the connection, so an edit of it would run a network check for a fact about this deployment", tc.name)
+				}
+			}
+		})
+	}
+}
+
+// TestChangesTheConnection_AnAbsentCommandSpelledAsAnEmptyListIsNotAChange
+// is the case the derived comparison found on its own fixture the first
+// time it ran. This product's own write path spells an absent key.command
+// as `command: []`, which loads back as an empty slice, and a Key rebuilt
+// from an ssh_key_id carries a nil one. reflect.DeepEqual tells the two
+// apart, so a comparison that did not normalise them ran a check on every
+// same-key re-send against every set this product had ever written, for a
+// command that was there on neither side.
+func TestChangesTheConnection_AnAbsentCommandSpelledAsAnEmptyListIsNotAChange(t *testing.T) {
+	before := fullyConnectedSet()
+	before.Remote.Key.Command = []string{}
+	before.Remote.Key.Passphrase.Command = []string{}
+	after := fullyConnectedSet()
+	after.Remote.Key.Command = nil
+	after.Remote.Key.Passphrase.Command = nil
+	if changesTheConnection(before, after, fullKeyEncryption()) {
+		t.Error("a command absent on both sides, spelled [] on one and nil on the other, is reported as a change, so every same-key re-send on a set this product wrote runs a check")
+	}
+}
+
+// TestConnectionSourceFor_LeavesNoFieldOfTheSourceUnset is the control on
+// the case above, and it is the same control backupsetupdate_test.go keeps
+// on its whole-struct isolation comparison: a comparison over a Source
+// proves nothing about a field the Source never carries.
+//
+// changesTheConnection is derived from connectionSourceFor, so the two
+// cannot disagree about which fields matter. What they can still both be
+// wrong about together is a field transport.Source gains later that
+// connectionSourceFor does not fill: the check would run without it and
+// the comparison could not see it move, and neither would say so. This
+// walks every field of the Source built from a set that sets everything
+// and requires it non-zero, so that field fails here on the day it lands
+// rather than on the day a cycle fails where the check passed.
+//
+// No exemption ledger, on purpose. Every field transport.Source has today
+// is one the set's own configuration answers, and a field that genuinely
+// cannot be is a reason to write down beside a ledger entry, not a reason
+// to have the ledger in advance.
+func TestConnectionSourceFor_LeavesNoFieldOfTheSourceUnset(t *testing.T) {
+	src := connectionSourceFor(fullyConnectedSet(), fullKeyEncryption())
+	rv := reflect.ValueOf(src)
+	for i := 0; i < rv.NumField(); i++ {
+		if rv.Field(i).IsZero() {
+			t.Errorf("transport.Source.%s is zero in the Source connectionSourceFor builds from a set that sets everything. Fill it from the set, so the check proves the connection a cycle makes and changesTheConnection can see it move; or, if it genuinely cannot be, say why here and exempt it",
+				rv.Type().Field(i).Name)
+		}
+	}
+	if _, isSource := any(src).(transport.Source); !isSource {
+		t.Fatal("connectionSourceFor no longer returns a transport.Source, so this walk is over the wrong type")
+	}
+}
+
+// givePassphraseOnDisk rewrites configPath so the named set's key carries
+// a passphrase file, the way an operator whose store key is
+// passphrase-protected has to configure it: ImportSSHKey persists a key
+// exactly as given, still protected if it was, and nothing on the update
+// request can set a passphrase source, so the only way a set gets one is
+// by hand.
+//
+// Through the config types rather than a string replacement, because the
+// indentation the encoder chose for a nested key block is not something a
+// fixture should guess at.
+func givePassphraseOnDisk(t *testing.T, configPath, sourceName, setName, passphrasePath string) {
+	t.Helper()
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var cfg config.Config
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	target := findBackupSetPointer(&cfg, sourceName, setName)
+	if target == nil {
+		t.Fatalf("the fixture has no backup set %s/%s:\n%s", sourceName, setName, raw)
+	}
+	target.Remote.Key.Passphrase.File = passphrasePath
+	encoded, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+// TestUpdateBackupSet_ResendingTheSameKeyKeepsItsPassphrase is the
+// reachable half of the finding TestChangesTheConnection_TracksEveryField
+// TheCheckProves pins structurally, driven through the service.
+//
+// An edit that names the ssh_key_id a set already uses has not changed
+// the key, so it is neither a rotation nor a connection change, and it
+// has to come out the other side as the no-op it is: the passphrase that
+// decrypts that key still on the set, no check run, and no mark. The edit
+// deliberately does NOT skip the check. The set's host is a name that
+// resolves nowhere, so a build that treats this as a connection change is
+// refused here, loudly, rather than passing because it was told to skip.
+//
+// The old behaviour replaced the whole config.Key for any ssh_key_id at
+// all, which cleared the passphrase, and compared only the four key
+// spellings, which said nothing had moved. The write landed and the next
+// cycle could not decrypt its own key.
+func TestUpdateBackupSet_ResendingTheSameKeyKeepsItsPassphrase(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, keyID, _, _ := createSFTPSet(t, svc, "same-key")
+	source, set, _ := splitBackupSetID(id)
+
+	passphrasePath := filepath.Join(t.TempDir(), "passphrase")
+	givePassphraseOnDisk(t, configPath, source, set, passphrasePath)
+	if before := readBackupSetFromDisk(t, configPath, source, set); before.Remote.Key.Passphrase.File != passphrasePath {
+		t.Fatalf("the fixture did not take the passphrase, so this case proves nothing: %+v", before.Remote.Key)
+	}
+
+	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SSHKeyID: strPtr(keyID),
+	}); err != nil {
+		t.Fatalf("re-sending the key this set already uses was refused: %v", err)
+	}
+
+	after := readBackupSetFromDisk(t, configPath, source, set)
+	if after.Remote.Key.Passphrase.File != passphrasePath {
+		t.Errorf("re-sending the key this set already uses dropped its passphrase: key = %+v on disk. The next cycle cannot decrypt the key it still names", after.Remote.Key)
+	}
+	if after.Remote.Key.File == "" {
+		t.Errorf("the set has no key.file at all after re-sending its own key: %+v", after.Remote.Key)
+	}
+	if after.ConnectionUnverified {
+		t.Error("nothing about the connection moved, and the set came back marked as unverified")
 	}
 }

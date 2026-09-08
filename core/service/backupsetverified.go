@@ -61,6 +61,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 
 	"gopkg.in/yaml.v3"
 
@@ -106,7 +107,7 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		Host:                 r.Host,
 		Port:                 connectionTestPort(r),
 		User:                 r.User,
-		KeyFile:              r.Key.File,
+		KeyFile:              keyFileOf(r),
 		KeyEnv:               r.Key.Env,
 		KeyCommand:           r.Key.Command,
 		PassphraseFile:       r.Key.Passphrase.File,
@@ -119,6 +120,23 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		KnownHosts:           r.KnownHosts,
 		Root:                 root,
 	}
+}
+
+// keyFileOf is the key file a remote names, under either spelling.
+//
+// config.Validate folds the deprecated key_file alias (#74) and key.file
+// into each other, so a set this process is RUNNING has both. A set
+// UpdateBackupSet is editing has not been through Validate yet: it is
+// re-read from disk, raw, so an operator's file that still says key_file
+// arrives here with Key.File empty. Reading only Key.File ran the check
+// for such a set with no key at all, and made changesTheConnection see a
+// key appear from nowhere the moment an edit moved the alias onto
+// Key.File, which every ssh_key_id edit does.
+func keyFileOf(r config.Remote) string {
+	if r.Key.File != "" {
+		return r.Key.File
+	}
+	return r.KeyFile
 }
 
 // connectionTestPort resolves the port a connection test dials.
@@ -154,42 +172,78 @@ func connectionTestPort(r config.Remote) int {
 	return r.Port
 }
 
-// changesTheConnection reports whether an edit moves any of the six things
-// a connection test actually proves (issue #624).
+// changesTheConnection reports whether an edit moves anything a connection
+// test proves (issue #624), and decides it by building the Source the
+// check would run against on each side and comparing the two.
 //
-// Those six and nothing else, and the line is drawn by what the check can
-// have an opinion about rather than by what feels important. Host, port
-// and user decide who is dialling what; the key decides whether that
-// account authenticates; the trusted line decides whether the machine
-// answering is the one that was trusted; the remote path decides whether
-// the account can read the folder the backups are in. Everything else on
-// an edit form (where artifacts land on THIS machine, how completion is
+// The line is still drawn by what the check can have an opinion about
+// rather than by what feels important. Host, port and user decide who is
+// dialling what; the key and its passphrase decide whether that account
+// authenticates; the trusted line decides whether the machine answering
+// is the one that was trusted; the remote path decides whether the
+// account can read the folder the backups are in. Everything else on an
+// edit form (where artifacts land on THIS machine, how completion is
 // detected, which validator runs, the freshness budget) is a fact about
 // this deployment, and running a network check for one of them would be a
 // refusal an operator cannot act on.
 //
-// The trusted line is asked of the REQUEST rather than of the two sets,
-// because a trust change is staged under a fresh filename and comparing
-// paths would report every re-trust as a change even when the line is
-// identical. Re-sending the line already on record is a no-op the
-// configuration cannot see, and checking a connection one more time is the
-// harmless direction to be wrong in.
-func changesTheConnection(before, after config.BackupSet, req UpdateBackupSetRequest) bool {
-	switch {
-	case req.KnownHostsLine != nil:
-		return true
-	case before.Remote.Host != after.Remote.Host:
-		return true
-	case before.Remote.Port != after.Remote.Port:
-		return true
-	case before.Remote.User != after.Remote.User:
-		return true
-	case !sameKeyReference(before.Remote, after.Remote):
-		return true
-	case before.RemotePath != after.RemotePath:
-		return true
+// Derived rather than listed, because the list it replaced disagreed with
+// the check. It named six things and connectionSourceFor beside it
+// carried a seventh it called essential, the key passphrase's three
+// sources, which the list did not look at. UpdateBackupSet meanwhile
+// replaced the whole config.Key for any ssh_key_id at all, clearing the
+// passphrase, so re-sending the id a passphrase-protected set already
+// used dropped the passphrase, the list saw the same key on both sides,
+// no check ran, no mark was set, and the write landed; the next cycle
+// could not decrypt its own key (PR #628 review). A hand list and a
+// constructor are two statements of which fields matter, and two
+// statements drift. One of them now defines the other, and
+// backupsetverified_test.go holds every field of the Source to being one
+// the constructor fills, so a field added to transport.Source later
+// cannot fall outside this comparison without a test saying so.
+//
+// What that pulls in beyond the six is #355's connection ceiling. It is
+// on the Source because a check without it can pass where a cycle fails,
+// so a ceiling that moved is a check that proved a different connection.
+// Nothing on UpdateBackupSetRequest can move it today, so no edit runs a
+// check for it that did not before; if a field for it is ever added, it
+// will, and that is the intended direction.
+//
+// One place this errs, towards proving. A re-trust is staged under a
+// fresh filename, so after's KnownHosts differs from before's whenever a
+// line was sent, even the line already on record; the list did the same
+// by asking the request rather than the paths, and checking a connection
+// one more time is the harmless direction to be wrong in.
+func changesTheConnection(before, after config.BackupSet, keyEnc config.KeyEncryption) bool {
+	return !reflect.DeepEqual(
+		comparableSource(connectionSourceFor(before, keyEnc)),
+		comparableSource(connectionSourceFor(after, keyEnc)),
+	)
+}
+
+// comparableSource is src with every empty slice made nil, so two Sources
+// that differ only in how an absent command is spelled compare equal.
+//
+// Not a corner case. This product's own write path encodes a set through
+// yaml.Marshal, which spells an absent key.command as `command: []`, and
+// that loads back as an empty slice rather than a nil one; a Key rebuilt
+// from an ssh_key_id has nil. reflect.DeepEqual tells the two apart, so
+// without this every re-send of the key a product-written set already
+// used ran a check for a command that was there on neither side, which
+// the first run of the derived comparison found on its own fixture.
+//
+// By reflection over whatever slice fields the Source has rather than by
+// naming them, for the same reason the comparison itself is derived: a
+// list here would be one more statement of which fields matter to keep
+// in step with the constructor.
+func comparableSource(src transport.Source) transport.Source {
+	rv := reflect.ValueOf(&src).Elem()
+	for i := 0; i < rv.NumField(); i++ {
+		if f := rv.Field(i); f.Kind() == reflect.Slice && f.Len() == 0 {
+			f.Set(reflect.Zero(f.Type()))
+		}
 	}
-	return false
+	return src
 }
 
 // clearConnectionUnverified removes issue #624's mark from one backup set
@@ -309,28 +363,4 @@ func (b *BackupService) reportUnclearedMark(ctx context.Context, id, what string
 		slog.String("backup_set", id),
 		slog.String("cause", err.Error()),
 	)
-}
-
-// sameKeyReference reports whether two remotes name the same SSH key.
-//
-// Written out rather than compared with ==, because config.Key carries a
-// Command as a []string and a struct holding a slice is not comparable.
-// Spelling it out is also the honest version: what matters is which of
-// the four spellings names the key and what it names, and a future fifth
-// source that this function forgot would be a key rotation nothing
-// checked, which is exactly the thing worth failing loudly on rather than
-// silently allowing.
-func sameKeyReference(before, after config.Remote) bool {
-	if before.KeyFile != after.KeyFile || before.Key.File != after.Key.File || before.Key.Env != after.Key.Env {
-		return false
-	}
-	if len(before.Key.Command) != len(after.Key.Command) {
-		return false
-	}
-	for i := range before.Key.Command {
-		if before.Key.Command[i] != after.Key.Command[i] {
-			return false
-		}
-	}
-	return true
 }
