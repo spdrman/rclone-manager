@@ -187,4 +187,4 @@
 # That is the same manual half the paragraphs above keep flagging, and it
 # is not something a bump on this side can close.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=e7bf7a9f3959abf8d42d35448afd30d1bac4aa09
+TESTS_REPO_SHA=44be7ee378b0844bf023fb9a709f671f3c578b41
