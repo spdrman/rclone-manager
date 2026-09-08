@@ -206,8 +206,8 @@ func TestTheImageSizeBudgetRefusesOneByteOverTheCeiling(t *testing.T) {
 		{"one byte under the ceiling", ceiling - 1, false},
 		{"exactly the ceiling", ceiling, false},
 		{"one byte over the ceiling", ceiling + 1, true},
-		{"the growth #635 found", 69704266, false},
-		{"that growth against the record it replaced", 43008762, false},
+		{"the record this one replaced, far under", 43008762, false},
+		{"the 1.62x drift #635 found, applied to this record", base * 162 / 100, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, over := overImageSizeBudget(tc.size, base, ratio); over != tc.want {
