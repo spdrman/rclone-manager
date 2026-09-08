@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "953187d9b65a57a057c51a32e86308cbe699868e4c5c8a2e5a556074e75082d4";
+export const CONTRACT_SHA256 = "61445a8b227f25daf5f35ab1805b469be3c2fdd84c7307e0ced577bbb62c3c94";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -55,6 +55,9 @@ export const WIRE_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "MEDIUM_IN_USE",
+  "MEDIUM_EXISTS",
+  "STORAGE_CREDENTIAL_NOT_FOUND",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -122,6 +125,9 @@ export const API_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "MEDIUM_IN_USE",
+  "MEDIUM_EXISTS",
+  "STORAGE_CREDENTIAL_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -920,6 +926,142 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "importStorageCredentials",
+    method: "POST",
+    path: "/storage-credentials",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "ImportStorageCredentialsRequest",
+    responseSchema: "ImportStorageCredentialsResponse",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "listStorageMediums",
+    method: "GET",
+    path: "/storage-mediums",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListStorageMediumsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "createStorageMedium",
+    method: "POST",
+    path: "/storage-mediums",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["STORAGE_CREDENTIAL_NOT_FOUND"],
+      409: ["MEDIUM_EXISTS"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "preflightStorageMediumCandidate",
+    method: "POST",
+    path: "/storage-mediums/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["STORAGE_CREDENTIAL_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "removeStorageMedium",
+    method: "DELETE",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      409: ["MEDIUM_IN_USE"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getStorageMedium",
+    method: "GET",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "updateStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND", "STORAGE_CREDENTIAL_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "preflightStorageMedium",
     method: "POST",
     path: "/storage-mediums/{id}/preflight",
@@ -935,6 +1077,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getStorageMediumUsage",
+    method: "GET",
+    path: "/storage-mediums/{id}/usage",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumUsageResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
     }
   },
@@ -1469,6 +1628,26 @@ export interface WireImportSSHKeyResponse {
   id: string;
 }
 
+/** POST /storage-credentials. Sent once; the caller discards its own
+ *  copy the moment an id comes back. This is the ONLY place in this
+ *  contract where S3 credential material appears, in either
+ *  direction, and it is write-only: no operation anywhere echoes it,
+ *  returns it or derives anything displayable from it. */
+export interface WireImportStorageCredentialsRequest {
+  access_key_id: string;
+  secret_access_key: string;
+  session_token?: string;
+}
+
+/** The reference an import returns, and nothing else. There is
+ *  deliberately no fingerprint, no masked key and no last-four here,
+ *  unlike ImportSSHKeyResponse's algorithm and fingerprint: an SSH
+ *  public key's fingerprint is a safe thing to show a person, and
+ *  nothing derived from an S3 credential is. */
+export interface WireImportStorageCredentialsResponse {
+  id: string;
+}
+
 /** GET /activity, newest first. */
 export interface WireListActivityResponse {
   events: WireActivityEvent[];
@@ -1491,6 +1670,14 @@ export interface WireListBackupSetsResponse {
  *  with. */
 export interface WireListOperationsResponse {
   operations: WireOperation[];
+}
+
+/** Every declared storage destination, in declaration order. An
+ *  object rather than a bare array, matching every other list in this
+ *  contract: a top-level array has nowhere to grow a field, and the
+ *  day this needs a count or a cursor it would be a breaking change. */
+export interface WireListStorageMediumsResponse {
+  mediums: WireStorageMediumSummary[];
 }
 
 /** GET /system/storage. The manager-wide reading a dashboard gauge is
@@ -1955,6 +2142,37 @@ export interface WireSettingsSchema {
   storage: WireStorageSchema;
 }
 
+/** Where one storage medium's credentials come from. Exactly one of
+ *  the four must be set, and none of them is credential MATERIAL:
+ *  this is a reference in all four spellings. credentials_id is the
+ *  one a browser uses, because it is the only one that names nothing
+ *  about the manager's host. */
+export interface WireStorageMediumCredentialsReference {
+  command?: string[];
+  credentials_id?: string;
+  env?: string;
+  file?: string;
+}
+
+/** One storage destination as a caller describes it: for POST
+ *  /storage-mediums (declare it), PUT /storage-mediums/{id} (replace
+ *  its description) and POST /storage-mediums/preflight (prove it
+ *  before either). The same shape for all three deliberately, so what
+ *  is proven and what is saved cannot be different destinations.
+ *  There is no field here for credential material, and there never
+ *  will be (FR-33): the credentials block names a reference. */
+export interface WireStorageMediumRequest {
+  bucket: string;
+  credentials?: WireStorageMediumCredentialsReference;
+  endpoint?: string;
+  id: string;
+  prefix?: string;
+  region?: string;
+  storage_class?: string;
+  type: "s3";
+  upload_verification?: "readback" | "attested";
+}
+
 /** One configured storage medium, as the settings surface reports it:
  *  what it is called, what kind of place it is, which bucket and
  *  region, and which storage class artifacts are written with. There
@@ -1962,14 +2180,42 @@ export interface WireSettingsSchema {
  *  there never will be (FR-33). A credential reaches this product
  *  only as a reference to a file, an environment variable or a
  *  command, and none of those three has a spelling on this boundary
- *  at all. */
+ *  at all. That absence now covers the WRITE direction too (POST/PUT
+ *  below), and it extends to the credential's KIND: there is no field
+ *  saying whether a medium reads a file, a variable or a command,
+ *  because where a credential comes from is a fact about the
+ *  manager's host that an API caller has no use for. An edit
+ *  therefore does not have to resupply the credential; omitting it
+ *  keeps the one already configured. */
 export interface WireStorageMediumSummary {
   bucket: string;
+  endpoint?: string;
   id: string;
+  prefix?: string;
   reads_require_restore: boolean;
   region?: string;
   storage_class: string;
   type: "s3";
+  upload_verification: "readback" | "attested";
+}
+
+/** One backup set's copies on a storage medium. */
+export interface WireStorageMediumUsageBySet {
+  only_copy_here: number;
+  placements: number;
+  set: string;
+}
+
+/** What the journal says is currently on one storage medium, listed
+ *  rather than only counted. It asks the medium nothing: this is what
+ *  the deployment RECORDED, and whether the endpoint answers right
+ *  now is the preflight's question, asked separately. A count with no
+ *  list is not something an operator can act on, which is why the
+ *  backup sets are here. */
+export interface WireStorageMediumUsageResponse {
+  backup_sets: WireStorageMediumUsageBySet[];
+  medium: string;
+  placements: number;
 }
 
 /** The closed value sets and the consent text a storage-medium

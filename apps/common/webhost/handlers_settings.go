@@ -222,17 +222,56 @@ type settingsResponse struct {
 // config.MediumCredentials is not reachable from this shape at all, so
 // there is nothing for a future edit to accidentally start copying
 // across.
+// Endpoint, Prefix and UploadVerification joined it with G2.2 (#594),
+// which made a destination something a form can EDIT rather than only
+// read. That is the reason they are here and not a convenience: an edit
+// replaces the whole record, so a field this shape cannot report is a
+// field an edit form cannot pre-fill and therefore a field the next save
+// silently clears.
+//
+// There is still no field naming the credential, not even its KIND, and
+// that stayed a deliberate refusal rather than an oversight. A
+// "file"/"env"/"command" word here would let an edit form pre-select a
+// radio button, and it would also put where this deployment keeps its
+// secrets onto a surface an operator can export and paste into a support
+// thread. The edit form does not need it, because a write that names no
+// credential keeps the one already configured.
 type storageMediumBody struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
 	Bucket       string `json:"bucket"`
 	Region       string `json:"region,omitempty"`
+	Endpoint     string `json:"endpoint,omitempty"`
+	Prefix       string `json:"prefix,omitempty"`
 	StorageClass string `json:"storage_class"`
+	// UploadVerification is how an upload is proven before the local copy
+	// is deleted, already resolved, so a client never has to know what an
+	// unset value defaults to.
+	UploadVerification string `json:"upload_verification"`
 	// ReadsRequireRestore says this medium's class cannot be read on
 	// demand. It is computed by the engine rather than derived by a
 	// client from storage_class, so one product decides what archive
 	// means.
 	ReadsRequireRestore bool `json:"reads_require_restore"`
+}
+
+// toStorageMediumBody is the one projection of a declared destination
+// onto this API, shared by the settings read and by every route in
+// handlers_mediums.go. One function rather than two identical literals:
+// the field this shape must never grow is a credential, and a second
+// projection is a second place somebody could add one.
+func toStorageMediumBody(m service.StorageMediumSummary) storageMediumBody {
+	return storageMediumBody{
+		ID:                  m.ID,
+		Type:                m.Type,
+		Bucket:              m.Bucket,
+		Region:              m.Region,
+		Endpoint:            m.Endpoint,
+		Prefix:              m.Prefix,
+		StorageClass:        m.StorageClass,
+		UploadVerification:  m.UploadVerification,
+		ReadsRequireRestore: m.ReadsRequireRestore,
+	}
 }
 
 // capacitySettingsBody is FR-21's block as it is actually deciding.
@@ -461,14 +500,7 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 	}
 	mediums := make([]storageMediumBody, 0, len(s.Mediums))
 	for _, m := range s.Mediums {
-		mediums = append(mediums, storageMediumBody{
-			ID:                  m.ID,
-			Type:                m.Type,
-			Bucket:              m.Bucket,
-			Region:              m.Region,
-			StorageClass:        m.StorageClass,
-			ReadsRequireRestore: m.ReadsRequireRestore,
-		})
+		mediums = append(mediums, toStorageMediumBody(m))
 	}
 	return settingsResponse{
 		Mediums:   mediums,

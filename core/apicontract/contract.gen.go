@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "953187d9b65a57a057c51a32e86308cbe699868e4c5c8a2e5a556074e75082d4"
+const ContractSHA256 = "61445a8b227f25daf5f35ab1805b469be3c2fdd84c7307e0ced577bbb62c3c94"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -92,6 +92,9 @@ const (
 	ErrorCodeCopyNotFound                           ErrorCode = "COPY_NOT_FOUND"
 	ErrorCodeMediumNotFound                         ErrorCode = "MEDIUM_NOT_FOUND"
 	ErrorCodeArtifactNotFailed                      ErrorCode = "ARTIFACT_NOT_FAILED"
+	ErrorCodeMediumInUse                            ErrorCode = "MEDIUM_IN_USE"
+	ErrorCodeMediumExists                           ErrorCode = "MEDIUM_EXISTS"
+	ErrorCodeStorageCredentialNotFound              ErrorCode = "STORAGE_CREDENTIAL_NOT_FOUND"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -131,6 +134,9 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
+	ErrorCodeMediumInUse,
+	ErrorCodeMediumExists,
+	ErrorCodeStorageCredentialNotFound,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -194,6 +200,9 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
+	ErrorCodeMediumInUse,
+	ErrorCodeMediumExists,
+	ErrorCodeStorageCredentialNotFound,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -669,6 +678,86 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "importStorageCredentials", Method: "POST", Path: "/storage-credentials",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "ImportStorageCredentialsRequest", ResponseSchema: "ImportStorageCredentialsResponse", SuccessStatus: 201,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "listStorageMediums", Method: "GET", Path: "/storage-mediums",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListStorageMediumsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "createStorageMedium", Method: "POST", Path: "/storage-mediums",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "StorageMediumRequest", ResponseSchema: "StorageMediumSummary", SuccessStatus: 201,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeStorageCredentialNotFound},
+			409: {ErrorCodeMediumExists},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "preflightStorageMediumCandidate", Method: "POST", Path: "/storage-mediums/preflight",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "StorageMediumRequest", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeStorageCredentialNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "removeStorageMedium", Method: "DELETE", Path: "/storage-mediums/{id}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
+			409: {ErrorCodeMediumInUse},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getStorageMedium", Method: "GET", Path: "/storage-mediums/{id}",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeMediumNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "updateStorageMedium", Method: "PUT", Path: "/storage-mediums/{id}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "StorageMediumRequest", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound, ErrorCodeStorageCredentialNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "preflightStorageMedium", Method: "POST", Path: "/storage-mediums/{id}/preflight",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
@@ -676,6 +765,15 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeMediumNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getStorageMediumUsage", Method: "GET", Path: "/storage-mediums/{id}/usage",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "StorageMediumUsageResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1167,6 +1265,26 @@ type ImportSSHKeyResponse struct {
 	ID          string `json:"id"`
 }
 
+// ImportStorageCredentialsRequest is POST /storage-credentials. Sent once; the caller discards its own
+// copy the moment an id comes back. This is the ONLY place in this
+// contract where S3 credential material appears, in either
+// direction, and it is write-only: no operation anywhere echoes it,
+// returns it or derives anything displayable from it.
+type ImportStorageCredentialsRequest struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	SessionToken    string `json:"session_token"`
+}
+
+// ImportStorageCredentialsResponse is the reference an import returns, and nothing else. There is
+// deliberately no fingerprint, no masked key and no last-four here,
+// unlike ImportSSHKeyResponse's algorithm and fingerprint: an SSH
+// public key's fingerprint is a safe thing to show a person, and
+// nothing derived from an S3 credential is.
+type ImportStorageCredentialsResponse struct {
+	ID string `json:"id"`
+}
+
 // ListActivityResponse is GET /activity, newest first.
 type ListActivityResponse struct {
 	Events []ActivityEvent `json:"events"`
@@ -1189,6 +1307,14 @@ type ListBackupSetsResponse struct {
 // with.
 type ListOperationsResponse struct {
 	Operations []Operation `json:"operations"`
+}
+
+// ListStorageMediumsResponse is every declared storage destination, in declaration order. An
+// object rather than a bare array, matching every other list in this
+// contract: a top-level array has nowhere to grow a field, and the
+// day this needs a count or a cursor it would be a breaking change.
+type ListStorageMediumsResponse struct {
+	Mediums []StorageMediumSummary `json:"mediums"`
 }
 
 // ListStorageStatusResponse is GET /system/storage. The manager-wide reading a dashboard gauge is
@@ -1653,6 +1779,37 @@ type SettingsSchema struct {
 	Storage   StorageSchema   `json:"storage"`
 }
 
+// StorageMediumCredentialsReference is where one storage medium's credentials come from. Exactly one of
+// the four must be set, and none of them is credential MATERIAL:
+// this is a reference in all four spellings. credentials_id is the
+// one a browser uses, because it is the only one that names nothing
+// about the manager's host.
+type StorageMediumCredentialsReference struct {
+	Command       []string `json:"command"`
+	CredentialsID string   `json:"credentials_id"`
+	Env           string   `json:"env"`
+	File          string   `json:"file"`
+}
+
+// StorageMediumRequest is one storage destination as a caller describes it: for POST
+// /storage-mediums (declare it), PUT /storage-mediums/{id} (replace
+// its description) and POST /storage-mediums/preflight (prove it
+// before either). The same shape for all three deliberately, so what
+// is proven and what is saved cannot be different destinations.
+// There is no field here for credential material, and there never
+// will be (FR-33): the credentials block names a reference.
+type StorageMediumRequest struct {
+	Bucket             string                            `json:"bucket"`
+	Credentials        StorageMediumCredentialsReference `json:"credentials"`
+	Endpoint           string                            `json:"endpoint"`
+	ID                 string                            `json:"id"`
+	Prefix             string                            `json:"prefix"`
+	Region             string                            `json:"region"`
+	StorageClass       string                            `json:"storage_class"`
+	Type               string                            `json:"type"`
+	UploadVerification string                            `json:"upload_verification"`
+}
+
 // StorageMediumSummary is one configured storage medium, as the settings surface reports it:
 // what it is called, what kind of place it is, which bucket and
 // region, and which storage class artifacts are written with. There
@@ -1660,14 +1817,42 @@ type SettingsSchema struct {
 // there never will be (FR-33). A credential reaches this product
 // only as a reference to a file, an environment variable or a
 // command, and none of those three has a spelling on this boundary
-// at all.
+// at all. That absence now covers the WRITE direction too (POST/PUT
+// below), and it extends to the credential's KIND: there is no field
+// saying whether a medium reads a file, a variable or a command,
+// because where a credential comes from is a fact about the
+// manager's host that an API caller has no use for. An edit
+// therefore does not have to resupply the credential; omitting it
+// keeps the one already configured.
 type StorageMediumSummary struct {
 	Bucket              string `json:"bucket"`
+	Endpoint            string `json:"endpoint,omitempty"`
 	ID                  string `json:"id"`
+	Prefix              string `json:"prefix,omitempty"`
 	ReadsRequireRestore bool   `json:"reads_require_restore"`
 	Region              string `json:"region,omitempty"`
 	StorageClass        string `json:"storage_class"`
 	Type                string `json:"type"`
+	UploadVerification  string `json:"upload_verification"`
+}
+
+// StorageMediumUsageBySet is one backup set's copies on a storage medium.
+type StorageMediumUsageBySet struct {
+	OnlyCopyHere int    `json:"only_copy_here"`
+	Placements   int    `json:"placements"`
+	Set          string `json:"set"`
+}
+
+// StorageMediumUsageResponse is what the journal says is currently on one storage medium, listed
+// rather than only counted. It asks the medium nothing: this is what
+// the deployment RECORDED, and whether the endpoint answers right
+// now is the preflight's question, asked separately. A count with no
+// list is not something an operator can act on, which is why the
+// backup sets are here.
+type StorageMediumUsageResponse struct {
+	BackupSets []StorageMediumUsageBySet `json:"backup_sets"`
+	Medium     string                    `json:"medium"`
+	Placements int                       `json:"placements"`
 }
 
 // StorageSchema is the closed value sets and the consent text a storage-medium
@@ -1842,85 +2027,92 @@ type VersionResponse struct {
 // through this map rather than through a hand-written lookup, so a schema
 // added to the contract cannot quietly go unchecked.
 var SchemaTypes = map[string]any{
-	"ActivityEvent":               ActivityEvent{},
-	"ApplyRetentionRequest":       ApplyRetentionRequest{},
-	"Artifact":                    Artifact{},
-	"ArtifactCheckResponse":       ArtifactCheckResponse{},
-	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
-	"AuthErrorResponse":           AuthErrorResponse{},
-	"BackupSet":                   BackupSet{},
-	"BackupSetEditHold":           BackupSetEditHold{},
-	"BackupSetEditHoldState":      BackupSetEditHoldState{},
-	"BackupSetHealth":             BackupSetHealth{},
-	"BackupSetRetention":          BackupSetRetention{},
-	"BackupSetSpec":               BackupSetSpec{},
-	"CapabilitiesResponse":        CapabilitiesResponse{},
-	"CapacitySettings":            CapacitySettings{},
-	"CatalogFailure":              CatalogFailure{},
-	"CatalogReportResponse":       CatalogReportResponse{},
-	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
-	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
-	"ConnectionCheck":             ConnectionCheck{},
-	"CreateBackupSetRequest":      CreateBackupSetRequest{},
-	"CreateBackupSetResponse":     CreateBackupSetResponse{},
-	"CredentialsRequest":          CredentialsRequest{},
-	"CycleMoveOutcome":            CycleMoveOutcome{},
-	"CycleOutcome":                CycleOutcome{},
-	"ErrorBody":                   ErrorBody{},
-	"ErrorResponse":               ErrorResponse{},
-	"FirstRunStatusResponse":      FirstRunStatusResponse{},
-	"HealthResponse":              HealthResponse{},
-	"HostKeyProbeRequest":         HostKeyProbeRequest{},
-	"HostKeyProbeResponse":        HostKeyProbeResponse{},
-	"ImportSSHKeyRequest":         ImportSSHKeyRequest{},
-	"ImportSSHKeyResponse":        ImportSSHKeyResponse{},
-	"ListActivityResponse":        ListActivityResponse{},
-	"ListArtifactsResponse":       ListArtifactsResponse{},
-	"ListBackupSetsResponse":      ListBackupSetsResponse{},
-	"ListOperationsResponse":      ListOperationsResponse{},
-	"ListStorageStatusResponse":   ListStorageStatusResponse{},
-	"ListValidatorsResponse":      ListValidatorsResponse{},
-	"LiveActivityDeployment":      LiveActivityDeployment{},
-	"LiveActivityEvent":           LiveActivityEvent{},
-	"LiveActivityField":           LiveActivityField{},
-	"LiveActivityResponse":        LiveActivityResponse{},
-	"LiveActivitySet":             LiveActivitySet{},
-	"ManagerStorage":              ManagerStorage{},
-	"MediumPreflightCheck":        MediumPreflightCheck{},
-	"MediumPreflightResponse":     MediumPreflightResponse{},
-	"Operation":                   Operation{},
-	"OperationProgress":           OperationProgress{},
-	"OperationRestore":            OperationRestore{},
-	"Placement":                   Placement{},
-	"RestoreOperationRequest":     RestoreOperationRequest{},
-	"RetentionMove":               RetentionMove{},
-	"RetentionOverride":           RetentionOverride{},
-	"RetentionPlan":               RetentionPlan{},
-	"RetentionSchema":             RetentionSchema{},
-	"RetentionSettings":           RetentionSettings{},
-	"RetentionTier":               RetentionTier{},
-	"RetentionTierSelection":      RetentionTierSelection{},
-	"RetentionVerdict":            RetentionVerdict{},
-	"RetryFailedRequest":          RetryFailedRequest{},
-	"RotatePasswordRequest":       RotatePasswordRequest{},
-	"RunningWork":                 RunningWork{},
-	"SessionResponse":             SessionResponse{},
-	"SetEnabledRequest":           SetEnabledRequest{},
-	"SetReadOnlyRequest":          SetReadOnlyRequest{},
-	"SettingsResponse":            SettingsResponse{},
-	"SettingsSchema":              SettingsSchema{},
-	"StorageMediumSummary":        StorageMediumSummary{},
-	"StorageSchema":               StorageSchema{},
-	"StorageStatus":               StorageStatus{},
-	"SubmitOperationRequest":      SubmitOperationRequest{},
-	"TestConnectionRequest":       TestConnectionRequest{},
-	"TestConnectionResponse":      TestConnectionResponse{},
-	"TrustedHostKey":              TrustedHostKey{},
-	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
-	"UpdateCapacitySettings":      UpdateCapacitySettings{},
-	"UpdateRetentionSettings":     UpdateRetentionSettings{},
-	"UpdateSettingsRequest":       UpdateSettingsRequest{},
-	"Validator":                   Validator{},
-	"VerificationClassInfo":       VerificationClassInfo{},
-	"VersionResponse":             VersionResponse{},
+	"ActivityEvent":                     ActivityEvent{},
+	"ApplyRetentionRequest":             ApplyRetentionRequest{},
+	"Artifact":                          Artifact{},
+	"ArtifactCheckResponse":             ArtifactCheckResponse{},
+	"ArtifactReinstateResponse":         ArtifactReinstateResponse{},
+	"AuthErrorResponse":                 AuthErrorResponse{},
+	"BackupSet":                         BackupSet{},
+	"BackupSetEditHold":                 BackupSetEditHold{},
+	"BackupSetEditHoldState":            BackupSetEditHoldState{},
+	"BackupSetHealth":                   BackupSetHealth{},
+	"BackupSetRetention":                BackupSetRetention{},
+	"BackupSetSpec":                     BackupSetSpec{},
+	"CapabilitiesResponse":              CapabilitiesResponse{},
+	"CapacitySettings":                  CapacitySettings{},
+	"CatalogFailure":                    CatalogFailure{},
+	"CatalogReportResponse":             CatalogReportResponse{},
+	"CompleteFirstRunResponse":          CompleteFirstRunResponse{},
+	"ConfigRevisionStaleResponse":       ConfigRevisionStaleResponse{},
+	"ConnectionCheck":                   ConnectionCheck{},
+	"CreateBackupSetRequest":            CreateBackupSetRequest{},
+	"CreateBackupSetResponse":           CreateBackupSetResponse{},
+	"CredentialsRequest":                CredentialsRequest{},
+	"CycleMoveOutcome":                  CycleMoveOutcome{},
+	"CycleOutcome":                      CycleOutcome{},
+	"ErrorBody":                         ErrorBody{},
+	"ErrorResponse":                     ErrorResponse{},
+	"FirstRunStatusResponse":            FirstRunStatusResponse{},
+	"HealthResponse":                    HealthResponse{},
+	"HostKeyProbeRequest":               HostKeyProbeRequest{},
+	"HostKeyProbeResponse":              HostKeyProbeResponse{},
+	"ImportSSHKeyRequest":               ImportSSHKeyRequest{},
+	"ImportSSHKeyResponse":              ImportSSHKeyResponse{},
+	"ImportStorageCredentialsRequest":   ImportStorageCredentialsRequest{},
+	"ImportStorageCredentialsResponse":  ImportStorageCredentialsResponse{},
+	"ListActivityResponse":              ListActivityResponse{},
+	"ListArtifactsResponse":             ListArtifactsResponse{},
+	"ListBackupSetsResponse":            ListBackupSetsResponse{},
+	"ListOperationsResponse":            ListOperationsResponse{},
+	"ListStorageMediumsResponse":        ListStorageMediumsResponse{},
+	"ListStorageStatusResponse":         ListStorageStatusResponse{},
+	"ListValidatorsResponse":            ListValidatorsResponse{},
+	"LiveActivityDeployment":            LiveActivityDeployment{},
+	"LiveActivityEvent":                 LiveActivityEvent{},
+	"LiveActivityField":                 LiveActivityField{},
+	"LiveActivityResponse":              LiveActivityResponse{},
+	"LiveActivitySet":                   LiveActivitySet{},
+	"ManagerStorage":                    ManagerStorage{},
+	"MediumPreflightCheck":              MediumPreflightCheck{},
+	"MediumPreflightResponse":           MediumPreflightResponse{},
+	"Operation":                         Operation{},
+	"OperationProgress":                 OperationProgress{},
+	"OperationRestore":                  OperationRestore{},
+	"Placement":                         Placement{},
+	"RestoreOperationRequest":           RestoreOperationRequest{},
+	"RetentionMove":                     RetentionMove{},
+	"RetentionOverride":                 RetentionOverride{},
+	"RetentionPlan":                     RetentionPlan{},
+	"RetentionSchema":                   RetentionSchema{},
+	"RetentionSettings":                 RetentionSettings{},
+	"RetentionTier":                     RetentionTier{},
+	"RetentionTierSelection":            RetentionTierSelection{},
+	"RetentionVerdict":                  RetentionVerdict{},
+	"RetryFailedRequest":                RetryFailedRequest{},
+	"RotatePasswordRequest":             RotatePasswordRequest{},
+	"RunningWork":                       RunningWork{},
+	"SessionResponse":                   SessionResponse{},
+	"SetEnabledRequest":                 SetEnabledRequest{},
+	"SetReadOnlyRequest":                SetReadOnlyRequest{},
+	"SettingsResponse":                  SettingsResponse{},
+	"SettingsSchema":                    SettingsSchema{},
+	"StorageMediumCredentialsReference": StorageMediumCredentialsReference{},
+	"StorageMediumRequest":              StorageMediumRequest{},
+	"StorageMediumSummary":              StorageMediumSummary{},
+	"StorageMediumUsageBySet":           StorageMediumUsageBySet{},
+	"StorageMediumUsageResponse":        StorageMediumUsageResponse{},
+	"StorageSchema":                     StorageSchema{},
+	"StorageStatus":                     StorageStatus{},
+	"SubmitOperationRequest":            SubmitOperationRequest{},
+	"TestConnectionRequest":             TestConnectionRequest{},
+	"TestConnectionResponse":            TestConnectionResponse{},
+	"TrustedHostKey":                    TrustedHostKey{},
+	"UpdateBackupSetRequest":            UpdateBackupSetRequest{},
+	"UpdateCapacitySettings":            UpdateCapacitySettings{},
+	"UpdateRetentionSettings":           UpdateRetentionSettings{},
+	"UpdateSettingsRequest":             UpdateSettingsRequest{},
+	"Validator":                         Validator{},
+	"VerificationClassInfo":             VerificationClassInfo{},
+	"VersionResponse":                   VersionResponse{},
 }

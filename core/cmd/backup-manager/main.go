@@ -201,6 +201,35 @@ commands:
                                                   clear the .partial residue a removal stranded mid-transfer, and end
                                                   the journal rows nothing will ever advance. It never touches a
                                                   retained backup; without --acknowledge it only prints what it would do
+  medium list [--json]                           list every storage destination this deployment declares, in
+                                                  declaration order. No credential is reported, not even which of
+                                                  the three sources a destination reads (#594)
+  medium show <medium-id> [--json]               one destination, plus what the journal says is currently on it:
+                                                  how many copies, which backup sets they belong to, and how many
+                                                  of them are the only confirmed copy of their artifact anywhere
+  medium import-credentials --stdin              read AWS shared-credentials text from standard input, write it
+                                                  0600 beside this deployment's configuration, and print an id to
+                                                  name it with. This is the only command here that ever holds a
+                                                  secret and it takes it on stdin: there is deliberately no
+                                                  --access-key-id and no --secret-access-key flag anywhere on this
+                                                  surface, because a secret on a command line is in ps output for
+                                                  every user on the box and in shell history
+  medium add <medium-id> --bucket B [--type s3] [--region R] [--endpoint URL] [--prefix P]
+             [--storage-class C] [--upload-verification readback|attested] [--no-verify]
+             (--credentials-id ID | --credentials-file PATH | --credentials-env VAR | --credentials-command 'prog arg ...')
+                                                  declare a storage destination without editing config.yaml. It
+                                                  VERIFIES FIRST and writes nothing when verification fails, which
+                                                  is what makes it scriptable across a fleet; --no-verify skips
+                                                  that and says in its own output that nothing was proven. Every
+                                                  credential flag names a REFERENCE and never material
+  medium edit <medium-id> [the same flags]       replace a destination's description. A flag left off keeps what
+                                                  the destination already says, and leaving the credential flags
+                                                  off keeps the credential already configured, which it has to:
+                                                  nothing here ever reports one back to be resubmitted
+  medium remove <medium-id>                      un-declare a destination. Refused while any copy names it, and
+                                                  the refusal lists the backup sets: removing the declaration would
+                                                  not delete those copies, it would leave this deployment with no
+                                                  bucket, no endpoint and no credential to reach them with (FR-30)
   medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
                                                   carrying a real backup does: it writes a probe object with the
                                                   medium's own storage class, reads it back byte for byte, checks
@@ -208,6 +237,10 @@ commands:
                                                   asks whether the medium's declared upload_verification can
                                                   actually be achieved there, and deletes the probe. Exits non-zero
                                                   when any check fails (#443)
+  medium preflight --candidate <medium-id> [the add flags]
+                                                  the same eight checks against a destination that is NOT declared,
+                                                  so a setup flow proves one before it is written down. It writes
+                                                  nothing whatever the report says
   retry <source/backup-set/artifact> [--note T]   put one FAILED backup back into the pipeline so it is attempted
                                                   again. FAILED means an attempt did not finish, which is not the
                                                   same thing as quarantine, so this is its own command and not a
@@ -249,10 +282,12 @@ a directory resolves to config.yaml inside it, which is what packaging mounts)
 
 a configuration write goes one of three ways, and says which on a "mode:" line. With nothing
 serving this deployment it is written here, and an engine started afterwards reads it when it
-starts. With something serving and a route to it, backup-set create, patch and remove and
-settings patch hand the change to that process over its API, so it takes effect at once and
-there is nothing to restart. With something serving and no route, the write is refused and
-nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
+starts. With something serving and a route to it, backup-set create, patch and remove,
+settings patch and medium import-credentials, add, edit and remove hand the change to that
+process over its API, so it takes effect at once and there is nothing to restart. medium
+preflight --candidate goes the same way, because it is the check medium add runs before it
+writes and has to happen where the write will. With something serving and no route, the
+write is refused and nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
 change left in the file is one the serving process would never read. Two writes have no route
 at all and are refused beside a serving engine either way: a backup-set retention that sets
 or clears a policy, and the first config.yaml a create writes on an instance that has none

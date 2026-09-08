@@ -62,8 +62,8 @@ const STORAGE = {
 };
 
 const MEDIUMS: StorageMedium[] = [
-  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", readsRequireRestore: false },
-  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", readsRequireRestore: true }
+  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false },
+  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback", readsRequireRestore: true }
 ];
 
 function settingsFixture(over: {

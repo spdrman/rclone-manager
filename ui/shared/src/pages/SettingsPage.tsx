@@ -30,6 +30,7 @@ import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 import { CapacityCard } from "@shared/pages/CapacityCard";
+import { StorageDestinationsCard } from "@shared/pages/StorageDestinationsCard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { PasswordInput } from "@shared/components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
@@ -80,6 +81,15 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
               the real thing, read from and written to the running
               config. */}
           <RetentionPolicyCard readOnly={readOnly} />
+
+          {/* G2.2 (#594). Beside the retention plan deliberately: a
+              retention tier's Medium field is a picker over exactly this
+              list, so the place where a destination is declared and the
+              place where a tier is pointed at one belong on the same
+              screen. Before this card there was no such place at all, and
+              declaring a destination meant editing config.yaml by hand,
+              which is the one thing EPIC G is about not having to do. */}
+          <StorageDestinationsCard readOnly={readOnly} />
 
           <section className="card">
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>

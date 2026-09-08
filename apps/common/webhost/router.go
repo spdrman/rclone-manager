@@ -409,6 +409,37 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// reach is the one it just wrote (see handlers_mediums.go).
 		r.With(requireCSRF).Post("/storage-mediums/{id}/preflight", h.preflightStorageMedium)
 
+		// G2.2 (issue #594): the storage-destination write surface, so a
+		// destination can be added without hand-editing config.yaml, and
+		// the candidate probe that proves one BEFORE it is written down.
+		//
+		// The static "/storage-mediums/preflight" is registered here,
+		// beside the "{id}" routes rather than buried among them, because
+		// the order it reads in is load-bearing to a person even though
+		// it is not to chi: chi's trie matches static before param, so
+		// "preflight" can never be read as a medium id whichever order
+		// these lines appear in, and writing them adjacent is what makes
+		// that visible to whoever adds the next route.
+		//
+		// CSRF on every write, and on the candidate probe for the reason
+		// the by-id probe above carries it: it writes a real object into
+		// somebody's bucket and deletes it again. Not the destructive
+		// gate on any of them. Declaring a destination MOVES NOTHING
+		// (artifacts arrive only once a retention tier names it, which is
+		// a separate write with its own disclosure), removing one deletes
+		// no backup data and is refused outright while any copy names it,
+		// and the probe can reach only the object it just wrote. Gating
+		// these would train an operator to click through the
+		// acknowledgment that actually matters.
+		r.With(requireCSRF).Post("/storage-credentials", h.importStorageCredentials)
+		r.Get("/storage-mediums", h.listStorageMediums)
+		r.With(requireCSRF).Post("/storage-mediums", h.createStorageMedium)
+		r.With(requireCSRF).Post("/storage-mediums/preflight", h.preflightStorageMediumCandidate)
+		r.Get("/storage-mediums/{id}", h.getStorageMedium)
+		r.With(requireCSRF).Put("/storage-mediums/{id}", h.updateStorageMedium)
+		r.With(requireCSRF).Delete("/storage-mediums/{id}", h.removeStorageMedium)
+		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
+
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk

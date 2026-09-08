@@ -113,6 +113,36 @@ type StorageMediumSummary struct {
 	Region       string
 	StorageClass string
 
+	// Endpoint, Prefix and UploadVerification complete the description a
+	// destinations page has to be able to EDIT (G2.2, issue #594).
+	//
+	// They are here rather than on a second, fuller type because of what
+	// leaving them out would mean for an edit. UpdateStorageMedium
+	// replaces the whole record, so a field this summary cannot report is
+	// a field an edit form cannot pre-fill and therefore a field the next
+	// save silently clears. That is RetentionTier.Medium's own lesson
+	// (its doc: "a lossy boundary between the file and the form is a
+	// configuration change nobody asked for, made by the act of changing
+	// something else"), and it applies here for the same reason.
+	//
+	// UploadVerification is the RESOLVED value, like StorageClass beside
+	// it, so a surface reads the class actually in force rather than the
+	// operator's omission.
+	Endpoint           string
+	Prefix             string
+	UploadVerification string
+
+	// There is deliberately no field naming the credential SOURCE, not
+	// even its kind. The obvious next field here is a "file" / "env" /
+	// "command" word so an edit form can pre-select a radio button, and
+	// it is not worth what it costs: this projection's own test refuses
+	// the word "credential" anywhere in the rendered response, on the
+	// grounds that where a credential comes from is a fact about this
+	// machine an API caller has no use for. The edit form does not need
+	// it either, because UpdateStorageMedium leaves the credential alone
+	// when a spec names none (see its doc): the one field that cannot be
+	// read back is the one field an edit does not have to resupply.
+	//
 	// ReadsRequireRestore is true when this medium's storage class cannot
 	// be read on demand. It is computed here, from the same predicate the
 	// engine's own access states use, so a surface never has to hold its
@@ -325,6 +355,9 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			Bucket:              m.Bucket,
 			Region:              m.Region,
 			StorageClass:        class,
+			Endpoint:            m.Endpoint,
+			Prefix:              m.Prefix,
+			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
 		})
 	}

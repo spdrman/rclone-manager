@@ -500,12 +500,89 @@ export interface StorageMedium {
   type: string;
   bucket: string;
   region?: string;
+  /** An endpoint override for an S3-compatible service; absent means the
+   *  provider's own endpoint for the region. */
+  endpoint?: string;
+  /** The key namespace inside the bucket; absent puts the key layout at
+   *  the root. */
+  prefix?: string;
   storageClass: string;
+  /** How an upload is proven before the local copy is deleted, already
+   *  resolved, so this UI never has to know what an unset value defaults
+   *  to. */
+  uploadVerification: string;
   /** True when this medium's class cannot be read on demand: a backup here
    *  needs an explicit restore, taking hours, before anything can read it.
    *  Computed by the backend, so this UI holds no list of its own of which
    *  classes count as archive. */
   readsRequireRestore: boolean;
+}
+
+/**
+ * Where one storage medium's credentials come from, in the four spellings
+ * the backend accepts. Exactly one must be set, and none of them is
+ * credential MATERIAL: this is a reference in all four.
+ *
+ * `credentialsId` is the one this UI uses, and the reason it exists at
+ * all. It is opaque, minted by the backend, and names nothing about the
+ * manager's host, so it is the only spelling that is safe to put on a
+ * request body, into an echoed command line, and into a terminal
+ * transcript an operator can export and paste into a support thread. The
+ * other three are here because an operator who already has a credential
+ * on the host, or in a secrets manager, should not have to hand this
+ * product a secret to use it.
+ */
+export interface StorageMediumCredentialsReference {
+  credentialsId?: string;
+  file?: string;
+  env?: string;
+  command?: string[];
+}
+
+/**
+ * One storage destination as this UI describes it, for declaring it,
+ * replacing it, or having it checked before either.
+ *
+ * The same shape for all three deliberately. What is proven and what is
+ * saved must be the same destination, and the interesting bug in a
+ * destination wizard is one that verifies green and then saves as
+ * something slightly different.
+ *
+ * `credentials` is optional only on an EDIT, where omitting it keeps the
+ * credential already configured. It has to be optional there, because
+ * StorageMedium above deliberately reports nothing about the credential,
+ * not even its kind, so a form cannot resubmit what it never received.
+ */
+export interface StorageMediumSpec {
+  id: string;
+  type: string;
+  region?: string;
+  endpoint?: string;
+  bucket: string;
+  prefix?: string;
+  storageClass?: string;
+  uploadVerification?: string;
+  credentials?: StorageMediumCredentialsReference;
+}
+
+/**
+ * What the journal says is currently on one storage destination, per
+ * backup set (FR-30).
+ *
+ * The list is the point. "148 copies affected" with nothing named is a
+ * number an operator cannot act on, which is why this carries the sets
+ * and not only the total, and why `onlyCopyHere` is separate: "52 copies
+ * live here" and "52 backups have their only confirmed copy here" are
+ * different sentences and call for different colours.
+ */
+export interface StorageMediumUsage {
+  medium: string;
+  placements: number;
+  backupSets: Array<{
+    set: string;
+    placements: number;
+    onlyCopyHere: number;
+  }>;
 }
 
 /**
@@ -1269,6 +1346,40 @@ export interface BackupManagerApi {
    * configuration does not declare.
    */
   preflightStorageMedium(mediumId: string): Promise<MediumPreflight>;
+
+  /**
+   * G2.2 (issue #594): the storage-destination surface a wizard drives.
+   *
+   * importStorageCredentials is the only call in this whole client that
+   * ever holds an S3 secret. It sends the material once and answers with
+   * an opaque id; nothing here reads it back, and the caller discards its
+   * own copy the moment the id arrives.
+   *
+   * preflightStorageMediumCandidate is why that id exists in this shape.
+   * preflightStorageMedium above can only check a destination already
+   * written into the operator's configuration, so without this the only
+   * way to find out whether a destination works is to save it first. The
+   * candidate carries `credentialsId`, which names no path and no
+   * variable on the manager's host, so the check is possible with nothing
+   * host-shaped on a request body. It writes nothing whatever the report
+   * says, and resolves rather than rejects when the destination does not
+   * work, exactly as the by-id preflight does.
+   *
+   * removeStorageMedium rejects with MEDIUM_IN_USE while any copy names
+   * the destination (FR-30). That is not a nicety: un-declaring it would
+   * leave this deployment with no bucket, no endpoint and no credential
+   * to reach those copies with, so they would read as unreachable and no
+   * prune could run against them. getStorageMediumUsage is what a caller
+   * renders instead of the bare refusal.
+   */
+  importStorageCredentials(accessKeyId: string, secretAccessKey: string, sessionToken?: string): Promise<string>;
+  listStorageMediums(): Promise<StorageMedium[]>;
+  getStorageMedium(mediumId: string): Promise<StorageMedium>;
+  getStorageMediumUsage(mediumId: string): Promise<StorageMediumUsage>;
+  preflightStorageMediumCandidate(spec: StorageMediumSpec): Promise<MediumPreflight>;
+  createStorageMedium(spec: StorageMediumSpec): Promise<StorageMedium>;
+  updateStorageMedium(mediumId: string, spec: StorageMediumSpec): Promise<StorageMedium>;
+  removeStorageMedium(mediumId: string): Promise<void>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see

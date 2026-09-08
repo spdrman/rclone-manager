@@ -146,6 +146,24 @@ type syncFakeBackend struct {
 	errOnRestore error
 	lastRestore  service.RestorePlacementRequest
 
+	// The G2.2 storage-destination surface's own state (#594): what has
+	// been declared, what the next write should refuse with, and what the
+	// last candidate probe and the last import were handed.
+	//
+	// lastImportedAccessKeyID and lastImportedSecret exist for the canary
+	// test and nothing else. They are the proof that the material really
+	// did cross the handler boundary, which is what makes "and it is not
+	// in the response" a claim about a code path rather than about a
+	// request that never carried anything.
+	mediums                       []service.StorageMediumSummary
+	mediumUsage                   service.StorageMediumUsage
+	lastMediumSpec                service.StorageMediumSpec
+	lastCandidate                 service.StorageMediumSpec
+	lastImportedAccessKeyID       string
+	lastImportedSecret            string
+	errOnMediumWrite              error
+	errOnImportStorageCredentials error
+
 	// plans holds every plan PreviewRetention has issued and
 	// ApplyRetentionPlan has not yet consumed, mirroring core/service's
 	// own single-use plan store closely enough for handlers_retention_test.go
@@ -697,6 +715,125 @@ func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (
 	return f.mediumPreflight, nil
 }
 
+// The G2.2 storage-destination write surface (#594). The fake keeps a
+// list rather than a single value, because the interesting handler tests
+// are about what a create leaves behind for a later read, and because the
+// candidate probe has to be provably able to run against a destination
+// that is NOT in that list.
+func (f *syncFakeBackend) ImportStorageCredentials(_ context.Context, accessKeyID, secretAccessKey, _ string) (service.MediumCredentialRef, error) {
+	if f.errOnImportStorageCredentials != nil {
+		return service.MediumCredentialRef{}, f.errOnImportStorageCredentials
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Recorded so a canary test can prove the material reached the
+	// backend and still never appears in the response.
+	f.lastImportedAccessKeyID = accessKeyID
+	f.lastImportedSecret = secretAccessKey
+	return service.MediumCredentialRef{ID: "fake-credential-id", File: "/srv/config/s3_credentials/fake-credential-id"}, nil
+}
+
+func (f *syncFakeBackend) ListStorageMediums(context.Context) ([]service.StorageMediumSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]service.StorageMediumSummary(nil), f.mediums...), nil
+}
+
+func (f *syncFakeBackend) GetStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.mediums {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
+func (f *syncFakeBackend) StorageMediumUsage(_ context.Context, id string) (service.StorageMediumUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	usage := f.mediumUsage
+	usage.Medium = id
+	return usage, nil
+}
+
+func (f *syncFakeBackend) PreflightStorageMediumCandidate(_ context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error) {
+	if f.errOnMediumPreflight != nil {
+		return service.MediumPreflight{}, f.errOnMediumPreflight
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastCandidate = spec
+	report := f.mediumPreflight
+	report.Medium = spec.ID
+	return report, nil
+}
+
+func (f *syncFakeBackend) CreateStorageMedium(_ context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMediumSpec = spec
+	summary := summaryOfSpec(spec)
+	f.mediums = append(f.mediums, summary)
+	return summary, nil
+}
+
+func (f *syncFakeBackend) UpdateStorageMedium(_ context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMediumSpec = spec
+	summary := summaryOfSpec(spec)
+	for i := range f.mediums {
+		if f.mediums[i].ID == spec.ID {
+			f.mediums[i] = summary
+			return summary, nil
+		}
+	}
+	return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, spec.ID)
+}
+
+func (f *syncFakeBackend) RemoveStorageMedium(_ context.Context, id string) error {
+	if f.errOnMediumWrite != nil {
+		return f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.mediums {
+		if f.mediums[i].ID == id {
+			f.mediums = append(f.mediums[:i], f.mediums[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
+// summaryOfSpec is the fake's own projection, and it deliberately drops
+// the credential exactly as the real one does: there is no field on
+// service.StorageMediumSummary a credential reference could land in, so a
+// fake that leaked one would not compile.
+func summaryOfSpec(spec service.StorageMediumSpec) service.StorageMediumSummary {
+	class := spec.StorageClass
+	if class == "" {
+		class = "STANDARD"
+	}
+	verification := spec.UploadVerification
+	if verification == "" {
+		verification = "readback"
+	}
+	return service.StorageMediumSummary{
+		ID: spec.ID, Type: spec.Type, Bucket: spec.Bucket, Region: spec.Region,
+		Endpoint: spec.Endpoint, Prefix: spec.Prefix, StorageClass: class,
+		UploadVerification: verification,
+	}
+}
+
 func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
 	if f.errOnReinstate != nil {
 		return service.ArtifactReinstatement{}, f.errOnReinstate
@@ -995,6 +1132,36 @@ func (f *asyncFakeBackend) RetryFailedArtifact(context.Context, string, string) 
 func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
 	return service.MediumPreflight{}, nil
 }
+
+func (f *asyncFakeBackend) ImportStorageCredentials(context.Context, string, string, string) (service.MediumCredentialRef, error) {
+	return service.MediumCredentialRef{}, nil
+}
+
+func (f *asyncFakeBackend) ListStorageMediums(context.Context) ([]service.StorageMediumSummary, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetStorageMedium(context.Context, string) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) StorageMediumUsage(context.Context, string) (service.StorageMediumUsage, error) {
+	return service.StorageMediumUsage{}, nil
+}
+
+func (f *asyncFakeBackend) PreflightStorageMediumCandidate(context.Context, service.StorageMediumSpec) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
+
+func (f *asyncFakeBackend) CreateStorageMedium(context.Context, service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) UpdateStorageMedium(context.Context, service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) RemoveStorageMedium(context.Context, string) error { return nil }
 
 func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
 	return service.ArtifactReinstatement{}, nil
