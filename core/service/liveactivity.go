@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -484,6 +485,25 @@ type liveActivity struct {
 	// with it.
 	epoch string
 
+	// configures reports whether the RUNNING configuration names a
+	// backup set id, and it is what keeps the bucket map bounded: see
+	// setLocked for the hole it closes and why the recorder's own check
+	// is not enough on its own.
+	//
+	// It is a function rather than a list because the configuration is
+	// hot-reloadable, so the answer has to be asked at the moment the
+	// question comes up rather than copied at construction. It reads the
+	// service's own atomic snapshot and takes no lock of this package's,
+	// and it is written once, before this feed is reachable by anything,
+	// so it needs none of ours either.
+	//
+	// It is asked only when a bucket has to be MINTED, which is once per
+	// set for the life of the process, so walking the configuration for
+	// the answer costs the event stream nothing: RecordEvent's promise
+	// about what it does per event is the whole reason this feed exists
+	// in this shape.
+	configures func(id string) bool
+
 	mu  sync.Mutex
 	seq int64
 
@@ -517,12 +537,31 @@ type liveActivitySetState struct {
 	finishedAt         *time.Time
 }
 
-func newLiveActivity() *liveActivity {
+// newLiveActivity builds the feed.
+//
+// configures is not optional and there is deliberately no constructor
+// without it: a feed that cannot tell a configured set from an invented
+// one is the bug this parameter exists to prevent, and a nil predicate
+// names nothing rather than everything.
+func newLiveActivity(configures func(id string) bool) *liveActivity {
 	return &liveActivity{
 		epoch:      newLiveActivityEpoch(),
+		configures: configures,
 		deployment: newLiveActivityRing(liveActivityBufferSize),
 		sets:       make(map[string]*liveActivitySetState),
 	}
+}
+
+// configuredSet reports whether the running configuration names id.
+//
+// Nil-safe in both directions, and a feed with no predicate names no
+// sets: the fail-closed answer is the one that cannot be turned into a
+// way to make this process hold memory.
+func (l *liveActivity) configuredSet(id string) bool {
+	if l == nil || l.configures == nil || id == "" {
+		return false
+	}
+	return l.configures(id)
 }
 
 // newLiveActivityEpoch mints the name one process's feed goes by.
@@ -590,6 +629,18 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		return
 	}
 	st := l.setLocked(setID)
+	if st == nil {
+		// This deployment does not have that set, so there is no strip
+		// for the line to land on: LiveActivity builds its list of
+		// strips from the configuration, and a bucket minted here would
+		// be one nothing can ever read (see setLocked). It goes to the
+		// deployment's bucket rather than being dropped, because that is
+		// what the deployment's bucket is for, and the global terminal
+		// showing somebody probing this API is the point.
+		e.Scope = LiveActivityScopeDeployment
+		l.deployment.add(e)
+		return
+	}
 	st.ring.add(e)
 	if isTerminalFailureTransition(r) {
 		st.failures++
@@ -611,14 +662,18 @@ func (l *liveActivity) ObserveProgress(p app.Progress) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	st := l.setLocked(p.BackupSetID)
+	if st == nil {
+		// Nothing this process is configured to back up, so there is no
+		// strip these numbers could be drawn on. See setLocked.
+		return
+	}
 	if l.current != p.BackupSetID {
 		l.finishCurrentLocked()
 		l.current = p.BackupSetID
-		st := l.setLocked(p.BackupSetID)
 		st.beginPass(now())
 	}
 
-	st := l.setLocked(p.BackupSetID)
 	st.stage = p.Stage
 	st.artifact = p.Artifact
 	st.artifactsCompleted = p.SetArtifactsCompleted
@@ -644,7 +699,9 @@ func (l *liveActivity) ObserveSetOutcome(backupSetID, outcome string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.setLocked(backupSetID).outcome = outcome
+	if st := l.setLocked(backupSetID); st != nil {
+		st.outcome = outcome
+	}
 }
 
 // beginCycle and endCycle bracket one run of the engine.
@@ -692,14 +749,46 @@ func (l *liveActivity) finishCurrentLocked() {
 	l.current = ""
 }
 
-// setLocked returns the state for id, creating it on first sight. The
-// caller holds l.mu.
+// setLocked returns the state for id, creating it on first sight, or nil
+// when the running configuration does not name id. The caller holds l.mu.
+//
+// # Why it refuses
+//
+// A bucket is 200 slots, and this map used to mint one for whatever id
+// it was handed. The ids stopped being the engine's the moment the API
+// action log landed (issue #599): the middleware records every non-GET
+// request and builds the set id straight out of the chi route
+// parameters, so `PATCH /api/v1/backup-sets/ghost-src/ghost-set` minted
+// a bucket whatever the request answered. 404, or 403 with no CSRF token
+// presented at all, made no difference, because the line is recorded
+// after the handler and a refusal is exactly what an operator most needs
+// to see.
+//
+// None of those buckets was ever readable: LiveActivity builds its list
+// of strips from the configuration, so an invented id has no strip. And
+// nothing removed them. So it was retained garbage at request rate,
+// reachable by any authenticated session without a CSRF token: 50,000
+// such requests left 50,000 buckets and 22.2 MB.
+//
+// RecordAPIAction checks the id too, and that is not this check being
+// duplicated. That one keeps a line about a set that does not exist
+// honest (it is a deployment-scoped line, and it says so); this one is
+// what makes the map bounded no matter who is feeding it, so the next
+// recorder wired in beside that one inherits the guarantee instead of
+// having to remember it.
+//
+// A bucket already open is returned whatever the configuration now says,
+// which is what keeps a set's own strip readable across the moment it is
+// renamed or removed rather than blanking it mid-reading.
 func (l *liveActivity) setLocked(id string) *liveActivitySetState {
-	st, ok := l.sets[id]
-	if !ok {
-		st = &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
-		l.sets[id] = st
+	if st, ok := l.sets[id]; ok {
+		return st
 	}
+	if !l.configuredSet(id) {
+		return nil
+	}
+	st := &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
+	l.sets[id] = st
 	return st
 }
 
@@ -804,9 +893,34 @@ func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveAct
 // liveActivityRing is a fixed-capacity, oldest-first buffer. Nothing here
 // grows: an entry beyond capacity displaces the oldest, which is what
 // "bounded" has to mean for a process that runs for months.
+//
+// # Why it is an actual ring
+//
+// It used to be a slice that appended and then re-sliced itself onto a
+// fresh array whenever it went over capacity. Once full that is two
+// allocations and two 200-element copies for every single event, about
+// 73 KB and 7 microseconds, paid inside the feed's mutex on whichever
+// goroutine the cycle had reached the event on: 703 MB through the heap
+// for ten thousand events into one bucket. RecordEvent's own doc promises
+// the opposite ("one lock, one append and a return"), and the promise
+// matters more now than when it was written, because since issue #599
+// every non-GET request on the API records a line here too.
+//
+// So the array is allocated once at its full length and never touched
+// again. head is the slot the next event goes into, count is how many
+// slots hold a live event, and an add on a full ring is one index write.
+// Overwriting the slot is also what releases the displaced event: the
+// whole struct goes, strings and all, so nothing dropped is kept alive
+// by the buffer that dropped it.
+//
+// The cost of that is that the events are no longer one contiguous
+// slice, so nothing outside this file may read them directly: len, at
+// and copyFrom below are the whole accessor surface, and they are what
+// boundsOf, tailOf and snapshotLocked walk.
 type liveActivityRing struct {
 	events []LiveActivityEvent
-	cap    int
+	head   int
+	count  int
 
 	// evicted is the sequence of the newest event this buffer has ever
 	// discarded, or 0 if it has discarded none. It is what lets a read
@@ -818,19 +932,82 @@ type liveActivityRing struct {
 }
 
 func newLiveActivityRing(capacity int) *liveActivityRing {
-	return &liveActivityRing{cap: capacity}
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &liveActivityRing{events: make([]LiveActivityEvent, capacity)}
 }
 
+// add files one event, displacing the oldest once the ring is full.
+//
+// One index write and two increments, no allocation, no copy. See the
+// type's own doc for what this replaced and why.
 func (r *liveActivityRing) add(e LiveActivityEvent) {
-	r.events = append(r.events, e)
-	if len(r.events) > r.cap {
-		r.evicted = r.events[len(r.events)-r.cap-1].Sequence
-		// Re-slice onto a fresh backing array rather than sliding within
-		// the old one: keeping the old array alive would hold on to every
-		// string in the dropped events for as long as this buffer lives.
-		kept := make([]LiveActivityEvent, r.cap)
-		copy(kept, r.events[len(r.events)-r.cap:])
-		r.events = kept
+	if len(r.events) == 0 {
+		// A ring with no capacity holds nothing, so everything put into
+		// it is discarded the moment it arrives and the cursor has to be
+		// told, exactly as it is for anything that falls off the back.
+		r.evicted = e.Sequence
+		return
+	}
+	if r.count == len(r.events) {
+		// Full, so head is sitting on the oldest event and that is the
+		// one about to go.
+		r.evicted = r.events[r.head].Sequence
+	} else {
+		r.count++
+	}
+	r.events[r.head] = e
+	r.head++
+	if r.head == len(r.events) {
+		r.head = 0
+	}
+}
+
+// len is how many events the ring currently holds, and at is the i'th
+// oldest of them. Nil-safe, because a set that has never been written to
+// has no ring at all.
+func (r *liveActivityRing) len() int {
+	if r == nil {
+		return 0
+	}
+	return r.count
+}
+
+func (r *liveActivityRing) at(i int) LiveActivityEvent {
+	return r.events[r.slot(i)]
+}
+
+// slot maps an oldest-first position onto the array index holding it.
+//
+// The oldest live event sits count places behind head, and both wraps
+// are a single subtraction rather than a modulo because i is never more
+// than count and count is never more than the length.
+func (r *liveActivityRing) slot(i int) int {
+	start := r.head - r.count
+	if start < 0 {
+		start += len(r.events)
+	}
+	j := start + i
+	if j >= len(r.events) {
+		j -= len(r.events)
+	}
+	return j
+}
+
+// copyFrom fills dst with len(dst) events starting at the from'th oldest.
+//
+// At most two copies: a ring's contents are contiguous except where they
+// wrap past the end of the array, so this is the same memmove a slice
+// copy would be, without the intermediate slice that used to be sized by
+// what the bucket HELD rather than by what the read returns.
+func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
+	if r == nil || len(dst) == 0 {
+		return
+	}
+	n := copy(dst, r.events[r.slot(from):])
+	if n < len(dst) {
+		copy(dst[n:], r.events[:len(dst)-n])
 	}
 }
 
@@ -841,10 +1018,11 @@ func (r *liveActivityRing) add(e LiveActivityEvent) {
 // ring alone (issue #593).
 func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	for _, r := range rings {
-		if r == nil || len(r.events) == 0 {
+		held := r.len()
+		if held == 0 {
 			continue
 		}
-		first, last := r.events[0].Sequence, r.events[len(r.events)-1].Sequence
+		first, last := r.at(0).Sequence, r.at(held-1).Sequence
 		if oldest == 0 || first < oldest {
 			oldest = first
 		}
@@ -875,23 +1053,29 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 // turns the limit into a page rather than a gap, and the flag says there
 // is another page to ask for.
 func tailOf(r *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
-	held := ringEvents(r)
-	kept := make([]LiveActivityEvent, 0, len(held))
-	for _, e := range held {
-		if e.Sequence > since {
-			kept = append(kept, e)
-		}
-	}
+	held := r.len()
+	// Binary search rather than a linear filter, and it is legal because
+	// a bucket's sequences increase strictly: l.seq++ and the add into
+	// the bucket happen under one mutex, so no two events in a bucket can
+	// be numbered out of the order they were filed in. That is a property
+	// of the locking rather than of anything declared here, so there is a
+	// test asserting it directly against concurrent writers
+	// (liveactivityring_test.go) and a change to how seq is handed out
+	// fails there rather than quietly returning a wrong answer here.
+	first := sort.Search(held, func(i int) bool { return r.at(i).Sequence > since })
+
+	count := held - first
 	truncated := false
-	if limit > 0 && len(kept) > limit {
-		kept = kept[:limit]
+	if limit > 0 && count > limit {
+		count = limit
 		truncated = true
 	}
-	// A fresh slice rather than a window onto the ring's own backing
-	// array, because a caller must never hold one onto anything this
-	// package will write again.
-	out := make([]LiveActivityEvent, len(kept))
-	copy(out, kept)
+	// One allocation, of exactly what is being handed back, and it is a
+	// fresh array rather than a window onto the ring's own, because a
+	// caller must never hold one onto anything this package will write
+	// again.
+	out := make([]LiveActivityEvent, count)
+	r.copyFrom(out, first)
 	return out, truncated
 }
 
@@ -923,13 +1107,6 @@ func droppedSince(since int64, rings ...*liveActivityRing) bool {
 		}
 	}
 	return false
-}
-
-func ringEvents(r *liveActivityRing) []LiveActivityEvent {
-	if r == nil {
-		return nil
-	}
-	return r.events
 }
 
 // copyInt and copyTime hand back a value that shares no memory with the

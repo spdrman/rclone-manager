@@ -74,7 +74,20 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 	// empty: an empty backup_set is what attributeRecord already treats
 	// as no set, and an empty field is one more thing for a terminal to
 	// render and skip.
-	if action.BackupSetID != "" {
+	//
+	// Only when the running configuration actually names the set, and
+	// that is not a formality. The id on this action comes from the
+	// route's own {source} and {set} parameters (apps/common/webhost's
+	// backupSetOfRoute), so it is whatever the request put in the URL,
+	// checked by nothing: a PATCH at backup-sets/ghost-src/ghost-set
+	// records an action naming a set that does not exist, and it does so
+	// for a 404 and for a 403 refused before any handler ran. An action
+	// on a set this deployment does not have is a deployment-scoped
+	// line, which is where an operator watching somebody probe this API
+	// wants to see it anyway, and it is also what stops those ids
+	// reaching the live feed's bucket map (see liveactivity.go's
+	// setLocked for what they did there).
+	if action.BackupSetID != "" && b.configuresBackupSetID(action.BackupSetID) {
 		attrs = append(attrs, slog.String("backup_set", action.BackupSetID))
 	}
 	if action.ErrorCode != "" {
