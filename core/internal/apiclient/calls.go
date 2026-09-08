@@ -226,3 +226,81 @@ func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apic
 	err := c.call(ctx, "previewRetention", []string{source, set}, nil, &out)
 	return out, err
 }
+
+// The storage-destination surface (G2.2, issue #594), which is what makes
+// `backup-manager medium add|edit|remove|import-credentials` work beside a
+// running engine instead of being refused.
+//
+// They are here under this file's own rule and not in spite of it: each
+// one has a command that drives it (core/cmd/backup-manager/medium.go),
+// so none of them is an untested wrapper claiming this client works
+// against a route nothing calls.
+
+// ImportStorageCredentials is POST /storage-credentials: the one call on
+// this client that ever carries S3 credential material, and it carries it
+// once, in one direction.
+//
+// The material arrives on this process's STDIN (`medium
+// import-credentials --stdin`) and leaves in a request body over the
+// session this client already holds. It is never a command-line argument,
+// so it is not in the process table and not in shell history, and the
+// response is an id, so there is nothing to redact in anything printed
+// afterwards.
+func (c *Client) ImportStorageCredentials(ctx context.Context, req apicontract.ImportStorageCredentialsRequest) (apicontract.ImportStorageCredentialsResponse, error) {
+	var out apicontract.ImportStorageCredentialsResponse
+	err := c.call(ctx, "importStorageCredentials", nil, req, &out)
+	return out, err
+}
+
+// ListStorageMediums is GET /storage-mediums: the destinations the ENGINE
+// holds, which is why a terminal would ask over HTTP rather than read the
+// file itself.
+func (c *Client) ListStorageMediums(ctx context.Context) (apicontract.ListStorageMediumsResponse, error) {
+	var out apicontract.ListStorageMediumsResponse
+	err := c.call(ctx, "listStorageMediums", nil, nil, &out)
+	return out, err
+}
+
+// GetStorageMedium is GET /storage-mediums/{id}.
+func (c *Client) GetStorageMedium(ctx context.Context, id string) (apicontract.StorageMediumSummary, error) {
+	var out apicontract.StorageMediumSummary
+	err := c.call(ctx, "getStorageMedium", []string{id}, nil, &out)
+	return out, err
+}
+
+// StorageMediumUsage is GET /storage-mediums/{id}/usage: FR-30's report of
+// what is actually on a destination, per backup set.
+func (c *Client) StorageMediumUsage(ctx context.Context, id string) (apicontract.StorageMediumUsageResponse, error) {
+	var out apicontract.StorageMediumUsageResponse
+	err := c.call(ctx, "getStorageMediumUsage", []string{id}, nil, &out)
+	return out, err
+}
+
+// PreflightStorageMediumCandidate is POST /storage-mediums/preflight:
+// prove a destination that has not been saved. It writes nothing whatever
+// the report says.
+func (c *Client) PreflightStorageMediumCandidate(ctx context.Context, req apicontract.StorageMediumRequest) (apicontract.MediumPreflightResponse, error) {
+	var out apicontract.MediumPreflightResponse
+	err := c.call(ctx, "preflightStorageMediumCandidate", nil, req, &out)
+	return out, err
+}
+
+// CreateStorageMedium is POST /storage-mediums.
+func (c *Client) CreateStorageMedium(ctx context.Context, req apicontract.StorageMediumRequest) (apicontract.StorageMediumSummary, error) {
+	var out apicontract.StorageMediumSummary
+	err := c.call(ctx, "createStorageMedium", nil, req, &out)
+	return out, err
+}
+
+// UpdateStorageMedium is PUT /storage-mediums/{id}.
+func (c *Client) UpdateStorageMedium(ctx context.Context, id string, req apicontract.StorageMediumRequest) (apicontract.StorageMediumSummary, error) {
+	var out apicontract.StorageMediumSummary
+	err := c.call(ctx, "updateStorageMedium", []string{id}, req, &out)
+	return out, err
+}
+
+// RemoveStorageMedium is DELETE /storage-mediums/{id}, which the engine
+// refuses while any copy names the destination (FR-30).
+func (c *Client) RemoveStorageMedium(ctx context.Context, id string) error {
+	return c.call(ctx, "removeStorageMedium", []string{id}, nil, nil)
+}

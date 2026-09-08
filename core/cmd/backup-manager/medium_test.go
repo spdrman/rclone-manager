@@ -1,6 +1,9 @@
 package main
 
 import (
+	"flag"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -61,14 +64,30 @@ func TestMediumPreflightIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 			// That keeps this cell about arity: it asks whether the
 			// refusal happened and said what shape it wanted, and does
 			// not go red the day a second verb is added.
+			//
+			// It reads mediumOperandShapes rather than mediumVerbNames
+			// because G2.2 (#594) gave this command verbs that take no
+			// operand at all, so one trailing "<medium-id>" would have
+			// asked four of the seven for an id they are right not to
+			// want.
 			name: "no verb and no medium",
 			args: nil,
-			says: "expected " + strings.Join(mediumVerbNames(), "|") + " <medium-id>",
+			says: "expected " + mediumOperandShapes(),
 		},
 		{
 			name: "a verb but no medium",
 			args: []string{"preflight"},
-			says: "expected " + strings.Join(mediumVerbNames(), "|") + " <medium-id>",
+			says: "expected " + mediumOperandShapes(),
+		},
+		{
+			// The other direction, which only became possible when verbs
+			// stopped sharing an arity: an operand given to a verb that
+			// takes none. Telling somebody "expected list | show
+			// <medium-id> | ..." here would send them looking for an id
+			// they were right not to have.
+			name: "an operand a verb does not take",
+			args: []string{"list", "offsite_s3"},
+			says: "list takes no argument",
 		},
 		{
 			name: "a medium but no verb this command has",
@@ -88,5 +107,122 @@ func TestMediumPreflightIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", out, tc.says)
 			}
 		})
+	}
+}
+
+// -------------------------------------------- the G2.2 verbs (#594) ------
+
+// TestMediumSurfaceHasNoFlagThatTakesASecret is the security property
+// this whole command surface is shaped around, asserted structurally
+// rather than trusted.
+//
+// EPIC G requires every action taken in the browser to print its
+// backup-manager equivalent into the global terminal, and that terminal is
+// copy-to-clipboard and exportable, so anything printed there ends up
+// pasted into a chat window eventually. Redaction is not the answer:
+// redaction is a policy somebody has to remember to apply at every print
+// site, and a site that forgets is indistinguishable from one that had
+// nothing to redact until the day it leaks.
+//
+// So there is no flag here that takes a secret at all, and this walks the
+// real flag set to prove it. The material only ever arrives on stdin,
+// which is not in the process table and not in shell history.
+func TestMediumSurfaceHasNoFlagThatTakesASecret(t *testing.T) {
+	fs := flag.NewFlagSet("medium", flag.ContinueOnError)
+	declareMediumFlags(fs)
+
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+	if len(names) == 0 {
+		t.Fatal("declareMediumFlags declared nothing, so this test would pass by finding no flags at all")
+	}
+	// The positive control: the scan really does see the flags that are
+	// there, so an empty result below means "no such flag exists" rather
+	// than "the walk found nothing".
+	if !slices.Contains(names, "credentials-id") {
+		t.Fatalf("the flag walk does not see --credentials-id, so it proves nothing about what it did not find: %v", names)
+	}
+
+	forbidden := regexp.MustCompile(`(?i)secret|access-key|accesskey|password|passphrase|token`)
+	for _, name := range names {
+		if forbidden.MatchString(name) {
+			t.Errorf("--%s takes something secret-shaped on a command line, which is in `ps` output for every user on this host and in shell history. Read it from stdin instead, the way import-credentials does", name)
+		}
+	}
+}
+
+// TestMediumImportCredentials_RefusesWithoutStdin. Reading a terminal's
+// stdin by default would hang with no explanation for somebody exploring,
+// and the flag is also what makes the shape of this command obvious in an
+// echoed command line: there is nowhere else the material could come from.
+func TestMediumImportCredentials_RefusesWithoutStdin(t *testing.T) {
+	var code int
+	out := captureStderr(t, func() {
+		code = cmdMedium([]string{"import-credentials", "--config", "/nonexistent/no-such-config.yaml"})
+	})
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 (a usage refusal, before anything is opened); stderr=%s", code, out)
+	}
+	if !strings.Contains(out, "--stdin is required") {
+		t.Errorf("stderr = %q, want it to say --stdin is required", out)
+	}
+	if !strings.Contains(out, "shell history") {
+		t.Errorf("the refusal does not say why the secret is not a flag: %q", out)
+	}
+}
+
+// TestParseSharedCredentialsText_ReportsShapeAndNeverTheBytes is the
+// parse this command does to what it read off stdin. It runs in a terminal
+// whose transcript an operator exports, so a refusal that quoted its input
+// would be the one place this binary prints a secret.
+func TestParseSharedCredentialsText_ReportsShapeAndNeverTheBytes(t *testing.T) {
+	const canary = "CANARY-594-cli-1f7be4a09c53-DO-NOT-PRINT"
+
+	id, secret, token, err := parseSharedCredentialsText([]byte(
+		"[default]\naws_access_key_id = EXAMPLE-NOT-A-REAL-KEY\naws_secret_access_key = " + canary + "\n"))
+	if err != nil {
+		t.Fatalf("parseSharedCredentialsText: %v", err)
+	}
+	if id != "EXAMPLE-NOT-A-REAL-KEY" || secret != canary || token != "" {
+		t.Fatalf("parsed as id=%q secret-len=%d token=%q", id, len(secret), token)
+	}
+
+	// The refusal path, with the canary in play so the assertion is about
+	// a code path rather than about an input that carried nothing.
+	_, _, _, err = parseSharedCredentialsText([]byte("[default]\naws_secret_access_key = " + canary + "\n"))
+	if err == nil {
+		t.Fatal("credentials text with no access key id was accepted")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("the refusal echoes what it read: %v", err)
+	}
+}
+
+// TestMediumFlagsSpec_LeavesUnwrittenFlagsAlone is the property an edit
+// depends on. A flag that was not passed and a flag that was passed empty
+// are different requests, and only the first one means "leave it alone".
+// It matters most for the credential: an unnamed one keeps the credential
+// already configured, and an empty one would describe a destination that
+// reaches nowhere.
+func TestMediumFlagsSpec_LeavesUnwrittenFlagsAlone(t *testing.T) {
+	fs := flag.NewFlagSet("medium", flag.ContinueOnError)
+	flags := declareMediumFlags(fs)
+	if err := fs.Parse([]string{"--region", "eu-west-1"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	spec := flags.spec("offsite_s3")
+	if spec.Region != "eu-west-1" {
+		t.Errorf("Region = %q, want eu-west-1", spec.Region)
+	}
+	// --type has a non-empty DEFAULT ("s3"), which is exactly the case a
+	// value-reading implementation would get wrong: it would send "s3" on
+	// an edit that never mentioned the type, and a whole-record replace
+	// would then write it.
+	if spec.Type != "" {
+		t.Errorf("Type = %q for a flag that was never passed; an edit would write it over whatever the destination says", spec.Type)
+	}
+	if spec.Bucket != "" || spec.Credentials.ID != "" || spec.Credentials.File != "" {
+		t.Errorf("unwritten flags reached the spec: %+v", spec)
 	}
 }

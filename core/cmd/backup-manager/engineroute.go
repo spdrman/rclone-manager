@@ -372,14 +372,7 @@ func settingsFromWire(s apicontract.SettingsResponse) service.Settings {
 		})
 	}
 	for _, m := range s.Mediums {
-		out.Mediums = append(out.Mediums, service.StorageMediumSummary{
-			ID:                  m.ID,
-			Type:                m.Type,
-			Bucket:              m.Bucket,
-			Region:              m.Region,
-			StorageClass:        m.StorageClass,
-			ReadsRequireRestore: m.ReadsRequireRestore,
-		})
+		out.Mediums = append(out.Mediums, storageMediumFromWire(m))
 	}
 	return out
 }
@@ -393,4 +386,153 @@ func retentionTierToWire(t service.RetentionTier) apicontract.RetentionTier {
 		WindowUnit:  t.WindowUnit,
 		Medium:      t.Medium,
 	}
+}
+
+// The storage-destination half of this route (G2.2, issue #594).
+//
+// It exists for the reason settingsRoute exists: `medium add`, `edit` and
+// `remove` write configuration, and a configuration write left in the file
+// beside a running engine is a change that process would never read
+// (#538/#543). Without these, those three verbs would be permanently
+// refused next to a live deployment, which is the position `settings
+// patch` was in before #543.
+//
+// The import is the one that carries a secret, and it is the reason the
+// CLI has no flag that takes one. The material is read from this
+// process's stdin and put straight into a request body over the session
+// this client already holds: never an argument, so never in the process
+// table and never in shell history, and the response is an id, so nothing
+// printed afterwards has anything to redact.
+
+func (r *engineRoute) ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error) {
+	resp, err := r.client.ImportStorageCredentials(ctx, apicontract.ImportStorageCredentialsRequest{
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+		SessionToken:    sessionToken,
+	})
+	if err != nil {
+		return service.MediumCredentialRef{}, err
+	}
+	// File is deliberately left empty. The engine wrote that path on its
+	// own host, which may not be this one, and the API does not report it
+	// for exactly that reason: an id is the whole of what a caller may
+	// hold.
+	return service.MediumCredentialRef{ID: resp.ID}, nil
+}
+
+func (r *engineRoute) ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error) {
+	resp, err := r.client.ListStorageMediums(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.StorageMediumSummary, 0, len(resp.Mediums))
+	for _, m := range resp.Mediums {
+		out = append(out, storageMediumFromWire(m))
+	}
+	return out, nil
+}
+
+func (r *engineRoute) GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error) {
+	resp, err := r.client.GetStorageMedium(ctx, id)
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error) {
+	resp, err := r.client.StorageMediumUsage(ctx, id)
+	if err != nil {
+		return service.StorageMediumUsage{}, err
+	}
+	out := service.StorageMediumUsage{Medium: resp.Medium, Placements: resp.Placements}
+	for _, s := range resp.BackupSets {
+		out.BackupSets = append(out.BackupSets, service.StorageMediumUsageBySet{
+			Set: s.Set, Placements: s.Placements, OnlyCopyHere: s.OnlyCopyHere,
+		})
+	}
+	return out, nil
+}
+
+func (r *engineRoute) PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error) {
+	resp, err := r.client.PreflightStorageMediumCandidate(ctx, storageMediumToWire(spec))
+	if err != nil {
+		return service.MediumPreflight{}, err
+	}
+	return mediumPreflightFromWire(resp), nil
+}
+
+func (r *engineRoute) CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	resp, err := r.client.CreateStorageMedium(ctx, storageMediumToWire(spec))
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	resp, err := r.client.UpdateStorageMedium(ctx, spec.ID, storageMediumToWire(spec))
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) RemoveStorageMedium(ctx context.Context, id string) error {
+	return r.client.RemoveStorageMedium(ctx, id)
+}
+
+// storageMediumFromWire is the one place the engine's answer becomes this
+// binary's shape, shared by the settings read and by every medium verb, so
+// the two cannot come to disagree about a destination.
+func storageMediumFromWire(m apicontract.StorageMediumSummary) service.StorageMediumSummary {
+	return service.StorageMediumSummary{
+		ID:                  m.ID,
+		Type:                m.Type,
+		Bucket:              m.Bucket,
+		Region:              m.Region,
+		Endpoint:            m.Endpoint,
+		Prefix:              m.Prefix,
+		StorageClass:        m.StorageClass,
+		UploadVerification:  m.UploadVerification,
+		ReadsRequireRestore: m.ReadsRequireRestore,
+	}
+}
+
+// storageMediumToWire is the write direction. The credentials block is
+// sent as the caller spelled it, EMPTY INCLUDED: on an edit the engine
+// reads an unnamed credential as "keep the one already configured", and a
+// mapping that invented a value here would rotate a credential nobody
+// asked to rotate.
+func storageMediumToWire(spec service.StorageMediumSpec) apicontract.StorageMediumRequest {
+	return apicontract.StorageMediumRequest{
+		ID:                 spec.ID,
+		Type:               spec.Type,
+		Region:             spec.Region,
+		Endpoint:           spec.Endpoint,
+		Bucket:             spec.Bucket,
+		Prefix:             spec.Prefix,
+		StorageClass:       spec.StorageClass,
+		UploadVerification: spec.UploadVerification,
+		Credentials: apicontract.StorageMediumCredentialsReference{
+			CredentialsID: spec.Credentials.ID,
+			File:          spec.Credentials.File,
+			Env:           spec.Credentials.Env,
+			Command:       spec.Credentials.Command,
+		},
+	}
+}
+
+// mediumPreflightFromWire carries every check through, skipped ones
+// included. A route that dropped them would print a shorter list on a
+// failure than on a success, which is the one moment the full list matters
+// most.
+func mediumPreflightFromWire(r apicontract.MediumPreflightResponse) service.MediumPreflight {
+	out := service.MediumPreflight{Medium: r.Medium, OK: r.OK, Checks: make([]service.MediumPreflightCheck, 0, len(r.Checks))}
+	for _, c := range r.Checks {
+		out.Checks = append(out.Checks, service.MediumPreflightCheck{
+			Step: c.Step, Outcome: c.Outcome, Category: c.Category, Detail: c.Detail,
+		})
+	}
+	return out
 }
