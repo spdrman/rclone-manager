@@ -40,7 +40,7 @@
     },
     "notice": {
       "path": "NOTICE",
-      "sha256": "1808660ecc880fe3aac90b865b85a1ef6287f665120423cfd37c7eb6296229de"
+      "sha256": "be43848c396b30ebcd2dfd80f6cd77794f506209facb08f32247aef5f9c53813"
     },
     "inventory": {
       "path": "provenance/third-party-licenses.json",
@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "ea1bead4481854c5d645b4b09ec168904d67796bbb49f11e6fcae395a8b94ce9",
+    "sha256": "45ca9ee688dd1afbb97ce607291254bff0791a48fd19f7e638ce45871e29ed17",
     "format": "sha256sum"
   },
   "artifacts": [

@@ -242,6 +242,12 @@ func noticeVendoredSection(c Compliance) string {
 		}
 		row("Licence", licence)
 		row("Licence text", v.LicenceTextURL)
+		// Where the licence text sits INSIDE the artifact, for the
+		// material whose licence asks to travel with every copy rather
+		// than to be linked. A recipient holding the image can open this
+		// path; the URL above needs the network this product is built to
+		// do without.
+		row("Licence copy", v.LicenceFile)
 		row("Modification", v.ModifiedNote)
 		row("What ships", v.WhatShips)
 		row("Carried in", strings.Join(v.VendoredInto, ", "))
