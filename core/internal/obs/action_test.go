@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -256,20 +258,59 @@ func TestAnActionOnASilentLoggerIsSilentRatherThanAPanic(t *testing.T) {
 	}
 }
 
-// TestNoEventLogsItsOwnFieldUnderAReservedKey is the shadowing rule
+// TestAMarkedLineNeverCarriesADuplicateKey is the shadowing rule
 // DiskPressure's own doc records, one field along. The record's outcome,
-// action and action id are written into the log line under those three
+// action and action id are written into the log line under three reserved
 // keys, so an event that also logged an attribute called one of them
-// would produce a JSON object with a duplicate key: the tap takes the
-// first and encoding/json keeps the last, and two readers of one event
-// would disagree about how it went.
-func TestNoEventLogsItsOwnFieldUnderAReservedKey(t *testing.T) {
-	for _, key := range []string{fieldOutcome, fieldAction, fieldActionID} {
-		if !reservedFieldKey(key) {
-			t.Errorf("%q is written into every marked line and is not reserved", key)
-		}
+// would produce a JSON object with two: the tap takes the first and
+// encoding/json keeps the last, and two readers of one event would
+// disagree about how it went.
+//
+// No event in the catalog does that, which is what "reserved" means, and
+// this is what happens if one ever tries. The event's own field stands,
+// for the same reason contextBackupSet leaves an event's own backup_set
+// alone: the event is the authority on its own fields. The typed outcome
+// still reaches the tap, because it is a field of the Record rather than
+// one of the flat list.
+func TestAMarkedLineNeverCarriesADuplicateKey(t *testing.T) {
+	var out bytes.Buffer
+	sink := &recordingSink{}
+	l := New(&out, LevelDebug).WithSink(sink)
+
+	l.Completed(context.Background(), OutcomeSuccess, "unit_test", "a made-up event with a field of its own",
+		slog.String(fieldOutcome, "passed"))
+
+	if got := strings.Count(out.String(), `"outcome"`); got != 1 {
+		t.Errorf("the log line carries %d outcome keys:\n%s", got, out.String())
 	}
-	if reservedFieldKey("step") {
-		t.Error("an ordinary event field is being treated as reserved")
+	lines := decodeLines(t, &out)
+	if lines[0][fieldOutcome] != "passed" {
+		t.Errorf("the log line's outcome is %v, and the event named its own; the event is the authority on its own fields", lines[0][fieldOutcome])
+	}
+
+	got := sink.all()[0]
+	if got.Outcome != OutcomeSuccess {
+		t.Errorf("the record's stated outcome is %q; it is a field of the Record and cannot be shadowed by one of the event's own", got.Outcome)
+	}
+	if v, ok := fieldValue(got, fieldOutcome); !ok || v != "passed" {
+		t.Errorf("the event's own outcome field reached the tap as %q (present=%v); a field an event logged must not be dropped on the way", v, ok)
+	}
+}
+
+// TestAMarksOwnAttributesDoNotAlsoArriveAsFields keeps the tap's list and
+// the Record's typed fields from saying the same thing twice, which would
+// leave every reader filtering three keys back out of the fields it
+// prints beside a line.
+func TestAMarksOwnAttributesDoNotAlsoArriveAsFields(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+
+	l.CycleEnd(context.Background(), "cycle-42", 0, nil)
+
+	got := sink.all()[0]
+	for _, key := range []string{fieldOutcome, fieldAction, fieldActionID} {
+		if v, ok := fieldValue(got, key); ok {
+			t.Errorf("the record carries %q=%q in its fields as well as in its own, so every reader has to filter it back out", key, v)
+		}
 	}
 }

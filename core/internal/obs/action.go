@@ -155,21 +155,16 @@ const (
 // last, so a line whose event supplied its own "outcome" would tell the
 // terminal one thing and the log another about how the very same
 // operation went.
+//
+// emit will not produce that object even if an event tries: a mark whose
+// key an event has already claimed is not written a second time, and the
+// event's own field stands, exactly as contextBackupSet leaves an event's
+// own backup_set alone. See TestAMarkedLineNeverCarriesADuplicateKey.
 const (
 	fieldOutcome  = "outcome"
 	fieldAction   = "action"
 	fieldActionID = "action_id"
 )
-
-// reservedFieldKey reports whether key is one of the three above.
-//
-// Exported to nobody and used in exactly two places: emit, which will not
-// let a mark overwrite a field an event supplied under one of these
-// names, and this package's own test, which is where the rule is stated
-// as a rule rather than left to be inferred from emit's loop.
-func reservedFieldKey(key string) bool {
-	return key == fieldOutcome || key == fieldAction || key == fieldActionID
-}
 
 // mark is the set of record-level facts a line carries beside its
 // severity: how the operation went, and which action it opens or closes.

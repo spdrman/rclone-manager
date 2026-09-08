@@ -217,17 +217,19 @@ func (l *Logger) emitMarked(ctx context.Context, level Level, m mark, event, msg
 	all := make([]slog.Attr, 0, len(attrs)+len(l.bound)+len(marks)+1)
 	all = append(all, slog.String(fieldEvent, event))
 	// The marks come before everything else, and only where neither the
-	// event nor What With bound already claimed the key. Those three keys
-	// are reserved (reservedFieldKey, action.go) precisely so that never
-	// happens, and the check is here anyway: a duplicate key is worse
-	// than either answer, the tap takes the first and encoding/json keeps
-	// the last, and a line disagreeing with itself about its own outcome
-	// is the one shape this field must never take.
+	// event nor what With bound already claimed the key. Those three keys
+	// are reserved (action.go) precisely so that never happens, and the
+	// check is here anyway: a duplicate key is worse than either answer,
+	// the tap takes the first and encoding/json keeps the last, and a
+	// line disagreeing with itself about its own outcome is the one shape
+	// this field must never take.
+	added := 0
 	for _, k := range marks {
 		if attrNamed(attrs, k.Key) || attrNamed(l.bound, k.Key) {
 			continue
 		}
 		all = append(all, k)
+		added++
 	}
 	// What With bound comes next, and only where the event did not say
 	// the same thing itself. The event is the authority on its own
@@ -245,7 +247,13 @@ func (l *Logger) emitMarked(ctx context.Context, level Level, m mark, event, msg
 	}
 	msg = l.redact.Filter(msg)
 	l.base.LogAttrs(ctx, level, msg, all...)
-	l.tap(level, m, event, msg, all[1:])
+	// The event attr and whichever marks were actually added are sliced
+	// off: the tap names all four in fields of its own, and repeating
+	// them in the flat list would leave every reader to filter them back
+	// out. Sliced by COUNT rather than dropped by key, so an event that
+	// claimed one of those keys for a field of its own keeps that field
+	// in the tap exactly as it keeps it in the line.
+	l.tap(level, m, event, msg, all[1+added:])
 }
 
 // attrNamed reports whether attrs already carries key.
@@ -270,24 +278,18 @@ func redactAttr(r *Redactor, a slog.Attr) slog.Attr {
 }
 
 // tap hands one already-redacted event to the Sink, if there is one. attrs
-// excludes the event attribute emit prepends, because Record names the
-// event in a field of its own and repeating it in the list would leave
-// every reader to filter it back out. It already carries whatever With
-// bound, redacted and de-duplicated with the rest, which is what keeps the
-// tap and the log line built from one list rather than two.
+// excludes the event attribute emit prepends and the marks emitMarked
+// added, because Record names all four in fields of its own and repeating
+// them in the list would leave every reader to filter them back out. It
+// already carries whatever With bound, redacted and de-duplicated with the
+// rest, which is what keeps the tap and the log line built from one list
+// rather than two.
 func (l *Logger) tap(level Level, m mark, event, msg string, attrs []slog.Attr) {
 	if l.sink == nil {
 		return
 	}
 	fields := make([]Field, 0, len(attrs))
 	for _, a := range attrs {
-		// The marks are typed fields on the Record below, so repeating
-		// them in the flat list would leave every reader to filter them
-		// back out of the fields it prints beside the line. The log line
-		// keeps them, because there the flat object is all there is.
-		if reservedFieldKey(a.Key) {
-			continue
-		}
 		fields = append(fields, Field{Key: a.Key, Value: a.Value.String()})
 	}
 	l.sink.RecordEvent(Record{
