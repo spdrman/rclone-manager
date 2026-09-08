@@ -137,3 +137,11 @@ is a measurement on the designated benchmark host rather than an edit, so
 it is not done here, it is filed as its own issue, and this paragraph is
 here so the next person to read a font-size figure in a compliance record
 knows which number the gate is actually failing on.
+
+That issue was #635, and it is resolved. The baseline was re-captured at
+`186ba0c7` on 2026-09-08 at 69,704,266 bytes, after the whole 26,695,504-byte
+move was accounted for: 71.2% of it is rclone's S3 backend compiled into both
+binaries for EPIC E's MediumStore, and the rest is the adapter bundles, the
+licence material and product code. `docs/perf/README.md` carries the working.
+The fonts measured here are inside that: 698,720 bytes across the five bundles
+and about 165,000 in the binary, which is the 863,745 above.

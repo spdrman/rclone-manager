@@ -271,6 +271,15 @@ to **44,811,244** bytes, which is +1,802,482 (+4.19%) against a ceiling of
 one more bundle: this image can carry these five and not a sixth. Shipping all
 seven, as #167 estimated, would have been roughly 2.4 MB and outside the gate.
 
+That paragraph is #180's measurement and it is left as it was taken. Both
+sides of it have since moved, and #635 re-measured them on the same host and
+platform on 2026-09-08: the five bundles now hold 3,503,996 bytes rather than
+1,802,482, because #632 put 139,744 bytes of woff2 into each one and EPIC F, G
+and H grew the JS chunk; and the ceiling moved with the re-captured baseline.
+The conclusion is unchanged, five fits and seven would not, but a reader
+sizing a sixth bundle should take the numbers from `docs/perf/` rather than
+from here.
+
 The end-to-end evidence, against the built image rather than against a
 function:
 
