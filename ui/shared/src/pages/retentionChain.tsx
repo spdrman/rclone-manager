@@ -480,6 +480,18 @@ export function destinationLabel(m: StorageMedium): string {
     " (" +
     m.storageClass +
     (m.readsRequireRestore ? ", cannot receive backups: reads need a restore" : "") +
+    // Issue #636, and it belongs on the CHOICE rather than only on the
+    // destinations list. This is the moment an operator decides to send a
+    // tier's backups somewhere, and "nothing has ever shown that this
+    // place works" is exactly the kind of thing to know before that save
+    // rather than after it. It reads as a label and not a refusal,
+    // because an unproven destination is a legitimate thing to pick: the
+    // operator who declared it offline is the operator picking it.
+    //
+    // Appended, so a destination carrying no mark keeps the label it had
+    // byte for byte. An <option> can hold no markup, so this says it in
+    // words the way the two clauses before it do.
+    (m.connectionUnverified ? ", never proven" : "") +
     ")"
   );
 }

@@ -1227,12 +1227,13 @@ function defaultSettings(): AppSettings {
         id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
         prefix: "annual", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback",
         readsRequireRestore: true, isLocal: false, isDefault: false,
-        // Declared unproven on purpose, so the destinations card's #636
-        // banner has something to draw in the demo the way the backup-set
-        // one does. It is also the honest fixture: a demo where every
-        // destination reads as checked is a demo of a state an operator
-        // reaches only by running the check.
-        connectionUnverified: true
+        // False on all three, like #628's own backup-set fixtures. The
+        // mark is a state an operator reaches by using --no-verify, and a
+        // demo that shipped one would put ", never proven" into every
+        // destination label the black-box suite reads without that suite
+        // having asked for it. The surfaces that draw it have their own
+        // cases, which inject the mark rather than inheriting it.
+        connectionUnverified: false
       }
     ],
     schema: {

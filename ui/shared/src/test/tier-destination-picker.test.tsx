@@ -181,6 +181,25 @@ describe("picking a destination under a retention tier (#622)", () => {
     expect(options).toContain("Local backup root");
   });
 
+  // Issue #636 on the surface where it decides something. A picker is
+  // where an operator sends a tier's backups somewhere, and "nothing has
+  // ever shown this place works" belongs before that save rather than
+  // after it.
+  it("says on the choice itself when a destination has never been proven", async () => {
+    await renderSettings({
+      settings: settingsFixture({ mediums: [LOCAL, { ...OFFSITE, connectionUnverified: true }] })
+    });
+
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toContain("offsite_s3 (STANDARD_IA, never proven)");
+
+    // The control: the same destination without the mark keeps the label
+    // it had, byte for byte.
+    cleanup();
+    await renderSettings({ settings: settingsFixture({ mediums: [LOCAL, OFFSITE] }) });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toContain("offsite_s3 (STANDARD_IA)");
+  });
+
   it("lists every declared destination beside the local one", async () => {
     await renderSettings();
 
