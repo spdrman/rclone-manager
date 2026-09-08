@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
@@ -136,6 +137,39 @@ func proveSourceConnection(ctx context.Context, svc sourceConnectionTester, noVe
 		return 1
 	}
 	return 0
+}
+
+// backupSetConnectionFlags are the patch flags that name something a
+// connection test can settle (issue #624).
+//
+// The same six things core/service's changesTheConnection compares, named
+// as flags rather than as fields because this side of the boundary has
+// flags and not a persisted set. It is used for what this command SAYS and
+// never for what it does: the decision to run the check belongs to the
+// process holding the configuration, for the reason
+// UpdateBackupSetRequest.SkipConnectionCheck's own doc gives, and a copy of
+// that decision here is a copy that can drift.
+var backupSetConnectionFlags = []string{
+	"host", "port", "user", "ssh-key-file", "ssh-key-id",
+	"known-hosts-line", "trust-host-key", "remote-path",
+}
+
+// namesAConnectionField reports whether this invocation PASSED any of them.
+//
+// fs.Visit rather than a zero-value test, for the reason buildBackupSetPatch
+// gives: `--port 0` and `--user ""` are values an operator can type and
+// mean, so "not passed" and "passed as its zero value" have to stay
+// distinguishable here too.
+func namesAConnectionField(fs *flag.FlagSet) bool {
+	named := false
+	fs.Visit(func(fl *flag.Flag) {
+		for _, name := range backupSetConnectionFlags {
+			if fl.Name == name {
+				named = true
+			}
+		}
+	})
+	return named
 }
 
 // printConnectionReport renders one connection test, every step in the

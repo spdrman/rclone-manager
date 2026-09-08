@@ -386,7 +386,7 @@ func declareBackupSetFlags() *backupSetFlags {
 		"patch: confirm trusting a DIFFERENT host key for the same host. Needed only when the line being pinned is not the one on record. The refusal without it names both fingerprints, which is the whole of what there is to compare")
 
 	f.noVerify = fs.Bool("no-verify", false,
-		"create, patch: write the backup set without proving the connection first. The output says in so many words that nothing was proven, and the set stays marked as unverified until a connection test passes; it exists for building configuration offline, against a host this machine cannot currently reach")
+		"create, patch: write the backup set without proving the connection first. The output says in so many words that nothing was proven, and the set is marked as unverified until a connection test passes. On patch it means something only for an edit that changes the host, port, user, key, trusted host key or remote path, because nothing else is a claim a connection test can settle. It exists for building configuration offline, against a host this machine cannot currently reach")
 
 	return f
 }
@@ -578,7 +578,16 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	// in the same order the destination side prints it. The set printed
 	// below carries the mark too, which is the durable half; this is the
 	// half that says what this particular command chose not to do.
-	if *f.noVerify {
+	//
+	// Only when the edit names something a connection test could have had
+	// an opinion about. A `--no-verify` beside a `--local-path` change
+	// skips nothing, because nothing would have run, and announcing a
+	// skip that did not happen teaches an operator to read the line as
+	// noise. The flags are what this command can see, so this can
+	// over-report by one case, an edit that names a connection field and
+	// sets it to the value it already had; that edit really was written
+	// without a check, so the sentence stays true.
+	if *f.noVerify && namesAConnectionField(f.fs) {
 		fmt.Println("not verified: --no-verify was given, so this edit is written without the connection being proven")
 		fmt.Printf("  prove it afterwards with: backup-manager backup-set test-connection %s\n", id)
 	}
@@ -1105,15 +1114,17 @@ func printBackupSet(s service.BackupSet) {
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
 	fmt.Printf("  read_only: %v\n", s.ReadOnly)
-	// Issue #624, and printed as words rather than as a bool because it
-	// is the one line here an operator has to act on. "verified" is the
-	// ordinary answer and is printed too: a line that appeared only when
-	// something was wrong would leave a reader unable to tell a proven
-	// set from a build that does not report this at all, which is the
-	// same reason stale_after says "not reported" rather than nothing.
+	// Issue #624, and printed ONLY when it is set, unlike every line above
+	// it. That asymmetry is the field's own meaning rather than an
+	// omission: true says a surface deliberately skipped a check it could
+	// have run, and false has two readings this build cannot tell apart,
+	// a set proven at creation and a set written before this deployment
+	// recorded the difference at all. Printing "verified" for the second
+	// would be a claim about a connection nobody ever made.
+	//
+	// So it says the one thing it knows and stays quiet about the one it
+	// does not, which is the same call the detail page's banner makes.
 	if s.ConnectionUnverified {
 		fmt.Println("  connection: not verified (nothing has proven this source; `backup-manager backup-set test-connection " + s.ID + "` clears this)")
-	} else {
-		fmt.Println("  connection: verified")
 	}
 }

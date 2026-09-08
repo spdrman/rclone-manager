@@ -220,8 +220,36 @@ func TestRun_BackupSetPatchProvesTheConnectionWhenItChangesOne(t *testing.T) {
 		args := []string{"backup-set", "--config", configPath, "patch", "api/offline",
 			"--local-path", newLocal}
 
-		if got := run(args); got != 0 {
-			t.Errorf("run(%v) = %d, want 0: where artifacts land on THIS machine is not something a connection test can prove or disprove", args, got)
+		out := captureStdout(t, func() {
+			if got := run(args); got != 0 {
+				t.Errorf("run(%v) = %d, want 0: where artifacts land on THIS machine is not something a connection test can prove or disprove", args, got)
+			}
+		})
+		// And it does not announce a skip either. A "not verified" line
+		// on an edit where no check would have run is a sentence an
+		// operator learns to read as noise, which is how the line stops
+		// working on the edits where it means something.
+		if strings.Contains(out, "not verified: --no-verify") {
+			t.Errorf("an edit that names no connection field announced a skip that never happened:\n%s", out)
+		}
+	})
+
+	t.Run("--no-verify says so when the edit really did skip one", func(t *testing.T) {
+		configPath := writeTestConfig(t)
+		anOfflineSFTPSet(t, configPath, "api/offline")
+		args := []string{"backup-set", "--config", configPath, "patch", "api/offline",
+			"--remote-path", "/srv/somewhere-else", "--no-verify"}
+
+		out := captureStdout(t, func() {
+			if got := run(args); got != 0 {
+				t.Errorf("run(%v) = %d, want 0: --no-verify is the way past the refusal, not a second refusal", args, got)
+			}
+		})
+		if !strings.Contains(out, "not verified") {
+			t.Errorf("--no-verify did not say that nothing was proven:\n%s", out)
+		}
+		if raw := readFile(t, configPath); !strings.Contains(raw, "connection_unverified: true") {
+			t.Errorf("the edit left no mark, so it is indistinguishable from one that was checked:\n%s", raw)
 		}
 	})
 }
