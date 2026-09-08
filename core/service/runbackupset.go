@@ -209,15 +209,20 @@ func configuresBackupSet(inner *app.Service, sourceName, setName string) bool {
 
 // executeRunBackupSet is the asynchronous half, and it is deliberately
 // shaped like executeRunCycle rather than merely similar to it: the same
-// three deferred guarantees in the same order (release the single-flight
-// lock, signal the wait group, recover a panic into a failed row rather
-// than crashing the whole serving process), the same validator refresh
-// before anything execs one, and the same live-feed bracket.
+// deferred guarantees registered in the same order, so they unwind in the
+// same one (a recovered panic writes a terminal status, then the cycle
+// watch stops answering, then the single-flight lock is released, then
+// the live reading is cleared, then the wait group is signalled), the
+// same validator refresh before anything execs one, and the same two
+// feeds bracketed around the work.
 //
-// The one thing it does not take is the cycle watch. That reading answers
-// "what would entering edit mode for this set stop" for a deployment-wide
-// pass; a per-set run is refused outright while a hold is in place, so
-// there is no window for it to describe.
+// The cycle watch matters more here than it looks. It is what
+// BackupSetEditState reads to answer "would entering edit mode interrupt
+// something", and it matches on the set id the readings carry. Leaving it
+// out would mean an operator opening the edit form during a per-set run
+// of that very set got no prompt at all, which is the two-writers race
+// #350 exists to warn about, arriving through the one door that did not
+// have the warning on it.
 func (b *BackupService) executeRunBackupSet(operationID, sourceName, setName string) {
 	defer b.wg.Done()
 	// The live reading, registered and torn down exactly as
@@ -229,6 +234,13 @@ func (b *BackupService) executeRunBackupSet(operationID, sourceName, setName str
 	live := b.progress.begin(operationID)
 	defer b.progress.end(operationID)
 	defer b.runOnce.Unlock()
+	// Registered AFTER runOnce.Unlock so it runs BEFORE it, exactly as
+	// executeRunCycle does and for the same reason: releasing the
+	// single-flight lock first would let a scheduled tick take it, begin
+	// its own watch and publish a reading, only for this deferred end()
+	// to wipe it.
+	b.cycleWatch.begin()
+	defer b.cycleWatch.end()
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error(context.Background(), "execute-run-backup-set-panic", fmt.Errorf("recovered panic: %v", r))
@@ -269,7 +281,7 @@ func (b *BackupService) executeRunBackupSet(operationID, sourceName, setName str
 	// live activity feed under this set's own id.
 	result, err := runBackupSetFetch(
 		b.state.Load().inner,
-		app.WithProgressObserver(b.ctx, progressFanout{live, b.activity}),
+		app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch, b.activity}),
 		sourceName, setName)
 	if err != nil {
 		// Not err.Error(): Fetch's errors come up from internal/app and

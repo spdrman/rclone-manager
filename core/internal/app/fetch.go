@@ -141,9 +141,8 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	// load-bearing rather than cosmetic. The per-set activity feed keys on
 	// it, so a run whose readings carry no set id lands in no set's
 	// terminal at all (issue #597).
-	ctx = beginCycle(ctx, 1)
+	ctx = beginOneSetCycle(ctx, bs.ID.String())
 	prog := progressFrom(ctx)
-	prog.enterSet(bs.ID.String())
 
 	result := FetchResult{Set: bs.ID}
 	defer func() {

@@ -18,6 +18,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
 // submitFixtureRun is the submission this file makes over and over, with
@@ -198,6 +200,73 @@ func TestSubmitRunBackupSet_CannotOverlapADeploymentWideRun(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already in progress") {
 		t.Errorf("the refusal does not say what it lost to: %v", err)
+	}
+}
+
+// TestSubmitRunBackupSet_IsVisibleToAnOperatorAboutToEnterEditMode is the
+// half of #350's warning that a new door could have walked straight past.
+//
+// BackupSetEditState answers "would entering edit mode interrupt
+// something" by reading the cycle watch and matching on the set id the
+// readings carry. A per-set run that did not feed that watch would leave
+// an operator opening the edit form, during a run of that very set,
+// with no prompt at all: two writers on one definition, arriving through
+// the one control that did not have the warning on it.
+//
+// The fetch is held open through the seam rather than raced, because a
+// race that happens to serialise proves nothing.
+func TestSubmitRunBackupSet_IsVisibleToAnOperatorAboutToEnterEditMode(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	restore := runBackupSetFetch
+	t.Cleanup(func() { runBackupSetFetch = restore })
+	runBackupSetFetch = func(_ *app.Service, ctx context.Context, _, _ string) (app.FetchResult, error) {
+		// Exactly what the real Fetch publishes first now: a reading that
+		// already names the set (beginOneSetCycle, core/internal/app).
+		if obs := app.ProgressObserverFrom(ctx); obs != nil {
+			obs.ObserveProgress(app.Progress{
+				BackupSetID:     fixtureSetID,
+				BackupSetsTotal: 1,
+				Stage:           app.StageTransferring,
+				Artifact:        "backup.dump",
+			})
+		}
+		close(started)
+		<-release
+		return app.FetchResult{}, nil
+	}
+
+	op, err := submitFixtureRun(t, svc, "edit-visibility", fixtureSetID)
+	if err != nil {
+		t.Fatalf("SubmitRunBackupSet: %v", err)
+	}
+	<-started
+
+	state, err := svc.BackupSetEditState(context.Background(), fixtureSetID)
+	if err != nil {
+		t.Fatalf("BackupSetEditState: %v", err)
+	}
+	if state.Running == nil {
+		t.Fatal("a per-set run in flight is invisible to BackupSetEditState, so entering edit mode for this very set would prompt about nothing")
+	}
+	if state.Running.Artifact != "backup.dump" || state.Running.Stage != app.StageTransferring {
+		t.Errorf("Running = %+v, want the artifact and stage the run published; a warning that cannot say what it would interrupt is not a warning", state.Running)
+	}
+
+	close(release)
+	waitForTerminalStatus(t, svc, op.ID)
+
+	// The control: once the run has ended the watch stops answering, so
+	// entering edit mode is silent again. Without this, a watch that
+	// simply always said "something is running" would pass above.
+	after, err := svc.BackupSetEditState(context.Background(), fixtureSetID)
+	if err != nil {
+		t.Fatalf("BackupSetEditState after the run: %v", err)
+	}
+	if after.Running != nil {
+		t.Errorf("Running = %+v after the run finished, want nil: a permanent prompt is one an operator stops reading", after.Running)
 	}
 }
 

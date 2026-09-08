@@ -206,6 +206,36 @@ func beginCycle(ctx context.Context, backupSetsTotal int) context.Context {
 	return context.WithValue(ctx, cycleProgressKey{}, c)
 }
 
+// beginOneSetCycle is beginCycle for a pass whose one backup set is known
+// before anything starts, which is exactly what Fetch is.
+//
+// It differs in the one way that matters: the FIRST reading already names
+// the set. beginCycle cannot do that, and should not try to: a RunCycle
+// does not know which set it will enter until it enters one, so its
+// opening reading carries no id and processBackupSet fills it in on the
+// next publish.
+//
+// For a per-set run that gap is not harmless. core/service's live
+// activity feed DROPS a reading whose BackupSetID is empty, so an opening
+// reading without the id reaches no terminal at all, and "this run
+// started" is the line a per-set terminal most needs to show (issue
+// #597). The denominator is 1 and is honest, for the reason Progress's
+// own doc gives about why a cycle has none.
+func beginOneSetCycle(ctx context.Context, setID string) context.Context {
+	obs := ProgressObserverFrom(ctx)
+	if obs == nil {
+		return ctx
+	}
+	c := &cycleProgress{obs: obs}
+	c.cur.BackupSetsTotal = 1
+	c.cur.BackupSetID = setID
+	c.cur.Stage = StageDiscovering
+	// No lock taken, exactly as beginCycle does not: nothing else holds a
+	// pointer to c yet, so there is nobody to race with.
+	c.publishLocked()
+	return context.WithValue(ctx, cycleProgressKey{}, c)
+}
+
 func progressFrom(ctx context.Context) *cycleProgress {
 	c, _ := ctx.Value(cycleProgressKey{}).(*cycleProgress)
 	return c

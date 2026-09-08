@@ -242,6 +242,110 @@ func TestRunCycle_WithoutAnObserverIsUnchanged(t *testing.T) {
 	}
 }
 
+// recordingSetObserver is recordingObserver that also wants the verdict,
+// which is the optional half of the feed (SetOutcomeObserver).
+type recordingSetObserver struct {
+	*recordingObserver
+	mu       sync.Mutex
+	outcomes map[string]string
+}
+
+func newRecordingSetObserver() *recordingSetObserver {
+	return &recordingSetObserver{recordingObserver: &recordingObserver{}, outcomes: map[string]string{}}
+}
+
+func (r *recordingSetObserver) ObserveSetOutcome(backupSetID, outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outcomes[backupSetID] = outcome
+}
+
+func (r *recordingSetObserver) outcomeOf(id string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	got, ok := r.outcomes[id]
+	return got, ok
+}
+
+// TestFetch_PublishesReadingsThatNameTheBackupSet is issue #597's
+// load-bearing half of running one set from a serving process.
+//
+// Fetch published nothing at all before it, because the cycle progress
+// value is installed by RunCycle and the set id is put on every reading
+// by processBackupSet, and Fetch calls neither. That is not a cosmetic
+// gap: core/service's live activity feed DROPS a reading whose
+// BackupSetID is empty (liveactivity.go), so a per-set run submitted
+// through the API would have landed in no backup set's terminal at all,
+// which is precisely the acceptance criterion the per-set button exists
+// to satisfy.
+//
+// The denominator is asserted too, and it is the one place a per-set run
+// is honestly better off than a cycle: Progress's own doc explains why a
+// cycle cannot know how many sets it will visit until it has visited
+// them, and a fetch visits exactly one, known before anything starts.
+func TestFetch_PublishesReadingsThatNameTheBackupSet(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := reportingTransport{fakeTransport: newFakeTransport()}
+	tr.put("backup.dump", "fetch payload for progress", epoch.Unix())
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	obs := newRecordingSetObserver()
+	result, err := svc.Fetch(WithProgressObserver(context.Background(), obs), "production", bs.Name, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if result.Progress.Durable == 0 {
+		t.Fatalf("the fetch got nothing through, so the readings below would be about a pass that did nothing: %+v", result)
+	}
+
+	readings := obs.all()
+	if len(readings) == 0 {
+		t.Fatal("the fetch published no progress at all, so a per-set run reaches no terminal")
+	}
+
+	// EVERY reading, not just one: the feed keys on this field and drops
+	// what it cannot attribute, so one unnamed reading is one line an
+	// operator never sees.
+	want := bs.ID.String()
+	for i, p := range readings {
+		if p.BackupSetID != want {
+			t.Fatalf("reading %d carries BackupSetID %q, want %q; the live activity feed drops a reading with no set id, so this line reaches nobody",
+				i, p.BackupSetID, want)
+		}
+		if p.BackupSetsTotal != 1 {
+			t.Errorf("reading %d says BackupSetsTotal = %d, want 1: a fetch visits exactly one set and knows it before it starts",
+				i, p.BackupSetsTotal)
+		}
+	}
+
+	// More than one stage, which is the control for the loop above: a
+	// feed that published a single opening reading and nothing else would
+	// satisfy every assertion so far while telling an operator nothing.
+	stages := map[string]bool{}
+	for _, p := range readings {
+		stages[p.Stage] = true
+	}
+	if len(stages) < 2 {
+		t.Errorf("the fetch reported only the stage(s) %v; a per-set terminal showing one frozen step is the thing this feed exists to avoid", stages)
+	}
+
+	// And the verdict, which is what lets a per-set panel tell "finished"
+	// from "stopped at reconcile" rather than deriving it from counters
+	// that are both zero either way.
+	outcome, ok := obs.outcomeOf(want)
+	if !ok {
+		t.Fatalf("the fetch never reported an outcome for %s, so a terminal cannot say how the run ended", want)
+	}
+	if outcome != SetOutcomeOK {
+		t.Errorf("outcome = %q, want %q for a clean fetch", outcome, SetOutcomeOK)
+	}
+}
+
 // shown renders a nullable counter for a failure message. A raw *int64
 // prints as an address, which tells a reader nothing about the reading
 // that was wrong.
