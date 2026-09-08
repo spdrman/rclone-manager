@@ -282,7 +282,17 @@ export function DashboardPage({
       ) : null}
 
       {staleSet ? (
-        <WarningBanner tone="warn" title={"Stale \u00b7 " + staleSet.name}>
+        <WarningBanner
+          tone="warn"
+          title={"Stale \u00b7 " + staleSet.name}
+          // Named rather than left to the derived key, because what this
+          // reports is one set's note and both halves move independently:
+          // a different set can go stale under the same words, and the
+          // same set's note can change under the same title. Nothing
+          // unmounts while a set stays stale, so a dismissal that ignored
+          // either half would swallow the next thing it said (#620).
+          dismissKey={staleSet.source + "/" + staleSet.set + "\u001f" + staleSet.stateNote}
+        >
           {staleSet.stateNote}
         </WarningBanner>
       ) : null}

@@ -57,8 +57,9 @@ export interface BannerProps {
    * box that is already dismissed.
    *
    * Optional, because most banners say one fixed thing and have no such
-   * value. WarningBanner derives one from its own tone, eyebrow and title,
-   * which covers every notice that goes through it.
+   * value. WarningBanner derives one from its own tone, eyebrow, title and
+   * scalar body, which covers every notice that goes through it. The tone
+   * is folded in here for every caller either way, see `reportKey` below.
    */
   dismissKey?: string;
   /** The close control's accessible name. Worth setting on a surface that
@@ -147,14 +148,22 @@ export function Banner({
 }: BannerProps) {
   const [dismissed, setDismissed] = useState(false);
 
+  // The tone joins the key without any caller asking. Two banners in the
+  // arms of one ternary are one element in one position, so React keeps
+  // the state across the swap, and a banner that changed colour under a
+  // dismissal is reporting something else by definition. It costs a caller
+  // nothing and it is the half of "which report is this" that is visible
+  // on screen.
+  const reportKey = tone + "\u001f" + (dismissKey ?? "");
+
   // Adjusting state during render rather than in an effect, which is the
   // pattern React documents for "reset when a prop changes" and the one
   // PasswordInput already uses here for the same reason: an effect would
   // paint one frame in which the new condition's banner is still hidden
   // by the previous condition's dismissal.
-  const [lastKey, setLastKey] = useState(dismissKey);
-  if (dismissKey !== lastKey) {
-    setLastKey(dismissKey);
+  const [lastKey, setLastKey] = useState(reportKey);
+  if (reportKey !== lastKey) {
+    setLastKey(reportKey);
     if (dismissed) setDismissed(false);
   }
 

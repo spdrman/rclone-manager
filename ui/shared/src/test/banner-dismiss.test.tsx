@@ -1,15 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import ts from "typescript";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { Banner } from "@shared/components/Banner";
 import type { BannerTone } from "@shared/components/Banner";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { PlacementList } from "@shared/components/PlacementList";
 import { ErrorState } from "@shared/components/EmptyState";
+import { App } from "@shared/App";
 import { DashboardPage } from "@shared/pages/DashboardPage";
+import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
+import { PlatformProvider } from "@shared/platform/PlatformContext";
+import { genericBridge } from "../../../../apps/generic/frontend/platform";
+import type { AuthContext, PlatformBridge } from "@shared/types/platform";
+import { backupSetPath } from "@shared/utilities/routes";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { resetGraphForTests } from "@shared/state/graph";
@@ -62,9 +69,12 @@ const DISMISS = "Dismiss this notice";
 const close = () => screen.getByRole("button", { name: DISMISS });
 
 /** The banner box a sentence is drawn in, for the cases that ask which
- *  banner a control belongs to rather than whether one exists. */
-function bannerAround(text: string | RegExp): HTMLElement {
-  return screen.getByText(text).closest(".banner") as HTMLElement;
+ *  banner a control belongs to rather than whether one exists. Takes the
+ *  element too, so a case that already awaited its text does not have to
+ *  look the same text up twice. */
+function bannerAround(text: string | RegExp | HTMLElement): HTMLElement {
+  const node = typeof text === "string" || text instanceof RegExp ? screen.getByText(text) : text;
+  return node.closest(".banner") as HTMLElement;
 }
 
 describe("every banner tone carries a close control (issue #620)", () => {
@@ -317,6 +327,168 @@ describe("dismissing is viewer-side and nothing else (issue #620)", () => {
   });
 });
 
+/**
+ * The banners that live ABOVE the router outlet, and why they opt out.
+ *
+ * App.tsx renders these two over `<Routes>` rather than inside a page, so
+ * they are mounted once for the life of the session and no navigation ever
+ * unmounts them. That is the one arrangement in which "a dismissal dies
+ * with the render tree" buys nothing at all: there is no later render of
+ * the surface, because the surface never went away. Both would have stayed
+ * gone until a hard reload.
+ *
+ * Both are also squarely #620's own opt-out rule. The first-run banner's
+ * body says "Until that is done nothing is backed up", and an operator who
+ * clears it and forgets believes they have backups they do not have. The
+ * version-mismatch banner is the ONLY thing on screen explaining why every
+ * management control is disabled, so clearing it turns a stated refusal
+ * into an application that silently does nothing.
+ */
+describe("the root banners cannot be cleared off the screen (issue #620)", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("offers no way to dismiss the first-run banner", async () => {
+    renderApp(createMockApi("first-run"));
+
+    const banner = bannerAround(await screen.findByText(/has no configuration yet/i));
+    expect(within(banner).queryByRole("button", { name: DISMISS })).toBeNull();
+  });
+
+  it("offers no way to dismiss the version-mismatch banner", async () => {
+    renderApp(createMockApi("version-mismatch"));
+
+    const banner = bannerAround(await screen.findByText(/update required/i));
+    expect(within(banner).queryByRole("button", { name: DISMISS })).toBeNull();
+  });
+
+  /**
+   * The mechanism the two cases above are protecting against, on a harness
+   * rather than on App, so it stays readable and cannot go stale when
+   * App's copy changes. This is what a dismissible banner above the outlet
+   * really does, and it is why neither of them may be one: a navigation
+   * re-renders what is INSIDE `<Routes>` and leaves everything above it
+   * mounted, dismissal and all.
+   */
+  it("a dismissible banner above the outlet keeps its dismissal across a navigation", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Banner tone="warn">Above the outlet</Banner>
+        <Routes>
+          <Route path="/" element={<Link to="/elsewhere">Go elsewhere</Link>} />
+          <Route path="/elsewhere" element={<p>Elsewhere</p>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await user.click(close());
+    expect(screen.queryByText("Above the outlet")).toBeNull();
+
+    await user.click(screen.getByRole("link", { name: "Go elsewhere" }));
+    expect(await screen.findByText("Elsewhere")).toBeTruthy();
+    expect(screen.queryByText("Above the outlet")).toBeNull();
+  });
+});
+
+/**
+ * A dismissal is about the sentence that was on screen, and for these two
+ * banners the sentence is in the BODY rather than in the title.
+ *
+ * WarningBanner used to derive its reset key from the tone, the eyebrow and
+ * the title alone, which is fine until a call site keeps a fixed title over
+ * a body that moves. The dashboard's stale banner is exactly that: the
+ * title is "Stale ยท <name>" and every word an operator acts on is in
+ * `stateNote` underneath it. Nothing unmounts while the same set stays
+ * stale, so one dismissal used to swallow every later note for that set.
+ */
+describe("a changed body brings the banner back (issue #620)", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("counts a scalar body in the derived key, so a moved sentence is a new report", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <WarningBanner tone="warn" title="Stale ยท nightly">No backup in 3 days.</WarningBanner>
+    );
+
+    await user.click(close());
+    expect(screen.queryByText("No backup in 3 days.")).toBeNull();
+
+    rerender(<WarningBanner tone="warn" title="Stale ยท nightly">No backup in 9 days.</WarningBanner>);
+
+    expect(screen.getByText("No backup in 9 days.")).toBeTruthy();
+  });
+
+  it("brings the dashboard's stale banner back when the set's note changes under it", async () => {
+    const user = userEvent.setup();
+    const set = await staleSet();
+
+    const { rerender } = render(dashboardTree(createMockApi(), [set]));
+    await screen.findByText("No backup in 3 days.");
+    await user.click(close());
+    expect(screen.queryByText("No backup in 3 days.")).toBeNull();
+
+    // Same set, still stale, still the same title. Only the sentence the
+    // operator is meant to act on has moved, and that is the whole report.
+    rerender(dashboardTree(createMockApi(), [{ ...set, stateNote: "No backup in 9 days." }]));
+
+    expect(await screen.findByText("No backup in 9 days.")).toBeTruthy();
+  });
+});
+
+/**
+ * Clearing a set's override swaps one sentence for its opposite in place.
+ *
+ * RetentionPanel is keyed on `retention.data.isOverride`, which reads like
+ * a remount that would rescue this and is not one: the clear path calls
+ * `apply`, `apply` calls `setR` on panel-local state, and `retention.data`
+ * is never refetched, so the key never moves. The banner keeps its
+ * position, its tone and its instance, and only the words inside change.
+ *
+ * Those words are the one line on the card saying WHICH policy decides
+ * deletions for this set, so a dismissal that outlives the change hides the
+ * answer to the only question the card exists to answer.
+ */
+describe("which policy governs a set survives a dismissal (issue #620)", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the deployment sentence after the override is cleared, even if its predecessor was dismissed", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[backupSetPath("media", "weekly-archive")]}>
+        <ApiProvider api={createMockApi()}>
+          <Routes>
+            <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
+          </Routes>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+
+    const own = await screen.findByText(/Retained under this backup set's own policy/);
+    await user.click(within(bannerAround(own)).getByRole("button", { name: DISMISS }));
+    expect(screen.queryByText(/Retained under this backup set's own policy/)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Return to the deployment's policy" }));
+    const confirm = await screen.findByRole("dialog");
+    await user.click(within(confirm).getByRole("button", { name: "Return to the deployment's policy" }));
+
+    expect(
+      await screen.findByText(/Retained under the deployment's retention policy/)
+    ).toBeTruthy();
+  });
+});
+
 describe("the notices that were raw divs dismiss too (issue #620)", () => {
   afterEach(cleanup);
 
@@ -334,49 +506,144 @@ describe("the notices that were raw divs dismiss too (issue #620)", () => {
 });
 
 /**
- * Nothing in the shipped UI writes `className="banner"` by hand any more.
+ * Nothing in the shipped UI builds the banner box by hand any more.
  *
  * This is the guard that stops the thirty-four divs #620 converted from
  * growing back one call site at a time. A close control cannot be added to
- * a class name, so every one of those divs was a banner the operator could
+ * a class name, so every one of those divs was a banner an operator could
  * not put away, and the only thing that had kept them consistent until now
  * was that everybody copied the line above them.
  *
- * It scans source rather than rendered output for the reason
- * jsx-literal-escapes.test.tsx gives for doing the same: most of these
- * sites are inside a conditional that only one failure path reaches, and a
- * rendered sweep sees only the branches some test happens to drive.
+ * It parses rather than pattern-matches, for the reason
+ * jsx-literal-escapes.test.tsx gives for doing the same one file over: the
+ * class can be spelled several ways and a regex over raw source cannot tell
+ * the ones that matter from the ones that do not. This started as
+ * `/className="banner[ "]/` and that is worse than it looks, because the
+ * spelling it misses is the one the code it replaced actually used:
+ * WarningBanner built its own box as `className={"banner banner--" + tone}`
+ * until this branch changed it, so a reintroduction written the way the
+ * original was written walked straight past the guard.
  *
- * The allowlist is a subset check rather than an equality one, so a file
- * that gets converted later needs no edit here.
+ * The rule is the first class token, whatever the expression around it. The
+ * `banner` token means "this element IS the box", which is what Banner.tsx
+ * now owns; `banner__close` and `banner--warn` are different tokens and are
+ * left alone. Banner.tsx's own `classes.join(" ")` has no literal in the
+ * attribute at all, so the component that fixed this is not reported as one
+ * of the offenders.
  */
-const SHIPPED_TSX: Record<string, string> = import.meta.glob("../**/*.tsx", {
-  query: "?raw",
-  import: "default",
-  eager: true
+const SHIPPED_TSX: Record<string, string> = {
+  ...import.meta.glob("../**/*.tsx", { query: "?raw", import: "default", eager: true }),
+  // The provider shells too, for the reason jsx-literal-escapes.test.tsx
+  // takes them: they are the other half of what reaches an operator, and
+  // they are JSX written by the same hands.
+  ...import.meta.glob("../../../../apps/*/frontend/**/*.tsx", { query: "?raw", import: "default", eager: true })
+};
+
+/** Every className in one file whose first class token is `banner`, which
+ *  is a banner box written by hand. Exported so the cases below can drive
+ *  it against each spelling directly, rather than hoping the tree happens
+ *  to contain one. */
+export function findHandWrittenBanners(fileName: string, source: string): number[] {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const lines: number[] = [];
+
+  /** The leftmost string literal under a node, which for `"a " + b + c` is
+   *  the one that decides the first class token. */
+  const firstLiteral = (node: ts.Node): string | undefined => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isTemplateExpression(node)) return node.head.text;
+    for (const child of node.getChildren(sourceFile)) {
+      const found = firstLiteral(child);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isJsxAttribute(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "className" &&
+      node.initializer !== undefined
+    ) {
+      const literal = firstLiteral(node.initializer);
+      if (literal !== undefined && literal.trim().split(/\s+/)[0] === "banner") {
+        lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return lines;
+}
+
+describe("the guard's own matcher (issue #620)", () => {
+  const caught = (source: string) => findHandWrittenBanners("probe.tsx", source).length;
+
+  it("catches the plain string spelling", () => {
+    expect(caught(`const a = <div className="banner banner--info">x</div>;`)).toBe(1);
+  });
+
+  it("catches the spelling WarningBanner itself used, which the first version of this guard missed", () => {
+    expect(caught(`const a = <div className={"banner banner--" + tone}>x</div>;`)).toBe(1);
+  });
+
+  it("catches it behind a template literal and behind a longer concatenation", () => {
+    expect(caught("const a = <div className={`banner banner--${tone}`}>x</div>;")).toBe(1);
+    expect(caught(`const a = <div className={"banner " + tone + extra}>x</div>;`)).toBe(1);
+  });
+
+  it("leaves the control, the modifier and every other class alone", () => {
+    for (const source of [
+      `const a = <button className="banner__close" />;`,
+      `const a = <div className="banner--warn" />;`,
+      `const a = <div className="card" />;`,
+      `const a = <div className="table-scroll banner-ish" />;`
+    ]) {
+      expect(caught(source)).toBe(0);
+    }
+  });
+
+  it("leaves Banner.tsx's own joined list alone, which is the form that replaced all of them", () => {
+    expect(caught(`const a = <Tag className={classes.join(" ")}>x</Tag>;`)).toBe(0);
+  });
 });
 
-/** BackupSetWizardPage holds six of them and is owned by another branch in
- *  EPIC H, so converting it here would collide. Named rather than left to
- *  read as an oversight; it is the one file #620 did not finish. */
-const ALLOWED_RAW_BANNERS = ["/pages/BackupSetWizardPage.tsx"];
-
 describe("the banner box has one owner (issue #620)", () => {
-  it("no shipped component writes the banner class by hand, except the one named file", () => {
-    const offenders = Object.entries(SHIPPED_TSX)
-      .filter(([path]) => !path.includes(".test.") && !path.includes("/test/"))
-      // Anchored on the box's own class rather than on the prefix:
-      // Banner.tsx writes className="banner__close" on the control it
-      // adds, and a bare prefix match would count the component that
-      // fixed this as one of the offenders.
-      .filter(([, source]) => /className="banner[ "]/.test(source))
-      .map(([path]) => path);
+  const shipped = Object.keys(SHIPPED_TSX)
+    .filter((path) => !path.includes(".test.") && !path.includes("/test/"))
+    .sort();
 
-    const unexpected = offenders.filter(
-      (path) => !ALLOWED_RAW_BANNERS.some((allowed) => path.endsWith(allowed))
-    );
+  /** An empty result has two explanations, and "the glob walked nothing"
+   *  is the one that would make the assertion below pass for the wrong
+   *  reason. */
+  it("actually reads the files it claims to check", () => {
+    // 60 at the time of writing, and the floor is deliberately under it:
+    // this is here to fail when the glob walks NOTHING, which is the one
+    // way the equality below passes for the wrong reason.
+    expect(shipped.length).toBeGreaterThan(45);
+    expect(shipped).toContain("../components/Banner.tsx");
+    expect(shipped).toContain("../pages/BackupSetWizardPage.tsx");
+    expect(shipped).toContain("../../../../apps/generic/frontend/bootstrap.tsx");
+  });
 
-    expect(unexpected).toEqual([]);
+  /**
+   * The assertion is an equality against the one file that really does
+   * still carry six of them, not a subset check against an allowlist.
+   * BackupSetWizardPage belongs to another branch in EPIC H, so #620 could
+   * not convert it, and that makes it the positive control this guard would
+   * otherwise have to invent: the day the matcher stops matching, or the
+   * glob stops walking, this list goes empty and the case fails.
+   */
+  it("finds them only in the one file #620 could not convert", () => {
+    const offenders = shipped.filter((path) => findHandWrittenBanners(path, SHIPPED_TSX[path]).length > 0);
+
+    expect(offenders).toEqual(["../pages/BackupSetWizardPage.tsx"]);
+    expect(findHandWrittenBanners(
+      "../pages/BackupSetWizardPage.tsx",
+      SHIPPED_TSX["../pages/BackupSetWizardPage.tsx"]
+    )).toHaveLength(6);
   });
 });
 
@@ -439,8 +706,10 @@ function haltedSet(): BackupSet {
   } as BackupSet;
 }
 
-function renderDashboard(api: BackupManagerApi, sets: BackupSet[]) {
-  return render(
+/** The dashboard as an element rather than a rendered tree, so a case can
+ *  re-render the same position with a moved fixture. */
+function dashboardTree(api: BackupManagerApi, sets: BackupSet[]) {
+  return (
     <MemoryRouter>
       <ApiProvider api={api}>
         <DashboardPage
@@ -448,6 +717,27 @@ function renderDashboard(api: BackupManagerApi, sets: BackupSet[]) {
           sets={{ data: sets, error: null, loading: false, reload: () => {} }}
           readOnly={false}
         />
+      </ApiProvider>
+    </MemoryRouter>
+  );
+}
+
+function renderDashboard(api: BackupManagerApi, sets: BackupSet[]) {
+  return render(dashboardTree(api, sets));
+}
+
+/** Signed in, on the generic shell, which is what puts App's own two
+ *  banners above the router outlet in the first place. */
+const AUTHENTICATED: AuthContext = { authenticated: true, username: "bm-admin", mode: "local-account" };
+const BRIDGE: PlatformBridge = { ...genericBridge, getAuthContext: () => Promise.resolve(AUTHENTICATED) };
+
+function renderApp(api: BackupManagerApi, route = "/") {
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <ApiProvider api={api}>
+        <PlatformProvider bridge={BRIDGE}>
+          <App />
+        </PlatformProvider>
       </ApiProvider>
     </MemoryRouter>
   );

@@ -247,7 +247,19 @@ function RetentionPanel({
           is a warning and neither is a success, so the two are told apart
           by what the sentence says rather than by colour, which this UI
           does not rely on alone anywhere. */}
-      <Banner tone="info" style={{ fontSize: "var(--text-sm)" }}>
+      <Banner
+        tone="info"
+        style={{ fontSize: "var(--text-sm)" }}
+        // The two sentences are opposites sharing one element, so without
+        // this a dismissal of either is inherited by the other (#620).
+        // Nothing rescues it: this panel is keyed on isOverride, which
+        // reads like a remount and is not one, because clearing an
+        // override goes through `apply` and that only moves panel-local
+        // state. `retention.data` is never refetched, so the key never
+        // changes and the words swap in place. They are the one line on
+        // this card saying which policy decides deletions for this set.
+        dismissKey={r.isOverride ? "override" : "deployment"}
+      >
         <span>
           {r.isOverride
             ? "Retained under this backup set's own policy. Editing the deployment's retention policy will not change it."
