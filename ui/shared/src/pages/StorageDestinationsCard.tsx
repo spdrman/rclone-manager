@@ -215,12 +215,7 @@ function DestinationRow({
       // that just answered would put a count on screen with nothing to
       // act on. Nothing about this fetch changes any state; it reads the
       // journal.
-      // The local hard drive holds no PLACEMENTS in the journal's sense:
-      // a copy there is the backup set's own local copy, which the
-      // journal records as the artifact rather than as a placement, so
-      // asking would answer zero and put a report on screen saying
-      // nothing is stored on the drive everything is stored on.
-      setUsage(result.ok || medium.isLocal ? null : await api.getStorageMediumUsage(medium.id));
+      setUsage(result.ok ? null : await api.getStorageMediumUsage(medium.id));
     } catch (e) {
       setFailure(apiErrorOf(e));
     } finally {
@@ -387,8 +382,10 @@ function FailedVerificationBanner({
             Nothing has been deleted and nothing will be. A copy I cannot confirm is not a copy I
             treat as gone: those backups read as <strong>unreachable</strong> until this destination
             answers again, retention will not prune against them, and no source copy anywhere gets
-            reclaimed on the strength of a placement I could not verify. Editing this destination is
-            allowed. Removing it is refused while a copy names it.
+            reclaimed on the strength of a placement I could not verify.
+            {medium.isLocal
+              ? " This is the drive on this machine, so it is not something the configuration declares and there is nothing here to edit or remove: the fix is on the machine, and the checks below say which part of it."
+              : " Editing this destination is allowed. Removing it is refused while a copy names it."}
             {onlyCopy > 0
               ? ` ${onlyCopy} of them ${onlyCopy === 1 ? "is" : "are"} the only confirmed copy of their backup anywhere.`
               : ""}
@@ -397,8 +394,10 @@ function FailedVerificationBanner({
         </>
       ) : (
         <p style={{ margin: 0, maxWidth: "74ch" }}>
-          Nothing has changed. No backup references this destination yet, so a failing check here
-          costs nothing but the next move that would have used it.
+          Nothing has changed.{" "}
+          {medium.isLocal
+            ? "No backup is recorded here yet, so nothing is lost. What it costs is the next backup: this is the drive they land on, and until it answers there is nowhere for one to land."
+            : "No backup references this destination yet, so a failing check here costs nothing but the next move that would have used it."}
         </p>
       )}
     </div>

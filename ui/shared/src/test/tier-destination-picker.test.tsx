@@ -3,7 +3,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { AppSettings, MediumPreflight, StorageMedium, UpdateSettingsRequest } from "@shared/api/contracts";
+import type {
+  AppSettings,
+  MediumPreflight,
+  StorageMedium,
+  StorageMediumUsage,
+  UpdateSettingsRequest
+} from "@shared/api/contracts";
 import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
@@ -96,6 +102,7 @@ async function renderSettings(options: {
   settings?: AppSettings;
   updateSettings?: (req: UpdateSettingsRequest) => Promise<AppSettings>;
   preflightStorageMedium?: (id: string) => Promise<MediumPreflight>;
+  getStorageMediumUsage?: (id: string) => Promise<StorageMediumUsage>;
   setDefaultStorageMedium?: (id: string) => Promise<StorageMedium>;
   listStorageMediums?: () => Promise<StorageMedium[]>;
 } = {}) {
@@ -116,7 +123,8 @@ async function renderSettings(options: {
     updateSettings,
     listStorageMediums,
     preflightStorageMedium,
-    setDefaultStorageMedium
+    setDefaultStorageMedium,
+    ...(options.getStorageMediumUsage ? { getStorageMediumUsage: vi.fn(options.getStorageMediumUsage) } : {})
   };
 
   act(() => {
@@ -333,6 +341,51 @@ describe("the storage destinations card (#622)", () => {
 
     await waitFor(() => expect(card().getByText("offsite_s3")).toBeTruthy());
     expect(row("offsite_s3").queryByRole("button", { name: "Remove" })).toBeNull();
+  });
+
+  // The one that matters most on the local entry: the drive backups land
+  // on has stopped answering, and the operator needs the count and the
+  // sentence that stops them doing something drastic.
+  //
+  // The count is real rather than skipped. A local copy IS a placement in
+  // the journal (FR-29 records "local" against every artifact in every
+  // deployment written before EPIC E), so asking what is affected answers
+  // something, and it answers about the most consequential destination
+  // there is. What is NOT said is the removal advice: local is not
+  // declared and cannot be removed, so the sentence about editing and
+  // removing would be advice nobody can take.
+  it("names what is on the local hard drive when it stops answering, without offering to remove it", async () => {
+    await renderSettings({
+      listStorageMediums: () => Promise.resolve([LOCAL]),
+      getStorageMediumUsage: () =>
+        Promise.resolve({
+          medium: LOCAL_DESTINATION_ID,
+          placements: 12,
+          backupSets: [{ set: "production/postgres-primary", placements: 12, onlyCopyHere: 12 }]
+        }),
+      preflightStorageMedium: () =>
+        Promise.resolve({
+          medium: LOCAL_DESTINATION_ID,
+          ok: false,
+          checks: [
+            {
+              step: "reach",
+              outcome: "failed",
+              category: "not_found",
+              detail: "The directory this deployment's backups land in is not there."
+            }
+          ]
+        } as MediumPreflight)
+    });
+
+    await waitFor(() => expect(card().getByText(LOCAL_DESTINATION_ID)).toBeTruthy());
+    fireEvent.click(row(LOCAL_DESTINATION_ID).getByRole("button", { name: "Test connection" }));
+
+    await waitFor(() => expect(screen.getByText(/12 copies are recorded there/)).toBeTruthy());
+    const shown = document.body.textContent ?? "";
+    expect(shown).toContain("Nothing has been deleted and nothing will be");
+    expect(shown).toContain("nothing here to edit or remove");
+    expect(shown).not.toContain("Removing it is refused while a copy names it");
   });
 
   // The naming half. Three names for one idea is three things to learn,
