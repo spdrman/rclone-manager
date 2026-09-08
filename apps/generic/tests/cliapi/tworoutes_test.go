@@ -418,6 +418,15 @@ func createArgs(configPath, keyPath, id string, extra ...string) []string {
 		// written there: no cycle runs for a set created in these tests.
 		"--local-path", "/data/backups/api",
 		"--completion-strategy", "rename",
+		// Issue #624: `create` proves the connection before it writes,
+		// and source.example.internal is a name that resolves nowhere.
+		// Every test in this package is about where the change LANDS, on
+		// which route, in which mode, so they skip the check the way an
+		// operator building configuration offline does. Whether the check
+		// happens at all is core/cmd/backup-manager's own suite, and
+		// whether it happens against two real machines is
+		// scripts/e2e/two-machine-backup.sh.
+		"--no-verify",
 	}, extra...)
 }
 
