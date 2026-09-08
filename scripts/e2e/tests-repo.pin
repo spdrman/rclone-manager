@@ -134,5 +134,57 @@
 # Still outstanding on their side, and still with no automation: their
 # build-under-test.json names 1bed795 of this repository and has to move to
 # whatever commit this branch merges as.
+#
+# Moved to e7bf7a9, rclone-manager-tests#51 and #53, off their merged main
+# and not off the branch, for the reason the paragraph about a794c38 above already
+# gives. This one runs the other way round from most of the bumps above:
+# their specs did not land ahead of a feature, they were pinning the old
+# shape of three surfaces this branch changed on purpose, so five Suite B
+# cases were red HERE against the old pin and go green with the bump.
+#
+# The run button lost "due". RunCycle walks every enabled backup set and
+# skips only the disabled and the edit-held, so "due" named a filter that
+# has never existed and the label was contradicting the tooltip printed
+# beside it. Three of the five looked for the old name, including both
+# version-mismatch cases, which are about management controls going off on
+# an incompatible service and still are: only the name moved there.
+#
+# The set-detail header gained two controls. #597 built the per-set run for
+# real, so "Run this backup set" sits beside the deployment-wide one and
+# the case's own comment saying core has no per-set run had gone false;
+# it enumerates both now and pins both tooltips, which is what #214 was
+# about in the first place. #591 added CANCEL & EXIT EDIT MODE, asserted
+# absent before edit mode opens and present after.
+#
+# The fifth is the opposite of the usual shape here: a limitation went
+# away, so the spec asserting it was obsolete rather than wrong. #592's
+# GET /ssh-keys is the read nothing had, so the wizard's managed-key panel
+# lists what a deployment holds and can be saved. That case asserts the
+# listing and a pick now, and keeps the half of #299 that still matters,
+# that nothing fabricates an in-use count.
+#
+# #53 is the same discovery arriving one step late. The set-detail
+# read-only case lists the controls that go off on an incompatible
+# service, and #597's per-set run made that three of four, so it covers
+# the fourth now. It reads the button's title back beside the disabled
+# state rather than asserting the state alone, because that button is ALSO
+# disabled when the set itself is disabled and a bare check could pass for
+# a reason that has nothing to do with a version mismatch.
+#
+# Verified before the bump rather than after, the way the notes above ask.
+# All five fail against this repository's main at 51f5f4f2 and pass against
+# this branch, checked by pointing RM_UI_DIR at each checkout in turn, so
+# they are a test of the product and not of the component. #53's assertion
+# is checked both ways round too: that button is enabled under the default
+# scenario and disabled under version-mismatch, so it is not trivially
+# true. Suite B green at the new pin against this branch's ui/shared, 198
+# of 198 across the generic and small-window projects.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names d2f4373 of this repository, which predates
+# the activity verb, so seven of their Suite A cases from #46 and #48 are
+# red over there until it moves to whatever commit this branch merges as.
+# That is the same manual half the paragraphs above keep flagging, and it
+# is not something a bump on this side can close.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=41b0721ae19142142f7dd7c82d90173e5bbd0aa8
+TESTS_REPO_SHA=e7bf7a9f3959abf8d42d35448afd30d1bac4aa09
