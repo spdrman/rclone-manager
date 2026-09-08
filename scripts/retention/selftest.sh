@@ -125,7 +125,7 @@ expect_gate_passes() {
   if selftest_anchors_only "$label"; then
     return 0
   fi
-  if (cd "$dir" && retention_gate 'TestRetentionApplyEvidence|TestPruneRefusesEveryDelete|TestPruneStillDeletes|TestPruneDeletesWhenTheOperator|TestPruneConfirmsA|TestRun_RetentionApply') >"$tmp/out" 2>&1; then
+  if (cd "$dir" && retention_gate 'TestRetentionApplyEvidence|TestPruneRefusesEveryDelete|TestPruneStillDeletes|TestPruneDeletesWhenTheOperator|TestPruneConfirmsA|TestPruneReconfirmsTheLastKnownGood|TestPruneHoldsTheRestOfThePass|TestRun_RetentionApply') >"$tmp/out" 2>&1; then
     echo "  ok (clean):  $label"
     pass=$((pass + 1))
   else
@@ -246,6 +246,36 @@ swap "$d/core/internal/retention/prune.go" \
 expect_gate_fails "a last known good confirmed from its journal row alone" "$d" \
   "FR-30" \
   'TestRetentionApplyEvidence_NothingIsRemovedWhenTheLastKnownGoodCopyIsGone|TestPruneRefusesEveryDeleteWhenTheLastKnownGood'
+
+# The control above cannot tell the two callers of that confirmation
+# apart. It plants inside pruneLastKnownGoodUnconfirmed itself, so it
+# disables PruneDecide's call and PruneApply's at once, and a tree in
+# which only the apply's had been deleted would pass it: the preview
+# would still refuse, every existing assertion is about a copy already
+# missing when the plan is drawn up, and nothing in this repository looks
+# at what happens to a copy that goes away AFTER it. That is the shape a
+# refactor collapsing the two calls into one produces, and it is the
+# shape in which a pass deletes on evidence nobody re-took.
+#
+# So this one deletes only the apply's, leaving the decision's intact.
+# What has to catch it is the pair of tests about WHEN the confirmation
+# is taken: one removes the copy at the first question the apply asks
+# after its plan is complete, the other removes it partway through a pass
+# that has already deleted something.
+d=$(mutant apply-time-last-known-good-not-reconfirmed)
+swap "$d/core/internal/retention/prune.go" \
+  '		if why := pruneLastKnownGoodUnconfirmed(bs, recByArtifact, lkg, where); why != "" {
+			pruneHoldEveryDelete(verdicts[i:], why)
+			continue
+		}' \
+  '		// PLANTED VIOLATION (scripts/retention/selftest.sh): the apply
+		// carries the plan'"'"'s own confirmation into the delete loop, so
+		// a last known good that goes away after the plan was drawn up,
+		// or partway through the pass, authorises every remaining delete.
+		_ = lkg'
+expect_gate_fails "an apply that re-confirms nothing the plan already confirmed" "$d" \
+  "the copy FR-19 protects" \
+  'TestPruneReconfirmsTheLastKnownGood|TestPruneHoldsTheRestOfThePass'
 
 echo
 echo "==> the CLI verb's confirmation"

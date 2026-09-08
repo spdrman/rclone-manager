@@ -103,6 +103,14 @@ const (
 	// single artifact.
 	EventRetention = "retention"
 
+	// EventRetentionHold records a whole backup set's retention pass
+	// refusing to delete anything, because the restore point FR-19
+	// reports as protected has no confirmed readable copy (FR-30, issue
+	// #602). It is a condition to be reconciled, not a verdict, which is
+	// why it is not an EventRetention line with a different decision on
+	// it.
+	EventRetentionHold = "retention_hold"
+
 	// EventRetry records one FR-22 bounded-backoff retry attempt.
 	EventRetry = "retry"
 
@@ -352,6 +360,40 @@ func (l *Logger) Retention(ctx context.Context, artifact, backupSet, tier, decis
 		slog.String("backup_set", backupSet),
 		slog.String("tier", tier),
 		slog.String("decision", decision),
+	)
+}
+
+// RetentionHold logs EventRetentionHold: a retention pass over backupSet
+// refused every deletion in it, because the restore point FR-19 reports as
+// protected has no confirmed readable copy (FR-30, issue #602). reason is
+// internal/retention's own sentence, which names the last known good it
+// could not confirm and what was wrong with it.
+//
+// The artifact is carried inside that sentence rather than as a field of
+// its own, because this event is about a backup SET: the hold stops every
+// deletion in it, an alert on it groups by backup_set, and a second
+// artifact-shaped field on the verdicts that carry this reason would be a
+// parallel copy of a fact the sentence already states.
+//
+// LevelWarn, and the level is the point of the event. Every other refusal
+// in a retention plan is a routine outcome an operator reads in the plan;
+// this one means retention for this backup set has stopped and will stay
+// stopped until somebody reconciles its inventory (FR-17), while the only
+// other symptom is local copies quietly accumulating until FR-21's
+// capacity refusal starts refusing transfers for a reason that names
+// neither this set nor this cause. It is deliberately not LevelError, for
+// the reason Alert's own doc gives: this package reserves that for the
+// manager failing at something, and refusing to delete a backup it cannot
+// prove is safe to delete is the manager working exactly as designed.
+//
+// Emitted from an apply and never from a preview. The condition is
+// permanent until it is fixed, so a preview surface that logged it would
+// write one of these per dashboard poll for as long as the set stayed
+// broken, which is how a real signal gets filtered out.
+func (l *Logger) RetentionHold(ctx context.Context, backupSet, reason string) {
+	l.emit(ctx, LevelWarn, EventRetentionHold, "retention held: no confirmed copy of this backup set's last known good",
+		slog.String("backup_set", backupSet),
+		slog.String("reason", reason),
 	)
 }
 
