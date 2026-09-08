@@ -91,15 +91,6 @@ import (
 // merely not needing it. A digest on source and a marker on redistributed
 // bytes are both checks that cannot fail, and a check that cannot fail is
 // worse than none: it reads like coverage.
-package packaging
-
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-)
 
 // The two ways vendored material reaches a recipient. They are checked
 // in opposite directions, and the file comment above says why.
