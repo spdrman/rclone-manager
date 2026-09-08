@@ -1,3 +1,22 @@
+package service
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+)
+
 // What `Test Connection` actually did (EPIC G, issue #596).
 //
 // # The button that could not be told apart from no button
@@ -39,24 +58,6 @@
 // whose source is local has no host, no key and no host key, and the
 // honest report is five skipped steps saying so plus a real listing,
 // rather than five invented passes.
-package service
-
-import (
-	"bufio"
-	"context"
-	"fmt"
-	"log/slog"
-	"os"
-	"strings"
-
-	"golang.org/x/crypto/ssh"
-
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-)
 
 // connectionTestEventName is the obs event name every connection-test
 // step is emitted under.
