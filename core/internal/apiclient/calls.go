@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"net/url"
+	"strconv"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
 )
@@ -303,4 +304,102 @@ func (c *Client) UpdateStorageMedium(ctx context.Context, id string, req apicont
 // refuses while any copy names the destination (FR-30).
 func (c *Client) RemoveStorageMedium(ctx context.Context, id string) error {
 	return c.call(ctx, "removeStorageMedium", []string{id}, nil, nil)
+}
+
+// ListActivity is GET /activity: the deployment-wide lifecycle feed, newest
+// first.
+//
+// limit is advisory in both directions and matches the route's own
+// handling: zero or less sends no query at all and takes the engine's
+// default, and a number above the engine's maximum is clamped there rather
+// than refused. A caller asking for a feed gets a feed.
+//
+// This is the one read in this package whose answer is RENDERED rather
+// than compared. readmode.go's doc explains why the other four are
+// comparisons: each of those commands prints something the contract cannot
+// express, so re-rendering from the wire would print less than the direct
+// route does. This feed has no such gap. Every column `activity` shows is
+// a field of ActivityEvent, so beside a live engine the honest thing is to
+// print the engine's own answer, and a set comparison would be worse than
+// useless here anyway: the log grows while the two reads happen, so two
+// truthful answers taken a round trip apart legitimately differ at the
+// newest end.
+func (c *Client) ListActivity(ctx context.Context, limit int) (apicontract.ListActivityResponse, error) {
+	var query url.Values
+	if limit > 0 {
+		query = url.Values{"limit": []string{strconv.Itoa(limit)}}
+	}
+	var out apicontract.ListActivityResponse
+	err := c.callQuery(ctx, "listActivity", nil, query, nil, &out)
+	return out, err
+}
+
+// LiveActivity is GET /activity/live: what every configured backup set is
+// doing right now, plus the tail of events behind it.
+//
+// A different feed from ListActivity above and deliberately not a
+// variation on it. That one reads the durable, append-only transition log
+// and survives a restart; this one is a bounded in-memory tail of the
+// SERVING PROCESS's own event stream, so it exists only where that process
+// does. A caller with no route to it has nothing to read, which is why
+// `backup-manager activity --follow` refuses rather than falling back to
+// the journal: the two feeds answer different questions and quietly
+// swapping one for the other would be this repository's own recurring
+// defect, two surfaces telling an operator different things.
+//
+// since is the highest sequence the caller has already seen, and zero
+// means "whatever is still held". It travels in the query rather than a
+// body because this is a GET, and it is what keeps polling cheap.
+//
+// The response's Epoch names the process that answered. A caller MUST drop
+// its cursor and everything it is holding when that changes, or after a
+// restart it goes on showing a dead process's log with a cursor the new
+// one cannot honour (#573).
+func (c *Client) LiveActivity(ctx context.Context, backupSetID string, since int64, limit int) (apicontract.LiveActivityResponse, error) {
+	query := url.Values{}
+	if backupSetID != "" {
+		query.Set("backup_set", backupSetID)
+	}
+	if since > 0 {
+		query.Set("since", strconv.FormatInt(since, 10))
+	}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	if len(query) == 0 {
+		query = nil
+	}
+	var out apicontract.LiveActivityResponse
+	err := c.callQuery(ctx, "getLiveActivity", nil, query, nil, &out)
+	return out, err
+}
+
+// GetBackupSetEditHold is GET /backup-sets/{source}/{set}/edit-hold: what
+// entering edit mode for this set would interrupt, and whether a hold is
+// already in force.
+//
+// Two arguments rather than a composite id, for GetBackupSet's reason: the
+// contract routes source and set as separate path parameters, and an id
+// pasted whole would be escaped into one unroutable segment.
+func (c *Client) GetBackupSetEditHold(ctx context.Context, source, set string) (apicontract.BackupSetEditHoldState, error) {
+	var out apicontract.BackupSetEditHoldState
+	err := c.call(ctx, "getBackupSetEditHold", []string{source, set}, nil, &out)
+	return out, err
+}
+
+// ReleaseBackupSetEditHold is POST
+// /backup-sets/{source}/{set}/edit-hold/release: give the lease back, so
+// the scheduler may run this set again without waiting for the hold to
+// lapse.
+//
+// takeBackupSetEditHold is deliberately NOT here, under this file's own
+// rule about wrappers nothing calls. A hold exists to protect an edit
+// session from a cycle running underneath it, and a CLI edit is one
+// `backup-set patch` that either runs or does not: there is no session to
+// protect, so a CLI that could TAKE a hold would only be able to pause a
+// backup set with no way for anything to notice it meant to. Releasing one
+// somebody else left behind is the operation an operator actually needs
+// from a terminal.
+func (c *Client) ReleaseBackupSetEditHold(ctx context.Context, source, set string) error {
+	return c.call(ctx, "releaseBackupSetEditHold", []string{source, set}, nil, nil)
 }

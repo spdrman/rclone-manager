@@ -90,5 +90,49 @@
 # through RM_MODE=local runs the whole of Suite A green, 72 of 72. Their
 # build-under-test.json names 1bed795 and still has to move to this branch's
 # merge commit by hand, which is the half of the lockstep with no automation.
+# Moved to 90c3bb1, rclone-manager-tests#46, read off their merged main and
+# not off the branch, for the reason the paragraph about a794c38 above
+# already gives. It is the specs half of #598: ten Suite B cases driving a
+# failing Activity page, and four Suite A cases plus a usage line for the
+# `activity` verb the same issue adds.
+#
+# This is the pin doing the thing the paragraphs above describe, in both
+# directions at once. Seven of those ten cases fail against this
+# repository's main as it stands, because they drive a mock scenario that
+# does not exist there and assert on a diagnostic that is not written yet,
+# so they were red over there against the old pin and go green here only
+# together with the product change in this same branch. Four of the Suite A
+# cases are the same shape one command over: there is no `activity` verb on
+# main, so `global/g3-usage-lists-every-command` cannot see it.
+#
+# Verified before the bump rather than after, the way the note above asks:
+# a stamped build of this branch through RM_MODE=local runs Suite A green,
+# 76 of 76, and Suite B green against this branch's ui/shared, 198 of 198
+# across the generic and small-window projects. The control matters as much
+# as the pass: the same Suite B file run against a clean checkout of main
+# fails 7 and passes 3, which is what makes it a test of the product rather
+# than of the component.
+#
+# Moved again, to 41b0721, rclone-manager-tests#48, off their merged main.
+# That one is the black-box half of the two CLI surfaces this branch adds
+# beyond the durable activity read: `activity --follow` and `backup-set
+# edit-hold`, both pinned by their REFUSAL rather than their happy path.
+#
+# Both refuse when nothing is serving this deployment, and for one reason:
+# a live feed and an edit hold each live in the memory of the serving
+# process and neither survives it, so with nothing serving there is no
+# answer to give and a fallback would put a different feed, or an
+# invented "not held", on screen looking exactly like an answer. Pinning
+# the refusal is what stops a fallback being added later without anybody
+# noticing. Their happy paths need a serving process, which is Suite C's
+# arrangement, and their matrix rows say so rather than leaving the gap
+# implicit.
+#
+# Verified before the bump, again: a stamped build of this branch through
+# RM_MODE=local runs Suite A green, 78 of 78.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names 1bed795 of this repository and has to move to
+# whatever commit this branch merges as.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=067385086246c907dfb02a57aaf332061fca726e
+TESTS_REPO_SHA=41b0721ae19142142f7dd7c82d90173e5bbd0aa8

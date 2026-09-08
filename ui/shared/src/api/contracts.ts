@@ -92,7 +92,21 @@ export interface ApiError {
   message: string;
   /** What to do next, if anything. */
   remediation?: string;
-  correlationId: string;
+  /** The id the failing RESPONSE carried, and ABSENT when it carried
+   *  none. It used to be required, which meant every caller that had no id
+   *  had to write one down, and the one they all wrote was the literal
+   *  `"unavailable"` (#598). That is worse than nothing: ErrorState only
+   *  offers its Advanced details disclosure when a failure carried an id,
+   *  so a literal one buys an operator a panel to open with a string in it
+   *  that appears in no log anywhere. Optional so "no id" is expressible. */
+  correlationId?: string;
+  /** The technical facts behind this failure, for the Advanced details
+   *  panel and the copy button beside it: an exception's own name and
+   *  message, the request path, the response status and content type where
+   *  there was a response. Never a stack trace and never a source path
+   *  (§37). Absent when the service named its own reason, which is already
+   *  in `message` and says more than a class name would. */
+  detail?: string;
 }
 
 /** The typed envelope, thrown. It extends Error so an unprepared caller
@@ -103,6 +117,76 @@ export class BackupManagerError extends Error {
     super(api.message);
     this.name = "BackupManagerError";
   }
+}
+
+/**
+ * The two failures a request can produce that are NOT refusals, labelled
+ * at the one place that can tell them apart (#598).
+ *
+ * `request()` used to type only the third case, a response the service
+ * refused with, and let the other two escape as whatever the browser
+ * happened to throw. So every caller above caught an untyped exception and
+ * had nothing to say about it but a sentence of its own invention, and
+ * "the service never answered" and "the service answered and this build
+ * could not read the answer" arrived on screen as the same eleven words.
+ * They are completely different problems for whoever is fixing them.
+ *
+ * Only `request()` constructs one, and that is what makes the label worth
+ * anything: an exception reaching a caller WITHOUT this wrapper did not
+ * come out of the request at all, it came out of whatever the caller
+ * chained onto it, which is a third thing again.
+ */
+export type RequestFailureKind =
+  /** `fetch` itself rejected: nothing came back, so there is no status, no
+   *  content type and no correlation id. Whether the request was carried
+   *  out is unknown, and this deliberately does not claim otherwise. */
+  | "no-response"
+  /** A response arrived and its body could not be read as JSON. The status
+   *  and content type are the two facts that separate a proxy's HTML error
+   *  page from a truncated body, and the correlation id is present
+   *  whenever the response carried the header. */
+  | "unreadable-body";
+
+export class RequestFailure extends Error {
+  readonly kind: RequestFailureKind;
+  /** The API path asked for, WITHOUT the base prefix, exactly as the
+   *  caller named it ("/activity"). */
+  readonly path: string;
+  readonly status?: number;
+  readonly contentType?: string;
+  readonly correlationId?: string;
+  /** The exception this wraps. `Error.cause` is not used for it because
+   *  the field has to survive being read by code compiled for older
+   *  targets, and because a named field is what a test asserts on. */
+  readonly cause: unknown;
+
+  constructor(init: {
+    kind: RequestFailureKind;
+    path: string;
+    status?: number;
+    contentType?: string;
+    correlationId?: string;
+    cause: unknown;
+  }) {
+    super(init.kind === "no-response" ? "the request got no reply" : "the response body could not be read");
+    this.name = "RequestFailure";
+    this.kind = init.kind;
+    this.path = init.path;
+    this.status = init.status;
+    this.contentType = init.contentType;
+    this.correlationId = init.correlationId;
+    this.cause = init.cause;
+  }
+}
+
+/** How an exception says what it is, for the Advanced details panel.
+ *  `name: message` rather than String(e), which renders a bare Error as
+ *  "Error: boom" and a plain thrown string as itself; both are worth
+ *  showing and neither is worth a special case at every call site. */
+export function describeException(e: unknown): string {
+  if (e instanceof Error) return e.name + ": " + e.message;
+  if (typeof e === "string") return e;
+  return String(e);
 }
 
 /** What a read-only catalog scan found, before anything is written. The

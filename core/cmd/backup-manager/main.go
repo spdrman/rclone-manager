@@ -70,6 +70,7 @@ var commands = map[string]func([]string) int{
 	"status":       cmdStatus,
 	"sources":      cmdSources,
 	"backup-set":   cmdBackupSet,
+	"activity":     cmdActivity,
 	"artifacts":    cmdArtifacts,
 	"fetch":        cmdFetch,
 	"retention":    cmdRetention,
@@ -154,6 +155,21 @@ commands:
                                                   of them (#569)
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
+  activity [--backup-set S] [--severity warn|error] [--limit N] [--json]
+                                                  list recorded lifecycle events, newest first: the same durable
+                                                  transition log the Web UI's Activity page draws. Beside a serving
+                                                  engine this reads GET /api/v1/activity from it; with nothing
+                                                  serving it reads this host's own journal (#598). --limit counts
+                                                  MATCHING events, so a filter that narrows still fills it. --json
+                                                  emits the wire objects unchanged, so a script parses the contract
+                                                  rather than this table
+  activity --follow [--backup-set S] [--severity warn|error] [--limit N] [--json]
+                                                  stream the LIVE feed instead, until interrupted: the serving
+                                                  process's own event stream, which is what the Web UI's docked
+                                                  terminal shows. A different feed from the one above rather than a
+                                                  mode of it, so it needs a route to that process and refuses
+                                                  without one instead of quietly reading the journal. The feed
+                                                  starts again, and says so, if that process restarts (#573, #598)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
                                                   --backup-set takes the source/backup-set id here too, and names
                                                   the source itself when it carries one, so --source is only
@@ -263,6 +279,15 @@ commands:
                                                   A chain that sends a tier somewhere new needs
                                                   --acknowledge-medium-disclosure, and without it the refusal carries the
                                                   disclosure (#595)
+  backup-set edit-hold <source/backup-set> [--release]
+                                                  report whether a backup set is held for editing, what taking the
+                                                  hold stopped, and when the lease expires; --release gives it back
+                                                  so the scheduler may run the set again rather than waiting for it
+                                                  to lapse. A hold lives in the memory of the process serving this
+                                                  deployment and does not survive it, so this needs a route to that
+                                                  process and refuses without one. There is no verb that TAKES a
+                                                  hold: a hold protects an editing session and a CLI edit is one
+                                                  backup-set patch that either runs or does not (#350, #600)
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]

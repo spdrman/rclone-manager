@@ -2,7 +2,9 @@ package webhost
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 
@@ -84,9 +86,45 @@ type RouterConfig struct {
 	// through. A recorder is a place lines go, and a host is free to
 	// wire the same BackupService into both or neither.
 	Recorder ActionRecorder
+	// Logger is where a refusal this package cannot explain to the
+	// client goes instead (#598). Nil means the default below, which
+	// writes to this process's own stdout: a host has to opt OUT of
+	// logging its 500s, never get silence by omission, because the
+	// correlation id every one of those responses carries is worth
+	// nothing if it matches no line anywhere.
+	//
+	// It is an interface, and its one method is exactly
+	// core/internal/obs.Logger's Event (obs.Level is an alias for
+	// slog.Level, so that type satisfies this as it stands). A host
+	// inside core/ can therefore hand its own obs.Logger straight in and
+	// get redaction and the FR-23 event catalog for free; this module
+	// cannot import that package itself, because obs is internal to the
+	// core module and this is a different module.
+	Logger Logger
 
 	BinaryVersion string
 	Commit        string
+}
+
+// Logger is the narrow seam this package writes to. See
+// RouterConfig.Logger for why it is an interface and what satisfies it.
+type Logger interface {
+	Event(ctx context.Context, level slog.Level, event, msg string, attrs ...slog.Attr)
+}
+
+// stdoutLogger is what a host that named no Logger gets: newline-delimited
+// JSON on stdout, one object per event, with the event name in its own
+// field. The same shape core/internal/obs writes, so a deployment running
+// the engine and this host in one image produces one parseable stream
+// rather than two formats.
+type stdoutLogger struct{ base *slog.Logger }
+
+func (l stdoutLogger) Event(ctx context.Context, level slog.Level, event, msg string, attrs ...slog.Attr) {
+	l.base.LogAttrs(ctx, level, msg, append([]slog.Attr{slog.String("event", event)}, attrs...)...)
+}
+
+func newStdoutLogger() Logger {
+	return stdoutLogger{base: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 }
 
 // handlers bundles what the HTTP methods in handlers_system.go and
@@ -115,6 +153,10 @@ type handlers struct {
 	// names; see firstrun.go for what each is for.
 	firstRun     FirstRunClient
 	onConfigured func(context.Context) error
+
+	// logger is RouterConfig.Logger, resolved: never nil after NewRouter,
+	// so internalError (refusal.go) has nothing to branch on.
+	logger Logger
 }
 
 // NewRouter builds the /api/v1 HTTP surface plus /health/live and
@@ -144,6 +186,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		gate = NotYetImplementedGate{}
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = newStdoutLogger()
+	}
+
 	h := &handlers{
 		platform:      cfg.Platform,
 		backend:       cfg.Backend,
@@ -152,6 +199,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		gate:          gate,
 		firstRun:      cfg.FirstRun,
 		onConfigured:  cfg.OnConfigured,
+		logger:        logger,
 	}
 
 	// An instance with a first-run surface and no backend has no

@@ -82,7 +82,7 @@ func (h *handlers) preflightStorageMedium(w http.ResponseWriter, r *http.Request
 				"this configuration declares no storage medium with that id")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to check the storage medium")
+		h.internalError(w, r, "INTERNAL", "failed to check the storage medium", err)
 		return
 	}
 

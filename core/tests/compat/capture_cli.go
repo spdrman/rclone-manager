@@ -123,6 +123,16 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 		{label: "artifacts, a quarantined artifact's detail", args: []string{"artifacts", "--config", cfgPath, "production/postgres-primary/quarantined-newest.dump"}},
 		{label: "artifacts, an artifact that does not exist", args: []string{"artifacts", "--config", cfgPath, "production/postgres-primary/no-such.dump"}},
 		{label: "artifacts, a filter combined with an operand", args: []string{"artifacts", "--config", cfgPath, "--source", "production", "production/postgres-primary/recent-daily.dump"}},
+		// Issue #598's verb. Four invocations, because the interesting
+		// part of this surface is not the plain list: it is that --limit
+		// counts MATCHING events rather than rows read (so a filter that
+		// narrows still fills it), that an unrecognised --severity is a 2
+		// rather than a silently unfiltered feed, and that --json emits
+		// the contract's own object rather than this table.
+		{label: "activity", args: []string{"activity", "--config", cfgPath, "--limit", "4"}},
+		{label: "activity, errors only", args: []string{"activity", "--config", cfgPath, "--severity", "error", "--limit", "3"}},
+		{label: "activity, as the contract shapes it", args: []string{"activity", "--config", cfgPath, "--limit", "1", "--json"}},
+		{label: "activity, a severity nobody defined", args: []string{"activity", "--config", cfgPath, "--severity", "loud"}},
 		{label: "settings", args: []string{"settings", "--config", cfgPath}},
 		{label: "check", args: []string{"check", "--config", cfgPath}},
 		{label: "a config path that is not there", args: []string{"check", "--config", filepath.Join(root, "absent.yaml")}},
@@ -463,6 +473,34 @@ func normalizeGoVersion(s string) string {
 // structured event line, and nothing else on it.
 var eventTime = regexp.MustCompile(`"time":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z"`)
 
+// occurredAt matches the two spellings of a lifecycle transition's
+// timestamp: the wall-clock column `activity` prints, and the RFC 3339
+// field its --json form emits.
+var occurredAt = regexp.MustCompile(`(?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|"occurred_at": "[^"]*")`)
+
+// normalizeActivityTime is the fourth normalization, and it is the same
+// argument the third one makes, one surface over (#598).
+//
+// `activity` prints when each transition happened, and that instant is set
+// by the cycle this fixture runs a moment before capturing, so it is
+// different on every run in the most literal sense. Pinning it would make
+// this cell red for everybody and green for nobody.
+//
+// What survives is everything that is not the clock: the state entered,
+// the backup set, the artifact, the caption, the ORDER (newest first, so a
+// feed that started printing oldest-first fails), the row count under
+// --limit, and the JSON field names. Only the value is replaced, and the
+// field name stays, so a --json form that dropped occurred_at entirely
+// still fails.
+func normalizeActivityTime(s string) string {
+	return occurredAt.ReplaceAllStringFunc(s, func(match string) string {
+		if strings.HasPrefix(match, `"occurred_at"`) {
+			return `"occurred_at": "<TIME>"`
+		}
+		return "<TIME>"
+	})
+}
+
 // normalizeEventTime is the third normalization, and it arrived with the
 // routed-write rows in captureBesideAServingProcess.
 //
@@ -497,7 +535,7 @@ func redactArgs(args []string, root string) []string {
 // what an operator sees, and a gate that trims it would not notice a
 // widened column.
 func splitStream(s, root string) []string {
-	s = normalizeRoot(normalizeEventTime(normalizeGoVersion(s)), root)
+	s = normalizeRoot(normalizeActivityTime(normalizeEventTime(normalizeGoVersion(s))), root)
 	if s == "" {
 		return nil
 	}

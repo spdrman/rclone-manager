@@ -30,7 +30,7 @@
  * service saying something this build has never heard of should draw
  * nothing, not draw the wrong thing confidently.
  */
-import { BackupManagerError, toApiErrorCode } from "./contracts";
+import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -195,16 +195,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
-  const res = await fetch(BASE + path, {
-    credentials: "same-origin",
-    ...init,
-    // headers last: spreading ...init after a merged `headers` object
-    // would otherwise silently replace it with init.headers alone
-    // whenever a caller passes its own headers (none do today, but the
-    // ordering bug is easy to reintroduce without noticing — see
-    // client.test.ts's own coverage for this).
-    headers
-  });
+  // Issue #598. Everything from here down is the one place that can tell
+  // this API's three failures apart, so it is the one place that labels
+  // them. A `fetch` that rejects and a 2xx body that will not parse used
+  // to escape as whatever the browser threw, and the callers above could
+  // then only say something generic about them.
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, {
+      credentials: "same-origin",
+      ...init,
+      // headers last: spreading ...init after a merged `headers` object
+      // would otherwise silently replace it with init.headers alone
+      // whenever a caller passes its own headers (none do today, but the
+      // ordering bug is easy to reintroduce without noticing — see
+      // client.test.ts's own coverage for this).
+      headers
+    });
+  } catch (cause) {
+    // No response at all, so no status, no content type and no id. It
+    // deliberately does NOT claim nothing was changed: a request that got
+    // no reply may still have been carried out with only the response
+    // lost.
+    throw new RequestFailure({ kind: "no-response", path, cause });
+  }
 
   if (!res.ok) {
     // The service always returns a typed error envelope, but not always
@@ -229,26 +243,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         api = {
           code: toApiErrorCode(err.code),
           message: err.message as string,
-          correlationId: headerCorrelationId ?? "unavailable"
+          correlationId: headerCorrelationId
         };
       } else {
         api = {
           code: toApiErrorCode(body.code),
           message: body.message as string,
-          correlationId: (body.correlationId as string) ?? headerCorrelationId ?? "unavailable"
+          correlationId: (body.correlationId as string) ?? headerCorrelationId
         };
       }
     } catch {
       api = {
         code: "unknown",
         message: "The backup service returned an unexpected response.",
-        correlationId: res.headers.get("x-correlation-id") ?? "unavailable"
+        correlationId: res.headers.get("x-correlation-id") ?? undefined
       };
     }
     throw new BackupManagerError(api);
   }
 
-  return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  if (res.status === 204) return undefined as T;
+  try {
+    return (await res.json()) as T;
+  } catch (cause) {
+    // The response arrived and this build could not read it. The status
+    // and the content type are what separate a proxy's HTML error page
+    // from a body that was cut off mid-transfer, and the correlation id is
+    // read here on the SUCCESS path as well as on a refusal (#598) so a
+    // body that fails to parse can still name the response it came from.
+    throw new RequestFailure({
+      kind: "unreadable-body",
+      path,
+      status: res.status,
+      contentType: res.headers.get("content-type") ?? undefined,
+      correlationId: res.headers.get("x-correlation-id") ?? undefined,
+      cause
+    });
+  }
 }
 
 /**

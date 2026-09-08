@@ -40,7 +40,25 @@ import type { DeploymentActivity, SetActivity, SetActivityEvent } from "@shared/
  *  "empty" one with a configuration and no backup sets. Toggle scenarios
  *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
+export type Scenario =
+  | "default"
+  | "empty"
+  | "storage-critical"
+  | "catalog-recovery"
+  | "version-mismatch"
+  | "first-run"
+  | "no-medium"
+  // Issue #598, and the only scenario here that is a FAILURE rather than a
+  // state of the deployment. listActivity rejects with a plain
+  // SyntaxError, which is what a 2xx carrying something other than the
+  // JSON this build expected looks like from a page's side, and it is the
+  // exact shape reported from a real 0.3.2 NAS: not a refusal, so nothing
+  // typed it, so every surface that ran this call said one fixed sentence
+  // and quoted a correlation id that appears in no log. Only this one call
+  // fails, so the rest of both pages renders normally and what is
+  // asserted is what the failing panel says rather than whether the page
+  // came up at all.
+  | "activity-unreadable";
 
 /** Reads the scenario out of the URL, falling back to the default for
  *  anything unrecognised. A closed allow-list rather than a cast, so a
@@ -48,7 +66,10 @@ export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recov
  *  half exists. */
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
+  const allowed: Scenario[] = [
+    "default", "empty", "storage-critical", "catalog-recovery",
+    "version-mismatch", "first-run", "no-medium", "activity-unreadable"
+  ];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
@@ -1179,6 +1200,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // scenario rather than a variant of "empty" because the point is a
   // FULLY populated instance that simply never heard of the feature.
   const noMedium = scenario === "no-medium";
+  // Issue #598. One call fails, and it fails the way the NAS did.
+  const activityUnreadable = scenario === "activity-unreadable";
   // Every previewRetention call advances this backup set's "inventory" by
   // one tick and issues a plan captured against it. applyRetention only
   // ever honors the plan_id from the LATEST tick — anything older is,
@@ -1476,7 +1499,18 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
-    listActivity: () => delay(empty ? [] : ACTIVITY),
+    listActivity: () =>
+      activityUnreadable
+        ? delay(null).then(() => {
+            // Thrown, not rejected with a BackupManagerError: the whole
+            // point of #598's scenario is a failure this frontend has no
+            // type for, reproduced exactly. `request()` would have
+            // labelled this a RequestFailure; a mock cannot go through
+            // request(), so it throws the browser's own exception and
+            // the classifier has to cope with the harder case.
+            throw new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON");
+          })
+        : delay(empty ? [] : ACTIVITY),
     getLiveActivity: (options) =>
       delay({
         observedAt: "2026-08-29T02:01:20+02:00",

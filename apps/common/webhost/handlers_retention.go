@@ -221,7 +221,7 @@ func (h *handlers) previewRetention(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := h.backend.PreviewRetention(r.Context(), source, set)
 	if err != nil {
-		writeRetentionServiceError(w, err, "failed to preview retention")
+		h.writeRetentionServiceError(w, r, err, "failed to preview retention")
 		return
 	}
 
@@ -275,7 +275,7 @@ func (h *handlers) applyRetention(w http.ResponseWriter, r *http.Request) {
 		Actor:  actorFromContext(r.Context()),
 	})
 	if err != nil {
-		writeRetentionServiceError(w, err, "failed to apply retention")
+		h.writeRetentionServiceError(w, r, err, "failed to apply retention")
 		return
 	}
 
@@ -294,7 +294,7 @@ func (h *handlers) applyRetention(w http.ResponseWriter, r *http.Request) {
 // writeConfigRevisionStale/CONFIG_REVISION_STALE and submitOperation's own
 // error switch (handlers_operations.go) already apply to their own
 // sentinels.
-func writeRetentionServiceError(w http.ResponseWriter, err error, fallbackMessage string) {
+func (h *handlers) writeRetentionServiceError(w http.ResponseWriter, r *http.Request, err error, fallbackMessage string) {
 	switch {
 	case errors.Is(err, service.ErrRetentionPlanStale):
 		writeError(w, http.StatusConflict, "RETENTION_PLAN_STALE", err.Error())
@@ -317,6 +317,6 @@ func writeRetentionServiceError(w http.ResponseWriter, err error, fallbackMessag
 		// Deliberately NOT err.Error() here: an unclassified error might
 		// carry state-layer/SQLite text across this boundary (see
 		// submitOperation's identical reasoning, handlers_operations.go).
-		writeError(w, http.StatusInternalServerError, "INTERNAL", fallbackMessage)
+		h.internalError(w, r, "INTERNAL", fallbackMessage, err)
 	}
 }

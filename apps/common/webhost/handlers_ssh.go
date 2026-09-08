@@ -95,7 +95,7 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to import SSH key")
+		h.internalError(w, r, "INTERNAL", "failed to import SSH key", err)
 		return
 	}
 
@@ -293,7 +293,7 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "SSH_KEY_NOT_FOUND", "the referenced ssh_key_id does not exist; import a key first")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to test connection")
+		h.internalError(w, r, "INTERNAL", "failed to test connection", err)
 		return
 	}
 

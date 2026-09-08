@@ -17,7 +17,12 @@
  */
 import { useCallback, useEffect, useMemo } from "react";
 import type { InputNode } from "@causlts/core";
-import { BackupManagerError } from "@shared/api/contracts";
+// Issue #598: this file used to carry a byte-identical copy of useAsync's
+// own fallback, so the graph-backed half of the app threw the exception
+// away exactly as the component-state half did, and minted the same
+// literal correlation id doing it. There is one conversion now and it
+// lives with the module that was written for this lesson (api/failure.ts).
+import { asApiError } from "@shared/api/failure";
 import type { ApiError } from "@shared/api/contracts";
 import { graph, registerInput, useCausl } from "./graph";
 
@@ -37,16 +42,6 @@ export interface ResourceState<T> {
  *  knows how to put it back. */
 export function createResourceNode<T>(id: string): InputNode<ResourceState<T>> {
   return registerInput<ResourceState<T>>(id, { data: null, error: null, loading: true });
-}
-
-function toApiError(e: unknown): ApiError {
-  return e instanceof BackupManagerError
-    ? e.api
-    : {
-        code: "unknown",
-        message: "Backup Manager could not complete that request.",
-        correlationId: "unavailable"
-      };
 }
 
 /** Tracks the sequence number of the most recently issued fetch per node,
@@ -85,7 +80,7 @@ export function fetchResource<T>(node: InputNode<ResourceState<T>>, fetchFn: () 
     .catch((e: unknown) => {
       if (!isLatest()) return;
       graph.commit(node.id + "/failed", (tx) =>
-        tx.set(node, { ...graph.read(node), error: toApiError(e), loading: false })
+        tx.set(node, { ...graph.read(node), error: asApiError(e), loading: false })
       );
     });
 }

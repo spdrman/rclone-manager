@@ -274,11 +274,19 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 		// never from rclone or state internals, and the path is what makes
 		// the sentence actionable.
 		if errors.Is(err, service.ErrStateDirInvalid) || errors.Is(err, service.ErrNotAnnounced) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL",
+			// The one 500 in this package that writes its own body rather
+			// than going through internalError, because it deliberately
+			// echoes the service's own sentence (see the paragraph above
+			// for why that is safe here and nowhere else). It still logs,
+			// under the id it just minted: the argument for recording a
+			// refusal does not weaken because the client got a better
+			// message this time (#598).
+			id := writeError(w, http.StatusInternalServerError, "INTERNAL",
 				"this deployment cannot be set up yet and nothing was written: "+err.Error()+". Fix that and submit this form again; there is no need to reinstall or restart anything.")
+			h.logRefusal(r, http.StatusInternalServerError, "INTERNAL", id, err)
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 

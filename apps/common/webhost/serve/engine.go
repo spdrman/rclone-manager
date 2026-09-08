@@ -98,6 +98,14 @@ type EngineConfig struct {
 	// at most once, and only by a FirstRunEngine.
 	Activate func(ctx context.Context) (webhost.BackupServiceClient, func() error, error)
 
+	// Logger, when non-nil, is where the API's own refusals go instead of
+	// this process's stdout (#598). Nil is the ordinary production case
+	// and is not silence: webhost.NewRouter falls back to JSON on stdout,
+	// which is what `docker logs` on the engine container shows. A host
+	// that can reach core/internal/obs (one inside the core module) can
+	// pass its own obs.Logger here and get redaction with it.
+	Logger webhost.Logger
+
 	BinaryVersion string
 	Commit        string
 }

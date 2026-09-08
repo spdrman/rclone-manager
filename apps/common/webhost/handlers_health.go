@@ -147,7 +147,7 @@ type healthResponse struct {
 func (h *handlers) systemHealth(w http.ResponseWriter, r *http.Request) {
 	report, err := h.backend.Health(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not compute backup health")
+		h.internalError(w, r, "INTERNAL", "could not compute backup health", err)
 		return
 	}
 

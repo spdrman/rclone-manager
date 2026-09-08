@@ -208,6 +208,7 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 		FirstRun:      cfg.FirstRun,
 		OnConfigured:  onConfigured,
 		Recorder:      recorderFor(cfg, backend),
+		Logger:        cfg.Logger,
 		BinaryVersion: cfg.BinaryVersion,
 		Commit:        cfg.Commit,
 	})

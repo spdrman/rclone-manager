@@ -87,6 +87,39 @@ the version and commit that were installed.
                   count. connlimit counts established connections per
                   source address, which is the production rule restated.
 
+  activity-diagnostic
+                  #598, and the only case here whose subject is a
+                  FAILURE rather than a backup. Three claims, in the
+                  order they matter.
+
+                  First, that the lifecycle feed is readable at all
+                  against a real deployment: `backup-manager activity`
+                  with the route configured announces
+                  `mode: engine-attached`, which means it asked the
+                  engine over HTTP, and it lists the transitions the
+                  cycle above actually produced, named and timestamped.
+                  That is the assertion that would have caught the
+                  reported bug, and no suite had it: the browser suite
+                  drives a mock through a dev server, so it proves a
+                  component renders rather than that the product works.
+
+                  Second, that a read which reaches no service says so.
+                  With the engine container stopped, the same command
+                  must never claim `engine-attached`, and must name the
+                  world it answered from instead.
+
+                  Third, and this is the whole point of #598's server
+                  half: a 500 the service cannot explain to its caller
+                  has to explain itself in its own log. The
+                  configuration directory is made read-only, a routed
+                  `settings patch` is refused with an INTERNAL and a
+                  correlation id, and `docker logs` on the manager
+                  machine has to carry a line with THAT id and the
+                  underlying error on it. Before this, thirty 500 sites
+                  in the web host discarded the error and there was
+                  nowhere to write it, so the id an operator was handed
+                  matched nothing anywhere.
+
   lifecycle       #343's two counting criteria, which are written in
                   deliberately anti-assertion language. It backs up,
                   creates an administrator, counts users, backup sets

@@ -89,6 +89,39 @@
 #                   count. connlimit counts established connections per
 #                   source address, which is the production rule restated.
 #
+#   activity-diagnostic
+#                   #598, and the only case here whose subject is a
+#                   FAILURE rather than a backup. Three claims, in the
+#                   order they matter.
+#
+#                   First, that the lifecycle feed is readable at all
+#                   against a real deployment: `backup-manager activity`
+#                   with the route configured announces
+#                   `mode: engine-attached`, which means it asked the
+#                   engine over HTTP, and it lists the transitions the
+#                   cycle above actually produced, named and timestamped.
+#                   That is the assertion that would have caught the
+#                   reported bug, and no suite had it: the browser suite
+#                   drives a mock through a dev server, so it proves a
+#                   component renders rather than that the product works.
+#
+#                   Second, that a read which reaches no service says so.
+#                   With the engine container stopped, the same command
+#                   must never claim `engine-attached`, and must name the
+#                   world it answered from instead.
+#
+#                   Third, and this is the whole point of #598's server
+#                   half: a 500 the service cannot explain to its caller
+#                   has to explain itself in its own log. The
+#                   configuration directory is made read-only, a routed
+#                   `settings patch` is refused with an INTERNAL and a
+#                   correlation id, and `docker logs` on the manager
+#                   machine has to carry a line with THAT id and the
+#                   underlying error on it. Before this, thirty 500 sites
+#                   in the web host discarded the error and there was
+#                   nowhere to write it, so the id an operator was handed
+#                   matched nothing anywhere.
+#
 #   lifecycle       #343's two counting criteria, which are written in
 #                   deliberately anti-assertion language. It backs up,
 #                   creates an administrator, counts users, backup sets
@@ -223,14 +256,14 @@ while [ $# -gt 0 ]; do
     -h|--help)
       render_help
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|lifecycle|retention-apply|all] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|activity-diagnostic|lifecycle|retention-apply|all] [--keep-on-failure]" ;;
   esac
 done
 
 case "$cases" in
-  all) case_list="plain no-arguments connection-cap lifecycle retention-apply" ;;
-  plain|no-arguments|connection-cap|lifecycle|retention-apply) case_list="$cases" ;;
-  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, lifecycle, retention-apply, all." ;;
+  all) case_list="plain no-arguments connection-cap activity-diagnostic lifecycle retention-apply" ;;
+  plain|no-arguments|connection-cap|activity-diagnostic|lifecycle|retention-apply) case_list="$cases" ;;
+  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, activity-diagnostic, lifecycle, retention-apply, all." ;;
 esac
 
 # ------------------------------------------------------------ identities
@@ -288,12 +321,16 @@ connection_cap=2
 lifecycle_from="rclone-manager-e2e-lifecycle:0.2.0"
 lifecycle_to="rclone-manager-e2e-lifecycle:0.3.0"
 
-# The administrator the lifecycle case creates, so there is a user for the
-# upgrade to preserve and for the factory reset to destroy. A throwaway
-# password for a container that is deleted minutes later, and it never
-# leaves this script's own process except down a pipe into stdin.
-lifecycle_admin_user="e2e-operator"
-lifecycle_admin_pass="e2e-$run_id-not-a-real-password"
+# The administrator two cases create: the lifecycle case needs a user for
+# the upgrade to preserve and the factory reset to destroy, and the
+# activity-diagnostic case needs credentials for the CLI's route to the
+# engine, which are the Web UI's own. A throwaway password for a container
+# that is deleted minutes later. It leaves this script's process down a
+# pipe into stdin when the account is created, and as an environment
+# variable on the exec'd commands that use the route, which is what the
+# CLI's own documentation prescribes; it is never written to a file.
+admin_user="e2e-operator"
+admin_pass="e2e-$run_id-not-a-real-password"
 
 # ------------------------------------------------------------- teardown
 #
@@ -996,6 +1033,9 @@ run_case() {
   if [ "$case_name" = "retention-apply" ]; then
     run_retention_apply "$mgr" "$prefix"
   fi
+  if [ "$case_name" = "activity-diagnostic" ]; then
+    run_activity_diagnostic "$mgr" "$prefix"
+  fi
 
   step "  case $case_name passed"
 
@@ -1021,6 +1061,215 @@ release_case() {
   # After the containers, never before: a network with an endpoint on it
   # cannot be removed.
   docker network rm "$net" >/dev/null 2>&1 || true
+}
+
+# ============================= #598: the feed reads, and a 500 says why
+#
+# Everything above this point is about a backup arriving. This is about
+# what an operator is told when something does not, and it is here rather
+# than in a unit test because both halves of #598 are about wiring that
+# only exists in a real deployment.
+#
+# The browser suite over in rclone-manager-tests drives createMockApi
+# through a Vite dev server. That is worth having and it is structurally
+# incapable of catching what was reported: the mock resolved every read
+# cleanly, so every case in it is a claim about a component rendering. The
+# claims below are made against the image built from this tree, running as
+# two containers on a machine that had nothing on it, over the same HTTP
+# route the browser uses.
+#
+# The route is the reason there is an administrator here at all. The CLI
+# reaches the engine through three environment variables (see `usage()`),
+# and the two credential ones are the Web UI's own, so a routed read is
+# an authenticated HTTP request to /api/v1/activity: the same request,
+# through the same middleware, answered by the same handler. That makes
+# the CLI the honest stand-in for the browser on a machine with no
+# browser on it, and it is why the mode line is asserted first. A command
+# that quietly answered from the journal would satisfy every assertion
+# about the rows and prove nothing about the route.
+run_activity_diagnostic() {
+  local mgr="$1" prefix="$2"
+
+  # ---------------------------------------- somebody to authenticate as
+  #
+  # Same dance as run_lifecycle, for the same reason: `auth create-admin`
+  # holds the credential store under a process-lifetime advisory flock, so
+  # the engine comes down for the length of it. The password never leaves
+  # this script except down a pipe into stdin here, and as an environment
+  # variable on the exec'd commands below, which is what the CLI's own
+  # documentation prescribes for the route; the container it lives in is
+  # deleted minutes from now.
+  step "  creating an administrator, so the CLI has a route to authenticate on"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  printf '%s' "$admin_pass" | docker exec -i "$mgr" docker compose \
+    -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    run --rm --no-deps -T rclone-manager \
+    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
+    || die "could not create an administrator on the installed instance."
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again after the administrator was created" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  # ------------------------------------------------- the feed, routed
+  step "  the lifecycle feed, read from the engine over its own API (#598)"
+  local feed_out feed_err
+  feed_err="$case_dir/activity.err"
+  feed_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config 2>"$feed_err")" \
+    || die "\`backup-manager activity\` failed against a deployment that has just completed a backup." \
+           "stderr: $(cat "$feed_err")"
+
+  grep -q '^mode: engine-attached' "$feed_err" \
+    || die "the activity read did not go to the engine." \
+           "It announced: $(head -1 "$feed_err")" \
+           "A read that answered from this host's own journal would satisfy every assertion below about the rows" \
+           "and prove nothing about the route the browser uses, which is what #598 is about."
+  note "the read announced engine-attached, so it came back over /api/v1/activity"
+
+  # The transitions the cycle above actually produced, named. Not "some
+  # rows": these three files are the ones whose bytes were compared
+  # against the source a moment ago, so a feed that listed anything else
+  # would be describing a different deployment.
+  local name
+  for name in payload.bin schema.sql notes.txt; do
+    echo "$feed_out" | grep -q "$name" \
+      || die "the activity feed does not mention $name, which this run backed up and verified by digest." \
+             "the feed said:" "$feed_out"
+  done
+  echo "$feed_out" | grep -q 'COMMITTED' \
+    || die "the activity feed carries no COMMITTED transition, and this run committed three artifacts." \
+           "the feed said:" "$feed_out"
+  # Timestamped, which is half of what the page shows and the half a
+  # projection silently drops.
+  echo "$feed_out" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} ' \
+    || die "no row in the activity feed carries a timestamp." \
+           "the feed said:" "$feed_out"
+  note "the feed names all three artifacts, their COMMITTED transitions, and when each happened"
+
+  # --json is what a support conversation or a cron job parses, so it is
+  # asserted on the contract's field names rather than on the table.
+  local json_out
+  json_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config --limit 1 --json 2>/dev/null)" \
+    || die "\`backup-manager activity --json\` failed against the running engine."
+  case "$json_out" in
+    *'"events"'*'"artifact_id"'*'"occurred_at"'*) : ;;
+    *) die "--json did not emit the contract's own ListActivityResponse shape." "it emitted: $json_out" ;;
+  esac
+  note "--json emits the wire objects, field names and all"
+
+  # -------------------------------- a read that reaches no service
+  #
+  # #598's second browser claim, in the form a machine with no browser can
+  # make it: with the engine down, the command must never CLAIM the world
+  # it could not reach. Run through `run --rm --no-deps` because there is
+  # no engine container left to exec into, which is itself the situation
+  # being modelled.
+  step "  a read with no engine to reach never claims it reached one"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  local down_err="$case_dir/activity-engine-down.err"
+  docker exec "$mgr" docker compose -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    run --rm --no-deps -T \
+    -e BACKUP_MANAGER_API_URL=http://127.0.0.1:8080 \
+    -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
+    -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
+    rclone-manager \
+    /backup-manager activity --config /etc/backup-manager/config >/dev/null 2>"$down_err" \
+    || true
+  if grep -q 'mode: engine-attached' "$down_err"; then
+    die "the read announced engine-attached with the engine container stopped." \
+        "it said: $(head -1 "$down_err")" \
+        "Claiming a world it could not reach is the defect #536 gave the mode line to prevent, and #598 asks for the same honesty one surface over."
+  fi
+  grep -q '^mode: ' "$down_err" \
+    || die "the read with no engine to reach announced no mode at all, so nothing on screen says which world the answer is about." \
+           "it said: $(cat "$down_err")"
+  note "it announced: $(grep -m1 '^mode: ' "$down_err" | cut -c1-60)..."
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  # ------------------- a 500 an operator can quote, and a log that has it
+  #
+  # The clause the server half of #598 exists for. There were thirty
+  # `writeError(w, 500, "INTERNAL", ...)` sites in the web host, every one
+  # of them binding the error, testing it and dropping it, with nowhere to
+  # write it even if it had wanted to. So the frontend's own words for an
+  # INTERNAL refusal, "its own log holds the detail, under this
+  # correlation id", were untrue of every route in the product.
+  #
+  # A read-only configuration directory is the cheapest deterministic way
+  # to make the engine refuse something it cannot explain: the write fails
+  # in the filesystem, well below anything that could produce a typed
+  # reason, which is exactly the shape those thirty sites are for.
+  step "  a 500 the engine cannot explain still explains itself in the log (#598)"
+  docker exec "$mgr" chmod 0555 "$prefix/config" \
+    || die "could not make the configuration directory read-only on the manager machine."
+
+  local refusal="" refused=0
+  refusal="$(bm_routed "$mgr" "$prefix" settings patch --timezone Europe/Berlin --config /etc/backup-manager/config 2>&1)" || refused=$?
+  docker exec "$mgr" chmod 0755 "$prefix/config" \
+    || die "could not restore the configuration directory's permissions on the manager machine."
+
+  [ "$refused" != "0" ] \
+    || die "a configuration write against a read-only configuration directory succeeded, so there is no refusal to check." \
+           "it said: $refusal"
+  case "$refusal" in
+    *INTERNAL*) : ;;
+    *) die "the refusal is not the INTERNAL one this case is about, so the log assertion below would be about a different failure." \
+           "it said: $refusal" ;;
+  esac
+
+  local cid
+  cid="$(printf '%s' "$refusal" | grep -oE 'cid_[A-Za-z0-9_-]+' | head -1 || true)"
+  [ -n "$cid" ] \
+    || die "the refusal quoted no correlation id, so an operator has nothing to give anybody." \
+           "it said: $refusal"
+  note "the engine refused with correlation id $cid"
+
+  local logs
+  logs="$(mgr_compose "$mgr" "$prefix" logs rclone-manager 2>/dev/null || true)"
+  printf '%s' "$logs" | grep -q "$cid" \
+    || die "the correlation id $cid the operator was handed appears nowhere in the engine's own log." \
+           "That is the whole defect #598's server half is about: an id that matches nothing sends whoever quotes it" \
+           "grepping for a string that was never written."
+  local line
+  line="$(printf '%s' "$logs" | grep -m1 "$cid")"
+  case "$line" in
+    *http_refusal*) : ;;
+    *) die "the line carrying $cid is not the refusal event, so something else happens to mention that id." "the line: $line" ;;
+  esac
+  case "$line" in
+    *'"error"'*) : ;;
+    *) die "the logged refusal carries the correlation id and not the error it refused over, which is the half that makes the id worth quoting." \
+           "the line: $line" ;;
+  esac
+  case "$line" in
+    *'/api/v1/settings'*) : ;;
+    *) die "the logged refusal does not name the route it refused, so an operator holding the id still cannot say what failed." "the line: $line" ;;
+  esac
+  note "the engine's own log carries that id, the route, and the error underneath it"
+
+  step "  activity-diagnostic passed"
+}
+
+# bm_routed is `bm` with the three environment variables that give the CLI
+# a route to the running engine (see `usage()`'s own paragraph on them).
+# Without these the same command answers from this host's journal and
+# announces `direct`, which is a different claim entirely, so every routed
+# assertion above checks the mode line before it checks anything else.
+bm_routed() {  # bm_routed <mgr> <prefix> <backup-manager args...>
+  local mgr="$1" prefix="$2"; shift 2
+  # The -e flags go on `compose exec`, not on the `docker exec` around it:
+  # the outer one would set them for the compose CLI running on the
+  # manager machine, which is not the process that needs them.
+  docker exec "$mgr" docker compose -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    exec -T \
+    -e BACKUP_MANAGER_API_URL=http://127.0.0.1:8080 \
+    -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
+    -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
+    rclone-manager /backup-manager "$@"
 }
 
 # ==================================== #343: upgrade, then factory reset
@@ -1053,11 +1302,11 @@ run_lifecycle() {
   # comes down for the length of it.
   step "  creating an administrator, so there is a user to count"
   mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
-  printf '%s' "$lifecycle_admin_pass" | docker exec -i "$mgr" docker compose \
+  printf '%s' "$admin_pass" | docker exec -i "$mgr" docker compose \
     -p rclone-manager --env-file "$prefix/.env" \
     -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
     run --rm --no-deps -T rclone-manager \
-    /backup-manager-web auth create-admin --username "$lifecycle_admin_user" --password-stdin \
+    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
     || die "could not create an administrator on the installed instance."
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   # On the engine answering, not on the record existing: `run --rm` wrote

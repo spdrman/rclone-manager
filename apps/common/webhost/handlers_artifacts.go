@@ -237,7 +237,7 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list backups")
+		h.internalError(w, r, "INTERNAL", "failed to list backups", err)
 		return
 	}
 	writeArtifactsResponse(w, artifacts)
@@ -248,7 +248,7 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) listQuarantine(w http.ResponseWriter, r *http.Request) {
 	artifacts, err := h.backend.ListArtifacts(r.Context(), service.ArtifactFilter{QuarantinedOnly: true})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list quarantined backups")
+		h.internalError(w, r, "INTERNAL", "failed to list quarantined backups", err)
 		return
 	}
 	writeArtifactsResponse(w, artifacts)
@@ -262,7 +262,7 @@ func (h *handlers) getArtifact(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "ARTIFACT_NOT_FOUND", "no such backup")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load backup")
+		h.internalError(w, r, "INTERNAL", "failed to load backup", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toArtifactResponse(artifact))
@@ -282,7 +282,7 @@ func (h *handlers) getArtifact(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) revalidateArtifact(w http.ResponseWriter, r *http.Request) {
 	result, err := h.backend.RevalidateArtifact(r.Context(), artifactIDFrom(r))
 	if err != nil {
-		writeArtifactActionError(w, err, "failed to revalidate the backup")
+		h.writeArtifactActionError(w, r, err, "failed to revalidate the backup")
 		return
 	}
 	writeJSON(w, http.StatusOK, artifactCheckResponse{
@@ -318,7 +318,7 @@ func (h *handlers) revalidateArtifact(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) reinstateArtifact(w http.ResponseWriter, r *http.Request) {
 	result, err := h.backend.ReinstateArtifact(r.Context(), artifactIDFrom(r), "")
 	if err != nil {
-		writeArtifactActionError(w, err, "failed to reinstate the backup")
+		h.writeArtifactActionError(w, r, err, "failed to reinstate the backup")
 		return
 	}
 	writeJSON(w, http.StatusOK, artifactReinstateResponse{
@@ -344,7 +344,7 @@ func (h *handlers) reinstateArtifact(w http.ResponseWriter, r *http.Request) {
 // livelocks instead of recovering.
 func (h *handlers) retryArtifactIngestion(w http.ResponseWriter, r *http.Request) {
 	if err := h.backend.RetryArtifactIngestion(r.Context(), artifactIDFrom(r)); err != nil {
-		writeArtifactActionError(w, err, "failed to return the backup to the pipeline")
+		h.writeArtifactActionError(w, r, err, "failed to return the backup to the pipeline")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -404,7 +404,7 @@ func (h *handlers) retryFailedIngestion(w http.ResponseWriter, r *http.Request) 
 				"this backup is not stuck: it is making progress, already finished, or quarantined and waiting for a judgement")
 			return
 		}
-		writeArtifactActionError(w, err, "failed to return the backup to the pipeline")
+		h.writeArtifactActionError(w, r, err, "failed to return the backup to the pipeline")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -435,7 +435,7 @@ func artifactIDFrom(r *http.Request) string {
 // their declared statuses. Both are ordinary outcomes an operator can
 // reach by clicking a button on a stale screen, so both are typed
 // refusals rather than 500s.
-func writeArtifactActionError(w http.ResponseWriter, err error, fallback string) {
+func (h *handlers) writeArtifactActionError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
 	case errors.Is(err, service.ErrArtifactNotFound):
 		writeError(w, http.StatusNotFound, "ARTIFACT_NOT_FOUND", "no such backup")
@@ -464,7 +464,7 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 		// Deliberately not err.Error(): an unclassified error here can
 		// carry filesystem text, the same reason writeBackupSetError's own
 		// default case gives.
-		writeError(w, http.StatusInternalServerError, "INTERNAL", fallback)
+		h.internalError(w, r, "INTERNAL", fallback, err)
 	}
 }
 

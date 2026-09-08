@@ -185,7 +185,7 @@ func (h *handlers) getBackupSetRetention(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	got, err := h.backend.BackupSetRetention(r.Context(), id)
 	if err != nil {
-		writeBackupSetRetentionError(w, err)
+		h.writeBackupSetRetentionError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetRetentionResponse(got))
@@ -212,7 +212,7 @@ func (h *handlers) setBackupSetRetention(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	got, err := h.backend.SetBackupSetRetention(r.Context(), id, body.toService())
 	if err != nil {
-		writeBackupSetRetentionError(w, err)
+		h.writeBackupSetRetentionError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetRetentionResponse(got))
@@ -228,7 +228,7 @@ func (h *handlers) clearBackupSetRetention(w http.ResponseWriter, r *http.Reques
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	got, err := h.backend.ClearBackupSetRetention(r.Context(), id)
 	if err != nil {
-		writeBackupSetRetentionError(w, err)
+		h.writeBackupSetRetentionError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetRetentionResponse(got))
@@ -245,7 +245,7 @@ func (h *handlers) clearBackupSetRetention(w http.ResponseWriter, r *http.Reques
 // gives for the identical line: that text is built from this project's own
 // field descriptions and the caller's own submitted values, never from a
 // state or rclone error string.
-func writeBackupSetRetentionError(w http.ResponseWriter, err error) {
+func (h *handlers) writeBackupSetRetentionError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrBackupSetNotFound):
 		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
@@ -260,10 +260,10 @@ func writeBackupSetRetentionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+		h.internalError(w, r, "INTERNAL", "this deployment has no configuration file to persist to", err)
 	default:
 		// Deliberately not err.Error(): an unclassified error could carry
 		// filesystem or rclone-internal text.
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read or change this backup set's retention policy")
+		h.internalError(w, r, "INTERNAL", "failed to read or change this backup set's retention policy", err)
 	}
 }
