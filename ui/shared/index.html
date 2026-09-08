@@ -26,17 +26,35 @@
       one of them goes.
     -->
     <!--
-      The typeface is IBM Plex Sans and IBM Plex Mono, Copyright 2017 IBM Corp.
-      with Reserved Font Name "Plex", used under the SIL Open Font License 1.1
-      (https://openfontlicense.org) and unmodified. Issue #631. The woff2 files
-      are IBM's own Latin1 subsets served from this deployment at /fonts/, the
-      full licence text travels with them at /fonts/LICENSE.txt as OFL section
-      2 asks, and docs/compliance/bundled-webfonts.md is the record. This page
-      used to fetch the same faces from Google's font service, which is a
-      request that fails on a NAS with no route off its own LAN, and it fails
-      silently: the page renders in a system font and nothing reports it. The
-      host is not written out anywhere in this file on purpose, so a sweep for
-      it can stay absolute.
+      The typeface this page renders in is vendored, and this is its
+      attribution. Issue #631.
+
+        IBM Plex Sans 1.1.0
+        IBM Plex Mono 2.5.0
+        Creator:      IBM Corp. (https://github.com/IBM/plex)
+        Copyright:    Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+        Licence:      OFL-1.1, the SIL Open Font License 1.1
+        Licence text: https://openfontlicense.org/open-font-license-official-text/
+        Modification: reproduced verbatim and unmodified
+
+      The woff2 files are IBM's own Latin1 subsets, served from this
+      deployment at /fonts/. The full licence text travels with them at
+      /fonts/LICENSE.txt, because OFL section 2 asks that each copy of the
+      Font Software carry the notice and the licence, and the copies include
+      the ones inside the image. docs/compliance/bundled-webfonts.md is the
+      full record.
+
+      A declared record rather than a courtesy, the same way the artwork's
+      comment above is: compliance.json lists this file under both font
+      entries' recordedIn, so VendoredAssetComplaints reads it for the
+      creator, the copyright, the licence, the address of the licence text
+      and the modification statement.
+
+      This page used to fetch the same faces from Google's font service,
+      which is a request that fails on a NAS with no route off its own LAN,
+      and it fails silently: the page renders in a system font and nothing
+      reports it. The host is not written out anywhere in this file on
+      purpose, so a sweep for it can stay absolute.
     -->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

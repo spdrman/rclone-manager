@@ -61,6 +61,32 @@ Font Awesome Free 6.7.2
   Upstream:       https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz
   Also stated in: docs/compliance/bundled-icon-artwork.md, ui/shared/index.html
 
+IBM Plex Sans 1.1.0
+  Creator:        IBM Corp.
+  Copyright:      Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+  Licence:        OFL-1.1, SIL Open Font License 1.1
+  Licence text:   https://openfontlicense.org/open-font-license-official-text/
+  Licence copy:   ui/shared/public/fonts/LICENSE.txt
+  Modification:   reproduced verbatim and unmodified
+  What ships:     the Latin1 woff2 subsets of the regular, medium, semibold and bold faces, served from the image
+  Carried in:     ui/shared/public/fonts/IBMPlexSans-Regular-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-Medium-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-SemiBold-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-Bold-Latin1.woff2
+  Linked into:    backup-manager-web
+  Upstream:       https://registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz
+  Also stated in: docs/compliance/bundled-webfonts.md, ui/shared/index.html, ui/shared/src/design-system/typography.css
+
+IBM Plex Mono 2.5.0
+  Creator:        IBM Corp.
+  Copyright:      Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+  Licence:        OFL-1.1, SIL Open Font License 1.1
+  Licence text:   https://openfontlicense.org/open-font-license-official-text/
+  Licence copy:   ui/shared/public/fonts/LICENSE.txt
+  Modification:   reproduced verbatim and unmodified
+  What ships:     the Latin1 woff2 subsets of the regular, medium and semibold faces, served from the image
+  Carried in:     ui/shared/public/fonts/IBMPlexMono-Regular-Latin1.woff2, ui/shared/public/fonts/IBMPlexMono-Medium-Latin1.woff2, ui/shared/public/fonts/IBMPlexMono-SemiBold-Latin1.woff2
+  Linked into:    backup-manager-web
+  Upstream:       https://registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz
+  Also stated in: docs/compliance/bundled-webfonts.md, ui/shared/index.html, ui/shared/src/design-system/typography.css
+
 Components by licence
 ---------------------
 

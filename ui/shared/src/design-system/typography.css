@@ -17,14 +17,26 @@
    WHICH FILES. These are IBM's own woff2, byte for byte out of the
    @ibm/plex-sans and @ibm/plex-mono packages IBM publishes, and not the
    subsets Google Fonts serves. The difference is licensing rather than
-   quality. IBM Plex is OFL-1.1 with the Reserved Font Name "Plex", and OFL §3
-   says a Modified Version may not carry the reserved name. Google's copies are
-   Google's own re-subsetting, so redistributing those from this repository
-   would be redistributing a modified font under the name the licence reserves.
-   Taking the copyright holder's own artifacts unmodified is squarely §2 and
-   needs no argument. distribution/packaging/compliance.json records each
-   file's SHA-256 and a test re-derives them, so "unmodified" is checked rather
-   than claimed, and docs/compliance/bundled-webfonts.md is the full record.
+   quality.
+
+     IBM Plex Sans 1.1.0
+     IBM Plex Mono 2.5.0
+     Creator:      IBM Corp.
+     Copyright:    Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+     Licence:      OFL-1.1, the SIL Open Font License 1.1
+     Licence text: https://openfontlicense.org/open-font-license-official-text/
+     Modification: reproduced verbatim and unmodified
+
+   OFL §3 says a Modified Version may not carry the reserved name. Google's
+   copies are Google's own re-subsetting, so redistributing those from this
+   repository would be redistributing a modified font under the name the
+   licence reserves. Taking the copyright holder's own artifacts unmodified is
+   squarely §2 and needs no argument.
+   distribution/packaging/compliance.json records each file's SHA-256 and a
+   test re-derives them, so "unmodified" is checked rather than claimed, and
+   docs/compliance/bundled-webfonts.md is the full record. This file is one of
+   that register's recordedIn artifacts, which is why the block above is a
+   labelled list rather than a sentence: VendoredAssetComplaints reads it.
 
    WHICH WEIGHTS. Seven, which is exactly what the retired link asked for, and
    that is a decision rather than a copy. The image carries this payload six

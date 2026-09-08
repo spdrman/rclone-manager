@@ -47,6 +47,7 @@ func vendoredFixture() VendoredAsset {
 		Modified:       false,
 		ModifiedNote:   "reproduced verbatim and unmodified",
 		WhatShips:      "two paths, compiled into the bundle",
+		CarriedAs:      VendoredCarriedAsSource,
 		VendoredInto:   []string{"src/art.tsx"},
 		Marker:         "Example Artwork 1.2.3",
 		LinkedInto:     []string{"backup-manager-web"},
@@ -326,5 +327,266 @@ func TestTheVendoredRegisterAndTheHandWrittenRecordAgree(t *testing.T) {
 		if handWritten == 0 {
 			t.Errorf("%s is recorded only in %s, which is generated from this same register and therefore cannot disagree with it; the attribution needs at least one artifact somebody wrote", v.Name, c.License.NoticeFile)
 		}
+	}
+}
+
+// The rest of this file is #631's half: a second kind of vendored
+// material arrived, the upstream's own files redistributed rather than
+// reproduced into a component this project writes, and the two kinds
+// cannot be held to the same evidence. The cases above drive the source
+// kind; these drive the other one and the boundary between them.
+
+// vendoredFilesFixture is the complete, well-formed entry for material
+// redistributed byte for byte, and the bodies its digests are taken from.
+func vendoredFilesFixture() (VendoredAsset, map[string]string) {
+	const face = "the bytes of a woff2 file"
+	const licence = "SIL OPEN FONT LICENSE Version 1.1\nCopyright 1999 Example Foundry with Reserved Font Name \"Example\""
+	v := VendoredAsset{
+		ID:             "example-webfont",
+		Name:           "Example Sans",
+		Version:        "4.5.6",
+		Creator:        "Example Foundry",
+		Copyright:      "Copyright 1999 Example Foundry with Reserved Font Name \"Example\"",
+		SPDXID:         "OFL-1.1",
+		LicenceName:    "SIL Open Font License 1.1",
+		LicenceTextURL: "https://example.invalid/ofl",
+		Modified:       false,
+		ModifiedNote:   "reproduced verbatim and unmodified",
+		WhatShips:      "the Latin subset of the regular face",
+		CarriedAs:      VendoredCarriedAsFiles,
+		VendoredInto:   []string{"ui/shared/public/fonts/Example-Regular.woff2"},
+		Digests:        map[string]string{"ui/shared/public/fonts/Example-Regular.woff2": SHA256Bytes([]byte(face))},
+		LicenceFile:    "ui/shared/public/fonts/LICENSE.txt",
+		LinkedInto:     []string{"backup-manager-web"},
+		SourceURL:      "https://example.invalid/example-sans-4.5.6.tgz",
+		RecordedIn:     []string{"NOTICE"},
+	}
+	files := map[string]string{
+		"ui/shared/public/fonts/Example-Regular.woff2": face,
+		"ui/shared/public/fonts/LICENSE.txt":           licence,
+		"NOTICE":                                       vendoredArtifact(v),
+	}
+	return v, files
+}
+
+// mine drops the tree sweep's complaints, which arrive from the same call
+// and have nothing to do with a synthetic fixture. Same filter the table
+// above uses, and both sweeps share the phrase on purpose.
+func mine(complaints []string) []string {
+	var out []string
+	for _, c := range complaints {
+		if !strings.Contains(c, "compliance.json claims it") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// TestTheTwoKindsOfVendoredMaterialAreHeldToDifferentEvidence.
+//
+// The positive control leads, and then every row is one edit away from
+// it. The four rows in the middle are the interesting ones: each kind is
+// refused for carrying the OTHER kind's evidence, not merely allowed to
+// omit it. A digest over a file this project maintains and a marker
+// inside a compressed binary are both checks that cannot fail, and a
+// check that cannot fail is worse than an absent one, because it reads
+// like coverage.
+func TestTheTwoKindsOfVendoredMaterialAreHeldToDifferentEvidence(t *testing.T) {
+	const path = "ui/shared/public/fonts/Example-Regular.woff2"
+
+	cases := []struct {
+		name string
+		edit func(*VendoredAsset, map[string]string)
+		want string
+	}{
+		{"a complete entry over the bytes it records", nil, ""},
+		{
+			"a file re-encoded under an unchanged digest",
+			func(_ *VendoredAsset, f map[string]string) { f[path] = "somebody else's re-subsetting" },
+			"the upstream's own bytes",
+		},
+		{
+			"a redistributed file with no digest at all",
+			func(v *VendoredAsset, _ map[string]string) { v.Digests = nil },
+			"records no digest for them",
+		},
+		{
+			"a digest for a file this entry does not ship",
+			func(v *VendoredAsset, _ map[string]string) {
+				v.Digests["ui/shared/public/fonts/Someone-Else.woff2"] = SHA256Bytes(nil)
+			},
+			"not one of the files it says it is vendored into",
+		},
+		{
+			"source material carrying a digest anyway",
+			func(v *VendoredAsset, _ map[string]string) {
+				v.CarriedAs = VendoredCarriedAsSource
+				v.Marker = "Example Sans 4.5.6"
+			},
+			"goes stale on the next edit",
+		},
+		{
+			"redistributed bytes carrying a marker anyway",
+			func(v *VendoredAsset, _ map[string]string) { v.Marker = "Example Sans 4.5.6" },
+			"could never fail",
+		},
+		{
+			"redistributed bytes with no licence text beside them",
+			func(v *VendoredAsset, _ map[string]string) { v.LicenceFile = "" },
+			"ships no copy of the licence text",
+		},
+		{
+			"a licence text that does not carry the copyright notice",
+			func(_ *VendoredAsset, f map[string]string) {
+				f["ui/shared/public/fonts/LICENSE.txt"] = "SIL OPEN FONT LICENSE Version 1.1"
+			},
+			"does not carry the notice",
+		},
+		{
+			"a licence text that is not in the tree",
+			func(_ *VendoredAsset, f map[string]string) { delete(f, "ui/shared/public/fonts/LICENSE.txt") },
+			"ships its licence text at",
+		},
+		{
+			"a redistributed file that is not in the tree",
+			func(_ *VendoredAsset, f map[string]string) { delete(f, path) },
+			"which is not in the tree",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, files := vendoredFilesFixture()
+			if tc.edit != nil {
+				tc.edit(&v, files)
+			}
+			got := mine(VendoredAssetComplaints(complianceWithVendored(v), readerFor(files)))
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("a complete entry over the bytes it records was refused:\n  %s", strings.Join(got, "\n  "))
+				}
+				return
+			}
+			for _, complaint := range got {
+				if strings.Contains(complaint, tc.want) {
+					return
+				}
+			}
+			t.Fatalf("no complaint mentioned %q; got:\n  %s", tc.want, strings.Join(got, "\n  "))
+		})
+	}
+}
+
+// TestAnIncompleteEntryDoesNotAlsoReportItsOwnFilesAsUndeclared.
+//
+// An entry missing one field used to report that field and then every
+// file it covers as undeclared material, because the sweep's claim was
+// registered after the completeness check rather than before it. One
+// accurate complaint arrived under several that would go away on their
+// own the moment it was fixed, which sends somebody declaring files that
+// are already declared. The sweep's question is whether anybody has
+// declared this file, and somebody has.
+func TestAnIncompleteEntryDoesNotAlsoReportItsOwnFilesAsUndeclared(t *testing.T) {
+	c := MustLoadCompliance()
+	if len(c.License.VendoredAssets) == 0 {
+		t.Fatal("the register is empty, so this measured nothing")
+	}
+	// Break the real register's first entry in a way that has nothing to
+	// do with its files, and drive the whole check over the real tree.
+	c.License.VendoredAssets[0].Creator = ""
+
+	var undeclared []string
+	for _, complaint := range VendoredAssetComplaints(c, RepoReader()) {
+		if strings.Contains(complaint, "compliance.json claims it") {
+			undeclared = append(undeclared, complaint)
+		}
+	}
+	if len(undeclared) != 0 {
+		t.Errorf("an entry missing its creator also reported %d of its own file(s) as undeclared, which buries the one complaint that is true:\n  %s",
+			len(undeclared), strings.Join(undeclared, "\n  "))
+	}
+}
+
+// TestEveryRedistributedFileIsClaimed is the binary half of the
+// direction that cannot be satisfied by declaring less.
+//
+// The marker sweep asks whether a file says it carries somebody else's
+// material, and a woff2 cannot answer: it is compressed, so it holds no
+// searchable string and the sweep reads straight past it. A second
+// typeface dropped into the fonts directory would ship attributed to
+// nobody with every other check in this file green. So redistributed
+// binaries are held to a stronger rule, and this is that rule's own
+// control: pointed at the real directory with nothing claimed, it has to
+// object.
+func TestEveryRedistributedFileIsClaimed(t *testing.T) {
+	got := sweepForUnclaimedFiles("ui/shared/public/fonts", map[string]string{})
+	if len(got) == 0 {
+		t.Fatal("the sweep found nothing in ui/shared/public/fonts with nothing declared, so it cannot be what stops an undeclared typeface shipping")
+	}
+	found := false
+	for _, complaint := range got {
+		if strings.Contains(complaint, ".woff2") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the sweep reported %d file(s) and none of them was a woff2, which is the thing this product actually redistributes:\n  %s",
+			len(got), strings.Join(got, "\n  "))
+	}
+}
+
+// TestTheMarkerListWouldCatchTheLicencesThisProjectActuallyCarries.
+//
+// The marker list started as the icon artwork's licence and nothing else,
+// and that was a hole rather than a scope. #631 vendored OFL-1.1 font
+// files, whose own licence text says "SIL OPEN FONT LICENSE" and never
+// says "CC BY 4.0" or "Font Awesome", so the sweep would have watched
+// them arrive undeclared and reported a clean tree.
+//
+// It is driven off the real licence text this repository ships rather
+// than off a string written here, so it cannot be satisfied by a list
+// that happens to contain whatever this test also contains.
+func TestTheMarkerListWouldCatchTheLicencesThisProjectActuallyCarries(t *testing.T) {
+	for _, rel := range []string{
+		"ui/shared/public/fonts/LICENSE.txt",
+		"ui/shared/src/design-system/typography.css",
+		"ui/shared/src/design-system/icons.tsx",
+	} {
+		data, err := os.ReadFile(Path(rel))
+		if err != nil {
+			t.Errorf("%s carries third-party licensing material and is not in the tree: %v", rel, err)
+			continue
+		}
+		matched := ""
+		for _, marker := range vendoredAttributionMarkers {
+			if strings.Contains(string(data), marker) {
+				matched = marker
+				break
+			}
+		}
+		if matched == "" {
+			t.Errorf("%s carries somebody else's licence and none of the %d marker(s) the sweep looks for appears in it, so vendoring material like this and forgetting the paperwork would be a green build",
+				rel, len(vendoredAttributionMarkers))
+		}
+	}
+}
+
+// TestTheSweepReachesTheProviderShells.
+//
+// vendoredScanRoots covered ui/shared only, and every provider shell in
+// apps/*/frontend is code that draws things and could carry vendored
+// material just as easily. An unexpanded or unmatched pattern is a
+// complaint rather than an empty result, for the reason this whole file
+// keeps returning to: a sweep that walks nothing reports a clean tree.
+func TestTheSweepReachesTheProviderShells(t *testing.T) {
+	roots, err := expandScanRoot("apps/*/frontend")
+	if err != nil {
+		t.Fatalf("the provider shells are not swept for vendored material: %v", err)
+	}
+	if len(roots) < 2 {
+		t.Errorf("apps/*/frontend expanded to %d root(s); this repository ships a shell per provider and the sweep should reach all of them", len(roots))
+	}
+	if _, err := expandScanRoot("apps/*/nothing-is-here"); err == nil {
+		t.Error("a scan root matching nothing was accepted, so a directory that moves takes the sweep with it silently")
 	}
 }
