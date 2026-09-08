@@ -52,7 +52,8 @@ the way its predecessor did.
 | `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set`. `--backup-set` takes the `source/backup-set` id `sources`, `status` and `retention` name a backup set by, and a plain set name where one source configures it. Not this list's own first column, which is the whole artifact id and a field longer; a name two sources share is refused with both ids rather than answered for one of them (issue #569) |
 | `fetch` | run one backup set's cycle on demand |
-| `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
+| `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides
+| `activity` | read the durable lifecycle log, newest first, filtered by `--backup-set` and `--severity`. `--follow` streams the live feed from the process serving this deployment instead, until interrupted, so a terminal beside a running cycle shows what it is doing rather than what it did (issues #598, #599) | |
 | `reconcile` | run FR-17 reconciliation for every backup set |
 | `validate` | re-check one artifact's durable copy, wherever it is. A copy on a storage medium is checked at the strongest verification class that costs nothing; `--content` downloads it and re-hashes it, which costs egress, so FR-31 makes that something an operator asks for (issue #435) |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
@@ -2294,6 +2295,7 @@ core/internal/
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
   retention/     GFS classification, last-known-good protection, home-medium planning, and the local prune
+  sourcecheck/   proves a backup set's SSH source can be reached, verified and listed, step by step, before a cycle needs it
   revalidate/    scheduled re-verification of artifacts that already passed
   state/         the SQLite journal: durable, idempotent transition recording
   testenv/       the environment a test has to be in before it may conclude anything from file permissions
