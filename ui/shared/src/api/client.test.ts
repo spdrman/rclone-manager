@@ -18,7 +18,7 @@
  * to.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { httpApi } from "./client";
+import { httpApi, newIdempotencyKey } from "./client";
 import { BackupManagerError, toApiErrorCode } from "./contracts";
 import type { ApiErrorCode } from "./contracts";
 import { progressPercent } from "@shared/types/operation";
@@ -978,6 +978,11 @@ describe("httpApi requests the paths the contract declares", () => {
     return JSON.parse(init.body as string) as Record<string, unknown>;
   }
 
+  function headersOf(fetchMock: ReturnType<typeof mockFetchOk>): Record<string, string> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return (init.headers ?? {}) as Record<string, string>;
+  }
+
   it("retryFailedIngestion posts to the backups path, not the quarantine one", async () => {
     // The two are different facts about a backup and different refusals,
     // so a client that sent a failed backup to the quarantine route would
@@ -1093,10 +1098,45 @@ describe("httpApi requests the paths the contract declares", () => {
     const fetchMock = mockFetchOk(undefined, 204);
     vi.stubGlobal("fetch", fetchMock);
 
-    await httpApi.runCycle("cfg_7");
+    await httpApi.runCycle("cfg_7", "key-1");
 
     expect(urlOf(fetchMock)).toBe("/api/v1/operations");
     expect(bodyOf(fetchMock)).toEqual({ action: "run_cycle", config_revision: "cfg_7" });
+    // The header, not a body field: it describes the retry rather than
+    // the operation, which is why the route reads it off the request and
+    // refuses without it. Every build of this client before #597 sent no
+    // header at all, because `post` had nowhere to put one.
+    expect(headersOf(fetchMock)["Idempotency-Key"]).toBe("key-1");
+  });
+
+  it("submits a per-set run to the same route, with the set named in the body", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.runBackupSet("nas-a/photos", "cfg_7", "key-2");
+
+    // The SAME route as runCycle above, deliberately: /operations is
+    // where durable, idempotency-keyed, revision-checked long work is
+    // started, and a second route would give this deployment two answers
+    // to how a long job begins.
+    expect(urlOf(fetchMock)).toBe("/api/v1/operations");
+    expect(bodyOf(fetchMock)).toEqual({
+      action: "run_backup_set",
+      config_revision: "cfg_7",
+      backup_set_id: "nas-a/photos"
+    });
+    expect(headersOf(fetchMock)["Idempotency-Key"]).toBe("key-2");
+  });
+
+  it("mints a different idempotency key each time newIdempotencyKey is called", () => {
+    // The key identifies a SUBMISSION, so two submissions must not
+    // collide: a repeated key across two different logical requests is
+    // refused with IDEMPOTENCY_KEY_CONFLICT, which would turn the second
+    // run an operator asked for into an error. Reuse is the caller's job
+    // and only on a retry of the same submission (useRunControls).
+    const keys = new Set(Array.from({ length: 64 }, () => newIdempotencyKey()));
+    expect(keys.size).toBe(64);
+    for (const key of keys) expect(key.length).toBeGreaterThan(15);
   });
 
   it("sends every field of a restore, on the same operations route", async () => {
@@ -1117,7 +1157,8 @@ describe("httpApi requests the paths the contract declares", () => {
       medium: "cold-store",
       windowDays: 14,
       acknowledged: true,
-      configRevision: "cfg_7"
+      configRevision: "cfg_7",
+      idempotencyKey: "key-restore"
     });
 
     expect(urlOf(fetchMock)).toBe("/api/v1/operations");
@@ -1160,7 +1201,8 @@ describe("httpApi requests the paths the contract declares", () => {
       medium: "cold-store",
       windowDays: 3,
       acknowledged: true,
-      configRevision: "cfg_7"
+      configRevision: "cfg_7",
+      idempotencyKey: "key-restore"
     });
 
     expect(Object.keys(sub).sort()).toEqual(["billing", "operationId", "status", "wait", "windowDays"]);

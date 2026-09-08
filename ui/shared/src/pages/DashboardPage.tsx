@@ -36,6 +36,8 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { RunControlNotice } from "@shared/components/RunControlNotice";
+import { useRunControls } from "@shared/hooks/useRunControls";
 import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
 import { backupSetPath } from "@shared/utilities/routes";
@@ -77,6 +79,12 @@ export function DashboardPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
+  // Issue #597. This page's copy of the run button had no onClick at all,
+  // which is the copy an operator presses first, and the two that DID
+  // have one swallowed every refusal. useRunControls is the one place a
+  // run is submitted from now, so all three say the same thing about the
+  // same press.
+  const run = useRunControls();
   // Live operation progress (§52, #95) reads the shared graph node directly
   // — App.tsx owns the one fetch/poll of it, so this page never re-fetches
   // its own copy. BackupSetsPage (#97) reads the exact same node, so the
@@ -172,13 +180,30 @@ export function DashboardPage({
         }
         actions={
           <>
-            <button className="btn" disabled={readOnly}>Run all due sets</button>
+            {/* "enabled", not "due": RunCycle walks every enabled set and
+                skips only the disabled and the edit-held, so there is no
+                schedule per set and nothing is ever due. The tooltip the
+                other two copies carry has always said the true thing;
+                the label used to contradict it. */}
+            <button
+              className="btn"
+              disabled={readOnly || run.busy}
+              title="Runs one pass over every enabled backup set."
+              onClick={run.runAll}
+            >
+              Run all enabled sets
+            </button>
             <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/sets/new")}>
               Add backup set
             </button>
           </>
         }
       />
+
+      {/* What the run button last answered. It goes above the halt banner
+          because it is about something the operator did a moment ago,
+          and the halt banner is about a state that was already true. */}
+      <RunControlNotice notice={run.notice} />
 
       {/* A set the manager cannot connect to is the highest-severity state
           in the product and is surfaced above everything else. The wording
