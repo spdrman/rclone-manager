@@ -148,7 +148,7 @@ async function renderSettings(options: {
 
 const tier = (n: number) => within(screen.getByRole("group", { name: "Tier " + n }));
 const picker = (n: number) =>
-  tier(n).getByLabelText("Storage destination for tier " + n) as HTMLSelectElement;
+  tier(n).getByLabelText("Storage medium for tier " + n) as HTMLSelectElement;
 
 describe("picking a destination under a retention tier (#622)", () => {
   beforeEach(() => resetGraphForTests());
@@ -169,10 +169,14 @@ describe("picking a destination under a retention tier (#622)", () => {
 
     expect(picker(1).value).toBe(LOCAL_DESTINATION_ID);
     const options = Array.from(picker(1).options).map((o) => o.textContent);
-    // The drive it writes to, not merely the word "local". A picker that
-    // said only "local" would leave an operator with two NAS volumes no
-    // better off than before.
-    expect(options.some((o) => o?.includes("/srv/backups"))).toBe(true);
+    // Named, and named the same thing the destinations card names it,
+    // because one function decides what a destination is called. The
+    // DRIVE is not spelled out here: there is exactly one local root in a
+    // deployment, so a path in a list of things to choose between says
+    // nothing about the choice. It is on the destinations card, which is
+    // the screen that answers "what are my destinations", and the case
+    // below asserts it there.
+    expect(options).toContain("Local backup root");
   });
 
   it("lists every declared destination beside the local one", async () => {

@@ -59,7 +59,7 @@ import {
   showCommand,
   testConnectionCommand
 } from "@shared/pages/storageDestinationCommands";
-import { destinationLabel } from "@shared/pages/retentionChain";
+import { localDriveDescription } from "@shared/pages/retentionChain";
 
 export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
@@ -436,12 +436,14 @@ function AffectedSets({ usage }: { usage: StorageMediumUsage }) {
  *  credential (see StorageMedium's own doc).
  *
  *  The local hard drive names the drive it writes to, which is the fact
- *  #622 says this list has to carry: an entry saying only "local" leaves
+ *  #622 says this LIST has to carry: an entry saying only "local" leaves
  *  an operator with two NAS volumes no better off than an entry that was
- *  missing entirely. It shares destinationLabel with the tier picker so
- *  the two surfaces cannot come to describe one destination differently. */
+ *  missing entirely. It goes here rather than into the tier picker's
+ *  label for the reason destinationLabel gives: this is the screen an
+ *  operator comes to in order to see what their destinations ARE, and a
+ *  picker is a list to choose between. */
 function describeDestination(m: StorageMedium): string {
-  if (m.isLocal) return destinationLabel(m);
+  if (m.isLocal) return localDriveDescription(m);
   const where = m.prefix ? `${m.bucket}/${m.prefix}` : m.bucket;
   return [m.type, where, m.region, m.storageClass].filter(Boolean).join(" · ");
 }

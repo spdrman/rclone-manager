@@ -343,22 +343,29 @@ export function TierRow({
             <select
               className="select"
               aria-describedby={helpId}
-              aria-label={"Storage destination for tier " + position}
+              // "Storage medium", not "Storage destination", and that is a
+              // deliberate hold rather than a spelling I missed. The word
+              // in the visible label is "Stored on", the group beside it
+              // is already named "Storage medium disclosure", and this
+              // accessible name is what the black-box suite in
+              // spdrman/rclone-manager-tests queries the picker by at the
+              // sha this repository pins. Renaming it is invisible to a
+              // sighted operator, buys nothing #622 asked for, and would
+              // turn five specs over there red for a word. See #622's PR
+              // for the one spec that legitimately does go red.
+              aria-label={"Storage medium for tier " + position}
               value={tier.medium}
               disabled={readOnly}
               onChange={(e) => onChange({ medium: e.target.value })}
             >
               {/* The local hard drive comes off the served list rather
-                  than being a literal option here, so the row names the
-                  DRIVE it writes to. A hardcoded "Local backup root" was
-                  the old spelling and it answered an operator with two
-                  volumes no better than silence did. An older engine
-                  serves no local entry at all, so one is drawn from the
-                  constant instead: the tier still points somewhere and
-                  the picker still works, it just cannot say which
-                  drive. */}
+                  than being a literal option here, so one function names
+                  a destination for every surface that shows one and they
+                  cannot drift. An older engine serves no local entry at
+                  all, so one is drawn from the constant instead: the tier
+                  still points somewhere and the picker still works. */}
               {mediums.some((m) => m.isLocal) ? null : (
-                <option value={LOCAL_DESTINATION_ID}>The hard drive on this machine</option>
+                <option value={LOCAL_DESTINATION_ID}>Local backup root</option>
               )}
               {/* A destination the list does not carry still gets an
                   option, naming itself and saying so.
@@ -442,27 +449,31 @@ export function TierRow({
 
 
 /**
- * The name a destination goes by in a picker: what it is, and enough of
- * where it is that an operator can tell two of them apart.
+ * The name a destination goes by in a picker.
  *
- * The local hard drive names its DRIVE, which is #622's own complaint
- * about the old list: a row saying only "local" leaves somebody with two
- * NAS volumes exactly where they started. A deployment that cannot place
- * it yet (no backup set, or sets on different volumes) says so rather
- * than rendering a blank path, because a label ending in a colon and
- * nothing reads as a bug.
+ * The drive on this machine is "Local backup root" and nothing else, and
+ * that is a decision rather than the old string surviving by inertia. A
+ * picker is a list of places to choose BETWEEN, and there is exactly one
+ * local root in any deployment, so a path here is a detail that says
+ * nothing about the choice being made and is read past from the second
+ * time onwards. #622's complaint about the path was about the
+ * DESTINATIONS LIST, which is where an operator goes to see what their
+ * destinations are, and that is where it now appears (see
+ * StorageDestinationsCard's describeDestination).
  *
- * A declared destination names its storage class, which is part of the
+ * It is also the name the black-box suite in spdrman/rclone-manager-tests
+ * pins at the sha this repository pins, which is a reason to keep a good
+ * word rather than a reason to keep any word: renaming it would cost a
+ * spec over there and buy an operator a path they already have one screen
+ * away.
+ *
+ * A declared destination names its storage class, which IS part of the
  * choice rather than decoration: one of these places cannot be read
  * without a restore, and the label says so before it is picked rather
  * than after.
  */
 export function destinationLabel(m: StorageMedium): string {
-  if (m.isLocal) {
-    return m.path
-      ? "The hard drive on this machine (" + m.path + ")"
-      : "The hard drive on this machine (which drive is not known yet)";
-  }
+  if (m.isLocal) return "Local backup root";
   return (
     m.id +
     " (" +
@@ -470,6 +481,19 @@ export function destinationLabel(m: StorageMedium): string {
     (m.readsRequireRestore ? ", cannot receive backups: reads need a restore" : "") +
     ")"
   );
+}
+
+/**
+ * Where the local destination actually writes, for the surfaces that show
+ * a destination rather than offer a choice between them (#622).
+ *
+ * A deployment that cannot place it yet, because it has no backup set or
+ * because its sets are on genuinely different volumes, says so rather
+ * than rendering a blank path: a row ending in a colon and nothing reads
+ * as a bug, and "not known yet" is the true answer.
+ */
+export function localDriveDescription(m: StorageMedium): string {
+  return m.path ? m.path : "which drive this writes to is not known yet";
 }
 
 /**

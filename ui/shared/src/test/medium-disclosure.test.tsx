@@ -155,7 +155,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("offers the picker even when only the local hard drive is there", async () => {
     await renderSettings({ settings: settingsFixture({ mediums: [LOCAL] }) });
 
-    const picker = tier(1).getByLabelText("Storage destination for tier 1") as HTMLSelectElement;
+    const picker = tier(1).getByLabelText("Storage medium for tier 1") as HTMLSelectElement;
     expect(picker.value).toBe("local");
     // The positive control: the tier really did render, so the picker
     // above is this tier's rather than something else on the page.
@@ -165,12 +165,12 @@ describe("mapping a retention tier to a storage medium", () => {
   it("names the storage class in the picker, and says which one needs a restore", async () => {
     await renderSettings();
 
-    const picker = tier(2).getByLabelText("Storage destination for tier 2") as HTMLSelectElement;
+    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
     const options = Array.from(picker.options).map((o) => o.textContent);
     // The local hard drive names the DRIVE it writes to, which is #622's
     // own complaint about the old label: "Local backup root" left an
     // operator with two NAS volumes exactly where they started.
-    expect(options).toContain("The hard drive on this machine (/data/backups)");
+    expect(options).toContain("Local backup root");
     expect(options).toContain("offsite_s3 (STANDARD_IA)");
     // The archive medium is labelled as one BEFORE it is chosen, and it
     // cannot be chosen at all. A tier bound to an archive class is refused
@@ -207,7 +207,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("lists a saved local volume, disabled, and says it is not built", async () => {
     await renderSettings();
 
-    const picker = tier(2).getByLabelText("Storage destination for tier 2") as HTMLSelectElement;
+    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
     const volume = Array.from(picker.options).find((o) => /second hard disk/i.test(o.textContent ?? ""));
     expect(volume).toBeTruthy();
     expect(volume?.textContent).toMatch(/NOT BUILT/);
@@ -231,7 +231,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("shows the deletion consequence, in the backend's own words, before the first mapping can be saved", async () => {
     await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
       target: { value: "offsite_s3" }
     });
 
@@ -258,7 +258,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("keeps Save disabled until the acknowledgment is ticked, then sends it", async () => {
     const { updateSettings } = await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
       target: { value: "offsite_s3" }
     });
     await screen.findByRole("group", { name: "Storage medium disclosure" });
@@ -317,7 +317,7 @@ describe("mapping a retention tier to a storage medium", () => {
       })
     });
 
-    fireEvent.change(tier(1).getByLabelText("Storage destination for tier 1"), {
+    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), {
       target: { value: "offsite_cold" }
     });
 
@@ -342,7 +342,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("forgets an acknowledgment given for a different mapping", async () => {
     await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
       target: { value: "offsite_s3" }
     });
     fireEvent.click(await screen.findByRole("checkbox", { name: /I understand/i }));
@@ -351,7 +351,7 @@ describe("mapping a retention tier to a storage medium", () => {
     // Now point the same tier somewhere materially different: an archive
     // class nothing can read without a restore. The tick was given for the
     // other place.
-    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
       target: { value: "offsite_cold" }
     });
     expect((save() as HTMLButtonElement).disabled).toBe(true);

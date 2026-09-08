@@ -122,7 +122,7 @@ async function renderSettings(preflight: ReturnType<typeof vi.fn>) {
 const tier = (n: number) => within(screen.getByRole("group", { name: "Tier " + n }));
 
 async function pointMonthlyAtTheMedium() {
-  fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
+  fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
     target: { value: "offsite_s3" }
   });
   await screen.findByRole("group", { name: "Storage medium disclosure" });
