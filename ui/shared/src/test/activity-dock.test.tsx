@@ -17,7 +17,15 @@ import { MemoryRouter } from "react-router-dom";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
-import { ActivityDock, dockEntries, dockPrefix, dockText, foldReading, restartRule } from "@shared/components/ActivityDock";
+import {
+  ActivityDock,
+  dockEntries,
+  dockPrefix,
+  dockText,
+  environmentPreamble,
+  foldReading,
+  restartRule
+} from "@shared/components/ActivityDock";
 import type { DockEntry } from "@shared/components/ActivityDock";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import type { DeploymentActivity, LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
@@ -177,7 +185,8 @@ describe("the text an operator takes away", () => {
           fields: {
             actor: "alice",
             route: "PATCH /api/v1/backup-sets/{source}/{set}",
-            command: "$ backup-manager backup-set patch api-server/var-backups --stale-after 48h"
+            // Bare on the wire: the prompt is this panel's to draw.
+            command: "backup-manager backup-set patch api-server/var-backups --stale-after 48h"
           }
         })
       },
@@ -188,8 +197,67 @@ describe("the text an operator takes away", () => {
     const lines = text.split("\n");
     expect(lines[0]).toContain("[api-server/var-backups]");
     expect(lines[1]).toContain("[you]");
-    expect(text).toContain("$ backup-manager backup-set patch api-server/var-backups --stale-after 48h");
+    expect(text).toContain("\n$ backup-manager backup-set patch api-server/var-backups --stale-after 48h");
     expect(lines[lines.length - 1]).toContain("engine restarted");
+  });
+
+  it("draws the prompt in front of a command the wire sends bare, and never twice", () => {
+    // The `command` field is a command, not a screen: a script reading
+    // the journal hands it to a shell as is. So the "$ " is drawn here,
+    // once, the same way the "# " is drawn in front of a gap.
+    const text = dockText(
+      [
+        {
+          kind: "event",
+          event: event(1, {
+            event: "api_action",
+            scope: "deployment",
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backup-manager catalog rebuild" }
+          })
+        }
+      ],
+      "alice"
+    );
+    expect(text).toContain("\n$ backup-manager catalog rebuild");
+    expect(text).not.toContain("$ $");
+  });
+
+  it("says a command is not runnable as printed when the engine says so, from the field rather than the text", () => {
+    const text = dockText(
+      [
+        {
+          kind: "event",
+          event: event(1, {
+            event: "api_action",
+            scope: "deployment",
+            fields: {
+              actor: "alice",
+              route: "PUT /api/v1/backup-sets/{source}/{set}/retention",
+              command: "backup-manager backup-set retention api-server/var-backups --policy-file <a file holding these tiers as a retention: block>",
+              command_runnable: "false"
+            }
+          })
+        }
+      ],
+      "alice"
+    );
+    expect(text).toContain("$ backup-manager backup-set retention");
+    expect(text).toContain("#   not runnable as printed");
+    // And the control: a runnable command does not carry the note.
+    const runnable = dockText(
+      [
+        {
+          kind: "event",
+          event: event(2, {
+            event: "api_action",
+            scope: "deployment",
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backup-manager catalog rebuild" }
+          })
+        }
+      ],
+      "alice"
+    );
+    expect(runnable).not.toContain("not runnable");
   });
 
   it("prints the gap for an action with no command rather than nothing at all", () => {
@@ -214,6 +282,33 @@ describe("the text an operator takes away", () => {
     );
     expect(text).toContain("# no backup-manager equivalent yet · POST /api/v1/operations");
     expect(text).toContain("not in this engine");
+  });
+
+  it("puts the environment the commands need first, said once, and never the password", () => {
+    const preamble = environmentPreamble("http://nas.local:8080", "alice");
+    expect(preamble).toBe(
+      "export BACKUP_MANAGER_API_URL=http://nas.local:8080 BACKUP_MANAGER_API_USERNAME=alice BACKUP_MANAGER_API_PASSWORD=<your password>"
+    );
+
+    // Composed from the origin the page was loaded from rather than by
+    // the engine, because the engine does not know the address a reader
+    // would type at their own shell; behind a proxy it is not what the
+    // engine listens on.
+    expect(environmentPreamble("https://nas.example.com", null)).toBe(
+      "export BACKUP_MANAGER_API_URL=https://nas.example.com BACKUP_MANAGER_API_USERNAME=<the administrator you sign in as> BACKUP_MANAGER_API_PASSWORD=<your password>"
+    );
+    // A name a shell would split is quoted, so the line is still one an
+    // operator can paste.
+    expect(environmentPreamble("http://nas.local:8080", "the admin")).toContain("BACKUP_MANAGER_API_USERNAME='the admin'");
+
+    const text = dockText(
+      [{ kind: "event", event: event(1, { event: "api_action", scope: "deployment", fields: { actor: "alice", command: "backup-manager catalog rebuild" } }) }],
+      "alice",
+      preamble
+    );
+    expect(text.split("\n")[0]).toBe(preamble);
+    // Once, at the top, and not again beside the command.
+    expect(text.split("BACKUP_MANAGER_API_URL").length).toBe(2);
   });
 });
 
@@ -330,7 +425,7 @@ describe("the panel itself", () => {
               scope: "deployment",
               event: "api_action",
               message: "patch /settings",
-              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "$ backup-manager settings patch --timezone Europe/Berlin" }
+              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "backup-manager settings patch --timezone Europe/Berlin" }
             })
           ])
         })
@@ -341,7 +436,20 @@ describe("the panel itself", () => {
       await user.click(screen.getByRole("button", { name: /^copy$/i }));
     });
     expect(writeText).toHaveBeenCalledTimes(1);
-    expect(writeText.mock.calls[0][0]).toContain("$ backup-manager settings patch --timezone Europe/Berlin");
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("$ backup-manager settings patch --timezone Europe/Berlin");
+    // The first line of what is copied is the environment the command
+    // needs, built from this page's own origin, so what is pasted is
+    // runnable under it.
+    expect(copied.split("\n")[0]).toBe(environmentPreamble(window.location.origin, null));
     vi.unstubAllGlobals();
+  });
+
+  it("draws the environment header at the top of the scrollback, from this page's own origin", async () => {
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backup-manager starting" })]) })]));
+    await screen.findByText(/backup-manager starting/);
+    const header = screen.getByText(/^export BACKUP_MANAGER_API_URL=/);
+    expect(header.textContent).toContain("BACKUP_MANAGER_API_URL=" + window.location.origin);
+    expect(header.textContent).toContain("BACKUP_MANAGER_API_PASSWORD=<your password>");
   });
 });

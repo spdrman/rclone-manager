@@ -433,25 +433,32 @@ var routes = map[string]entry{
 // backupSetCreateCommand is `backup-set create`, shared by POST
 // /backup-sets and POST /system/first-run because they write the same
 // thing: usage() puts the first config.yaml on this same verb (#176).
+//
+// Every string field is echoed only when the request carried it. The case
+// that matters is a create REFUSED for a missing field: the line beside
+// this one says what was missing, and this one has to be the command that
+// was asked for, not --user followed by an empty string, which is a
+// different command (an empty user rather than no user) and not one
+// anybody can fill in and run.
 func backupSetCreateCommand(spec apicontract.BackupSetSpec, runNow, acknowledgeRepoint bool) *cmd {
 	c := newCmd("backup-set", "create", spec.SourceName+"/"+spec.Name)
-	c.flag("host", spec.Host)
+	c.flagIfSet("host", spec.Host)
 	if spec.Port > 0 {
 		c.flag("port", itoa(spec.Port))
 	}
-	c.flag("user", spec.User)
-	c.flag("remote-path", spec.RemotePath)
-	c.flag("local-path", spec.LocalPath)
+	c.flagIfSet("user", spec.User)
+	c.flagIfSet("remote-path", spec.RemotePath)
+	c.flagIfSet("local-path", spec.LocalPath)
 	// An id, never key material: the key itself was imported by its own
 	// request and this names the copy this deployment already holds.
-	c.flag("ssh-key-id", spec.SSHKeyID)
+	c.flagIfSet("ssh-key-id", spec.SSHKeyID)
 	// A known_hosts line is a PUBLIC host key. It is the one long value
 	// on this line and it is deliberately printed rather than placed
 	// behind a placeholder: an operator pasting this command needs to
 	// pin the same key, and hiding it would make the command unrunnable
 	// for no gain.
-	c.flag("known-hosts-line", spec.KnownHostsLine)
-	c.flag("completion-strategy", spec.CompletionStrategy)
+	c.flagIfSet("known-hosts-line", spec.KnownHostsLine)
+	c.flagIfSet("completion-strategy", spec.CompletionStrategy)
 	if len(spec.Include) > 0 {
 		c.flag("include", strings.Join(spec.Include, ","))
 	}

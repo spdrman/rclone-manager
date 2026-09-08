@@ -73,7 +73,6 @@ package cliecho
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -109,8 +108,8 @@ type Line struct {
 	Route string
 
 	// Command is the argv an operator could have typed, starting with
-	// "backup-manager", unquoted. Nil when there is no equivalent. Text
-	// below is what gets printed; this is what a parser is fed.
+	// "backup-manager", unquoted. Nil when there is no equivalent. Shell
+	// below is what goes on the wire; this is what a parser is fed.
 	Command []string
 
 	// Gap and GapDetail are why there is no equivalent. Gap is the short
@@ -124,29 +123,32 @@ type Line struct {
 	Placeholder bool
 }
 
-// Text is the line as it appears in the terminal and in an exported file.
+// Shell is the command as one line an operator can paste: the argv,
+// shell-quoted, and nothing else. Empty when there is no command.
 //
-// A command is prefixed "$ " and shell-quoted so it is copy-pasteable as
-// typed. A gap is prefixed "# " so a filtered export is a shell script
-// with its gaps sitting in it as comments, and so somebody can grep for
-// them.
-func (l Line) Text() string {
+// No "$ " in front of it and no note after it, deliberately. This string
+// is what goes on the wire as the event's `command` field and into the
+// durable journal, and a field called command carries a command: a script
+// reading `activity --json` gets something it can hand to a shell, not a
+// screen. The prompt a terminal draws in front of a command and the "# "
+// it draws in front of a gap are the terminal's, the same way the
+// timestamp and the [actor] prefix are, and they are drawn from the same
+// fields by every client (the dock today, `activity --follow` when it
+// exists) so the two agree. Whether the line is runnable as printed is
+// data too, on command_runnable, rather than a sentence inside this one.
+//
+// The quoting stays, because it is part of the command and not of the
+// display: a known_hosts line has spaces in it, and an argv can only be
+// one string if the words that need it are quoted.
+func (l Line) Shell() string {
 	if len(l.Command) == 0 {
-		out := "# " + l.Gap + " · " + l.Route
-		if l.GapDetail != "" {
-			out += "\n#   " + l.GapDetail
-		}
-		return out
+		return ""
 	}
 	quoted := make([]string, 0, len(l.Command))
 	for _, arg := range l.Command {
 		quoted = append(quoted, shellQuote(arg))
 	}
-	out := "$ " + strings.Join(quoted, " ")
-	if l.Placeholder {
-		out += "\n#   not runnable as printed: fill in the value in angle brackets"
-	}
-	return out
+	return strings.Join(quoted, " ")
 }
 
 // gapNoEquivalent is the one wording every gap line uses, so an operator
@@ -274,6 +276,22 @@ func (c *cmd) flag(name, value string) *cmd {
 	return c
 }
 
+// flagIfSet appends --name value only when there is a value.
+//
+// It is for a request whose fields are plain strings, where empty is the
+// only way to say absent. A create refused for a missing user must not
+// echo --user with an empty string after it: that is not "no user", it
+// is an empty user, which is a different command from the one that was
+// asked for and one that would be refused for a different reason.
+// Skipping the field leaves a line that says exactly what the request
+// said, and one an operator can fill in and run.
+func (c *cmd) flagIfSet(name, value string) *cmd {
+	if value == "" {
+		return c
+	}
+	return c.flag(name, value)
+}
+
 // bare appends a boolean flag that is only ever passed, never assigned.
 func (c *cmd) bare(name string) *cmd {
 	c.argv = append(c.argv, "--"+name)
@@ -363,21 +381,13 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// EnvironmentPreamble is the one thing every command below needs beyond
-// its own argv, said once by the panel rather than repeated on every line.
-//
-// The password is a placeholder rather than a value for the reason
-// usage() already gives for these being environment variables at all: a
-// password on a command line is in every process listing on the host. And
-// this panel is exportable and copy-to-clipboard by design, which is the
-// same argument one step further along.
-func EnvironmentPreamble(apiURL, username string) string {
-	if apiURL == "" {
-		apiURL = "http://127.0.0.1:8080"
-	}
-	if username == "" {
-		username = "<the administrator you sign in as>"
-	}
-	return fmt.Sprintf("export BACKUP_MANAGER_API_URL=%s BACKUP_MANAGER_API_USERNAME=%s BACKUP_MANAGER_API_PASSWORD=<your password>",
-		shellQuote(apiURL), shellQuote(username))
-}
+// What the printed commands need beyond their own argv (the three
+// BACKUP_MANAGER_API_* variables usage() names) is deliberately NOT
+// composed here. The engine does not know the address the reader would
+// type at their own shell to reach it: it knows what it is listening on,
+// which behind a reverse proxy or a Synology package is not that. The
+// browser does know it, as window.location.origin, and it knows the
+// session's own name, so the dock composes that one line itself
+// (ui/shared/src/components/ActivityDock.tsx, environmentPreamble). Every
+// command line here stays clean of it, which is what makes them pasteable
+// under a preamble said once.

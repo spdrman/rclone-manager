@@ -41,8 +41,10 @@ type APIAction struct {
 	BackupSetID string
 
 	// Command is the `backup-manager` invocation that would have done the
-	// same thing, or empty when there is none. Gap and GapDetail are why
-	// there is none.
+	// same thing, as Line.Shell renders it: shell-quoted, with no prompt
+	// in front and no note after, so what lands in the journal is a
+	// command and not a screen. Empty when there is none, and Gap and
+	// GapDetail are why there is none.
 	Command     string
 	Gap         string
 	GapDetail   string

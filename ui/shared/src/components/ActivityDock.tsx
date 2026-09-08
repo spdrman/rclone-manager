@@ -226,6 +226,38 @@ export function restartRule(at: string): string {
   return "──── engine restarted at " + clock(at) + " · everything above belongs to a process that has gone ────";
 }
 
+/** One word as a shell would need it typed: bare when it is made only of
+ *  characters a shell leaves alone, single-quoted otherwise. Mirrors
+ *  core/cliecho's shellQuote for the two values this file quotes. */
+function shellWord(s: string): string {
+  if (s === "") return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s)) return s;
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * What every command below needs beyond its own argv, said once at the
+ * top of the panel rather than repeated on every line.
+ *
+ * It is composed here and not in the engine, because the engine does not
+ * have the information. It knows what address it is listening on, and
+ * behind a reverse proxy or inside a Synology package that is not the
+ * address the reader would type at their own shell. The browser does
+ * know it: it is the origin this page was loaded from. And it knows the
+ * session's own name, which is the account the commands would run as.
+ *
+ * The password is a placeholder for the reason usage() already gives for
+ * these being environment variables at all: a password on a command line
+ * is in every process listing on the host. This panel is exportable and
+ * copy-to-clipboard by design, which is the same argument one step
+ * further along, so the line never carries one and never could.
+ */
+export function environmentPreamble(origin: string, viewer: string | null): string {
+  const url = shellWord(origin === "" ? "http://127.0.0.1:8080" : origin);
+  const user = viewer === null || viewer === "" ? "<the administrator you sign in as>" : shellWord(viewer);
+  return "export BACKUP_MANAGER_API_URL=" + url + " BACKUP_MANAGER_API_USERNAME=" + user + " BACKUP_MANAGER_API_PASSWORD=<your password>";
+}
+
 /** The dock's text, for the clipboard and for the saved file, honouring
  *  whatever filter is on.
  *
@@ -233,17 +265,18 @@ export function restartRule(at: string): string {
  * argument its own doc already makes: one builder, so what an operator
  * pastes into an issue is what they were looking at. The prefixes and the
  * restart rules are laid in around it here, because they are this panel's
- * and no strip has them. */
-export function dockText(entries: DockEntry[], viewer: string | null): string {
-  return entries
-    .map((entry) => {
-      if (entry.kind === "restart") return restartRule(entry.at);
-      const prefix = dockPrefix(entry.event, viewer);
-      const [first, ...rest] = logText([entry.event]).split("\n");
-      const head = first.replace(/^(\S+)\s/, "$1 [" + prefix.label + "] ");
-      return [head, ...rest].join("\n");
-    })
-    .join("\n");
+ * and no strip has them. The preamble, when given, is the first line for
+ * the same reason it is the first line on screen: the commands under it
+ * are only runnable with it said once above them. */
+export function dockText(entries: DockEntry[], viewer: string | null, preamble: string | null = null): string {
+  const lines = entries.map((entry) => {
+    if (entry.kind === "restart") return restartRule(entry.at);
+    const prefix = dockPrefix(entry.event, viewer);
+    const [first, ...rest] = logText([entry.event]).split("\n");
+    const head = first.replace(/^(\S+)\s/, "$1 [" + prefix.label + "] ");
+    return [head, ...rest].join("\n");
+  });
+  return (preamble === null ? lines : [preamble, ...lines]).join("\n");
 }
 
 function readStored(key: string): string | null {
@@ -347,6 +380,10 @@ export function ActivityDock() {
   const sets = useMemo(() => (live.data?.sets ?? []).map((s) => s.setId), [live.data]);
   const all = useMemo(() => dockEntries(history, held), [history, held]);
   const shown = useMemo(() => all.filter((e) => passesFilter(e, filter, viewer)), [all, filter, viewer]);
+  // The origin this page was loaded from is the address the reader would
+  // type, which is the one fact the engine cannot know (see
+  // environmentPreamble). Read once per viewer rather than per render.
+  const preamble = useMemo(() => environmentPreamble(window.location.origin, viewer), [viewer]);
 
   const problems = useMemo(() => {
     let errors = 0;
@@ -360,12 +397,12 @@ export function ActivityDock() {
   }, [all]);
 
   const copy = useCallback(() => {
-    void navigator.clipboard?.writeText(dockText(shown, viewer));
+    void navigator.clipboard?.writeText(dockText(shown, viewer, preamble));
     setCopied(true);
-  }, [shown, viewer]);
+  }, [shown, viewer, preamble]);
 
   const save = useCallback(() => {
-    const blob = new Blob([dockText(shown, viewer)], { type: "text/plain" });
+    const blob = new Blob([dockText(shown, viewer, preamble)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -373,7 +410,7 @@ export function ActivityDock() {
     anchor.download = "backup-manager-terminal-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [shown, viewer]);
+  }, [shown, viewer, preamble]);
 
   const dropped = held?.dropped ?? false;
 
@@ -468,6 +505,7 @@ export function ActivityDock() {
           height={height}
           onResize={setHeight}
           dropped={dropped}
+          preamble={preamble}
         />
       ) : null}
     </section>
@@ -510,13 +548,15 @@ function DockLog({
   viewer,
   height,
   onResize,
-  dropped
+  dropped,
+  preamble
 }: {
   entries: DockEntry[];
   viewer: string | null;
   height: number;
   onResize(next: number): void;
   dropped: boolean;
+  preamble: string;
 }) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const following = useRef(true);
@@ -568,6 +608,13 @@ function DockLog({
         onScroll={onScroll}
         style={{ height, maxHeight: height, overflow: "auto" }}
       >
+        {/* The environment every command below needs, said once here
+            rather than on every line, so each command stays clean and
+            runnable under it. Muted, because it is a header and not an
+            event: nothing happened at it. */}
+        <div className="activity-log__time" style={{ color: "var(--text-3)" }}>
+          {preamble}
+        </div>
         {/* One line at the top of the scrollback rather than a toast that
             disappears: what is gone is gone, and the durable record has a
             name. */}

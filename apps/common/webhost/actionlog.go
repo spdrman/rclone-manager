@@ -122,9 +122,10 @@ func recordActions(recorder ActionRecorder) func(http.Handler) http.Handler {
 				GapDetail:   line.GapDetail,
 				Placeholder: line.Placeholder,
 			}
-			if len(line.Command) > 0 {
-				action.Command = line.Text()
-			}
+			// Bare: the "$ " a terminal draws in front of it is the
+			// terminal's, and a script reading the journal wants a
+			// command it can run, not a screen (see cliecho.Line.Shell).
+			action.Command = line.Shell()
 			recorder.RecordAPIAction(r.Context(), action)
 		})
 	}

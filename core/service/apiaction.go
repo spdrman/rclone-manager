@@ -86,6 +86,17 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 	// Exactly one of these two, always. A terminal prints the command
 	// when there is one and the marked gap line when there is not, and
 	// never nothing: silence is the thing this feature exists to abolish.
+	//
+	// Both halves go out as data and neither as a rendered line. `command`
+	// is the shell-quoted invocation with no "$ " in front of it, and the
+	// gap is its wording plus its detail with no "# " in front of either;
+	// the route is already on the line. A terminal draws those prefixes,
+	// the same way it draws the timestamp and the [actor], so the dock and
+	// `activity --follow` render the same fields the same way and a script
+	// reading `activity --json` gets a command it can run rather than a
+	// screen it has to parse. Whether that command is runnable as printed
+	// is data as well, on command_runnable, rather than a sentence inside
+	// the command.
 	switch {
 	case action.Command != "":
 		attrs = append(attrs, slog.String("command", action.Command))

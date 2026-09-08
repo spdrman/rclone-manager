@@ -199,7 +199,10 @@ func TestAnAPIActionIsRecordedWithItsActorAndItsCommand(t *testing.T) {
 	if got.BackupSetID != "production/postgres-primary" {
 		t.Errorf("the action names backup set %q, so it would land on the wrong feed", got.BackupSetID)
 	}
-	if want := "$ backup-manager backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
+	// Bare, with no prompt: this is what reaches the journal, and a script
+	// reading it wants a command it can hand to a shell. The "$ " is the
+	// terminal's to draw, the same way it draws "# " in front of a gap.
+	if want := "backup-manager backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
 		t.Errorf("the action echoes\n  %s\nwant\n  %s", got.Command, want)
 	}
 	if got.Status != http.StatusOK {

@@ -42,7 +42,7 @@ func TestRecordAPIAction_ReachesTheDeploymentsFeedWithItsCommand(t *testing.T) {
 		Method:  "PATCH",
 		Route:   "/settings",
 		Status:  200,
-		Command: "$ backup-manager settings patch --timezone Europe/Berlin",
+		Command: "backup-manager settings patch --timezone Europe/Berlin",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -88,7 +88,7 @@ func TestRecordAPIAction_LandsOnTheSetItWasAbout(t *testing.T) {
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 200, BackupSetID: "alpha/nightly",
-		Command: "$ backup-manager backup-set patch alpha/nightly --stale-after 48h",
+		Command: "backup-manager backup-set patch alpha/nightly --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -156,7 +156,7 @@ func TestRecordAPIAction_AFailureIsAnErrorAndARefusalIsAWarning(t *testing.T) {
 
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Method: "POST", Route: "/catalog/rebuild", Status: 500, ErrorCode: "INTERNAL",
-		Command: "$ backup-manager catalog rebuild",
+		Command: "backup-manager catalog rebuild",
 	})
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
 	if err != nil {

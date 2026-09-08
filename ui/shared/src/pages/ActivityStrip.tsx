@@ -198,8 +198,17 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       // logText is built on this function.
       const parts = [e.message || e.event];
       if (f.detail) parts.push("  " + f.detail);
-      if (f.command) parts.push(f.command);
-      else if (f.command_gap) {
+      // The wire carries the command bare and the gap as its wording plus
+      // its detail, and this draws the "$ " and the "# ". The prompt is
+      // the terminal's in the same way the timestamp is: a script reading
+      // the journal wants a command it can hand to a shell, and a
+      // `command` field that carried a prompt would be a screen it had to
+      // parse. Every client draws the same prefixes from the same fields,
+      // so this and `activity --follow` agree without sharing code.
+      if (f.command) {
+        parts.push("$ " + f.command);
+        if (f.command_runnable === "false") parts.push("#   not runnable as printed: fill in the value in angle brackets");
+      } else if (f.command_gap) {
         parts.push("# " + f.command_gap + (f.route ? " · " + f.route : ""));
         if (f.command_gap_detail) parts.push("#   " + f.command_gap_detail);
       }
