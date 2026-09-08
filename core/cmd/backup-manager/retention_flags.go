@@ -39,6 +39,7 @@ type retentionFlags struct {
 	weeklyMonths  *int
 	monthlyMonths *int
 	tiers         *retentionTierFlag
+	tierMediums   *retentionTierMediumFlag
 	protect       *bool
 }
 
@@ -95,6 +96,71 @@ func (f *retentionTierFlag) Set(spec string) error {
 	return nil
 }
 
+// tierMediumOverride is one --tier-medium NAME=MEDIUM_ID pairing: the
+// name of a tier this command line supplied, and the storage medium its
+// artifacts live on.
+//
+// The medium is carried as the operator typed it and is never inspected
+// here. Whether it is spelled legally, whether it is the reserved local
+// id, and whether any storage_mediums entry declares it are all decided
+// by the config layer, in the identical words the same mistake written
+// into config.yaml is refused with. A copy of any of those rules here
+// would be a second rule free to disagree with the first.
+type tierMediumOverride struct {
+	tier   string
+	medium string
+}
+
+// retentionTierMediumFlag collects the repeatable -tier-medium flag.
+//
+// A repeatable flag rather than a fifth colon-separated position on
+// -tier, for the reason retentionTierFlag.Set already gives about
+// "days=14": the three-field form stays readable, and the value stays
+// attached to the thing it belongs to.
+//
+// Set decides only what is decidable from the one string it is handed:
+// the shape, and that the same tier is not given two destinations. It
+// cannot decide whether a -tier of that name was given, because flags
+// are parsed in the order they were typed and "-tier-medium daily=x
+// -tier daily:day:7" is a legal command line. That check is
+// applyRetentionOverrides', which sees the whole resolved set at once.
+type retentionTierMediumFlag struct {
+	pairs []tierMediumOverride
+}
+
+func (f *retentionTierMediumFlag) String() string {
+	specs := make([]string, len(f.pairs))
+	for i, p := range f.pairs {
+		specs[i] = p.tier + "=" + p.medium
+	}
+	return strings.Join(specs, ",")
+}
+
+func (f *retentionTierMediumFlag) Set(spec string) error {
+	name, medium, ok := strings.Cut(spec, "=")
+	if !ok {
+		return fmt.Errorf("tier medium %q must be written NAME=MEDIUM_ID, naming a tier this command line's -tier flags gave and the storage medium its artifacts live on", spec)
+	}
+	if name == "" {
+		return fmt.Errorf("tier medium %q names no tier before the =", spec)
+	}
+	if medium == "" {
+		// Not read as "put this tier on local". Local is spelled by
+		// leaving the medium out entirely, exactly as it is in the config
+		// file (config.RetentionTier.Medium's own doc), so an empty value
+		// here is a half-typed flag rather than a second spelling of the
+		// default.
+		return fmt.Errorf("tier medium %q names no medium after the =; a tier lives on the local backup root by not naming a medium at all, so leave the whole flag out rather than passing it empty", spec)
+	}
+	for _, p := range f.pairs {
+		if p.tier == name {
+			return fmt.Errorf("tier medium %q gives tier %q a second destination; it already has %q, and a tier's artifacts live in one place", spec, name, p.medium)
+		}
+	}
+	f.pairs = append(f.pairs, tierMediumOverride{tier: name, medium: medium})
+	return nil
+}
+
 // registerRetentionFlags adds the retention override flags to fs. It
 // does not parse anything; call fs.Parse and then resolveRetentionFlags
 // once parsing has happened, so protectLastKnownGood's "was --
@@ -106,6 +172,12 @@ func registerRetentionFlags(fs *flag.FlagSet) *retentionFlags {
 		"(granularity: day, week, month, quarter, half_year, year, or days=N for a custom period). Repeatable, and it "+
 		"replaces the whole chain: -tier cannot be combined with -daily-days, -weekly-months or -monthly-months, which "+
 		"are sugar for the default chain. Unset leaves the loaded config's own policy")
+	tierMediums := &retentionTierMediumFlag{}
+	fs.Var(tierMediums, "tier-medium", "name the storage medium one -tier lives on, written NAME=MEDIUM_ID (EPIC E, FR-27). "+
+		"Repeatable, at most once per tier, and refused when no -tier of that name was given. A tier with no -tier-medium "+
+		"lives on the backup set's own local path, which is how local is spelled in the config file too. The id is handed "+
+		"to the config layer unchecked, so one no storage_mediums entry declares is refused in the same words config.yaml "+
+		"would refuse it in")
 	return &retentionFlags{
 		fs:            fs,
 		timezone:      fs.String("timezone", "", "override retention.timezone (an IANA name; unset leaves the loaded config's value)"),
@@ -114,6 +186,7 @@ func registerRetentionFlags(fs *flag.FlagSet) *retentionFlags {
 		weeklyMonths:  fs.Int("weekly-months", 0, "override retention.weekly_months (unset, or 0, leaves the loaded config's value)"),
 		monthlyMonths: fs.Int("monthly-months", 0, "override retention.monthly_months (unset, or 0, leaves the loaded config's value)"),
 		tiers:         tiers,
+		tierMediums:   tierMediums,
 		// Default true is irrelevant unless the flag is actually passed:
 		// resolveRetentionFlags below only ever reads this pointer's value
 		// when fs.Visit confirms the flag was set on the command line, so
@@ -139,6 +212,7 @@ type retentionOverrides struct {
 	weeklyMonths         int
 	monthlyMonths        int
 	tiers                []config.RetentionTier
+	tierMediums          []tierMediumOverride
 	protectLastKnownGood *bool
 }
 
@@ -155,6 +229,7 @@ func resolveRetentionFlags(rf *retentionFlags) retentionOverrides {
 		weeklyMonths:  *rf.weeklyMonths,
 		monthlyMonths: *rf.monthlyMonths,
 		tiers:         rf.tiers.tiers,
+		tierMediums:   rf.tierMediums.pairs,
 	}
 	rf.fs.Visit(func(f *flag.Flag) {
 		if f.Name == "protect-last-known-good" {
@@ -211,6 +286,9 @@ func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
 	case len(o.tiers) == 0 && len(r.Tiers) > 0 && scalars:
 		return fmt.Errorf("-daily-days, -weekly-months and -monthly-months are sugar for the default chain and cannot override a config file that already defines retention.tiers; pass -tier to replace the chain instead")
 	}
+	if err := tierMediumsNameAGivenTier(o); err != nil {
+		return err
+	}
 
 	// Folded onto a copy, so a refusal from config.ValidateRetention
 	// below leaves the caller's policy untouched too. The copy is shallow
@@ -245,6 +323,23 @@ func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
 	if len(o.tiers) > 0 {
 		next.Tiers = append([]config.RetentionTier(nil), o.tiers...)
 		next.DailyDays, next.WeeklyMonths, next.MonthlyMonths = 0, 0, 0
+		// -tier-medium writes onto the chain -tier just supplied, never
+		// onto the file's own, which is why it lives inside this branch:
+		// with no -tier there is no chain of this command line's to put a
+		// destination on, and the refusal above has already said so.
+		//
+		// The medium goes in exactly as typed. config.ValidateRetention,
+		// three lines down, is what refuses the reserved local id and a
+		// name that is not lower_snake_case, and cmdRetention's own
+		// cfg.Validate is what refuses one no storage_mediums entry
+		// declares. Every one of those messages is the config file's own.
+		for _, tm := range o.tierMediums {
+			for i := range next.Tiers {
+				if next.Tiers[i].Name == tm.tier {
+					next.Tiers[i].Medium = tm.medium
+				}
+			}
+		}
 	}
 	if o.protectLastKnownGood != nil {
 		next.ProtectLastKnownGood = o.protectLastKnownGood
@@ -271,5 +366,44 @@ func overridden(o retentionOverrides) bool {
 		o.weeklyMonths != 0 ||
 		o.monthlyMonths != 0 ||
 		len(o.tiers) > 0 ||
+		len(o.tierMediums) > 0 ||
 		o.protectLastKnownGood != nil
+}
+
+// tierMediumsNameAGivenTier refuses a -tier-medium that is attached to
+// nothing, before anything is folded.
+//
+// Two shapes, and they are different mistakes. With no -tier at all there
+// is no chain of this command line's to put a destination on: the
+// deployment's own chain already carries its destinations, and quietly
+// writing one onto it would make this preview about a policy nobody
+// wrote. With a chain that simply has no tier of that name, the likeliest
+// cause is a typo in the name, and a typo silently ignored is exactly the
+// failure this whole flag exists to end: the operator would read a
+// confident all-local plan for the tier they meant.
+//
+// Decided against o alone, like the two mutual-exclusion refusals above
+// it, so applyRetentionOverrides stays all-or-nothing: a refused override
+// leaves the caller's policy exactly as it was passed.
+func tierMediumsNameAGivenTier(o retentionOverrides) error {
+	if len(o.tierMediums) == 0 {
+		return nil
+	}
+	if len(o.tiers) == 0 {
+		return fmt.Errorf("-tier-medium names the destination of a tier this command line supplied, and no -tier was given; pass the whole chain with -tier, or leave both out to preview the deployment's own policy, which already carries its own destinations")
+	}
+	names := make([]string, 0, len(o.tiers))
+	given := make(map[string]bool, len(o.tiers))
+	for _, t := range o.tiers {
+		if !given[t.Name] {
+			names = append(names, t.Name)
+		}
+		given[t.Name] = true
+	}
+	for _, tm := range o.tierMediums {
+		if !given[tm.tier] {
+			return fmt.Errorf("-tier-medium %s=%s names no tier this command line gave; the -tier flags gave %s", tm.tier, tm.medium, strings.Join(names, ", "))
+		}
+	}
+	return nil
 }

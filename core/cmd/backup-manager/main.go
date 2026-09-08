@@ -159,11 +159,17 @@ commands:
                                                   the source itself when it carries one, so --source is only
                                                   needed for the plain set name (#569)
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
+            [--tier NAME:GRANULARITY:KEEP[:WINDOW_UNIT]] [--tier-medium NAME=MEDIUM_ID]
                                                   preview GFS/last-known-good retention decisions. It deletes nothing in
                                                   either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
                                                   through the API's retention preview/apply pair, against a reviewed plan_id.
                                                   Each retention flag overrides the loaded config's own resolved value for
-                                                  this preview only
+                                                  this preview only.
+                                                  --tier is repeatable and replaces the whole chain; --tier-medium says
+                                                  where one of those tiers' copies go, so a supplied chain is previewed
+                                                  against the destinations it names rather than silently against the local
+                                                  backup root. A supplied chain that names none, beside a deployment whose
+                                                  own chain does, says so before the plan (#595)
   retention <source/backup-set> [--dry-run] [the same retention override flags]
                                                   preview that one backup set's decisions instead of every configured
                                                   set's. An id that names no configured backup set is refused and
@@ -209,18 +215,27 @@ commands:
                                                   defaults to 7 and is bounded to 1..30. artifacts <id> lists
                                                   which medium each copy is on
   settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
+                   [--policy-file F] [--acknowledge-medium-disclosure]
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
-                                                  report the live retention/capacity settings, or change one in place;
-                                                  a full retention tier-chain replacement is still a config-file edit
+                                                  report the live retention/capacity settings, or change one in place.
+                                                  --policy-file replaces the deployment's whole retention chain from a
+                                                  file holding the contents of a config.yaml "retention:" block, with "-"
+                                                  reading standard input, spelled the way backup-set retention spells it.
+                                                  A chain that sends a tier somewhere new needs
+                                                  --acknowledge-medium-disclosure, and without it the refusal carries the
+                                                  disclosure (#595)
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]
-                       [--protect-last-known-good=BOOL]
+                       [--protect-last-known-good=BOOL] [--acknowledge-medium-disclosure]
                                                   report which retention policy this backup set is retained under and
                                                   where it came from; with a policy flag, give the set a whole policy of
                                                   its own; with --inherit, remove that policy so it is retained under the
                                                   deployment's again. An override replaces the deployment's whole chain
-                                                  and is never merged with it, so it has to name a whole one
+                                                  and is never merged with it, so it has to name a whole one.
+                                                  --acknowledge-medium-disclosure is needed when the policy sends one of
+                                                  this set's tiers somewhere new, and without it the refusal carries the
+                                                  disclosure. The show form prints each tier's destination
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;

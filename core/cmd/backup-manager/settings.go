@@ -54,12 +54,47 @@ import (
 // complaining about a running engine over a forgotten --timezone sends
 // somebody off to stop a daemon for nothing.
 //
-// PATCH deliberately does not expose a full retention tier-chain
-// replacement (core/service.RetentionUpdate.Tiers): replacing the whole
-// chain is still, and remains, a config-file edit, exactly like every
-// other case the config-file answer already covers (README.md's "Backup
-// sets, first-run and enable/disable" note). Every other retention and
-// capacity field is here.
+// # The whole chain, which this command used to refuse (issue #595)
+//
+// This doc used to say the opposite: that a full retention tier-chain
+// replacement (core/service.RetentionUpdate.Tiers) "is still, and
+// remains, a config-file edit, exactly like every other case the
+// config-file answer already covers". --policy-file is the reversal, and
+// it is spelled exactly the way `backup-set retention` already spells it,
+// because an operator moves between the two and should not meet two
+// grammars for one thing: the file holds the CONTENTS of a `retention:`
+// block, and "-" reads standard input.
+//
+// Two things undid the original argument, and only the second is new.
+//
+// A chain stopped being purely a policy about time. Since EPIC E a tier
+// names a `medium:` (config.RetentionTier.Medium), so a chain says where
+// the bytes live, and EPIC G requires every capability to be reachable
+// from `backup-manager` because a browser-only destination change is one
+// nobody can automate across a fleet.
+//
+// And the config-file answer was never an equal-power route here. The
+// three write modes above are this command's own: beside a serving
+// process a file edit is REFUSED, precisely because nothing watches
+// config.yaml and a change left in the file is one that process would
+// never read (#543). So "edit the file" was advice that does not work in
+// the one deployment where a fleet-wide destination change matters, and
+// the deployment plan was effectively browser-only there. Every other
+// retention and capacity field was already here; this was the hole.
+//
+// Nothing below it needed building. RetentionUpdate.Tiers, the FR-27
+// disclosure gate and the empty-chain refusal all already existed and the
+// browser already drove them over PATCH /settings, and engineRoute's own
+// mapping already carried Tiers across "so that the one type doing the
+// translating does not have a hole in it the day something else fills
+// that field in". This is that day.
+//
+// The three legacy daily_days/weekly_months/monthly_months scalars are
+// the one thing --policy-file will not take, and it refuses them rather
+// than dropping them. RetentionUpdate has no field for them and neither
+// does the wire type, so accepting the file and applying the rest would
+// report success for a chain that never changed. They are sugar for the
+// default chain, so the chain is what to write.
 func cmdSettings(args []string) int {
 	fs, cfgPath := newFlagSet("settings")
 	timezone := fs.String("timezone", "", "patch only; ignored otherwise: retention.timezone (an IANA name)")
@@ -73,6 +108,10 @@ func cmdSettings(args []string) int {
 	criticalFreeBytes := fs.Int64("critical-free-bytes", 0,
 		"patch only; ignored otherwise: capacity.critical_free_bytes (0 means no critical line)")
 	safetyMarginBytes := fs.Int64("safety-margin-bytes", 0, "patch only; ignored otherwise: capacity.safety_margin_bytes")
+	policyFile := fs.String("policy-file", "",
+		`patch only; ignored otherwise: replace the deployment's whole retention chain from a file holding the CONTENTS of a config.yaml "retention:" block (the key itself omitted); "-" reads standard input`)
+	acknowledge := fs.Bool("acknowledge-medium-disclosure", false,
+		"patch only; ignored otherwise: acknowledge the storage-medium disclosure, which a chain needs the first time it sends one of its tiers to a non-local medium; without it that write is refused, and the refusal is the disclosure")
 
 	operands, err := parseFlagsAroundOperands(fs, args)
 	if err != nil {
@@ -110,6 +149,30 @@ func cmdSettings(args []string) int {
 		return usageError("settings patch: name at least one setting to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
 	}
 
+	// The three rules `backup-set retention` already applies to the
+	// identically spelled flag, in the same order and for the same
+	// reasons. Each one is about the command line rather than about the
+	// deployment, so each is decided here, before anything is opened.
+	if patching {
+		named := visitedRetentionSectionFlags(fs)
+		if contains(named, "policy-file") && *policyFile == "" {
+			return usageError(`settings patch: --policy-file needs a path, or "-" to read the policy from standard input`)
+		}
+		if *policyFile != "" && len(named) > 1 {
+			return usageError(
+				"settings patch: --policy-file carries the whole retention policy, so it cannot be combined with --%s; "+
+					"put those values in the file instead",
+				strings.Join(without(named, "policy-file"), ", --"))
+		}
+		// The acknowledgment consents to a policy write. On a command
+		// line that writes no policy it acknowledges nothing, and
+		// accepting it silently would teach an operator the flag did
+		// something.
+		if *acknowledge && len(named) == 0 {
+			return usageError("settings patch: --acknowledge-medium-disclosure acknowledges a retention policy write, and this command line writes no policy; pass it alongside --policy-file")
+		}
+	}
+
 	ctx := context.Background()
 
 	// The read and the write go through different doors, and which one is
@@ -144,6 +207,23 @@ func cmdSettings(args []string) int {
 		return 0
 	}
 
+	// The policy is read BEFORE the route is opened, and the ordering is
+	// the point rather than tidiness. It is cmdBackupSetRetention's own
+	// argument, over the identical flag: --policy-file "-" finishes
+	// whenever whatever is on the other end finishes, so reading it after
+	// the engine check would put an operator-controlled pause between
+	// that check and the write, and an engine that started during the
+	// pause was written straight over (#535). Read first, then claim the
+	// deployment, then write, with nothing that can block in between.
+	var chain *service.RetentionUpdate
+	if *policyFile != "" {
+		var code int
+		chain, code = readDeploymentChain(*policyFile)
+		if code != exitOK {
+			return code
+		}
+	}
+
 	route, cleanup, err := openConfigWriteRoute(ctx, *cfgPath)
 	if err != nil {
 		return fail(err)
@@ -153,6 +233,10 @@ func cmdSettings(args []string) int {
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
 	req := buildSettingsPatch(fs, timezone, weekStartsOn, protect, capBytes, warningFreeBytes, criticalFreeBytes, safetyMarginBytes)
+	if chain != nil {
+		req.Retention = chain
+	}
+	req.AcknowledgeMediumDisclosure = *acknowledge
 	settings, err := route.UpdateSettings(ctx, req)
 	if err != nil {
 		return fail(err)
@@ -167,8 +251,87 @@ func cmdSettings(args []string) int {
 // and buildSettingsPatch (which reads them once it is present), so the
 // two lists cannot drift apart on which flags are patch-only.
 var settingsPatchFlagNames = []string{
-	"timezone", "week-starts-on", "protect-last-known-good",
+	"timezone", "week-starts-on", "protect-last-known-good", "policy-file",
+	"acknowledge-medium-disclosure",
 	"cap-bytes", "warning-free-bytes", "critical-free-bytes", "safety-margin-bytes",
+}
+
+// settingsRetentionSectionFlagNames is the subset of the above that
+// writes the RETENTION section, which is the section --policy-file
+// carries whole.
+//
+// --acknowledge-medium-disclosure is deliberately not here: it is a
+// consent that rides beside a policy rather than a field of one, exactly
+// as RetentionOverride.AcknowledgeMediumDisclosure's own doc has it, and
+// counting it would make it acknowledge itself.
+var settingsRetentionSectionFlagNames = []string{
+	"policy-file", "timezone", "week-starts-on", "protect-last-known-good",
+}
+
+// visitedRetentionSectionFlags returns the retention-section flags
+// actually passed, in the order fs.Visit reports them, so the two
+// mutual-exclusion refusals above can name the ones that clashed.
+func visitedRetentionSectionFlags(fs *flag.FlagSet) []string {
+	section := make(map[string]bool, len(settingsRetentionSectionFlagNames))
+	for _, name := range settingsRetentionSectionFlagNames {
+		section[name] = true
+	}
+	var named []string
+	fs.Visit(func(f *flag.Flag) {
+		if section[f.Name] {
+			named = append(named, f.Name)
+		}
+	})
+	return named
+}
+
+// readDeploymentChain turns --policy-file's contents into the retention
+// section of a settings patch.
+//
+// It parses through core/service, which parses through config's own
+// schema, strictly: this command never learns what a retention block may
+// contain, so a key added there needs no change here. It resolves nothing
+// and completes nothing, exactly like the flag it mirrors.
+//
+// The one thing it decides itself is the legacy spelling, and it decides
+// it here rather than one layer down because this is where the surface
+// that cannot carry it lives. RetentionUpdate has no
+// daily_days/weekly_months/monthly_months field, so a policy file written
+// that way would apply its other keys, report success and leave the chain
+// exactly as the file already had it, which is silent data loss dressed
+// as a 200.
+//
+// An exit code rather than an error, like buildRetentionOverride: reading
+// a file named on the command line is a usage problem this package owns
+// and prints itself, not a service refusal for fail() to render.
+func readDeploymentChain(policyFile string) (*service.RetentionUpdate, int) {
+	data, err := readPolicyFile(policyFile)
+	if err != nil {
+		return nil, fail(err)
+	}
+	o, err := service.ParseRetentionOverride(data)
+	if err != nil {
+		return nil, fail(err)
+	}
+	if o.DailyDays != 0 || o.WeeklyMonths != 0 || o.MonthlyMonths != 0 {
+		return nil, fail(fmt.Errorf("settings patch: the policy names daily_days/weekly_months/monthly_months, and the deployment's chain is patched in the tiers spelling only; those three are sugar for the default chain, so write the chain itself as a tiers list (a tier is name, granularity and keep, plus medium to say where its copies go)"))
+	}
+
+	u := &service.RetentionUpdate{Tiers: o.Tiers}
+	// Pointers for the reason engineRoute.UpdateSettings goes to the same
+	// trouble: a field the file did not name has to stay "leave this
+	// alone" rather than becoming "set it to the zero value", or a patch
+	// that only replaces a chain would also blank the timezone.
+	if o.Timezone != "" {
+		u.Timezone = &o.Timezone
+	}
+	if o.WeekStartsOn != "" {
+		u.WeekStartsOn = &o.WeekStartsOn
+	}
+	if o.ProtectLastKnownGood != nil {
+		u.ProtectLastKnownGood = o.ProtectLastKnownGood
+	}
+	return u, exitOK
 }
 
 // visitedSettingsPatchFlags returns the names of every patch-only flag
@@ -267,6 +430,15 @@ func printSettings(s service.Settings) {
 		}
 		if t.WindowUnit != "" {
 			fmt.Printf(" window_unit=%s", t.WindowUnit)
+		}
+		// Where this tier's copies go, so an operator can read the
+		// destination without opening YAML (#595). Appended only when the
+		// tier names one, which is printBackupSetRetention's own rule for
+		// the identical field and is what keeps a medium-free deployment
+		// printing exactly the line it printed before this existed: every
+		// case in core/tests/compat is one.
+		if t.Medium != "" {
+			fmt.Printf(" medium=%s", t.Medium)
 		}
 		fmt.Println()
 	}

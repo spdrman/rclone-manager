@@ -1109,11 +1109,22 @@ type RetentionTier struct {
 	// The medium is only expressible in this, the tiers spelling. The
 	// three legacy daily_days/weekly_months/monthly_months scalars cannot
 	// name one and do not need to: adopting mediums means adopting the
-	// chain. The CLI's own -tier override cannot name one either (its
-	// syntax is name:granularity:keep[:window_unit]), so an override
-	// replaces the file's chain with an all-local one. That is inert
-	// while nothing reads this field, and it is #239's to answer when
-	// retention starts planning on it.
+	// chain.
+	//
+	// The CLI's -tier override could not name one either, which this doc
+	// used to record as inert and defer to #239 "when retention starts
+	// planning on it". #239 landed and it stopped being inert: an
+	// override replaced the file's chain with an all-local one, so
+	// `backup-manager retention --tier` previewed placement against local
+	// beside a deployment sending monthly to S3, and printed it no less
+	// confidently. `--tier-medium NAME=MEDIUM_ID` answers it (issue #595,
+	// retention_flags.go): a repeatable flag rather than a fifth
+	// colon-separated position, refused when no -tier of that name was
+	// given, and handing the id here unparsed so a medium nothing declares
+	// is refused in the identical words below. A supplied chain that names
+	// no destination beside a file's chain that does is still an all-local
+	// preview, deliberately (the override replaces rather than merges),
+	// and cmdRetention says so on stderr before printing the plan.
 	//
 	// omitempty, for the round-trip reason above.
 	Medium string `yaml:"medium,omitempty"`

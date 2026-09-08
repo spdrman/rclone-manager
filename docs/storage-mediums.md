@@ -27,6 +27,7 @@ an archive class is not a place a tier can deliver to.
 | Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
 | Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
+| A tier's destination is reachable from `backup-manager`, not only the browser | Landed (#595): `retention --tier-medium NAME=MEDIUM_ID` previews a supplied chain against the destinations it names, `settings patch --policy-file` replaces the deployment's whole chain, and `backup-set retention --policy-file` already did one set's |
 | A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 

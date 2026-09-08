@@ -162,6 +162,47 @@ describe("mapping a retention tier to a storage medium", () => {
     expect(Array.from(picker.options).find((o) => o.value === "offsite_s3")?.disabled).toBe(false);
   });
 
+  // The owner's ask in #595 named three kinds of destination and one of
+  // them does not exist: a saved local volume, the second hard disk in the
+  // NAS. There is no "volume" concept anywhere in the tree. Local means
+  // the backup set's own local_path and nothing else, `local` is a
+  // reserved medium id nothing may spell, and the config layer's medium
+  // type set is closed to s3 alone. transport.MediumTypeLocalDir exists
+  // and its own doc says flatly that it is NOT configurable, because
+  // "'local' as a MEDIUM would be a second answer to where local artifacts
+  // live", and MediumType's doc says the set "grows only by an FR-4
+  // architecture decision, never by an import line".
+  //
+  // So this row is named, disabled, and says it is not built. Inventing a
+  // medium type to fill it would be making an architecture decision inside
+  // a form. Leaving it off the list entirely would be worse in the other
+  // direction: an operator who came here to put backups on a second disk
+  // learns nothing from a menu that simply does not mention it, and asks
+  // again next month.
+  it("lists a saved local volume, disabled, and says it is not built", async () => {
+    await renderSettings();
+
+    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
+    const volume = Array.from(picker.options).find((o) => /second hard disk/i.test(o.textContent ?? ""));
+    expect(volume).toBeTruthy();
+    expect(volume?.textContent).toMatch(/NOT BUILT/);
+    expect(volume?.disabled).toBe(true);
+    // disabled is what keeps it out of a save: a disabled option cannot
+    // be chosen. (Asserted as the attribute rather than by firing a
+    // change at it, because assigning select.value programmatically
+    // selects a disabled option in jsdom just as it does in a browser,
+    // so that would be a test of the DOM rather than of the product.)
+    //
+    // Its value is a sentinel and not "", so it can never be confused
+    // with the local backup root, which is the row that DOES work and is
+    // spelled by naming no medium at all.
+    expect(volume?.value).not.toBe("");
+    expect(MEDIUMS.map((m) => m.id)).not.toContain(volume?.value);
+    // The control: with the not-built row on the list, the row that works
+    // is still selectable and still the local one.
+    expect(Array.from(picker.options).find((o) => o.value === "")?.disabled).toBeFalsy();
+  });
+
   it("shows the deletion consequence, in the backend's own words, before the first mapping can be saved", async () => {
     await renderSettings();
 
