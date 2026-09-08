@@ -486,7 +486,7 @@ func (h *handlers) submitRunBackupSet(w http.ResponseWriter, r *http.Request, id
 		BackupSetID:    body.BackupSetID,
 	})
 	if err != nil {
-		writeRunBackupSetError(w, err, h.backend.ConfigRevision())
+		h.writeRunBackupSetError(w, r, err, h.backend.ConfigRevision())
 		return
 	}
 
@@ -499,7 +499,7 @@ func (h *handlers) submitRunBackupSet(w http.ResponseWriter, r *http.Request, id
 // Every message echoed here is core/service's own prose, which is the
 // rule service.ErrInvalidRequest's doc sets out: never an unclassified
 // error, which could carry state-layer or transport text.
-func writeRunBackupSetError(w http.ResponseWriter, err error, revision string) {
+func (h *handlers) writeRunBackupSetError(w http.ResponseWriter, r *http.Request, err error, revision string) {
 	switch {
 	case errors.Is(err, service.ErrConfigRevisionStale):
 		writeConfigRevisionStale(w, err.Error(), revision)
@@ -519,7 +519,12 @@ func writeRunBackupSetError(w http.ResponseWriter, err error, revision string) {
 	case errors.Is(err, service.ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit operation")
+		// Through the helper, like every other 500 in this package: the
+		// response keeps the id and none of err, and the log gets err in
+		// full under that same id (#598). A bare writeError here would
+		// hand an operator a correlation id matching no line anywhere,
+		// which is exactly the report that feature closed.
+		h.internalError(w, r, "INTERNAL", "failed to submit operation", err)
 	}
 }
 

@@ -266,7 +266,7 @@ func (h *handlers) importStorageCredentials(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", importErr.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to import storage credentials")
+		h.internalError(w, r, "INTERNAL", "failed to import storage credentials", importErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, importStorageCredentialsResponse{ID: imported.ID})
@@ -276,7 +276,7 @@ func (h *handlers) importStorageCredentials(w http.ResponseWriter, r *http.Reque
 func (h *handlers) listStorageMediums(w http.ResponseWriter, r *http.Request) {
 	mediums, listErr := h.backend.ListStorageMediums(r.Context())
 	if listErr != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read the storage destinations")
+		h.internalError(w, r, "INTERNAL", "failed to read the storage destinations", listErr)
 		return
 	}
 	out := listStorageMediumsResponse{Mediums: make([]storageMediumBody, 0, len(mediums))}
@@ -295,7 +295,7 @@ func (h *handlers) getStorageMedium(w http.ResponseWriter, r *http.Request) {
 				"this configuration declares no storage medium with that id")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read the storage destination")
+		h.internalError(w, r, "INTERNAL", "failed to read the storage destination", getErr)
 		return
 	}
 	writeJSON(w, http.StatusOK, toStorageMediumBody(m))
@@ -311,7 +311,7 @@ func (h *handlers) getStorageMedium(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) getStorageMediumUsage(w http.ResponseWriter, r *http.Request) {
 	usage, usageErr := h.backend.StorageMediumUsage(r.Context(), chi.URLParam(r, "id"))
 	if usageErr != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read what is on the storage destination")
+		h.internalError(w, r, "INTERNAL", "failed to read what is on the storage destination", usageErr)
 		return
 	}
 	body := storageMediumUsageResponse{
@@ -349,7 +349,7 @@ func (h *handlers) preflightStorageMediumCandidate(w http.ResponseWriter, r *htt
 	}
 	result, checkErr := h.backend.PreflightStorageMediumCandidate(r.Context(), body.spec())
 	if checkErr != nil {
-		writeStorageMediumWriteError(w, checkErr, "failed to check the storage destination")
+		h.writeStorageMediumWriteError(w, r, checkErr, "failed to check the storage destination")
 		return
 	}
 	writeJSON(w, http.StatusOK, toMediumPreflightResponse(result))
@@ -408,7 +408,7 @@ func (h *handlers) writeStorageMedium(w http.ResponseWriter, r *http.Request, up
 		medium, writeErr = h.backend.CreateStorageMedium(r.Context(), body.spec())
 	}
 	if writeErr != nil {
-		writeStorageMediumWriteError(w, writeErr, "failed to save the storage destination")
+		h.writeStorageMediumWriteError(w, r, writeErr, "failed to save the storage destination")
 		return
 	}
 	writeJSON(w, status, toStorageMediumBody(medium))
@@ -425,7 +425,7 @@ func (h *handlers) writeStorageMedium(w http.ResponseWriter, r *http.Request, up
 // run against them.
 func (h *handlers) removeStorageMedium(w http.ResponseWriter, r *http.Request) {
 	if removeErr := h.backend.RemoveStorageMedium(r.Context(), chi.URLParam(r, "id")); removeErr != nil {
-		writeStorageMediumWriteError(w, removeErr, "failed to remove the storage destination")
+		h.writeStorageMediumWriteError(w, r, removeErr, "failed to remove the storage destination")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -439,7 +439,7 @@ func (h *handlers) removeStorageMedium(w http.ResponseWriter, r *http.Request) {
 // was understood perfectly and is being declined on the state of the
 // deployment, which is what 409 means; a 400 would read as "you sent me
 // something malformed" and send an operator to check their JSON.
-func writeStorageMediumWriteError(w http.ResponseWriter, err error, fallback string) {
+func (h *handlers) writeStorageMediumWriteError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
 	case service.AsStorageMediumInUse(err):
 		// The message is this package's own sentence plus a count and a
@@ -463,6 +463,12 @@ func writeStorageMediumWriteError(w http.ResponseWriter, err error, fallback str
 		// boundary a credential could have arrived in.
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", fallback)
+		// The one arm here that is not a named refusal, so it is the one
+		// arm whose error nobody else records. Deliberately not
+		// err.Error() in the response, for the reason the INVALID_REQUEST
+		// arm above states in reverse: an unclassified error can carry a
+		// path, an endpoint or an rclone internal. It goes to the log
+		// under the id the response carries instead.
+		h.internalError(w, r, "INTERNAL", fallback, err)
 	}
 }

@@ -350,9 +350,135 @@ var routes = map[string]entry{
 	},
 
 	// --------------------------------------------------------- storage ---
+	//
+	// The whole storage surface, and every route on it is a real command
+	// rather than a gap. `medium preflight` was the only verb until G2.2
+	// (#594) added list, show, add, edit, remove and import-credentials,
+	// which is what made a destination something an operator can configure
+	// from a terminal instead of only by hand-editing config.yaml, and it
+	// is why nothing down here has to say "there is no verb that".
+	//
+	// # Not one of these lines can carry an S3 secret
+	//
+	// That is a property of the CLI rather than of care taken here, which
+	// is the only kind of guarantee worth having on a panel that is
+	// copy-to-clipboard and exportable. `medium` declares no flag that
+	// takes credential material and mediumFlags says so in as many words:
+	// all four credential flags name a REFERENCE (an id this deployment
+	// minted, a path, a variable NAME, a command), and the material itself
+	// reaches the binary only on standard input. So these are the commands
+	// that actually work, byte for byte, with nothing starred out and no
+	// placeholder to apologise for.
+	key("GET", "/storage-mediums"): {
+		build:    func(Action) *cmd { return newCmd("medium", "list") },
+		examples: []Action{{}},
+	},
+	key("GET", "/storage-mediums/{id}"): {
+		build:    func(a Action) *cmd { return newCmd("medium", "show", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("GET", "/storage-mediums/{id}/usage"): {
+		// `show` again, and not a usage verb, because there is no usage
+		// verb and that is deliberate rather than missing: `medium show`
+		// prints the destination and then FR-30's report of what is on
+		// it, on the reasoning its own doc gives, that whether anything
+		// is there and whether it is the only copy is the fact an
+		// operator is actually asking about when they look one up. Two
+		// routes answering to one command is the honest line here; a gap
+		// would be inventing a missing verb for a question the CLI does
+		// answer.
+		build:    func(a Action) *cmd { return newCmd("medium", "show", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("POST", "/storage-mediums"): {
+		// `medium add` proves the destination before it writes it, which
+		// this route on its own does not: the wizard preflights first, on
+		// the route below, and then saves here. So the two lines an
+		// operator reads back are a candidate preflight followed by an
+		// add, and the add re-proves what the preflight just proved. That
+		// is a repeated check rather than a wrong command, and the
+		// alternative is worse: --no-verify would echo a save that skips
+		// a check the browser DID perform.
+		build: func(a Action) *cmd {
+			var req apicontract.StorageMediumRequest
+			if !decode(a.Body, &req) {
+				return nil
+			}
+			return mediumSpecFlags(newCmd("medium", "add", req.ID), req)
+		},
+		why: "there is no verb that declares a storage destination from a request body",
+		examples: []Action{
+			{Body: []byte(`{"id":"offsite_s3","type":"s3","region":"eu-central-1","bucket":"acme-backups","prefix":"prod","storage_class":"STANDARD_IA","upload_verification":"readback","credentials":{"credentials_id":"cred_01HX"}}`)},
+			{Body: []byte(`{"id":"offsite_s3","type":"s3","region":"eu-central-1","bucket":"acme-backups","credentials":{"command":["aws-vault","exec","backups"]}}`)},
+		},
+	},
+	key("PUT", "/storage-mediums/{id}"): {
+		build: func(a Action) *cmd {
+			var req apicontract.StorageMediumRequest
+			if !decode(a.Body, &req) {
+				return nil
+			}
+			// The path id, never the body's. That is this route's own
+			// rule rather than a choice made here: a body naming a
+			// different destination is refused outright, so by the time
+			// anything is written the two agree, and echoing the path id
+			// is echoing the one that was edited.
+			return mediumSpecFlags(newCmd("medium", "edit", a.Params["id"]), req)
+		},
+		why: "there is no verb that edits a storage destination from a request body",
+		examples: []Action{
+			{Params: map[string]string{"id": "offsite_s3"},
+				Body: []byte(`{"region":"eu-west-1","storage_class":"GLACIER_IR"}`)},
+			{Params: map[string]string{"id": "offsite_s3"},
+				Body: []byte(`{"type":"s3","region":"eu-west-1","endpoint":"https://s3.eu-west-1.example.net","bucket":"acme-backups","prefix":"prod","storage_class":"STANDARD","upload_verification":"attested","credentials":{"file":"/etc/backup-manager/aws-credentials"}}`)},
+		},
+	},
+	key("DELETE", "/storage-mediums/{id}"): {
+		build:    func(a Action) *cmd { return newCmd("medium", "remove", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("POST", "/storage-mediums/preflight"): {
+		// The candidate form of the same verb, which is the whole reason
+		// `preflight` takes --candidate: this route proves a destination
+		// that has not been declared, and the flag is what says the id on
+		// the line names a description rather than something already in
+		// the configuration.
+		build: func(a Action) *cmd {
+			var req apicontract.StorageMediumRequest
+			if !decode(a.Body, &req) {
+				return nil
+			}
+			return mediumSpecFlags(newCmd("medium", "preflight", req.ID).bare("candidate"), req)
+		},
+		why: "there is no verb that proves an undeclared storage destination from a request body",
+		examples: []Action{
+			{Body: []byte(`{"id":"offsite_s3","type":"s3","region":"eu-central-1","endpoint":"https://s3.eu-central-1.example.net","bucket":"acme-backups","prefix":"prod","storage_class":"STANDARD","upload_verification":"readback","credentials":{"env":"BACKUP_MANAGER_S3_CREDENTIALS"}}`)},
+		},
+	},
 	key("POST", "/storage-mediums/{id}/preflight"): {
 		build:    func(a Action) *cmd { return newCmd("medium", "preflight", a.Params["id"]) },
 		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("POST", "/storage-credentials"): {
+		// The one request in this whole contract that carries S3
+		// credential MATERIAL, and so the one line in this file that
+		// could have leaked one.
+		//
+		// It cannot, and not because this builder is careful with the
+		// body: it never reads the body at all, because the command it
+		// names takes nothing from it. `medium import-credentials
+		// --stdin` reads the shared-credentials text from standard
+		// input, which is not in the process table and not in shell
+		// history, and --stdin is required rather than assumed precisely
+		// so that this is the only shape the command has.
+		//
+		// So this is a working invocation printed in full: no
+		// placeholder, nothing starred out, and no "not runnable as
+		// printed" note, because it IS runnable as printed. An operator
+		// pastes it, pipes their credentials in, and gets back the same
+		// id the wizard got.
+		build:    func(Action) *cmd { return newCmd("medium", "import-credentials").bare("stdin") },
+		examples: []Action{{}},
 	},
 
 	// --------------------------------------------------------- catalog ---
@@ -514,6 +640,48 @@ func backupSetCreateCommand(spec apicontract.BackupSetSpec, runNow, acknowledgeR
 	}
 	if acknowledgeRepoint {
 		c.bare("acknowledge-repoint")
+	}
+	return c
+}
+
+// mediumSpecFlags puts a storage destination's description onto a `medium`
+// command line, shared by add, edit and the candidate preflight.
+//
+// One helper for the three because both surfaces already treat them as
+// one: core/cmd/backup-manager declares a single flag set that all seven
+// verbs read, and this API sends a single body shape to all three of
+// these routes, on the reasoning that what is proven and what is saved
+// must not be able to be different destinations.
+//
+// No flag here can carry credential material, and that is a fact about
+// apicontract.StorageMediumRequest rather than a rule applied at this call
+// site: FR-33 leaves no field on that type a secret could have arrived in,
+// and the four credential spellings are an id, a path, a variable NAME and
+// a command.
+//
+// flagIfSet throughout, for backupSetCreateCommand's reason: a field the
+// request did not carry must not echo as a flag with an empty value after
+// it, which is a different command from the one that was made. Nothing is
+// lost on an edit, either, because this wire shape has plain strings
+// rather than pointers, so the request itself cannot tell "leave the
+// prefix alone" from "clear the prefix"; the line says exactly as much as
+// the request did.
+func mediumSpecFlags(c *cmd, req apicontract.StorageMediumRequest) *cmd {
+	c.flagIfSet("type", req.Type)
+	c.flagIfSet("region", req.Region)
+	c.flagIfSet("endpoint", req.Endpoint)
+	c.flagIfSet("bucket", req.Bucket)
+	c.flagIfSet("prefix", req.Prefix)
+	c.flagIfSet("storage-class", req.StorageClass)
+	c.flagIfSet("upload-verification", req.UploadVerification)
+	c.flagIfSet("credentials-id", req.Credentials.CredentialsID)
+	c.flagIfSet("credentials-file", req.Credentials.File)
+	c.flagIfSet("credentials-env", req.Credentials.Env)
+	if len(req.Credentials.Command) > 0 {
+		// The CLI splits this one on spaces itself and runs it directly,
+		// never through a shell, so joining on spaces here is how the
+		// words go back together the same way they came apart.
+		c.flag("credentials-command", strings.Join(req.Credentials.Command, " "))
 	}
 	return c
 }

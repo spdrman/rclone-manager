@@ -28,6 +28,7 @@ import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
 import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupManagerApi } from "@shared/api/contracts";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { setsNode, versionNode } from "@shared/state/appNodes";
 import type { AsyncState } from "@shared/hooks/useAsync";
@@ -111,10 +112,18 @@ describe("the dashboard's run control", () => {
   // sets</button>` was the whole of it: no onClick, on the copy an
   // operator presses first.
   it("submits a run cycle when it is pressed", async () => {
-    // The parameters are spelled out rather than inferred: `vi.fn(() =>
-    // ...)` infers a zero-argument signature, and reading calls[0][1] off
-    // one type-checks under `tsc --noEmit` and fails the real build.
-    const runCycle = vi.fn((_revision: string, _key: string) => Promise.resolve());
+    // The signature is spelled out rather than inferred: `vi.fn(() =>
+    // ...)` infers a zero-argument mock, and reading calls[0][1] off one
+    // type-checks under `tsc --noEmit` and fails the real build.
+    //
+    // It goes on vi.fn's own type parameter rather than on a stub's
+    // parameter list, because a parameter list is the one shape that
+    // cannot say "two arguments, neither of which this stub looks at":
+    // eslint's no-unused-vars is on for the whole workspace with no
+    // argsIgnorePattern, so an unused `_key` is an error however it is
+    // spelled. Taking the type from the contract is better than either,
+    // since the mock now moves when BackupManagerApi does.
+    const runCycle = vi.fn<BackupManagerApi["runCycle"]>(() => Promise.resolve());
     const api = { ...createMockApi(), runCycle };
     const sets = await createMockApi().listSets();
     seedVersion(VERSION);
@@ -274,7 +283,7 @@ describe("the per-set run control", () => {
   // since FR-1 behind `backup-manager fetch --backup-set`; what was
   // missing was a way to reach it from a browser.
   it("runs exactly the set on screen, by its full source/backup-set id", async () => {
-    const runBackupSet = vi.fn((_id: string, _revision: string, _key: string) => Promise.resolve());
+    const runBackupSet = vi.fn<BackupManagerApi["runBackupSet"]>(() => Promise.resolve());
     const sets = await createMockApi().listSets();
     const target = sets.find((s) => s.enabled) ?? sets[0];
     const api = { ...createMockApi(), runBackupSet };
