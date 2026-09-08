@@ -484,6 +484,14 @@ func (r *engineRoute) RemoveStorageMedium(ctx context.Context, id string) error 
 	return r.client.RemoveStorageMedium(ctx, id)
 }
 
+func (r *engineRoute) SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error) {
+	resp, err := r.client.SetDefaultStorageMedium(ctx, id)
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
 // storageMediumFromWire is the one place the engine's answer becomes this
 // binary's shape, shared by the settings read and by every medium verb, so
 // the two cannot come to disagree about a destination.
@@ -498,6 +506,15 @@ func storageMediumFromWire(m apicontract.StorageMediumSummary) service.StorageMe
 		StorageClass:        m.StorageClass,
 		UploadVerification:  m.UploadVerification,
 		ReadsRequireRestore: m.ReadsRequireRestore,
+		// H2.2's three (#622). Carried across rather than dropped for the
+		// reason this function exists at all: `medium list` beside a
+		// serving engine has to print what the engine's own settings page
+		// shows, and a mapping that lost is_default would print a list
+		// with no default in it, which is a list no deployment can
+		// actually be in.
+		Path:      m.Path,
+		IsLocal:   m.IsLocal,
+		IsDefault: m.IsDefault,
 	}
 }
 

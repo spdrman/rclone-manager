@@ -186,6 +186,14 @@ type mediumRoute interface {
 	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	RemoveStorageMedium(ctx context.Context, id string) error
+
+	// SetDefaultStorageMedium moves the destination a newly created
+	// retention tier starts on (H2.2, issue #622). It is a configuration
+	// write like the three above it and is here for the same #538 reason:
+	// a default changed in the file beside a running engine is a change
+	// that process would never read, and the next tier added through its
+	// web UI would start somewhere else.
+	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
 }
 
 // configWriteRoute is where a routed configuration write goes: both halves

@@ -107,6 +107,28 @@ type MediumPreflightCheck struct {
 // somebody's bucket, which is why nothing schedules this and why the route
 // that reaches it carries CSRF.
 func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (MediumPreflight, error) {
+	// The local hard drive is a destination on every surface now (H2.2,
+	// issue #622), so it answers this call too. It is dispatched here
+	// rather than inside internal/app because the two checks share
+	// nothing below this line: there is no config.StorageMedium behind
+	// the local id, no MediumStore that could reach it, and
+	// MediumResolver refuses it in so many words. What they share is the
+	// Report, which is exactly what a caller of this method wants.
+	//
+	// "Test connection" is what this is called on every surface an
+	// operator reads (#622 standardised the three names it had). The
+	// method keeps its name, and so does the `preflightStorageMedium`
+	// operation on /api/v1: the additive-only contract rule means a
+	// promise list may only grow, so renaming an operation would be a
+	// removal, and it would buy an operator nothing they can see.
+	if id == StorageMediumLocalID {
+		report, err := b.state.Load().inner.PreflightLocalMedium(ctx)
+		if err != nil {
+			return MediumPreflight{}, fmt.Errorf("service: testing the connection to the local hard drive: %w", err)
+		}
+		return toMediumPreflight(report), nil
+	}
+
 	report, err := b.state.Load().inner.PreflightMedium(ctx, id)
 	switch {
 	case app.AsMediumNotDeclared(err):

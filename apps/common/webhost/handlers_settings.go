@@ -253,6 +253,26 @@ type storageMediumBody struct {
 	// client from storage_class, so one product decides what archive
 	// means.
 	ReadsRequireRestore bool `json:"reads_require_restore"`
+
+	// Path, IsLocal and IsDefault are H2.2's three (issue #622), and the
+	// first two are here because this shape now describes a destination
+	// that is not a bucket.
+	//
+	// The list always carries the drive this deployment's backups land
+	// on. It is not declared anywhere, it is what every retention tier
+	// that names no destination means, and leaving it out was #622's own
+	// complaint: the settings list omitted the one destination every
+	// deployment has. Path is the drive it writes to, resolved exactly as
+	// capacitySettingsBody.BackupRoot is so one deployment cannot report
+	// two mounts, and empty for a bucket because a bucket has no path on
+	// this host.
+	//
+	// IsDefault marks the destination a NEWLY created retention tier
+	// starts on, and exactly one entry in a list carries it. It says
+	// nothing about where anything currently is.
+	Path      string `json:"path,omitempty"`
+	IsLocal   bool   `json:"is_local"`
+	IsDefault bool   `json:"is_default"`
 }
 
 // toStorageMediumBody is the one projection of a declared destination
@@ -271,6 +291,9 @@ func toStorageMediumBody(m service.StorageMediumSummary) storageMediumBody {
 		StorageClass:        m.StorageClass,
 		UploadVerification:  m.UploadVerification,
 		ReadsRequireRestore: m.ReadsRequireRestore,
+		Path:                m.Path,
+		IsLocal:             m.IsLocal,
+		IsDefault:           m.IsDefault,
 	}
 }
 

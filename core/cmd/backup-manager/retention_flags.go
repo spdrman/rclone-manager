@@ -328,15 +328,34 @@ func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
 		// with no -tier there is no chain of this command line's to put a
 		// destination on, and the refusal above has already said so.
 		//
-		// The medium goes in exactly as typed. config.ValidateRetention,
-		// three lines down, is what refuses the reserved local id and a
-		// name that is not lower_snake_case, and cmdRetention's own
-		// cfg.Validate is what refuses one no storage_mediums entry
-		// declares. Every one of those messages is the config file's own.
+		// The medium goes in as typed, with one translation: the reserved
+		// local id becomes the absence that is local's only spelling in a
+		// configuration (H2.2, issue #622). Everything else is handed on
+		// unexamined, and config.ValidateRetention three lines down is
+		// what refuses a name that is not lower_snake_case, while
+		// cmdRetention's own cfg.Validate refuses one no storage_mediums
+		// entry declares. Every one of those messages is the config
+		// file's own.
+		//
+		// The translation is here because #622 gave the local hard drive
+		// a name on every surface an operator touches: it is an entry in
+		// the destinations list, an option in the tier picker and a legal
+		// operand of `medium default`. A flag that accepted that name
+		// everywhere except on this one command would be the two-spellings
+		// problem this issue exists to remove, arriving as "why does
+		// --tier-medium daily=local work in `settings patch` and not
+		// here". service.mediumForConfig is the same translation on the
+		// service boundary; this is the CLI's own, three lines from the
+		// config type it feeds, because cmd/ cannot reach an unexported
+		// helper in core/service.
 		for _, tm := range o.tierMediums {
+			medium := tm.medium
+			if medium == config.MediumLocal {
+				medium = ""
+			}
 			for i := range next.Tiers {
 				if next.Tiers[i].Name == tm.tier {
-					next.Tiers[i].Medium = tm.medium
+					next.Tiers[i].Medium = medium
 				}
 			}
 		}

@@ -122,8 +122,9 @@ func TestCreateStorageMedium_WritesTheDeclarationAndNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	if len(settings.Mediums) != 1 || settings.Mediums[0].ID != "offsite_s3" {
-		t.Fatalf("Settings.Mediums = %+v, want exactly offsite_s3 (the create must hot-reload)", settings.Mediums)
+	declared := declaredOnly(settings.Mediums)
+	if len(declared) != 1 || declared[0].ID != "offsite_s3" {
+		t.Fatalf("Settings.Mediums declares %+v, want exactly offsite_s3 (the create must hot-reload)", declared)
 	}
 
 	raw, err := os.ReadFile(configPath)
@@ -198,8 +199,11 @@ func TestRemoveStorageMedium_RefusesWhileAPlacementNamesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	if len(settings.Mediums) != 0 {
-		t.Fatalf("Settings.Mediums = %+v after a remove, want none", settings.Mediums)
+	// One left, and it is the local hard drive: the destinations list
+	// always carries it (H2.2, #622), so "the S3 medium is gone" is
+	// spelled as "nothing declared remains" rather than as an empty list.
+	if declared := declaredOnly(settings.Mediums); len(declared) != 0 {
+		t.Fatalf("Settings.Mediums still declares %+v after a remove, want none", declared)
 	}
 }
 
@@ -328,8 +332,8 @@ func TestRemoveStorageMedium_RefusesWhileCopiesNameIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	if len(settings.Mediums) != 1 {
-		t.Errorf("the medium is no longer declared after a refused removal: %+v", settings.Mediums)
+	if declared := declaredOnly(settings.Mediums); len(declared) != 1 {
+		t.Errorf("the medium is no longer declared after a refused removal: %+v", declared)
 	}
 }
 
@@ -505,4 +509,24 @@ func TestStorageMediumWrites_RefuseMoreThanOneCredentialSource(t *testing.T) {
 	if err == nil {
 		t.Fatal("a medium naming no credential source at all was accepted")
 	}
+}
+
+// declaredOnly drops the local hard drive from a destinations list,
+// leaving the ones an operator actually declared in config.yaml.
+//
+// It exists because #622 made the list total: it now carries the drive
+// backups land on as well as the buckets, which is the whole point of the
+// issue and is exactly not what a case about DECLARING one is asking
+// about. A case that counted the whole list would go red for the addition
+// rather than for the behaviour it is pinning, and one that indexed past
+// the first entry would silently stop checking the thing it names.
+func declaredOnly(mediums []StorageMediumSummary) []StorageMediumSummary {
+	out := make([]StorageMediumSummary, 0, len(mediums))
+	for _, m := range mediums {
+		if m.IsLocal {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }

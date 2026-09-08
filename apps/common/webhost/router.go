@@ -486,6 +486,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/storage-mediums/{id}", h.getStorageMedium)
 		r.With(requireCSRF).Put("/storage-mediums/{id}", h.updateStorageMedium)
 		r.With(requireCSRF).Delete("/storage-mediums/{id}", h.removeStorageMedium)
+		r.With(requireCSRF).Put("/storage-mediums/{id}/default", h.setDefaultStorageMedium)
 		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
 
 		// Issue #211: FR-9 catalog recovery, the API expression of

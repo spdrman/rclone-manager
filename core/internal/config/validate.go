@@ -1708,6 +1708,7 @@ func (v *validator) validateTierMedium(path string, t *RetentionTier) {
 func (v *validator) validateMediumReferences(c *Config, declared map[string]bool) {
 	archived := archiveClassMediums(c.StorageMediums)
 
+	v.validateDefaultStorageMedium(c, declared, archived)
 	v.validateTierMediumReferences("retention", &c.Retention, declared, archived)
 
 	for i := range c.Sources {
@@ -1723,6 +1724,52 @@ func (v *validator) validateMediumReferences(c *Config, declared map[string]bool
 			path := fmt.Sprintf("sources[%d].backup_sets[%d].retention", i, j)
 			v.validateTierMediumReferences(path, &bs.Retention, declared, archived)
 		}
+	}
+}
+
+// validateDefaultStorageMedium checks the destination a newly created
+// retention tier starts on (issue #622).
+//
+// Three refusals, and each one exists because the alternative is a
+// configuration that loads and then produces a tier nothing can serve.
+//
+// "local" written out is refused for the reason RetentionTier.Medium's
+// own doc gives: absence is how local is spelled, and a second spelling is
+// how a read and a write come to disagree about where a tier points. The
+// message names the fix rather than only the rule, because an operator who
+// typed it did so on purpose and needs to know that deleting the key is
+// what they meant.
+//
+// A name nothing declares is refused rather than resolved to local, which
+// is validateTierMediumReferences' rule one level up. A default that
+// silently fell back would start every new tier somewhere other than where
+// the operator wrote, and it would do it to the tier nobody has created
+// yet, so the mistake would surface long after the typo.
+//
+// An archive class is refused because a tier bound to one is refused
+// (validateTierIsNotBoundToAnArchiveClass): a copy written to an archive
+// class is archived the instant it lands, so the move can never be
+// verified and the tier can never take delivery. A default pointing there
+// would mean every newly added tier produced a configuration this same
+// Validate rejects, which is a trap laid one write in advance.
+func (v *validator) validateDefaultStorageMedium(c *Config, declared map[string]bool, archived map[string]string) {
+	const path = "default_storage_medium"
+	switch {
+	case c.DefaultStorageMedium == "":
+		return
+	case c.DefaultStorageMedium == MediumLocal:
+		v.addf("%s: %q is the implicit local medium and cannot be named explicitly; omit the key instead, which is what keeps a settings save from writing it into a config that never chose a destination", path, MediumLocal)
+		return
+	case !storageMediumIDPattern.MatchString(c.DefaultStorageMedium):
+		v.addf("%s: %q must be lower_snake_case (letters, digits and underscores, starting with a letter), the same rule a storage_mediums id follows", path, c.DefaultStorageMedium)
+		return
+	case !declared[c.DefaultStorageMedium]:
+		v.addf("%s: %q is not declared by any storage_mediums entry; the destination a new retention tier starts on must name one, and there is no fall-back to local for a name that does not resolve", path, c.DefaultStorageMedium)
+		return
+	}
+	if class, isArchive := archived[c.DefaultStorageMedium]; isArchive {
+		v.addf("%s: %q writes with storage class %s, which cannot receive backups at all: an object written there is archived the instant it lands, so the copy can never be verified and a tier can never take delivery. A new tier starting there would be refused by this same check, so the default may not point at it",
+			path, c.DefaultStorageMedium, class)
 	}
 }
 

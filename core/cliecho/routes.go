@@ -658,8 +658,26 @@ var routes = map[string]entry{
 		},
 	},
 	key("POST", "/storage-mediums/{id}/preflight"): {
-		build:    func(a Action) *cmd { return newCmd("medium", "preflight", a.Params["id"]) },
-		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+		// `test-connection`, not `preflight`, since H2.2 (#622). The
+		// check is the same one it always was and `preflight` still runs
+		// it, kept as an alias so anything scripted against it goes on
+		// working. What changed is the NAME an operator reads: the same
+		// idea was called "Verify" in the browser, `preflight` on the
+		// command line and "Test connection" on the source side of the
+		// same product, and three names for one thing is three things to
+		// an operator. This line echoes the name the button now carries,
+		// because a command line printed under a button that says
+		// something else teaches the wrong word.
+		build:    func(a Action) *cmd { return newCmd("medium", "test-connection", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}, {Params: map[string]string{"id": "local"}}},
+	},
+	key("PUT", "/storage-mediums/{id}/default"): {
+		// Moving the destination a newly created retention tier starts on
+		// (#622). One verb, one operand, and no flags: the whole content
+		// of the request is which destination, and the id in the path is
+		// the only place it appears.
+		build:    func(a Action) *cmd { return newCmd("medium", "default", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}, {Params: map[string]string{"id": "local"}}},
 	},
 	key("POST", "/storage-credentials"): {
 		// The one request in this whole contract that carries S3

@@ -399,3 +399,130 @@ func TestUpdateStorageMedium_MayOmitTheCredentialBlock(t *testing.T) {
 		t.Errorf("an edit that named no credential arrived carrying one: %+v", c)
 	}
 }
+
+// H2.2 (#622) on the wire: the local hard drive in the list, the default
+// and how it moves, and the second removal refusal.
+
+// TestListStorageMediums_CarriesTheLocalEntryWithItsDriveAndItsDefaultMark
+// pins the three fields #622 adds, together, because they are only useful
+// together: an entry saying "local" with no path does not tell an
+// operator which drive their backups land on, and a list with no default
+// mark does not tell them where the next tier would start.
+func TestListStorageMediums_CarriesTheLocalEntryWithItsDriveAndItsDefaultMark(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "local", Type: "local", Path: "/srv/backups", UploadVerification: "readback", IsLocal: true, IsDefault: true},
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD", UploadVerification: "readback"},
+	}
+
+	rec := rt.get(t, "/api/v1/storage-mediums")
+	mustStatus(t, rec, http.StatusOK)
+
+	var got listStorageMediumsResponse
+	decodeInto(t, rec, &got)
+	if len(got.Mediums) != 2 {
+		t.Fatalf("mediums = %+v, want the local hard drive and the declared one", got.Mediums)
+	}
+	local := got.Mediums[0]
+	if !local.IsLocal || local.ID != "local" {
+		t.Fatalf("the first entry is not the local hard drive: %+v", local)
+	}
+	if local.Path != "/srv/backups" {
+		t.Errorf("the local entry does not name the drive it writes to: %+v", local)
+	}
+	if !local.IsDefault {
+		t.Errorf("the local entry is not marked as the destination a new tier starts on: %+v", local)
+	}
+	if got.Mediums[1].IsLocal || got.Mediums[1].IsDefault {
+		t.Errorf("the declared destination is marked local or default: %+v", got.Mediums[1])
+	}
+}
+
+// TestSetDefaultStorageMedium_MovesItAndAnswersWithTheDestination: the
+// response is the destination that is now the default, so a caller
+// re-renders from the answer rather than from its own optimistic guess.
+func TestSetDefaultStorageMedium_MovesItAndAnswersWithTheDestination(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "local", Type: "local", Path: "/srv/backups", IsLocal: true, IsDefault: true},
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD", UploadVerification: "readback"},
+	}
+
+	rec := rt.put(t, "/api/v1/storage-mediums/offsite_s3/default", "")
+	mustStatus(t, rec, http.StatusOK)
+
+	var got storageMediumBody
+	decodeInto(t, rec, &got)
+	if got.ID != "offsite_s3" || !got.IsDefault {
+		t.Fatalf("the answer is not the destination that is now the default: %+v", got)
+	}
+	// Exactly one, which is the invariant the list has to keep. A fake
+	// that set a flag without clearing the others would pass a check on
+	// the answer alone and produce a list no deployment can be in.
+	defaults := 0
+	for _, m := range rt.backend.mediums {
+		if m.IsDefault {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Errorf("%d destinations are marked default after the move, want exactly 1", defaults)
+	}
+}
+
+// TestSetDefaultStorageMedium_IsNotBehindTheDestructiveGate is the
+// route's own tier, asserted rather than left to the red-team walk's
+// exemption list to imply. It moves no backup and rewrites no tier, so
+// the gate has nothing to stand in front of, and putting it behind one
+// would train an operator to click through the acknowledgment that
+// matters.
+func TestSetDefaultStorageMedium_IsNotBehindTheDestructiveGate(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD", UploadVerification: "readback"},
+	}
+
+	rec := rt.put(t, "/api/v1/storage-mediums/offsite_s3/default", "")
+	if got := responseErrorCode(rec.Body.String()); got == "DESTRUCTIVE_OPERATIONS_DISABLED" {
+		t.Fatalf("the route is behind the destructive gate: %s", rec.Body.String())
+	}
+	mustStatus(t, rec, http.StatusOK)
+}
+
+// TestSetDefaultStorageMedium_RefusesADestinationThisDeploymentDoesNotHave
+// keeps the default from becoming a dangling reference, which is the one
+// way this setting could point a new tier at nowhere.
+func TestSetDefaultStorageMedium_RefusesADestinationThisDeploymentDoesNotHave(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.put(t, "/api/v1/storage-mediums/typo_s3/default", "")
+	mustStatus(t, rec, http.StatusNotFound)
+	if got := responseErrorCode(rec.Body.String()); got != "MEDIUM_NOT_FOUND" {
+		t.Fatalf("error code = %q, want MEDIUM_NOT_FOUND", got)
+	}
+}
+
+// TestRemoveStorageMedium_RefusesTheDefaultUnderItsOwnCode is the second
+// removal refusal, and the point of the case is the CODE rather than the
+// status.
+//
+// Both refusals are 409, and a caller that could not tell them apart
+// would render "what is affected" under a refusal that is not about
+// affected backups at all: MEDIUM_IN_USE means copies are there and the
+// next step is to look at them, MEDIUM_IS_DEFAULT means nothing is
+// necessarily there and the next step is to move one setting.
+func TestRemoveStorageMedium_RefusesTheDefaultUnderItsOwnCode(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnMediumWrite = fmt.Errorf(
+		"%w: offsite_s3 is the destination a newly created retention tier starts on",
+		service.ErrStorageMediumIsDefault)
+
+	rec := rt.delete(t, "/api/v1/storage-mediums/offsite_s3")
+	mustStatus(t, rec, http.StatusConflict)
+	if got := responseErrorCode(rec.Body.String()); got != "MEDIUM_IS_DEFAULT" {
+		t.Fatalf("error code = %q, want MEDIUM_IS_DEFAULT", got)
+	}
+	if !strings.Contains(rec.Body.String(), "default") {
+		t.Errorf("the refusal does not say why it refused:\n%s", rec.Body.String())
+	}
+}

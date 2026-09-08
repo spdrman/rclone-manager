@@ -261,6 +261,22 @@ commands:
                                                   the same eight checks against a destination that is NOT declared,
                                                   so a setup flow proves one before it is written down. It writes
                                                   nothing whatever the report says
+  medium test-connection <medium-id>             the same check as medium preflight, under the name the rest of this
+                                                  product uses for it. One check, two verbs, one implementation:
+                                                  preflight is kept as an alias so anything scripted against it goes on
+                                                  working, and this is the name the web UI's button and the command it
+                                                  echoes now carry. It also answers for "local", the drive this
+                                                  deployment's backups land on, reporting a missing path, a directory
+                                                  the service user cannot write to, and a full filesystem as three
+                                                  different failures rather than being unavailable because no network
+                                                  is involved (#622)
+  medium default <medium-id>                     make this the destination a NEWLY CREATED retention tier starts on.
+                                                  It moves that and nothing else: every tier that already names a
+                                                  destination goes on naming it and no backup is relocated. "local" is
+                                                  a legal id here and is what a deployment that has chosen nothing
+                                                  already has, so moving the default to a bucket is reversible. The
+                                                  destination that is the default cannot be removed, and removing down
+                                                  to one destination makes that one the default (#622)
   retry <source/backup-set/artifact> [--note T]   put one FAILED backup back into the pipeline so it is attempted
                                                   again. FAILED means an attempt did not finish, which is not the
                                                   same thing as quarantine, so this is its own command and not a
@@ -283,6 +299,15 @@ commands:
                                                   A chain that sends a tier somewhere new needs
                                                   --acknowledge-medium-disclosure, and without it the refusal carries the
                                                   disclosure (#595)
+  settings patch --tier-medium NAME=MEDIUM_ID [--acknowledge-medium-disclosure]
+                                                  point one retention tier at a storage destination and leave the rest of
+                                                  the chain exactly as it is. Repeatable, at most once per tier, and
+                                                  refused when the chain has no tier of that name rather than inventing
+                                                  one. MEDIUM_ID is a declared destination, or "local" for the drive
+                                                  this deployment's backups already land on, which moves a tier back.
+                                                  Sending a tier somewhere other than local for the first time needs
+                                                  --acknowledge-medium-disclosure. This is the command the picker under a
+                                                  tier in the web UI echoes (#622)
   backup-set edit-hold <source/backup-set> [--release]
                                                   report whether a backup set is held for editing, what taking the
                                                   hold stopped, and when the lease expires; --release gives it back

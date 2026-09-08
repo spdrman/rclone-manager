@@ -597,7 +597,15 @@ func applyRetentionUpdate(r *config.Retention, u RetentionUpdate) {
 				// question, asked over the whole config a few lines
 				// after this one; nothing here second-guesses it, which
 				// is what keeps every medium rule in one package.
-				Medium: t.Medium,
+				//
+				// Normalised on the way in, so a caller naming the local
+				// hard drive by its reserved id writes the absence that
+				// is local's only spelling in a configuration file (H2.2,
+				// issue #622). Without this, a form that read the chain
+				// back and sent it whole would be refused by
+				// config.Validate, which refuses `medium: local` in so
+				// many words.
+				Medium: mediumForConfig(t.Medium),
 			})
 		}
 		// The three scalars are sugar for the default chain, and
@@ -625,7 +633,12 @@ func toRetentionTiers(in []config.RetentionTier) []RetentionTier {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
-			Medium:      t.Medium,
+			// Normalised on the way out, so above this boundary every
+			// tier names a destination and the local hard drive is one
+			// of them (H2.2, issue #622). See storagedestinations.go for
+			// why absence and StorageMediumLocalID must not both be
+			// spellings a caller has to interpret.
+			Medium: mediumForSurface(t.Medium),
 		})
 	}
 	return out

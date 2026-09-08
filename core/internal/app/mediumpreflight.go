@@ -207,3 +207,39 @@ func (s *Service) PreflightMediumCandidate(ctx context.Context, candidate Medium
 	}
 	return mediumcheck.Run(ctx, deps, medium, class)
 }
+
+// PreflightLocalMedium proves the LOCAL hard drive works: the directory
+// this deployment's backups land in, checked the same way and reported in
+// the same shape as a storage medium (H2.2, issue #622).
+//
+// It is a separate entry point rather than a branch inside PreflightMedium
+// above, and the reason is the one declaresMedium already states: the
+// reserved local id is not a medium this boundary resolves. MediumResolver
+// refuses it in so many words, there is no config.StorageMedium behind it
+// and no transport.MediumStore that could reach it, so a branch inside
+// that function would be a function whose two halves share nothing but a
+// name. What they DO share is the Report, which is the part a surface
+// cares about.
+//
+// The thresholds come from this Service's own resolved Capacity rather
+// than from the raw config, so the free-space step weighs the same numbers
+// admitCapacity weighs before a real transfer. A check that used different
+// numbers from the guard would be a check that passes for a destination
+// the next transfer refuses.
+func (s *Service) PreflightLocalMedium(ctx context.Context) (mediumcheck.Report, error) {
+	if s.Config == nil {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: this instance has no configuration to read a backup root out of")
+	}
+	return mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
+		// The one place the underlying cause is allowed to go, exactly as
+		// PreflightMedium's Observe is. An os error names a path on this
+		// machine, and the report is rendered in a browser and exported
+		// from a terminal; the operator's log is where their diagnostics
+		// already live.
+		s.logger().Error(ctx, "medium-preflight", fmt.Errorf("local storage destination, %s check: %w", step, err))
+	}, mediumcheck.LocalTarget{
+		Root:              s.Config.EffectiveBackupRoot(),
+		SafetyMarginBytes: s.Capacity.SafetyMarginBytes,
+		CriticalFreeBytes: s.Capacity.CriticalFreeBytes,
+	})
+}

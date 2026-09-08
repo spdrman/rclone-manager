@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "f62c80584a579f250bc2ee38aaaa12d0c2653c7af96275ffb2400f2936a19f09"
+const ContractSHA256 = "4c10e9b51ce6bc81203f8071cb59ce140d5c07a336ef1c106269f3d90a1c0c69"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -94,6 +94,7 @@ const (
 	ErrorCodeMediumNotFound                         ErrorCode = "MEDIUM_NOT_FOUND"
 	ErrorCodeArtifactNotFailed                      ErrorCode = "ARTIFACT_NOT_FAILED"
 	ErrorCodeMediumInUse                            ErrorCode = "MEDIUM_IN_USE"
+	ErrorCodeMediumIsDefault                        ErrorCode = "MEDIUM_IS_DEFAULT"
 	ErrorCodeMediumExists                           ErrorCode = "MEDIUM_EXISTS"
 	ErrorCodeStorageCredentialNotFound              ErrorCode = "STORAGE_CREDENTIAL_NOT_FOUND"
 	ErrorCodeSSHKeyCandidateNotFound                ErrorCode = "SSH_KEY_CANDIDATE_NOT_FOUND"
@@ -138,6 +139,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
 	ErrorCodeMediumInUse,
+	ErrorCodeMediumIsDefault,
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
@@ -206,6 +208,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
 	ErrorCodeMediumInUse,
+	ErrorCodeMediumIsDefault,
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
@@ -216,7 +219,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeMediumIsDefault},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -766,7 +769,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeMediumNotFound},
-			409: {ErrorCodeMediumInUse},
+			409: {ErrorCodeMediumInUse, ErrorCodeMediumIsDefault},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -789,6 +792,18 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeMediumNotFound, ErrorCodeStorageCredentialNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "setDefaultStorageMedium", Method: "PUT", Path: "/storage-mediums/{id}/default",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1948,6 +1963,9 @@ type StorageMediumSummary struct {
 	Bucket              string `json:"bucket"`
 	Endpoint            string `json:"endpoint,omitempty"`
 	ID                  string `json:"id"`
+	IsDefault           bool   `json:"is_default"`
+	IsLocal             bool   `json:"is_local"`
+	Path                string `json:"path,omitempty"`
 	Prefix              string `json:"prefix,omitempty"`
 	ReadsRequireRestore bool   `json:"reads_require_restore"`
 	Region              string `json:"region,omitempty"`

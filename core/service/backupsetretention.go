@@ -491,7 +491,14 @@ func toConfigRetention(o RetentionOverride) config.Retention {
 			// doc gives on the settings path: this assignment replaces a
 			// whole chain, so a field this projection drops is a field
 			// the save deletes from the operator's file.
-			Medium: t.Medium,
+			//
+			// Normalised on the way in, exactly as applyRetentionUpdate
+			// normalises the deployment-wide chain (H2.2, issue #622). A
+			// per-set override is a whole chain in its own right and its
+			// picker offers the same destinations, so a rule applied on
+			// one path and not the other would make the local hard drive
+			// selectable in one editor and refused in the other.
+			Medium: mediumForConfig(t.Medium),
 		})
 	}
 	if o.ProtectLastKnownGood != nil {

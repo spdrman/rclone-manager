@@ -301,9 +301,24 @@ func (c *Client) UpdateStorageMedium(ctx context.Context, id string, req apicont
 }
 
 // RemoveStorageMedium is DELETE /storage-mediums/{id}, which the engine
-// refuses while any copy names the destination (FR-30).
+// refuses while any copy names the destination (FR-30), and since H2.2
+// (#622) also when the destination is the local hard drive or is the one
+// a newly created retention tier starts on.
 func (c *Client) RemoveStorageMedium(ctx context.Context, id string) error {
 	return c.call(ctx, "removeStorageMedium", []string{id}, nil, nil)
+}
+
+// SetDefaultStorageMedium is PUT /storage-mediums/{id}/default: make this
+// the destination a NEWLY CREATED retention tier starts on (H2.2, #622).
+//
+// It carries no body. The whole content of the request is which
+// destination, and that is in the path, so a body would be a second place
+// for the same fact to be written and a second thing for the engine to
+// have to reconcile against the path.
+func (c *Client) SetDefaultStorageMedium(ctx context.Context, id string) (apicontract.StorageMediumSummary, error) {
+	var out apicontract.StorageMediumSummary
+	err := c.call(ctx, "setDefaultStorageMedium", []string{id}, nil, &out)
+	return out, err
 }
 
 // ListActivity is GET /activity: the deployment-wide lifecycle feed, newest

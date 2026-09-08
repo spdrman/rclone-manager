@@ -147,6 +147,13 @@ var contractBindings = map[string]contractBinding{
 	"updateStorageMedium":             {storageMediumRequest{}, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3"},
 	"removeStorageMedium":             {nil, nil, "/api/v1/storage-mediums/offsite_s3"},
 	"getStorageMediumUsage":           {nil, storageMediumUsageResponse{}, "/api/v1/storage-mediums/offsite_s3/usage"},
+
+	// H2.2 (#622). It answers with the destination that is now the
+	// default, which is a StorageMediumSummary and not a shape of its
+	// own: a caller that just moved the default needs the entry back, and
+	// a bespoke "ok" body would be a second description of a destination
+	// for one call to drift from.
+	"setDefaultStorageMedium": {nil, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3/default"},
 	"setBackupSetEnabled":             {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
 	"setBackupSetReadOnly":            {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 

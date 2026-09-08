@@ -148,6 +148,35 @@ type StorageMediumSummary struct {
 	// engine's own access states use, so a surface never has to hold its
 	// own list of which classes are archive.
 	ReadsRequireRestore bool
+
+	// Path, IsLocal and IsDefault are H2.2's three additions (issue
+	// #622), and the first two exist because this type now describes a
+	// destination that is not a bucket.
+	//
+	// Path is the drive the LOCAL destination writes to, resolved exactly
+	// as CapacitySettings.BackupRoot resolves it so one deployment cannot
+	// report two mounts, and empty for every declared medium because a
+	// bucket has no path on this machine. It is the answer to the
+	// question #622 says the settings list could not answer at all: the
+	// list omitted the drive backups actually land on, and a local entry
+	// that did not name the drive would only half fix that.
+	//
+	// IsLocal separates the one synthesised entry from the declared ones,
+	// so a surface decides what to offer (no Edit, no Remove) on a fact
+	// rather than by comparing an id against a reserved string it would
+	// have to hold its own copy of. Type carries the same information and
+	// is the wrong field to branch on: it is a vocabulary that grows by
+	// architecture decision, and a second local-ish backend added there
+	// one day must not silently make an entry undeletable.
+	//
+	// IsDefault is the destination a NEWLY CREATED retention tier starts
+	// on. Exactly one entry in a list carries it. It says nothing about
+	// where anything currently is: an existing tier goes on naming
+	// whatever it named when this moves. See
+	// BackupService.SetDefaultStorageMedium.
+	Path      string
+	IsLocal   bool
+	IsDefault bool
 }
 
 // VerificationClassInfo is one rung of FR-31's ladder, with the engine's
@@ -343,10 +372,26 @@ func toServicePlacement(p state.Placement, idx mediumIndex) Placement {
 	return out
 }
 
-// toStorageMediumSummaries projects the configured mediums onto the
-// settings boundary, in declaration order.
+// toStorageMediumSummaries projects the destinations this deployment has
+// onto the settings boundary: the local hard drive first, then the
+// declared mediums in declaration order.
+//
+// The local entry leads and is not optional (H2.2, issue #622). It is
+// where backups actually land and what every tier that names no medium
+// means, and a list that omitted it was a list of the places a backup
+// could go that left out the one every deployment uses. It also makes
+// #622's second invariant, "there is never zero destinations", true by
+// construction here rather than by a check somewhere else: this function
+// cannot return an empty slice.
+//
+// Declaration order is preserved for the declared ones, unchanged, so a
+// settings page still shows the operator's own file back to them in the
+// order they wrote it.
 func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
-	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums))
+	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums)+1)
+	out = append(out, localStorageMediumSummary(cfg))
+
+	defaultID := cfg.EffectiveDefaultStorageMedium()
 	for _, m := range cfg.StorageMediums {
 		class := m.EffectiveStorageClass()
 		out = append(out, StorageMediumSummary{
@@ -359,6 +404,7 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			Prefix:              m.Prefix,
 			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
+			IsDefault:           m.ID == defaultID,
 		})
 	}
 	return out

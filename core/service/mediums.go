@@ -315,15 +315,31 @@ func (b *BackupService) UpdateStorageMedium(_ context.Context, spec StorageMediu
 	return b.writeStorageMedium(spec, true)
 }
 
-// RemoveStorageMedium un-declares a destination, and refuses while any
-// copy names it (FR-30).
+// RemoveStorageMedium un-declares a destination, and refuses in three
+// cases: while any copy names it (FR-30), when it is the local hard drive,
+// and when it is the destination a newly created tier starts on (H2.2,
+// issue #622).
 //
-// The refusal is not a nicety. Today a removed medium leaves
+// The FR-30 refusal is not a nicety. Today a removed medium leaves
 // ErrMediumNotDeclared behind for every surface that touches the copies
 // on it and those copies read as unreachable, which is honest and
 // survivable, and is not something an operator should be able to do by
 // accident from a list. The refusal carries the count and the backup
 // sets, so what comes back is something to act on rather than a "no".
+//
+// The other two are #622's invariants, and they are ADDITIONAL refusals
+// rather than a replacement: a destination that is both in use and the
+// default is refused for whichever is asked first, and the FR-30 answer
+// goes first because it is the one that names affected backups.
+//
+// The local hard drive cannot be un-declared because it was never
+// declared. It is synthesised from the configuration on every read
+// (localStorageMediumSummary), it is where every tier that names no
+// destination puts its backups, and a deployment without it is not a
+// deployment this product can describe. Refusing it here is what makes
+// #622's "there is never zero destinations" invariant hold against a
+// caller that goes straight to the API rather than through a list that
+// hides the button.
 //
 // A tier still naming the medium is refused too, by config.Validate over
 // the whole configuration, which is where that rule already lives.
@@ -333,6 +349,10 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 	}
 	if id == "" {
 		return fmt.Errorf("%w: a storage medium id is required", ErrInvalidRequest)
+	}
+	if id == StorageMediumLocalID {
+		return fmt.Errorf("%w: %s is the drive this deployment's backups land on. It is not declared in the configuration and cannot be un-declared: every retention tier that names no destination means this one, and a deployment with no destination at all is not a state this product can be in",
+			ErrStorageMediumIsDefault, id)
 	}
 
 	// Asked BEFORE the file is re-read, encoded or written, so a refused
@@ -352,6 +372,15 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 	cfg, err := config.Load(b.configPath)
 	if err != nil {
 		return fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	// Against the file as it actually is right now rather than against
+	// this process's loaded copy, for the reason UpdateSettings asks its
+	// own consent question that way: the default this removal is refused
+	// over is the one the deployment has, including one moved by hand
+	// since this service started.
+	if cfg.EffectiveDefaultStorageMedium() == id {
+		return storageMediumIsDefaultRefusal(id)
 	}
 	kept := make([]config.StorageMedium, 0, len(cfg.StorageMediums))
 	found := false
@@ -374,6 +403,12 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 		kept = nil
 	}
 	cfg.StorageMediums = kept
+
+	// #622's third invariant, applied on the way out rather than left to
+	// follow from the fact that the local hard drive is always present.
+	// See normalizeDefaultStorageMedium for why it is stated rather than
+	// inherited, and for the hand-edited configuration it also repairs.
+	normalizeDefaultStorageMedium(cfg)
 
 	return b.persistConfig(cfg)
 }
