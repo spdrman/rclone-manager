@@ -53,7 +53,13 @@ import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
 import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
 import { CommandEcho } from "@shared/pages/CommandEcho";
-import { preflightCommand, removeCommand, showCommand } from "@shared/pages/storageDestinationCommands";
+import {
+  removeCommand,
+  setDefaultCommand,
+  showCommand,
+  testConnectionCommand
+} from "@shared/pages/storageDestinationCommands";
+import { destinationLabel } from "@shared/pages/retentionChain";
 
 export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
@@ -62,7 +68,7 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
   const [adding, setAdding] = useState(false);
 
   return (
-    <section className="card">
+    <section className="card" role="region" aria-label="Storage destinations">
       <div className="card__header">
         <h2 className="eyebrow">Storage destinations</h2>
       </div>
@@ -82,14 +88,22 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
         ) : mediums.data ? (
           <>
             <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
-              The places a retention tier can send a backup to, besides each backup set&rsquo;s own
-              local path. Declaring one moves nothing on its own: backups arrive here only once a
-              retention tier names it, which is a separate decision with a disclosure of its own.
+              Every place a retention tier can send a backup to, starting with the hard drive on
+              this machine, which is where they land unless a tier says otherwise. Declaring
+              another moves nothing on its own: backups arrive there only once a retention tier
+              names it, which is a separate decision with a disclosure of its own.
             </p>
 
             {mediums.data.length === 0 ? (
+              // Unreachable against a current engine, which always serves
+              // the drive backups land on (#622), and kept as a hole
+              // rather than deleted: an empty list is either an older
+              // engine or a broken invariant, and both are better said
+              // out loud than rendered as a card with nothing in it.
               <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
-                No storage destinations are declared. Every backup stays on this machine.
+                This deployment reports no storage destinations at all, not even the drive its
+                backups land on. That should not be possible; the service is older than this page,
+                or something is wrong with its configuration.
               </p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -143,12 +157,34 @@ export function StorageDestinationsCard({ readOnly }: { readOnly: boolean }) {
 }
 
 /**
- * One destination, with the three things that can be done to it.
+ * One destination, with the things that can be done to it.
  *
- * Verify and Remove both keep their result on this row rather than
- * navigating anywhere, because both answers are about this row and because
- * a failed verification has to be able to sit beside the destination it is
- * about while the operator reads what is affected.
+ * Test connection and Remove both keep their result on this row rather
+ * than navigating anywhere, because both answers are about this row and
+ * because a failed check has to be able to sit beside the destination it
+ * is about while the operator reads what is affected.
+ *
+ * # Which controls a row gets, and why two of them are absent rather than disabled
+ *
+ * The local hard drive has no Edit and no Remove (#622). It is not
+ * declared in the configuration, so there is nothing to edit and nothing
+ * to un-declare, and the backend refuses both. They are ABSENT rather
+ * than disabled because a disabled control invites an operator to work
+ * out what would enable it, and nothing will: this is not a permission
+ * they lack or a state they can leave, it is a thing that does not exist.
+ *
+ * The default destination has no Remove either, and that one IS a state
+ * they can leave: move the default elsewhere and the button comes back.
+ * The backend refuses it regardless (ErrStorageMediumIsDefault), so this
+ * is a courtesy in front of a gate rather than the gate.
+ *
+ * # "Test connection", not "Verify"
+ *
+ * The same idea was called three things: Verify here, `preflight` on the
+ * command line, and "Test connection" on the source side of this same
+ * product. One operator, one question, three words. This surface now says
+ * what the other one already said, and the CLI keeps `preflight` working
+ * as an alias so nothing scripted breaks.
  */
 function DestinationRow({
   medium,
@@ -167,7 +203,7 @@ function DestinationRow({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
 
-  async function verify() {
+  async function testConnection() {
     setBusy(true);
     setFailure(null);
     try {
@@ -179,7 +215,25 @@ function DestinationRow({
       // that just answered would put a count on screen with nothing to
       // act on. Nothing about this fetch changes any state; it reads the
       // journal.
-      setUsage(result.ok ? null : await api.getStorageMediumUsage(medium.id));
+      // The local hard drive holds no PLACEMENTS in the journal's sense:
+      // a copy there is the backup set's own local copy, which the
+      // journal records as the artifact rather than as a placement, so
+      // asking would answer zero and put a report on screen saying
+      // nothing is stored on the drive everything is stored on.
+      setUsage(result.ok || medium.isLocal ? null : await api.getStorageMediumUsage(medium.id));
+    } catch (e) {
+      setFailure(apiErrorOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function makeDefault() {
+    setBusy(true);
+    setFailure(null);
+    try {
+      await api.setDefaultStorageMedium(medium.id);
+      onChanged();
     } catch (e) {
       setFailure(apiErrorOf(e));
     } finally {
@@ -214,6 +268,8 @@ function DestinationRow({
 
   return (
     <div
+      role="group"
+      aria-label={"Storage destination " + medium.id}
       style={{
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)",
@@ -228,6 +284,11 @@ function DestinationRow({
         <span className="mono" style={{ fontSize: "var(--text-xs)", color: "var(--text-3)" }}>
           {describeDestination(medium)}
         </span>
+        {medium.isDefault ? (
+          <span className="badge" title="A retention tier created from here on starts on this destination.">
+            Default
+          </span>
+        ) : null}
         {medium.readsRequireRestore ? (
           <span className="badge" style={{ color: "var(--warn)" }}>
             reads need a restore
@@ -236,20 +297,44 @@ function DestinationRow({
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button className="btn" disabled={busy} onClick={verify}>
-          {busy ? "Working…" : "Verify"}
+        <button className="btn" disabled={busy} onClick={testConnection}>
+          {busy ? "Working…" : "Test connection"}
         </button>
-        <button className="btn" disabled={readOnly || busy} onClick={onEdit}>
-          Edit
-        </button>
-        <button className="btn" disabled={readOnly || busy} onClick={remove}>
-          Remove
-        </button>
+        {medium.isDefault ? null : (
+          <button className="btn" disabled={readOnly || busy} onClick={makeDefault}>
+            Make default
+          </button>
+        )}
+        {medium.isLocal ? null : (
+          <button className="btn" disabled={readOnly || busy} onClick={onEdit}>
+            Edit
+          </button>
+        )}
+        {medium.isLocal || medium.isDefault ? null : (
+          <button className="btn" disabled={readOnly || busy} onClick={remove}>
+            Remove
+          </button>
+        )}
       </div>
+
+      {medium.isDefault ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
+          A retention tier created from here on starts on this destination. Moving that mark moves
+          no backup and rewrites no tier: it decides where the NEXT tier begins. This destination
+          cannot be removed while it carries the mark.
+        </p>
+      ) : null}
+      {medium.isLocal ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
+          This is not something the configuration declares, so there is nothing here to edit and
+          nothing to remove. Every retention tier that names no other destination keeps its backups
+          here.
+        </p>
+      ) : null}
 
       <CommandEcho
         label="the same thing from a terminal"
-        commands={[showCommand(medium.id), preflightCommand(medium.id), removeCommand(medium.id)]}
+        commands={commandsFor(medium)}
       />
 
       {failure ? (
@@ -349,8 +434,32 @@ function AffectedSets({ usage }: { usage: StorageMediumUsage }) {
 
 /** The one-line description a row shows: everything about the place, and
  *  nothing about the credential, because the API reports nothing about the
- *  credential (see StorageMedium's own doc). */
+ *  credential (see StorageMedium's own doc).
+ *
+ *  The local hard drive names the drive it writes to, which is the fact
+ *  #622 says this list has to carry: an entry saying only "local" leaves
+ *  an operator with two NAS volumes no better off than an entry that was
+ *  missing entirely. It shares destinationLabel with the tier picker so
+ *  the two surfaces cannot come to describe one destination differently. */
 function describeDestination(m: StorageMedium): string {
+  if (m.isLocal) return destinationLabel(m);
   const where = m.prefix ? `${m.bucket}/${m.prefix}` : m.bucket;
   return [m.type, where, m.region, m.storageClass].filter(Boolean).join(" · ");
+}
+
+/** The commands one row's controls are equivalent to, in the order the
+ *  buttons above them sit in.
+ *
+ *  A row prints only the commands its own buttons offer. A `medium
+ *  remove local` under an entry with no Remove button would teach a
+ *  command that is refused, and a `medium default` under the destination
+ *  that already carries the mark would be a line that changes nothing.
+ *  EPIC G's rule is that what an operator can DO has an equivalent
+ *  command, not that every verb appears under every row. */
+function commandsFor(m: StorageMedium): string[] {
+  const out = [testConnectionCommand(m.id)];
+  if (!m.isDefault) out.push(setDefaultCommand(m.id));
+  if (!m.isLocal) out.push(showCommand(m.id));
+  if (!m.isLocal && !m.isDefault) out.push(removeCommand(m.id));
+  return out;
 }

@@ -51,7 +51,7 @@ const STORAGE = {
 };
 
 const MEDIUMS: StorageMedium[] = [
-  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false }
+  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false }
 ];
 
 function settingsFixture(): AppSettings {
@@ -122,7 +122,7 @@ async function renderSettings(preflight: ReturnType<typeof vi.fn>) {
 const tier = (n: number) => within(screen.getByRole("group", { name: "Tier " + n }));
 
 async function pointMonthlyAtTheMedium() {
-  fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
+  fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
     target: { value: "offsite_s3" }
   });
   await screen.findByRole("group", { name: "Storage medium disclosure" });

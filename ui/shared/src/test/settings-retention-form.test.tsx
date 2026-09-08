@@ -205,10 +205,15 @@ describe("SettingsPage retention policy form", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
 
     const req = updateSettings.mock.calls[0][0] as UpdateSettingsRequest;
+    // Every tier names its destination on the way out, the local hard
+    // drive included (#622). That is the whole chain going back exactly
+    // as it was read, which is what stops a save that changed one keep
+    // from moving another tier's backups: the field cannot be dropped
+    // because there is no spelling of "unset" for it to be dropped to.
     expect(req.retention?.tiers).toEqual([
-      { name: "daily", granularity: "day", keep: 10, periodDays: undefined, windowUnit: undefined },
-      { name: "weekly", granularity: "week", keep: 3, periodDays: undefined, windowUnit: "month" },
-      { name: "monthly", granularity: "month", keep: 12, periodDays: undefined, windowUnit: undefined }
+      { name: "daily", granularity: "day", keep: 10, periodDays: undefined, windowUnit: undefined, medium: "local" },
+      { name: "weekly", granularity: "week", keep: 3, periodDays: undefined, windowUnit: "month", medium: "local" },
+      { name: "monthly", granularity: "month", keep: 12, periodDays: undefined, windowUnit: undefined, medium: "local" }
     ]);
     // Untouched scalars are absent, not resent: the endpoint reads an
     // absent key as "leave this alone".
@@ -260,7 +265,7 @@ describe("SettingsPage retention policy form", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     const req = updateSettings.mock.calls[0][0] as UpdateSettingsRequest;
     expect(req.retention?.tiers).toEqual([
-      { name: "annual", granularity: "year", keep: 5, periodDays: undefined, windowUnit: undefined }
+      { name: "annual", granularity: "year", keep: 5, periodDays: undefined, windowUnit: undefined, medium: "local" }
     ]);
   });
 
@@ -367,7 +372,7 @@ describe("SettingsPage retention policy form", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     const sent = (updateSettings.mock.calls[0][0] as UpdateSettingsRequest).retention?.tiers?.[0];
     expect(sent).toEqual({
-      name: "fortnightly", granularity: "days", keep: 7, periodDays: 14, windowUnit: undefined
+      name: "fortnightly", granularity: "days", keep: 7, periodDays: 14, windowUnit: undefined, medium: "local"
     });
 
     // Switching back off the custom period drops period_days rather than

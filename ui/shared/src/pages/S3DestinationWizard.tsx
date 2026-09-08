@@ -66,7 +66,7 @@ import {
   addCommand,
   editCommand,
   importCredentialsCommand,
-  preflightCandidateCommand
+  testConnectionCandidateCommand
 } from "@shared/pages/storageDestinationCommands";
 
 /**
@@ -117,7 +117,17 @@ export function S3DestinationWizard({
 }: {
   editing?: StorageMedium;
   onClose(): void;
-  onSaved(): void;
+  /** Called once the destination is written, with the destination the
+   *  engine answered with.
+   *
+   *  It carries the saved medium since #622, because the wizard is now
+   *  opened from INSIDE a retention tier's picker as well as from the
+   *  settings list, and the tier has to be able to select what was just
+   *  created. Handing back the engine's own answer rather than the draft
+   *  is the point: an id the engine resolved differently, or a class it
+   *  defaulted, is what the tier should end up pointing at. Callers that
+   *  only reload a list ignore the argument. */
+  onSaved(saved?: StorageMedium): void;
 }) {
   const api = useApi();
   const fieldId = useId();
@@ -203,9 +213,10 @@ export function S3DestinationWizard({
     setBusy(true);
     setFailure(null);
     try {
-      if (editing) await api.updateStorageMedium(editing.id, spec);
-      else await api.createStorageMedium(spec);
-      onSaved();
+      const saved = editing
+        ? await api.updateStorageMedium(editing.id, spec)
+        : await api.createStorageMedium(spec);
+      onSaved(saved);
     } catch (e) {
       setFailure(apiErrorOf(e));
     } finally {
@@ -652,7 +663,7 @@ function VerifyPane({
         <MediumPreflightChecks report={report} />
       ) : null}
 
-      <CommandEcho label="the same thing from a terminal" commands={[preflightCandidateCommand(spec)]} />
+      <CommandEcho label="the same thing from a terminal" commands={[testConnectionCandidateCommand(spec)]} />
 
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn" type="button" onClick={onBack}>

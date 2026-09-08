@@ -295,6 +295,7 @@ describe("every request the shared client makes is a declared operation", () => 
           id: "offsite_s3", type: "s3", bucket: "nas-backups"
         })],
       ["removeStorageMedium", () => httpApi.removeStorageMedium("offsite_s3")],
+      ["setDefaultStorageMedium", () => httpApi.setDefaultStorageMedium("offsite_s3")],
       ["getStorage", () => httpApi.getStorage()],
       ["scanCatalog", () => httpApi.scanCatalog()],
       ["rebuildCatalog", () => httpApi.rebuildCatalog()],

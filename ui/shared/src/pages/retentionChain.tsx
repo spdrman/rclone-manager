@@ -1,10 +1,14 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupManagerError, LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
+import { CommandEcho } from "@shared/pages/CommandEcho";
+import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
+import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
+import { testConnectionCommand, tierMediumCommand } from "@shared/pages/storageDestinationCommands";
 import type {
   MediumPreflight,
   RetentionSchema,
@@ -49,18 +53,24 @@ export interface TierDraft {
   keep: string;
   periodDays: string;
   windowUnit: string;
-  /** The storage medium this tier names (FR-27), or "" for the local
-   *  backup root. Held as the id rather than an index so a medium removed
-   *  from the configuration between load and save cannot silently become
-   *  a different one.
+  /** The storage destination this tier names (FR-27), by id, with
+   *  LOCAL_DESTINATION_ID for the drive on this machine. Held as the id
+   *  rather than an index so a destination removed from the
+   *  configuration between load and save cannot silently become a
+   *  different one.
    *
-   *  TierRow edits it when the deployment declares a medium (#240), and
-   *  it is held even when it does not, because a chain save REPLACES the
-   *  operator's whole chain: a field the draft dropped would be deleted
-   *  from their configuration file by the act of changing something
-   *  else, which is precisely what service.RetentionTier.Medium's own doc
-   *  calls a lossy boundary. Editing daily's keep must not quietly move
-   *  monthly's artifacts back onto local disk. */
+   *  It is never empty since #622. The backend names a destination on
+   *  every tier, the picker offers one on every tier, and a draft that
+   *  could hold "" would be a third spelling of local sitting between two
+   *  that agree. toDraft fills it in for a tier that arrived without one,
+   *  which is what an older engine answers.
+   *
+   *  It is carried whether or not the row edits it, because a chain save
+   *  REPLACES the operator's whole chain: a field the draft dropped would
+   *  be deleted from their configuration file by the act of changing
+   *  something else, which is precisely what service.RetentionTier.Medium's
+   *  own doc calls a lossy boundary. Editing daily's keep must not
+   *  quietly move monthly's artifacts back onto local disk. */
   medium: string;
 }
 
@@ -79,7 +89,11 @@ export function toDraft(t: RetentionTierSetting): TierDraft {
     keep: String(t.keep),
     periodDays: t.periodDays ? String(t.periodDays) : "",
     windowUnit: t.windowUnit ?? "",
-    medium: t.medium ?? ""
+    // A tier that named no destination is on the local hard drive, which
+    // is what absence meant before #622 and what an older engine still
+    // answers. Resolved here, once, rather than at each place that reads
+    // the draft.
+    medium: t.medium || LOCAL_DESTINATION_ID
   };
 }
 
@@ -113,6 +127,27 @@ export const NOT_BUILT_LOCAL_VOLUME = "__not_built_local_volume";
  *  served by the schema for the same reason. */
 export function defaultChain(schema: RetentionSchema): TierDraft[] {
   return schema.defaultTiers.map(toDraft);
+}
+
+/**
+ * The destination a NEWLY CREATED tier starts on: the one the deployment
+ * marked default, or the local hard drive when nothing is marked (#622).
+ *
+ * Read off the served list rather than held as a preference in this form,
+ * for the reason defaultChain is served rather than written out here: it
+ * is a value the deployment decided and a second copy would be free to go
+ * stale, and a stale one here would start somebody's next tier on a
+ * destination they moved away from.
+ *
+ * Falling back to the local hard drive rather than to the first entry is
+ * the safe direction. An engine older than #622 marks nothing, and its
+ * first declared medium is a bucket: starting a new tier there would send
+ * backups off the machine on the strength of a field that was not
+ * answered, which is exactly the write FR-27's disclosure stands in front
+ * of.
+ */
+export function defaultDestinationId(mediums: StorageMedium[]): string {
+  return mediums.find((m) => m.isDefault)?.id ?? LOCAL_DESTINATION_ID;
 }
 
 /** Operator-facing words for the granularities the schema serves. A
@@ -150,22 +185,41 @@ export function TierRow({
   readOnly,
   canRemove,
   onChange,
-  onRemove
+  onRemove,
+  onDestinationsChanged
 }: {
   index: number;
   tier: TierDraft;
   schema: RetentionSchema;
-  /** Every storage medium the configuration declares. Empty when it
-   *  declares none, which is when the picker below is not rendered at
-   *  all (FR-35): a configuration that never heard of storage mediums
-   *  gets the row it already had, with no extra control to read past and
-   *  no new way to get its policy wrong. */
+  /** Every destination this deployment has: the drive backups land on
+   *  first, then whatever the configuration declares. It is never empty
+   *  on a current engine (#622), and the picker is rendered whether or
+   *  not anything is declared, which is the reversal that issue asks
+   *  for.
+   *
+   *  It used to be hidden when nothing was declared, on the reasoning
+   *  that there was nowhere else for a backup to go. That was right about
+   *  the choices and wrong about the operator: with the control absent
+   *  there was no way to see where a tier's backups DO go, and no
+   *  affordance for putting them anywhere else, so the only tier that
+   *  could ever be pointed at S3 was one edited outside the product.
+   *
+   *  An empty list is still handled rather than assumed away, because an
+   *  older engine answers one: the picker then offers the local hard
+   *  drive alone, which is the honest rendering of "this deployment has
+   *  one destination". */
   mediums: StorageMedium[];
   errors: TierErrors;
   readOnly: boolean;
   canRemove: boolean;
   onChange(patch: Partial<TierDraft>): void;
   onRemove(): void;
+  /** Called after a destination is created from inside this row, so the
+   *  card above reloads the list and the new one is selectable without a
+   *  page reload. Optional: the per-set editor passes it as readily as
+   *  the settings one, and a row rendered without it simply offers no
+   *  inline create. */
+  onDestinationsChanged?(): void;
 }) {
   const custom = tier.granularity === CUSTOM_PERIOD;
   const position = index + 1;
@@ -267,11 +321,11 @@ export function TierRow({
         </Field>
       )}
 
-      {/* The picker exists only where there is somewhere else to put a
-          backup. The class is part of the choice, not decoration: one of
-          these places cannot be read without a restore, and an operator
-          picking blind would find that out hours later, holding a restore
-          request they did not know they needed.
+      {/* The picker is on every tier, always. The class is part of the
+          choice, not decoration: one of these places cannot be read
+          without a restore, and an operator picking blind would find that
+          out hours later, holding a restore request they did not know
+          they needed.
 
           A medium whose reads need a restore is listed and NOT selectable.
           The server refuses a tier bound to one when the config loads
@@ -282,18 +336,29 @@ export function TierRow({
           who declared it wants to know it is there, and it IS legal to
           declare one and restore from it by hand. So it stays on the list,
           greyed out, saying why. */}
-      {mediums.length > 0 ? (
+      <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8 }}>
         <Field label="Stored on" help={FIELD_HELP.tierMedium}>
           {(helpId) => (
             <select
               className="select"
               aria-describedby={helpId}
-              aria-label={"Storage medium for tier " + position}
+              aria-label={"Storage destination for tier " + position}
               value={tier.medium}
               disabled={readOnly}
               onChange={(e) => onChange({ medium: e.target.value })}
             >
-              <option value="">Local backup root</option>
+              {/* The local hard drive comes off the served list rather
+                  than being a literal option here, so the row names the
+                  DRIVE it writes to. A hardcoded "Local backup root" was
+                  the old spelling and it answered an operator with two
+                  volumes no better than silence did. An older engine
+                  serves no local entry at all, so one is drawn from the
+                  constant instead: the tier still points somewhere and
+                  the picker still works, it just cannot say which
+                  drive. */}
+              {mediums.some((m) => m.isLocal) ? null : (
+                <option value={LOCAL_DESTINATION_ID}>The hard drive on this machine</option>
+              )}
               {/* The third kind of destination #595 asked for, which does
                   not exist. It is here, named and disabled, rather than
                   left off the menu, and both halves of that are the
@@ -326,17 +391,20 @@ export function TierRow({
               </option>
               {mediums.map((m) => (
                 <option key={m.id} value={m.id} disabled={m.readsRequireRestore}>
-                  {m.id +
-                    " (" +
-                    m.storageClass +
-                    (m.readsRequireRestore ? ", cannot receive backups: reads need a restore" : "") +
-                    ")"}
+                  {destinationLabel(m)}
                 </option>
               ))}
             </select>
           )}
         </Field>
-      ) : null}
+
+        <TierDestinationActions
+          tier={tier}
+          readOnly={readOnly}
+          onDestinationsChanged={onDestinationsChanged}
+          onPick={(id) => onChange({ medium: id })}
+        />
+      </div>
 
       <div style={{ alignSelf: "end" }}>
         <button
@@ -353,6 +421,148 @@ export function TierRow({
   );
 }
 
+
+/**
+ * The name a destination goes by in a picker: what it is, and enough of
+ * where it is that an operator can tell two of them apart.
+ *
+ * The local hard drive names its DRIVE, which is #622's own complaint
+ * about the old list: a row saying only "local" leaves somebody with two
+ * NAS volumes exactly where they started. A deployment that cannot place
+ * it yet (no backup set, or sets on different volumes) says so rather
+ * than rendering a blank path, because a label ending in a colon and
+ * nothing reads as a bug.
+ *
+ * A declared destination names its storage class, which is part of the
+ * choice rather than decoration: one of these places cannot be read
+ * without a restore, and the label says so before it is picked rather
+ * than after.
+ */
+export function destinationLabel(m: StorageMedium): string {
+  if (m.isLocal) {
+    return m.path
+      ? "The hard drive on this machine (" + m.path + ")"
+      : "The hard drive on this machine (which drive is not known yet)";
+  }
+  return (
+    m.id +
+    " (" +
+    m.storageClass +
+    (m.readsRequireRestore ? ", cannot receive backups: reads need a restore" : "") +
+    ")"
+  );
+}
+
+/**
+ * The two things an operator has to be able to do WITHOUT leaving the
+ * tier: prove the destination it names, and make a new one (#622).
+ *
+ * That is the whole point of putting a picker here rather than sending
+ * somebody to the settings page and back. A destination created in the
+ * middle of choosing one needs the same check before it is trusted, and a
+ * detour to another page to run that check is a detour most people will
+ * not take.
+ *
+ * The test is offered and never required, which is MediumPreflightPanel's
+ * own rule one component over: an operator who is about to fix the bucket,
+ * or who knows something this check does not, is not served by a form that
+ * refuses. What it does is make the answer available before the
+ * consequence.
+ *
+ * The command echo is EPIC G's standing rule: the line under the picker is
+ * the one that reproduces the click, so somebody who moved one tier by
+ * clicking has read the command that moves the next fifty.
+ */
+function TierDestinationActions({
+  tier,
+  readOnly,
+  onDestinationsChanged,
+  onPick
+}: {
+  tier: TierDraft;
+  readOnly: boolean;
+  onDestinationsChanged?(): void;
+  onPick(mediumId: string): void;
+}) {
+  const api = useApi();
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<MediumPreflight | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  function test() {
+    setBusy(true);
+    setReport(null);
+    setError(null);
+    api
+      .preflightStorageMedium(tier.medium)
+      .then(setReport)
+      .catch((e: unknown) =>
+        setError(
+          e instanceof BackupManagerError
+            ? e.api.message
+            : "Backup Manager could not test the connection to this destination."
+        )
+      )
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button className="btn btn--sm" type="button" disabled={busy} onClick={test}>
+          {busy ? "Testing…" : "Test connection"}
+        </button>
+        {onDestinationsChanged ? (
+          <button className="btn btn--sm" type="button" disabled={readOnly} onClick={() => setAdding(true)}>
+            Add a destination
+          </button>
+        ) : null}
+        {report ? (
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
+            {report.ok
+              ? "This destination is ready for a backup."
+              : "This destination is not ready. Saving is still allowed; the checks below say why."}
+          </span>
+        ) : null}
+      </div>
+
+      <CommandEcho
+        label="the same thing from a terminal"
+        commands={
+          tier.name
+            ? [tierMediumCommand(tier.name, tier.medium), testConnectionCommand(tier.medium)]
+            : // A tier with no name yet cannot be named on a command line,
+              // and a line reading "--tier-medium =offsite_s3" is not a
+              // command an operator can paste. The test connection is
+              // still nameable, because it is about the destination
+              // rather than about the tier.
+              [testConnectionCommand(tier.medium)]
+        }
+      />
+
+      {error ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--danger)" }}>{error}</p>
+      ) : null}
+      {report ? <MediumPreflightChecks report={report} /> : null}
+
+      {adding ? (
+        <S3DestinationWizard
+          onClose={() => setAdding(false)}
+          onSaved={(created) => {
+            setAdding(false);
+            // Picked immediately, because choosing it is why they made
+            // it. A wizard that saved and left the tier on its old
+            // destination would make the operator repeat the choice they
+            // already expressed by creating the thing.
+            if (created) onPick(created.id);
+            onDestinationsChanged?.();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * One labelled control, its help pop-up (#278) and its validation message.
@@ -465,8 +675,15 @@ export function toTierSetting(t: TierDraft): RetentionTierSetting {
     // stray value the server refuses.
     periodDays: custom ? Number(t.periodDays) : undefined,
     windowUnit: custom || !t.windowUnit ? undefined : t.windowUnit,
-    // Carried back out unchanged. See TierDraft.medium.
-    medium: t.medium ? t.medium : undefined
+    // Carried back out by name, the local hard drive included. The
+    // backend is where that becomes the absence a configuration file
+    // spells local with, in one place, so sending it here is what keeps
+    // the read and the write agreeing about where this tier points
+    // (#622). Sending undefined would work too and would be worse: it
+    // would put a second spelling of local on the wire and leave the
+    // server unable to tell "on local disk" from "this client is too old
+    // to have an opinion".
+    medium: t.medium || LOCAL_DESTINATION_ID
   };
 }
 
@@ -476,7 +693,9 @@ export function toTierSetting(t: TierDraft): RetentionTierSetting {
  *  depends on object key ordering. */
 export function chainKey(tiers: RetentionTierSetting[]): string {
   return tiers
-    .map((t) => [t.name, t.granularity, t.periodDays ?? 0, t.keep, t.windowUnit ?? "", t.medium ?? ""].join(":"))
+    .map((t) =>
+      [t.name, t.granularity, t.periodDays ?? 0, t.keep, t.windowUnit ?? "", t.medium || LOCAL_DESTINATION_ID].join(":")
+    )
     .join("|");
 }
 
@@ -505,9 +724,13 @@ export function introducedMediumMappings(
   current: RetentionTierSetting[]
 ): RetentionTierSetting[] {
   return next.filter((t) => {
-    if (!t.medium) return false;
+    // The local hard drive is where the backups already are, so naming it
+    // discloses nothing and asks nobody to acknowledge anything. It is
+    // spelled by its reserved id since #622, and by absence on an older
+    // engine, and both mean the same thing here.
+    if (!t.medium || t.medium === LOCAL_DESTINATION_ID) return false;
     const was = current.find((b) => b.name === t.name);
-    return !was || (was.medium ?? "") !== t.medium;
+    return !was || (was.medium || LOCAL_DESTINATION_ID) !== t.medium;
   });
 }
 

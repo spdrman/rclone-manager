@@ -20,6 +20,7 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import {
   chainKey,
   defaultChain,
+  defaultDestinationId,
   introducedMediumMappings,
   MediumDisclosure,
   settingsKey,
@@ -121,6 +122,7 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
             mediums={settings.data.mediums}
             storage={settings.data.schema.storage}
             readOnly={readOnly}
+            onDestinationsChanged={settings.reload}
           />
         ) : (
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
@@ -141,17 +143,21 @@ function RetentionPolicyEditor({
   schema,
   mediums,
   storage,
-  readOnly
+  readOnly,
+  onDestinationsChanged
 }: {
   loaded: RetentionSettings;
   schema: RetentionSchema;
-  /** Every storage medium the configuration declares. EMPTY is the
-   *  ordinary case and the compatibility one: with no medium configured
-   *  there is nowhere else for a tier's backups to go, so the picker is
-   *  not rendered at all and the form is exactly the form it was. */
+  /** Every destination this deployment has, the drive backups land on
+   *  first (#622). The picker under each tier is rendered whatever is in
+   *  here, because there is always at least one destination and an
+   *  operator has to be able to see which one a tier is on. */
   mediums: StorageMedium[];
   storage: StorageSchema;
   readOnly: boolean;
+  /** Reloads the settings after a destination is created from inside a
+   *  tier, so the new one is selectable without a page reload. */
+  onDestinationsChanged(): void;
 }) {
   const api = useApi();
 
@@ -330,6 +336,7 @@ function RetentionPolicyEditor({
               setSaved(false);
               setTiers((current) => current.filter((_, n) => n !== i));
             }}
+            onDestinationsChanged={onDestinationsChanged}
           />
         ))}
       </div>
@@ -341,9 +348,14 @@ function RetentionPolicyEditor({
           disabled={readOnly}
           onClick={() => {
             setSaved(false);
+            // A new tier starts on the DEFAULT destination, which is the
+            // whole of what "default" governs (#622). It says nothing
+            // about where anything already is: the tiers above it keep
+            // whatever they named, and this one is the only thing the
+            // mark decides.
             setTiers((current) => [
               ...current,
-              toDraft({ name: "", granularity: "day", keep: 1 })
+              toDraft({ name: "", granularity: "day", keep: 1, medium: defaultDestinationId(mediums) })
             ]);
           }}
         >

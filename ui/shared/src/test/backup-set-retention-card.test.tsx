@@ -316,20 +316,32 @@ describe("mapping one backup set's tier to a storage medium", () => {
   it("offers the same medium picker the Settings page has, naming each medium's class and which one needs a restore", async () => {
     await openEditor(createMockApi());
 
-    const picker = tier(1).getByLabelText("Storage medium for tier 1") as HTMLSelectElement;
+    const picker = tier(1).getByLabelText("Storage destination for tier 1") as HTMLSelectElement;
     const options = Array.from(picker.options).map((o) => o.textContent);
-    expect(options).toContain("Local backup root");
+    expect(options).toContain("The hard drive on this machine (/data/backups)");
     expect(options).toContain("offsite_s3 (STANDARD_IA)");
     expect(options).toContain("offsite_cold (DEEP_ARCHIVE, cannot receive backups: reads need a restore)");
     // The inherited mapping is what the picker starts on: the editor
     // pre-fills from the chain in force, medium included.
-    expect((tier(3).getByLabelText("Storage medium for tier 3") as HTMLSelectElement).value).toBe("offsite_s3");
+    expect((tier(3).getByLabelText("Storage destination for tier 3") as HTMLSelectElement).value).toBe("offsite_s3");
   });
 
-  it("offers no medium picker at all for a deployment that never heard of storage mediums", async () => {
+  // This used to assert no picker at all on the FR-35 deployment, and
+  // #622 reversed the picker half while leaving the disclosure half
+  // exactly as it was. Both halves are the point.
+  //
+  // The picker is there, offering the one destination that deployment
+  // has, because "where do these backups live" is worth answering even
+  // when there is nothing to choose between. The disclosure is NOT, and
+  // that is unchanged: nothing is leaving this machine, so there is
+  // nothing to consent to, and a panel that appeared anyway would be the
+  // acknowledgment-fatigue FR-27 is careful to avoid.
+  it("offers the local hard drive and nothing else for a deployment that declared no destination", async () => {
     await openEditor(createMockApi("no-medium"));
 
-    expect(tier(1).queryByLabelText("Storage medium for tier 1")).toBeNull();
+    const picker = tier(1).getByLabelText("Storage destination for tier 1") as HTMLSelectElement;
+    const selectable = Array.from(picker.options).filter((o) => !o.disabled).map((o) => o.value);
+    expect(selectable).toEqual(["local"]);
     expect(screen.queryByRole("group", { name: "Storage medium disclosure" })).toBeNull();
   });
 
@@ -342,7 +354,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
     });
     await openEditor(api);
 
-    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), { target: { value: "offsite_s3" } });
+    fireEvent.change(tier(1).getByLabelText("Storage destination for tier 1"), { target: { value: "offsite_s3" } });
 
     const words = panel().textContent ?? "";
     expect(words).toMatch(/daily/);
@@ -367,7 +379,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
 
   it("forgets an acknowledgment given for a different destination, and says when that destination cannot be read on demand", async () => {
     await openEditor(createMockApi());
-    const picker = tier(1).getByLabelText("Storage medium for tier 1");
+    const picker = tier(1).getByLabelText("Storage destination for tier 1");
 
     fireEvent.change(picker, { target: { value: "offsite_s3" } });
     fireEvent.click(within(panel()).getByRole("checkbox"));
@@ -392,7 +404,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
     );
     await openEditor(api);
 
-    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), { target: { value: "offsite_s3" } });
+    fireEvent.change(tier(1).getByLabelText("Storage destination for tier 1"), { target: { value: "offsite_s3" } });
     fireEvent.click(within(panel()).getByRole("checkbox"));
     fireEvent.click(save());
 

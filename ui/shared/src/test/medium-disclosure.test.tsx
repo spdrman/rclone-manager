@@ -61,9 +61,18 @@ const STORAGE = {
     "I hold no price list and no knowledge of your rates."
 };
 
+/** The drive backups land on, which every deployment has and which the
+ *  settings response carries first since #622. The cases below are about
+ *  a tier LEAVING it, so it is a fixture value rather than the subject. */
+const LOCAL: StorageMedium = {
+  id: "local", type: "local", bucket: "", path: "/data/backups", storageClass: "",
+  uploadVerification: "readback", readsRequireRestore: false, isLocal: true, isDefault: true
+};
+
 const MEDIUMS: StorageMedium[] = [
-  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false },
-  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback", readsRequireRestore: true }
+  LOCAL,
+  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false },
+  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback", readsRequireRestore: true, isLocal: false, isDefault: false }
 ];
 
 function settingsFixture(over: {
@@ -127,25 +136,41 @@ describe("mapping a retention tier to a storage medium", () => {
     resetGraphForTests();
   });
 
-  // FR-35's compatibility line, on the form. A deployment that declares no
-  // storage medium has nowhere else to put a backup, so it gets exactly
-  // the form it already had: no extra control to read past, and no new way
-  // to get its policy wrong.
-  it("offers no medium picker at all when the configuration declares none", async () => {
-    await renderSettings({ settings: settingsFixture({ mediums: [] }) });
+  // This used to assert the opposite: with nothing declared, no picker at
+  // all, on FR-35's reasoning that a deployment which never heard of
+  // storage mediums should get exactly the form it had.
+  //
+  // #622 reversed it, and the argument it reversed is worth keeping
+  // rather than deleting. The old rule was right about the CHOICES and
+  // wrong about the operator: hiding the control also hid where a tier's
+  // backups go, so the only way to find out was to read config.yaml, and
+  // there was no affordance for putting them anywhere else. FR-35 is
+  // about a deployment's BEHAVIOUR being unchanged, which it is: a chain
+  // of local tiers still writes no medium: key, which core/service's own
+  // round-trip case pins.
+  //
+  // The picker now offers the local hard drive even when it is the only
+  // destination there is, because "where do these backups live" is a
+  // question worth answering with one option in the list.
+  it("offers the picker even when only the local hard drive is there", async () => {
+    await renderSettings({ settings: settingsFixture({ mediums: [LOCAL] }) });
 
-    expect(tier(1).queryByLabelText("Storage medium for tier 1")).toBeNull();
-    // The positive control: the tier really did render, so the absence
-    // above is the absence of the picker and not of the form.
+    const picker = tier(1).getByLabelText("Storage destination for tier 1") as HTMLSelectElement;
+    expect(picker.value).toBe("local");
+    // The positive control: the tier really did render, so the picker
+    // above is this tier's rather than something else on the page.
     expect((tier(1).getByLabelText("Name") as HTMLInputElement).value).toBe("daily");
   });
 
   it("names the storage class in the picker, and says which one needs a restore", async () => {
     await renderSettings();
 
-    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
+    const picker = tier(2).getByLabelText("Storage destination for tier 2") as HTMLSelectElement;
     const options = Array.from(picker.options).map((o) => o.textContent);
-    expect(options).toContain("Local backup root");
+    // The local hard drive names the DRIVE it writes to, which is #622's
+    // own complaint about the old label: "Local backup root" left an
+    // operator with two NAS volumes exactly where they started.
+    expect(options).toContain("The hard drive on this machine (/data/backups)");
     expect(options).toContain("offsite_s3 (STANDARD_IA)");
     // The archive medium is labelled as one BEFORE it is chosen, and it
     // cannot be chosen at all. A tier bound to an archive class is refused
@@ -182,7 +207,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("lists a saved local volume, disabled, and says it is not built", async () => {
     await renderSettings();
 
-    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
+    const picker = tier(2).getByLabelText("Storage destination for tier 2") as HTMLSelectElement;
     const volume = Array.from(picker.options).find((o) => /second hard disk/i.test(o.textContent ?? ""));
     expect(volume).toBeTruthy();
     expect(volume?.textContent).toMatch(/NOT BUILT/);
@@ -206,7 +231,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("shows the deletion consequence, in the backend's own words, before the first mapping can be saved", async () => {
     await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
       target: { value: "offsite_s3" }
     });
 
@@ -233,7 +258,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("keeps Save disabled until the acknowledgment is ticked, then sends it", async () => {
     const { updateSettings } = await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
       target: { value: "offsite_s3" }
     });
     await screen.findByRole("group", { name: "Storage medium disclosure" });
@@ -292,7 +317,7 @@ describe("mapping a retention tier to a storage medium", () => {
       })
     });
 
-    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), {
+    fireEvent.change(tier(1).getByLabelText("Storage destination for tier 1"), {
       target: { value: "offsite_cold" }
     });
 
@@ -317,7 +342,7 @@ describe("mapping a retention tier to a storage medium", () => {
   it("forgets an acknowledgment given for a different mapping", async () => {
     await renderSettings();
 
-    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
       target: { value: "offsite_s3" }
     });
     fireEvent.click(await screen.findByRole("checkbox", { name: /I understand/i }));
@@ -326,7 +351,7 @@ describe("mapping a retention tier to a storage medium", () => {
     // Now point the same tier somewhere materially different: an archive
     // class nothing can read without a restore. The tick was given for the
     // other place.
-    fireEvent.change(tier(2).getByLabelText("Storage medium for tier 2"), {
+    fireEvent.change(tier(2).getByLabelText("Storage destination for tier 2"), {
       target: { value: "offsite_cold" }
     });
     expect((save() as HTMLButtonElement).disabled).toBe(true);
