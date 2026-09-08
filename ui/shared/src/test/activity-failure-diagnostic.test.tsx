@@ -224,3 +224,49 @@ describe("the dashboard's Recent activity panel does not swallow the same failur
     expect(within(panel).queryByRole("alert")).toBeNull();
   });
 });
+
+/**
+ * The backstop, driven directly.
+ *
+ * `ApiError.correlationId` used to be a required field, so every caller
+ * with no id to give wrote one down, and they all wrote the same literal.
+ * The constructors this issue owns are fixed. Four more live in retention
+ * and settings files another lane is working in, and the rule belongs
+ * where the id is rendered anyway: a surface written next month will have
+ * the same temptation, and this is what stops it reaching an operator.
+ */
+describe("ErrorState refuses an id that is not an id", () => {
+  afterEach(cleanup);
+
+  it("offers no advanced details for the literal 'unavailable'", async () => {
+    const { ErrorState } = await import("@shared/components/EmptyState");
+    render(<ErrorState message="Something failed." correlationId="unavailable" />);
+
+    expect(screen.queryByText("Advanced details")).toBeNull();
+    expect(document.body.textContent).not.toContain("unavailable");
+  });
+
+  it("shows a real id, which is the whole point of the check above", async () => {
+    const { ErrorState } = await import("@shared/components/EmptyState");
+    render(<ErrorState message="Something failed." correlationId="cid_realOne" />);
+
+    expect(screen.getByText("Advanced details")).toBeTruthy();
+    expect(document.body.textContent).toContain("cid_realOne");
+  });
+
+  it("offers a disclosure for a detail even when there is no id at all", async () => {
+    const { ErrorState } = await import("@shared/components/EmptyState");
+    render(<ErrorState message="Something failed." detail="TypeError: Failed to fetch" />);
+
+    expect(screen.getByText("Advanced details")).toBeTruthy();
+    expect(document.body.textContent).toContain("TypeError: Failed to fetch");
+    expect(document.body.textContent).not.toContain("correlation id");
+  });
+
+  it("offers no disclosure when the failure carried neither", async () => {
+    const { ErrorState } = await import("@shared/components/EmptyState");
+    render(<ErrorState message="Something failed." />);
+
+    expect(screen.queryByText("Advanced details")).toBeNull();
+  });
+});

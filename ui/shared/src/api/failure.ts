@@ -106,6 +106,24 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
 
   const api = apiErrorOf(e);
   if (api === null) {
+    // A SyntaxError is the one untyped exception that says where it came
+    // from. `fetch` never rejects with one, and nothing else in this
+    // frontend parses anything, so it means a response arrived and could
+    // not be read: the same fact `request()` labels, reached without the
+    // label because the throw came from a caller's own chain (or, in the
+    // browser suite, from a mock standing in for one). A TypeError does
+    // NOT say that, which is why it falls through to the branch below: a
+    // failed fetch and a property read on the wrong shape are both spelled
+    // TypeError, and guessing between them is the defect this module
+    // exists to stop.
+    if (e instanceof SyntaxError) {
+      return {
+        message: "Backup Manager answered, and this page could not read the answer.",
+        remediation:
+          "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
+        detail: detailOf(describeException(e), buildLine())
+      };
+    }
     // An exception that came from neither the service nor `request()`.
     // In practice that is a mapper throwing inside a `.then()` chained
     // onto a request that resolved, which is the shape #598 was reported
