@@ -765,8 +765,12 @@ var surfaces = []surface{
 		}},
 	{verb: "unconfigured", name: "what the journal remembers", mode: "", exit: 0,
 		argv: func(f fixture) []string { return []string{"unconfigured", "--config", f.configPath} }},
-	{verb: "medium", name: "preflight", mode: "", exit: 1,
-		note: "this deployment declares no storage medium, so this refuses for the missing subject",
+	{verb: "medium", name: "preflight", mode: "direct", exit: 1, routed: true,
+		note: "this deployment declares no storage medium, so this refuses for the missing subject. " +
+			"It names a mode as of #636 and did not before: a check that PASSES now clears that destination's " +
+			"unverified mark, which is a configuration write, so the verb moved onto the door the medium writes " +
+			"already go through. It is not a write ITSELF, which is why this row does not carry `writes`: the one " +
+			"thing it can change is a mark, and only on a destination that both exists and passes",
 		argv: func(f fixture) []string {
 			return []string{"medium", "--config", f.configPath, "preflight", "no-such-medium"}
 		}},
