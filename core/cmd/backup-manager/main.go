@@ -228,6 +228,15 @@ commands:
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
                                                   report the live retention/capacity settings, or change one in place;
                                                   a full retention tier-chain replacement is still a config-file edit
+  backup-set edit-hold <source/backup-set> [--release]
+                                                  report whether a backup set is held for editing, what taking the
+                                                  hold stopped, and when the lease expires; --release gives it back
+                                                  so the scheduler may run the set again rather than waiting for it
+                                                  to lapse. A hold lives in the memory of the process serving this
+                                                  deployment and does not survive it, so this needs a route to that
+                                                  process and refuses without one. There is no verb that TAKES a
+                                                  hold: a hold protects an editing session and a CLI edit is one
+                                                  backup-set patch that either runs or does not (#350, #600)
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]

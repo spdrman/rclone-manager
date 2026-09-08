@@ -285,6 +285,10 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 		e.updateBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/backup-sets/"):
 		e.removeBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/edit-hold"):
+		e.getEditHold(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/backup-sets/"), "/edit-hold"))
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/edit-hold/release"):
+		e.releaseEditHold(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/backup-sets/"), "/edit-hold/release"))
 	case r.Method == http.MethodGet && path == "/activity":
 		e.listActivity(w, r)
 	case r.Method == http.MethodGet && path == "/activity/live":
@@ -773,4 +777,41 @@ func (e *fakeEngine) cursorsSeen() []int64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]int64(nil), e.liveSince...)
+}
+
+// getEditHold and releaseEditHold are #600's gap, served off the real
+// BackupService like everything else here: the hold registry behind them
+// is core/service's own, so a release this test performs is the release
+// the engine performs and a state it reports is the one core/service
+// holds. Nothing about the lease is faked.
+func (e *fakeEngine) getEditHold(w http.ResponseWriter, r *http.Request, id string) {
+	state, err := e.svc.BackupSetEditState(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			refuse(w, http.StatusNotFound, apicontract.ErrorCodeBackupSetNotFound, "no such backup set")
+			return
+		}
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to read this backup set's edit hold")
+		return
+	}
+	resp := apicontract.BackupSetEditHoldState{BackupSetID: id, Held: state.Held}
+	if !state.ExpiresAt.IsZero() {
+		resp.ExpiresAt = state.ExpiresAt.Format(time.RFC3339Nano)
+	}
+	if state.Running != nil {
+		resp.Running = &apicontract.RunningWork{Artifact: state.Running.Artifact, Stage: state.Running.Stage}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (e *fakeEngine) releaseEditHold(w http.ResponseWriter, r *http.Request, id string) {
+	if err := e.svc.EndBackupSetEdit(r.Context(), id); err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			refuse(w, http.StatusNotFound, apicontract.ErrorCodeBackupSetNotFound, "no such backup set")
+			return
+		}
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to release this backup set's edit hold")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

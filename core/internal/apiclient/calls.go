@@ -295,3 +295,33 @@ func (c *Client) LiveActivity(ctx context.Context, backupSetID string, since int
 	err := c.callQuery(ctx, "getLiveActivity", nil, query, nil, &out)
 	return out, err
 }
+
+// GetBackupSetEditHold is GET /backup-sets/{source}/{set}/edit-hold: what
+// entering edit mode for this set would interrupt, and whether a hold is
+// already in force.
+//
+// Two arguments rather than a composite id, for GetBackupSet's reason: the
+// contract routes source and set as separate path parameters, and an id
+// pasted whole would be escaped into one unroutable segment.
+func (c *Client) GetBackupSetEditHold(ctx context.Context, source, set string) (apicontract.BackupSetEditHoldState, error) {
+	var out apicontract.BackupSetEditHoldState
+	err := c.call(ctx, "getBackupSetEditHold", []string{source, set}, nil, &out)
+	return out, err
+}
+
+// ReleaseBackupSetEditHold is POST
+// /backup-sets/{source}/{set}/edit-hold/release: give the lease back, so
+// the scheduler may run this set again without waiting for the hold to
+// lapse.
+//
+// takeBackupSetEditHold is deliberately NOT here, under this file's own
+// rule about wrappers nothing calls. A hold exists to protect an edit
+// session from a cycle running underneath it, and a CLI edit is one
+// `backup-set patch` that either runs or does not: there is no session to
+// protect, so a CLI that could TAKE a hold would only be able to pause a
+// backup set with no way for anything to notice it meant to. Releasing one
+// somebody else left behind is the operation an operator actually needs
+// from a terminal.
+func (c *Client) ReleaseBackupSetEditHold(ctx context.Context, source, set string) error {
+	return c.call(ctx, "releaseBackupSetEditHold", []string{source, set}, nil, nil)
+}

@@ -36,6 +36,7 @@ import (
 // configuration file rather than as an error.
 var backupSetVerbs = map[string]func([]string) int{
 	"retention": cmdBackupSetRetention,
+	"edit-hold": cmdBackupSetEditHold,
 }
 
 // backupSetSharedFlagVerbs are the verbs that share declareBackupSetFlags
