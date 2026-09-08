@@ -65,7 +65,8 @@ const SET: BackupSet = {
   retainedCount: null,
   retainedBytes: null,
   trustedHostKeys: [],
-  trustedHostKeyRecordedAt: null
+  trustedHostKeyRecordedAt: null,
+  sshKeyId: "key_a1b2c3"
 };
 
 function open(set: BackupSet) {

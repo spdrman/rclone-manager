@@ -749,7 +749,12 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/backup-sets/test-connection");
-    expect(result).toEqual({ ok: true });
+    // stages is [] rather than absent (issue #592). A response with no
+    // breakdown is an engine that predates the field, and the render site
+    // says exactly that; defaulting to four fabricated failures, or
+    // leaving the key off so a caller has to check for undefined before
+    // every read, are both worse answers than an empty list.
+    expect(result).toEqual({ ok: true, stages: [] });
   });
 });
 

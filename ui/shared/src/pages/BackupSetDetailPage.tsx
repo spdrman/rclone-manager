@@ -46,6 +46,7 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { RemoveBackupSetDialog } from "@shared/components/RemoveBackupSetDialog";
+import { SSHAuthWizard } from "@shared/components/SSHAuthWizard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
@@ -96,6 +97,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const version = useCausl(versionNode);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  // Issue #592. The SSH surface used to be two boxes in the edit list
+  // above; it is a wizard now, opened from the Connection section, and it
+  // lives here rather than inside edit mode because choosing an
+  // authentication method is not a field you type into.
+  const [sshWizardOpen, setSSHWizardOpen] = useState(false);
   // Issue #391's `removing`/`removeError` pair moved into
   // RemoveBackupSetDialog with the rest of the removal, so the list page
   // and this one cannot drift apart on what removal promises, what it
@@ -692,9 +698,9 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <p style={{ margin: "14px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                 This set&rsquo;s name and source are its identity: every backup, journal
                 entry and recovery manifest is filed under them, so they are not editable
-                here. Its SSH key and trusted host key are. Both boxes start empty because
-                neither holds a value this page can show back, so leaving one empty keeps
-                what the set already uses, and replacing the trusted host key asks first.
+                here. Its SSH key and trusted host key are not boxes here either: they are
+                the wizard in the Connection panel, which offers what this machine already
+                has rather than asking you to paste an id nothing would tell you.
               </p>
             </Section>
           ) : null}
@@ -717,6 +723,23 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
               The private key never leaves this NAS and is never displayed.
             </p>
+            {/* Issue #592. This used to be two text boxes in the edit
+                list above, one of which asked an operator to paste an id
+                the product had shown them exactly once. The wizard offers
+                the keys this deployment already holds and the keys on
+                this machine, settles the host key through #572's own
+                refusal, and proves the whole path before it writes
+                anything. */}
+            <div style={{ marginTop: 12 }}>
+              <button className="btn btn--sm" onClick={() => setSSHWizardOpen(true)}>
+                Change SSH authentication
+              </button>
+              <p style={{ margin: "8px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                {s.sshKeyId === ""
+                  ? "This set uses a key this deployment does not manage, so there is no key id to show. The wizard can point it at one this deployment holds."
+                  : "Authenticating with key " + s.sshKeyId + "."}
+              </p>
+            </div>
           </Section>
 
           <Section title="Backup discovery">
@@ -870,6 +893,20 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           shows the set they just removed, for up to thirty seconds. Same
           refresh, same reason, as the create path in
           BackupSetWizardPage. */}
+      {/* Issue #592. Mounted with the set it is about, and it applies
+          through the same PATCH the edit list uses, so a successful pass
+          reloads this page from the server's own answer rather than from
+          what the wizard hoped it wrote. */}
+      <SSHAuthWizard
+        set={s}
+        open={sshWizardOpen}
+        onCancel={() => setSSHWizardOpen(false)}
+        onApplied={() => {
+          setSSHWizardOpen(false);
+          set.reload();
+        }}
+      />
+
       <RemoveBackupSetDialog
         set={s}
         open={removeOpen}

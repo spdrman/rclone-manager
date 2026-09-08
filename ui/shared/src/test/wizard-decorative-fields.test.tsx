@@ -88,6 +88,11 @@ describe("the wizard no longer renders the decorative fields #299 removed", () =
     expect(screen.getByText(/Generating a key on save isn.t available yet/)).toBeTruthy();
   });
 
+  // #299 removed a picklist of two hardcoded key names and a fabricated
+  // "Already installed on 2 other backup sets" count. #592 gave the radio
+  // a REAL listing, so what this case pins is that the fabrications did
+  // not come back with it: the panel has rows again, and not one of them
+  // is a value this frontend made up.
   it("has no hardcoded managed-key picklist or fabricated in-use count on the Use managed key panel", async () => {
     const user = userEvent.setup();
     renderWizard();
@@ -97,8 +102,7 @@ describe("the wizard no longer renders the decorative fields #299 removed", () =
 
     expect(screen.queryByLabelText("Managed key")).toBeNull();
     expect(screen.queryByText(/nas-01-postgres/)).toBeNull();
-    expect(screen.queryByText(/other backup sets/i)).toBeNull();
-    expect(screen.getByText(/Reusing a managed key on save isn.t available yet/)).toBeTruthy();
+    expect(screen.queryByText(/Already installed on/i)).toBeNull();
   });
 
   it("has no Retention summary and no SHA-256 claim on the Review step", async () => {

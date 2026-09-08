@@ -78,6 +78,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     retainedBytes: 1024,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
     trustedHostKeyRecordedAt: "2026-08-02T10:14:00Z",
+    sshKeyId: "key_a1b2c3",
     readOnly: false,
     readOnlyRetainedCount: 0,
     ...overrides
