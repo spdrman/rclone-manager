@@ -175,6 +175,12 @@ commands:
                                                   set's. An id that names no configured backup set is refused and
                                                   nothing is printed, rather than answered about a set nobody asked
                                                   about (#568)
+  retention apply <source/backup-set> --acknowledge
+                                                  delete the local copy of every backup in that set no retention
+                                                  tier keeps, against the plan it prints first. FR-19's last known
+                                                  good is never among them, and a set whose inventory or
+                                                  configuration moved between the two is refused with nothing
+                                                  deleted. --acknowledge is required (#602)
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   validate <source/backup-set/artifact> [--content]

@@ -39,8 +39,17 @@ import (
 // have read and nothing to compare against at the moment of deletion.
 // FR-20's whole design is that a deletion is authorised against a plan
 // somebody reviewed, so this command staying a preview is the answer
-// rather than an unfinished follow-up. If a CLI apply is ever wanted, it
-// needs a confirmation story of its own first.
+// rather than an unfinished follow-up.
+//
+// A CLI apply now exists, and it is the confirmation story that sentence
+// asked for rather than a reversal of this decision (issue #602). It is
+// its own verb, `retention apply <source/backup-set> --acknowledge`, so
+// nothing an operator can leave out turns a preview into a deletion, and
+// it applies through the identical PreviewRetention/ApplyRetentionPlan
+// pair the API uses, against a plan it prints first and refuses if the
+// set moved underneath it. See retentionapply.go. Both forms of this
+// command still preview and both still say so, which is what the note at
+// the bottom is for.
 //
 // # Retention override flags (issue #111, B3.6)
 //
@@ -74,6 +83,22 @@ import (
 // is the command somebody reads to decide whether a deletion is safe, so
 // an id it cannot place is a refusal rather than a best effort.
 func cmdRetention(args []string) int {
+	// The verb scan comes before this command's own flags are declared,
+	// in the shape cmdBackupSet already uses: the verb handler re-parses
+	// the WHOLE argument list with its own FlagSet, so a --config written
+	// before the verb is not silently dropped, and this command's own
+	// override flags are not offered to a verb that does not take them.
+	//
+	// Scanning for the word rather than requiring it first is what makes
+	// `retention --config X apply prod/db` and `retention apply prod/db
+	// --config X` the same command, which is the property
+	// parseFlagsAroundOperands exists to give every other operand here.
+	for _, a := range args {
+		if verb, ok := retentionVerbs[a]; ok {
+			return verb(args)
+		}
+	}
+
 	fs, cfgPath := newFlagSet("retention")
 	dryRun := fs.Bool("dry-run", false, "accepted and inert: this command previews in both modes, and says so on its own output")
 	rf := registerRetentionFlags(fs)
@@ -314,7 +339,7 @@ func cmdRetention(args []string) int {
 		fmt.Printf("\nthis preview is about one backup set, so it leaves out %d backup set(s) whose configuration was removed and which no retention policy governs at all. `backup-manager retention` with no argument lists those (issue #418).\n", ungoverned)
 	}
 	if !*dryRun {
-		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed.")
+		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed, and from a terminal through `backup-manager retention apply <source/backup-set> --acknowledge`, which applies against a plan it prints first (#602).")
 	}
 	return 0
 }

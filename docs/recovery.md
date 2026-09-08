@@ -243,10 +243,22 @@ section is the longer version:
   without `--dry-run`. That is not a gap waiting to be filled: a CLI that deleted backups
   without the `plan_id` confirmation the HTTP path insists on would be a second, weaker
   authorisation path to the same act (issue #431).
+- `backup-manager retention apply <source/backup-set> --acknowledge` is the terminal's own
+  way in (issue #602), and it is not that second path: it goes through the same
+  `PreviewRetention`/`ApplyRetentionPlan` pair, prints the plan it is about to apply, and
+  refuses with `RETENTION_PLAN_STALE` and zero deletions if the set moved in between.
+  `--acknowledge` is required, and the refusal without it says what it consents to.
 
 So if a file survives a `Keep: false` verdict, the question is who was supposed to apply the
 plan, not whether deletion works. The verdicts above are the source of truth for "what would
-be safe to remove"; applying them is somebody's deliberate act through the API.
+be safe to remove"; applying them is somebody's deliberate act, through the API or through
+that verb.
+
+One thing to know before reading a preview taken AFTER an apply: deleting a file does not
+change the journal, so `backup-manager retention` goes on listing a pruned artifact as
+`DELETE` (it reads FR-18/FR-19 classification and never looks at the disk), while the API's
+own preview reports `REFUSE` for it, because FR-20's checks stat the path and find nothing
+there. Both are describing the same backup set; only one of them has looked.
 
 ## Step 7: the newest row is `FAILED` and nothing is happening
 

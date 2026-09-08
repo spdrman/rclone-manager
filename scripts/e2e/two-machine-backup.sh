@@ -99,6 +99,25 @@
 #                   proves the administrator record went with the
 #                   database.
 #
+#   retention-apply #602, and the only place in this repository where a
+#                   retention plan is applied against restore points a
+#                   real cycle produced on a real machine. It backs up,
+#                   narrows the chain so today's three artifacts do not
+#                   all survive it, fingerprints the whole backup
+#                   directory, applies the plan through
+#                   `retention apply --acknowledge`, and requires the
+#                   difference between the two fingerprints to be exactly
+#                   the set the plan printed as DELETE.
+#
+#                   The file called unmanaged-by-anything.txt is the
+#                   point. No journal row mentions it, so it has to
+#                   survive, and the comparison is then run twice more
+#                   against deliberately perturbed listings and required
+#                   to complain about each: one where that file went
+#                   missing anyway, and one where a previewed DELETE is
+#                   still there. Without those, an apply that deleted
+#                   nothing at all passes every other assertion here.
+#
 # # Hygiene
 #
 # Every container and the network are torn down on success, on failure and
@@ -204,14 +223,14 @@ while [ $# -gt 0 ]; do
     -h|--help)
       render_help
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|lifecycle|all] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|lifecycle|retention-apply|all] [--keep-on-failure]" ;;
   esac
 done
 
 case "$cases" in
-  all) case_list="plain no-arguments connection-cap lifecycle" ;;
-  plain|no-arguments|connection-cap|lifecycle) case_list="$cases" ;;
-  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, lifecycle, all." ;;
+  all) case_list="plain no-arguments connection-cap lifecycle retention-apply" ;;
+  plain|no-arguments|connection-cap|lifecycle|retention-apply) case_list="$cases" ;;
+  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, lifecycle, retention-apply, all." ;;
 esac
 
 # ------------------------------------------------------------ identities
@@ -974,6 +993,10 @@ run_case() {
     run_lifecycle "$mgr" "$prefix" "$want_payload"
   fi
 
+  if [ "$case_name" = "retention-apply" ]; then
+    run_retention_apply "$mgr" "$prefix"
+  fi
+
   step "  case $case_name passed"
 
   # Released here rather than left to the exit trap. Each manager machine
@@ -1120,6 +1143,235 @@ run_lifecycle() {
   [ "$still" = "$want_payload" ] \
     || die "the retained backup did not survive the factory reset, which destroys the catalog and not the files."
   note "the retained backups are untouched"
+}
+
+
+# run_retention_apply is issue #602's whole claim, on restore points a real
+# cycle produced on a real machine: an apply removes exactly the set the
+# plan printed as DELETE, and nothing else.
+#
+# # Why the chain gets narrowed first
+#
+# One cycle lands three artifacts on one day, and every GFS tier keeps a
+# representative of its newest bucket, so under the default chain all
+# three are KEEP and the plan selects nothing. A plan that selects nothing
+# makes every assertion below vacuously true, which is the exact shape
+# this case exists to rule out, so the chain is narrowed to one per bucket
+# through `backup-set retention` and the emptiness of the DELETE set is
+# then checked rather than assumed.
+#
+# # Why the engine is stopped for it
+#
+# Not because the apply would be refused: it reads the configuration and
+# writes the journal, so it is allowed beside a serving engine exactly as
+# `restore` is. It is stopped because the poll loop can finish a cycle in
+# the window between the preview and the apply, and a cycle writes the
+# very journal rows the staleness comparison is computed over, so the
+# apply would correctly refuse with RETENTION_PLAN_STALE and this case
+# would be asserting on that refusal instead. That refusal is pinned where
+# it belongs, at both boundaries, in core/service and apps/common/webhost.
+# The engine comes back up afterwards and has to still call the set
+# healthy.
+#
+# # The positive control
+#
+# unmanaged-by-anything.txt is planted in the backup directory and no
+# journal row mentions it. FR-20 never lists a directory to find something
+# to delete, so it has to survive. It is also what the comparison is
+# proven on: after the real apply, retention_apply_complaints is run twice
+# more against listings perturbed by hand, one with that file missing and
+# one with a previewed DELETE still present, and it has to complain about
+# each by name. Without that, an apply that deleted nothing at all passes
+# every other line here.
+run_retention_apply() {
+  local mgr="$1" prefix="$2"
+  local backups="$prefix/backups/source"
+
+  step "  planting a file no journal row mentions"
+  docker exec "$mgr" sh -c "printf 'no journal row mentions this\n' > $backups/unmanaged-by-anything.txt" \
+    || die "could not plant the unmanaged file in $backups."
+
+  # A whole policy, through the CLI, with the engine down: this is a
+  # configuration write and #538 refuses one beside a serving engine, so
+  # it follows the same stop/run --rm/start shape the create above does.
+  step "  narrowing the chain so today's restore points do not all survive it"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set retention e2e/source \
+    --config /etc/backup-manager/config \
+    --daily-days 1 --weekly-months 1 --monthly-months 1 >/dev/null \
+    || die "giving the backup set its own retention policy failed."
+
+  local before after apply_out want_deleted did_delete removed complaints
+  before="$(retention_apply_listing "$mgr" "$backups")"
+  note "before the apply: $(printf '%s\n' "$before" | awk '{print $1}' | tr '\n' ' ')"
+
+  step "  applying the plan"
+  apply_out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager retention apply e2e/source \
+    --config /etc/backup-manager/config --acknowledge 2>/dev/null)" \
+    || die "the retention apply exited non-zero." "It said: $apply_out"
+  printf '%s\n' "$apply_out" | sed 's/^/    | /'
+
+  # The plan the apply printed BEFORE it did anything, which is the plan
+  # it applied. Read off its own output rather than from a second preview:
+  # a second preview is a second decision, and comparing the disk against
+  # one nothing acted on would be comparing two different plans.
+  want_deleted="$(printf '%s\n' "$apply_out" | awk '/: applied plan /{exit} $1 == "DELETE" { print $2 }' | sort)"
+  did_delete="$(printf '%s\n' "$apply_out" | awk '/: applied plan /{on=1;next} on && $1 == "DELETE" { print $2 }' | sort)"
+
+  [ -n "$want_deleted" ] \
+    || die "the plan selected nothing for deletion, so this case certifies nothing." \
+           "Every assertion below is vacuously true of an apply that removed nothing at all." \
+           "The chain narrowed above is supposed to leave one representative per bucket out of three same-day artifacts." \
+           "The apply said: $apply_out"
+  [ "$want_deleted" = "$did_delete" ] \
+    || die "the apply's own receipt names a different set from the plan it printed first." \
+           "planned: $(echo "$want_deleted" | tr '\n' ' ')" \
+           "applied: $(echo "$did_delete" | tr '\n' ' ')"
+  note "the plan selected: $(echo "$want_deleted" | tr '\n' ' ')"
+
+  after="$(retention_apply_listing "$mgr" "$backups")"
+  note "after the apply:  $(printf '%s\n' "$after" | awk '{print $1}' | tr '\n' ' ')"
+
+  complaints="$(retention_apply_complaints "$before" "$after" "$want_deleted")"
+  [ -z "$complaints" ] \
+    || die "the apply did not remove exactly the set the plan named:" "$complaints"
+
+  removed="$(comm -23 <(printf '%s\n' "$before" | awk '{print $1}') <(printf '%s\n' "$after" | awk '{print $1}'))"
+  note "removed exactly: $(echo "$removed" | tr '\n' ' ')"
+
+  # The positive control. Everything above is a comparison, and a
+  # comparison nobody has watched fail is indistinguishable from one that
+  # cannot. Both perturbations are applied to the LISTING rather than to
+  # the machine, because what is under test here is the assertion and a
+  # control that deleted a real file would be testing rm.
+  step "  proving that comparison would have noticed"
+  local perturbed
+  # `|| true` because grep exits 1 on an empty result and this whole
+  # script runs under `set -e`. An empty listing here is not a silent
+  # pass: the comparison below would then complain about every file in
+  # the tree, the planted one included, so the control still fires.
+  perturbed="$(printf '%s\n' "$after" | grep -v '^unmanaged-by-anything.txt ' || true)"
+  retention_apply_complaints "$before" "$perturbed" "$want_deleted" \
+    | grep -q 'unmanaged-by-anything.txt' \
+    || die "the comparison reported nothing wrong about a file no verdict named going missing." \
+           "It would therefore have passed against an apply that removed a file the journal never knew about," \
+           "which makes every assertion in this case worthless."
+  note "a file no verdict named going missing: caught"
+
+  local survivor
+  survivor="$(printf '%s\n' "$want_deleted" | head -1)"
+  perturbed="$(printf '%s\n%s\n' "$after" "$(printf '%s\n' "$before" | grep "^$survivor ")" | grep -v '^$' | sort)"
+  retention_apply_complaints "$before" "$perturbed" "$want_deleted" \
+    | grep -q "$survivor" \
+    || die "the comparison reported nothing wrong about a previewed DELETE still sitting on disk." \
+           "It would therefore have passed against an apply that confirmed a plan and carried none of it out."
+  note "a previewed DELETE still on disk: caught"
+
+  retention_apply_complaints "$before" "$after" "" | grep -q 'certifies nothing' \
+    || die "the comparison answered true for a plan that named nothing to delete, rather than refusing it."
+  note "an empty plan: refused rather than answered true"
+
+  # What the deployment looks like afterwards, and the one thing about it
+  # that has to hold.
+  #
+  # It is not "healthy", and this case found that out rather than assuming
+  # it: an apply removes the local file and leaves the journal row exactly
+  # as it was, so the next reconciliation finds a REMOTE_RETAINED artifact
+  # whose durable local copy is missing and quarantines it. The set then
+  # reports DEGRADED and `status` exits non-zero, for a run that did
+  # precisely what its plan said. That is issue #608 and it is not this
+  # case's to fix: a pruned artifact needs an end state of its own, which
+  # changes internal/state's schema.
+  #
+  # So the exit code is not gated on, and one thing is: nothing may be
+  # reported as UNRECOVERABLE. The source here is read-only, so these
+  # route to the ordinary recoverable QUARANTINED; the same code path
+  # sends a COMPLETE artifact to QUARANTINED_LOST, which is the
+  # unrecoverable one, and retention's own deliberate deletion being
+  # recorded as unrecoverable data loss is the version of #608 that would
+  # be an emergency rather than a defect. Pinning it here is what makes
+  # that distinction something a run can lose rather than something a
+  # reader has to remember.
+  step "  bringing the engine back up"
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again after the retention apply" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  local health
+  health="$(bm "$mgr" "$prefix" status --config /etc/backup-manager/config 2>/dev/null || true)"
+  printf '%s\n' "$health" | sed 's/^/    | /'
+  printf '%s\n' "$health" | grep -q "^e2e/source:" \
+    || die "the engine's status says nothing about e2e/source after the retention apply." \
+           "It said: $health"
+  printf '%s\n' "$health" | grep -qE "unrecoverable: [1-9]" \
+    && die "the engine reports an UNRECOVERABLE artifact after a retention apply that removed only what its own plan named." \
+           "A deletion this product decided on, previewed and confirmed must never be recorded as data it has lost." \
+           "It said: $health"
+  note "nothing is reported as unrecoverable; the DEGRADED reading itself is issue #608"
+}
+
+# retention_apply_listing fingerprints one directory inside a container as
+# "<name> <sha256>" lines, sorted.
+#
+# Names AND digests, because "present afterwards" is a weaker claim than
+# "present and the same file", and the difference is the whole of what a
+# restore point is for.
+retention_apply_listing() {  # retention_apply_listing <container> <dir>
+  docker exec "$1" sh -c "cd $2 && sha256sum * 2>/dev/null" | awk '{print $2, $1}' | sort
+}
+
+# retention_apply_complaints is the assertion, as a function that prints
+# what is wrong rather than one that dies.
+#
+# That shape is the point, and it is the same one core/service's own
+# retentionEvidenceCompare takes: a helper that called die could only ever
+# be exercised by a run that was already failing, so nothing could ask it
+# "would you notice". This one can be handed a deliberately perturbed
+# listing and required to complain, which is what the control above does.
+#
+# An empty <previewed-delete-set> is refused rather than answered true
+# about: with nothing named for deletion every clause here is vacuously
+# satisfied by an apply that did nothing at all.
+retention_apply_complaints() {  # retention_apply_complaints <before> <after> <previewed-delete-set>
+  local before="$1" after="$2" want="$3"
+  local name digest now_digest
+
+  if [ -z "$want" ]; then
+    echo "the plan named nothing for deletion, so this comparison certifies nothing"
+    return 0
+  fi
+
+  while read -r name digest; do
+    [ -z "$name" ] && continue
+    now_digest="$(printf '%s\n' "$after" | awk -v n="$name" '$1 == n { print $2 }')"
+    if [ -z "$now_digest" ]; then
+      printf '%s\n' "$want" | grep -qxF -- "$name" \
+        || echo "$name was removed and no verdict in the plan named it"
+    elif printf '%s\n' "$want" | grep -qxF -- "$name"; then
+      echo "$name is still on disk and the plan marked it DELETE"
+    elif [ "$now_digest" != "$digest" ]; then
+      echo "$name survived the apply but is not the same file"
+    fi
+  done <<LISTING
+$before
+LISTING
+
+  while read -r name digest; do
+    [ -z "$name" ] && continue
+    printf '%s\n' "$before" | awk '{print $1}' | grep -qxF -- "$name" \
+      || echo "$name appeared during the apply, and a retention apply creates nothing"
+  done <<LISTING
+$after
+LISTING
+
+  # Explicit, and not tidiness. A `while read` loop ends on the read that
+  # found nothing, so this function would otherwise return 1 whenever it
+  # had no complaint to make, which under `set -euo pipefail` kills the
+  # run at the assignment above and fires every `|| die` in the control
+  # below on a comparison that was perfectly happy.
+  return 0
 }
 
 count_admins() {  # 1 when the administrator record exists, 0 otherwise

@@ -97,6 +97,25 @@ the version and commit that were installed.
                   proves the administrator record went with the
                   database.
 
+  retention-apply #602, and the only place in this repository where a
+                  retention plan is applied against restore points a
+                  real cycle produced on a real machine. It backs up,
+                  narrows the chain so today's three artifacts do not
+                  all survive it, fingerprints the whole backup
+                  directory, applies the plan through
+                  `retention apply --acknowledge`, and requires the
+                  difference between the two fingerprints to be exactly
+                  the set the plan printed as DELETE.
+
+                  The file called unmanaged-by-anything.txt is the
+                  point. No journal row mentions it, so it has to
+                  survive, and the comparison is then run twice more
+                  against deliberately perturbed listings and required
+                  to complain about each: one where that file went
+                  missing anyway, and one where a previewed DELETE is
+                  still there. Without those, an apply that deleted
+                  nothing at all passes every other assertion here.
+
 # Hygiene
 
 Every container and the network are torn down on success, on failure and

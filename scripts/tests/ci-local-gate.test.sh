@@ -316,6 +316,16 @@ make_full_tree() {
   mkdir -p "$tree/scripts/conformance"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/conformance/selftest.sh"
 
+  # FR-20's retention-apply mutation self-test (#602), stubbed for the same
+  # reason as the two above and found the same way: the step landed in the
+  # gate, this fixture did not grow the path, and every Group D and Group E
+  # case went red at once on a 127 that had nothing to do with what any of
+  # them was measuring. The paragraph above says that will happen; this is
+  # what it looks like when somebody adds a step without reading it. The
+  # real one copies the tree eight times and builds core/ in each copy.
+  mkdir -p "$tree/scripts/retention"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/retention/selftest.sh"
+
   # The race detector's own mutation self-test (#417), stubbed for the
   # seventh time for the seventh identical reason: the real one copies the
   # tree twice, plants a data race in core/service and runs the detector
