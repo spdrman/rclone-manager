@@ -47,8 +47,42 @@ const HEALTH: AsyncState<SystemHealth> = {
   reload: () => {}
 };
 
+/** One configured backup set, because a dashboard with none renders the
+ *  "No backup sets yet" empty state instead of its panels, and the panel
+ *  under test is one of the ones it would not draw. */
+const SET: BackupSet = {
+  id: "production/postgres-primary",
+  source: "production",
+  set: "postgres-primary",
+  name: "Production PostgreSQL",
+  host: "prod-db-01.internal",
+  port: 22,
+  username: "backup-agent",
+  remoteFolder: "/backups/postgresql/",
+  includePatterns: ["*.dump.zst"],
+  excludePatterns: ["*.tmp"],
+  completionMethod: "completion-marker",
+  stableForSeconds: 0,
+  destination: "/data/backups/production/postgres/",
+  retentionIsOverride: false,
+  validations: ["transfer", "checksum"],
+  state: "healthy",
+  stateNote: "Verified nightly dump.",
+  enabled: true,
+  readOnly: false,
+  readOnlyRetainedCount: 0,
+  newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
+  lastRunAt: "2026-08-29T02:01:01+02:00",
+  lastValidation: "passed",
+  expectedIntervalHours: 24,
+  retainedCount: 32,
+  retainedBytes: 421 * 1024 ** 3,
+  trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+};
+
 const SETS: AsyncState<BackupSet[]> = {
-  data: [],
+  data: [SET],
   error: null,
   loading: false,
   reload: () => {}

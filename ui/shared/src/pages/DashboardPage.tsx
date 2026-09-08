@@ -17,6 +17,7 @@
  * than only live ones, and a panel headed "active" that counted the whole
  * list would report the whole day's finished runs as in progress.
  */
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -104,6 +105,10 @@ export function DashboardPage({
   // answer.
   const lastCycle = operations.data?.find((op) => op.cycle !== null) ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
+  // See the Recent activity panel below: a fetch that failed has to say so
+  // rather than draw an empty list, and a Try again that failed the same
+  // way has to leave evidence it ran (#598).
+  const [activityRetriedAt, setActivityRetriedAt] = useState<string | null>(null);
   // Issue #286: a separate fetch, not derived from `health` above. GET
   // /system/storage's `manager` object answers a different question than
   // GET /system/health's per-set list (see ManagerStorage's own doc for
@@ -320,7 +325,24 @@ export function DashboardPage({
           </button>
         </div>
         <div style={{ padding: "14px 18px" }}>
-          <ActivityTimeline events={(activity.data ?? []).slice(0, 6)} dense />
+          {/* Issue #598. This panel used to render `activity.data ?? []`
+              and never look at `activity.error`, so the failure that made
+              the Activity page unusable on a real NAS drew HERE as an
+              empty list, indistinguishable from a deployment where nothing
+              has ever happened. Two surfaces, one failure, and the quieter
+              of the two is the one an operator lands on first. */}
+          {activity.error ? (
+            <ErrorState
+              {...activity.error}
+              retriedAt={activityRetriedAt ?? undefined}
+              onRetry={() => {
+                setActivityRetriedAt(new Date().toLocaleTimeString());
+                activity.reload();
+              }}
+            />
+          ) : (
+            <ActivityTimeline events={(activity.data ?? []).slice(0, 6)} dense />
+          )}
         </div>
       </section>
     </>

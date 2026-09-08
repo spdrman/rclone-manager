@@ -1,5 +1,6 @@
-import { BackupManagerError } from "./contracts";
+import { BackupManagerError, RequestFailure, describeException } from "./contracts";
 import type { ApiError } from "./contracts";
+import { API_BASE_PATH, API_VERSION } from "./generated/contract";
 
 /**
  * Issue #274. The service tells this frontend why it refused, in a typed
@@ -59,6 +60,38 @@ export interface OperatorFailure {
    *  reached the service, because there is then no id in any log to
    *  match, and an id that matches nothing is worse than none (#274). */
   correlationId?: string;
+  /** The technical facts, for the Advanced details panel: what was asked
+   *  for, what came back, and what the exception said about it. Issue
+   *  #598: this is what the fallback used to throw away, and throwing it
+   *  away is what made a dropped connection, a truncated body and a mapper
+   *  that threw indistinguishable from each other on screen. Never a stack
+   *  trace and never a source path (§37). */
+  detail?: string;
+}
+
+/** The path in the form an operator reads it, which is the one they can
+ *  put in a curl or paste into a bug report. `request()` records the path
+ *  without the version prefix; the prefix is what makes it a URL. */
+function requestedPath(path: string): string {
+  return "GET " + API_BASE_PATH + path;
+}
+
+/** Which contract this bundle speaks. A diagnostic that does not say
+ *  which build produced it is one nobody can act on, and a page talking to
+ *  a service newer than itself is exactly the shape an unreadable body
+ *  takes. This module can say it for the frontend half honestly, from a
+ *  generated constant; the SERVICE's own build is a fact only the version
+ *  endpoint has, and it is already on the Settings page under it. */
+function buildLine(): string {
+  return "web ui speaks api " + API_VERSION;
+}
+
+/** Joins the facts a failure carries into the one block the Advanced
+ *  details panel shows and the copy button copies. One fact per line: an
+ *  operator pastes this into a message, and a paragraph does not survive
+ *  that as well as lines do. */
+function detailOf(...parts: (string | undefined)[]): string {
+  return parts.filter((p): p is string => !!p).join("\n");
 }
 
 /**
@@ -69,17 +102,33 @@ export interface OperatorFailure {
  * better: the service reached, refused, and said nothing usable.
  */
 export function describeFailure(e: unknown, fallbackMessage: string): OperatorFailure {
+  if (e instanceof RequestFailure) return describeRequestFailure(e);
+
   const api = apiErrorOf(e);
   if (api === null) {
+    // An exception that came from neither the service nor `request()`.
+    // In practice that is a mapper throwing inside a `.then()` chained
+    // onto a request that resolved, which is the shape #598 was reported
+    // as, or a test double standing in for one of the above. Nothing types
+    // it, so the exception's own words are the whole of what there is to
+    // show, and showing them is the entire point: "TypeError: r.events.map
+    // is not a function" names the defect exactly, and the sentence that
+    // used to be printed in its place named nothing.
     return {
-      message: "Backup Manager did not answer.",
+      message: "Backup Manager did not answer, or answered with something this page could not read.",
       // Deliberately does NOT say nothing was changed. A request that got
       // no reply may still have been carried out, with only the response
       // lost, and claiming otherwise would be this module's own version of
       // the defect it exists to fix. The CSRF branch below can say it,
       // because requireCSRF refuses before any handler runs.
+      // Deliberately does not use the words "correlation id" here. There
+      // is none, and a sentence saying so still puts the phrase on screen,
+      // which is what auth-failure-reporting.test.tsx checks the absence
+      // of: an operator scanning a banner for an id finds the words either
+      // way.
       remediation:
-        "The request got no reply at all, so whether it was carried out is unknown. Check that the Backup Manager service is still running, then try again."
+        "This failure did not come out of the service, so it has no id in any log. Check that the Backup Manager service is still running, then try again.",
+      detail: detailOf(describeException(e), buildLine())
     };
   }
 
@@ -109,4 +158,65 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     default:
       return { message: api.message || fallbackMessage, correlationId };
   }
+}
+
+/**
+ * The two failures that are not refusals, said apart.
+ *
+ * This is the branch #598 exists for. The service refusing is already well
+ * covered above: it names a code, a sentence and an id, and all three
+ * reach the operator. What had no branch at all was the request never
+ * coming back and the response body not parsing, and those two used to
+ * arrive on screen as one another.
+ */
+function describeRequestFailure(e: RequestFailure): OperatorFailure {
+  if (e.kind === "no-response") {
+    return {
+      message: "Backup Manager did not answer.",
+      remediation:
+        "The request got no reply at all, so whether it was carried out is unknown. Check that the Backup Manager service is still running, then try again.",
+      // No response, so no id. apiErrorOf's own rule, one failure over: an
+      // id that matches nothing in any log is a false lead.
+      detail: detailOf(requestedPath(e.path), describeException(e.cause), buildLine())
+    };
+  }
+  return {
+    message: "Backup Manager answered, and this page could not read the answer.",
+    remediation:
+      "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
+    correlationId: e.correlationId,
+    detail: detailOf(
+      requestedPath(e.path),
+      e.status === undefined ? undefined : "status " + e.status,
+      e.contentType === undefined ? undefined : "content-type " + e.contentType,
+      describeException(e.cause),
+      buildLine()
+    )
+  };
+}
+
+/**
+ * The one conversion the two fetch hooks use (useAsync, state/resource).
+ *
+ * They hold an `ApiError`, not an `OperatorFailure`, because `.code` is
+ * what `isNotConfigured` and every per-code branch above them reads. So
+ * this is describeFailure with the code carried alongside, and with the
+ * service's own sentence as the fallback rather than one written here: an
+ * INTERNAL refusal that says "failed to list activity" is more use to
+ * whoever is reading it than anything this module could substitute.
+ *
+ * Before #598 both hooks had a byte-identical copy of a fallback that
+ * dropped the exception and minted `correlationId: "unavailable"`. There
+ * is now one of these, and it never mints an id.
+ */
+export function asApiError(e: unknown): ApiError {
+  const api = apiErrorOf(e);
+  const failure = describeFailure(e, api?.message || "Backup Manager could not complete that request.");
+  return {
+    code: api?.code ?? "unknown",
+    message: failure.message,
+    remediation: failure.remediation,
+    correlationId: failure.correlationId,
+    detail: failure.detail
+  };
 }
