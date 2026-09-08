@@ -11,9 +11,10 @@ they mean, and exactly what a later Phase 6 change has to beat.
 On host `darwin-arm64-mac17-2` under workload `phase6-baseline-v1`, a later
 Phase 6 change fails the performance gate if the median of five captures shows
 **`GET /api/v1/backup-sets` p95 above 0.218 ms**, or **transfer throughput below
-672.2 MB/s** (capture that one on a quiet machine, or it fails for reasons that
-are not the tree; "What moved" below has six measurements of why). That p95
-number carries two conditions and both have to hold, so
+448.1 MB/s**. Both of those are much wider than the 10% ratio they look like, and
+for the same underlying reason in each case: the threshold is sized from measured
+movement rather than chosen, and neither metric can resolve 10% on this host. That
+p95 number carries two conditions and both have to hold, so
 the 0.05 ms absolute floor is what binds rather than the 10% ratio; the section
 below works the arithmetic through. Three more metrics are gated alongside them,
 two are recorded but not gated, and every number below is derived from
@@ -114,18 +115,22 @@ rule applied to `api_read_p95_ms` would have failed against an unchanged tree,
 and a gate that goes red on an unchanged tree teaches everyone to ignore it.
 So:
 
-- **`transfer_mb_per_second`, `idle_rss_bytes`, `image_size_bytes`** are gated
-  on a ratio alone. Their noise is 11x, 45x and infinitely below the budget
-  respectively, so the ratio is a real gate.
+- **`idle_rss_bytes` and `image_size_bytes`** are gated on a ratio alone. Their
+  noise is 45x and infinitely below the budget respectively, so the ratio is a
+  real gate. Nothing #635 measured touches either: idle RSS is a process property
+  and an image size is a function of the tree and the target architecture.
+- **`transfer_mb_per_second`** was in that list on the strength of the 0.93%
+  above, and #635 established that the 0.93% measures the wrong quantity. Both of
+  those baselines were taken back to back on a quiet machine, so what they
+  measured is repeatability under ONE condition, not sensitivity to condition,
+  and a 256 MiB disk-to-disk copy is the metric here most exposed to the
+  difference. Six runs of an unchanged tree on a loaded machine span **1.398x**,
+  which is fourteen times a 10% budget rather than a ninth of it.
 
-  That holds for two of the three, and **not for `transfer_mb_per_second`**
-  (#635). The 0.93% is real and it is the wrong quantity: both baselines in the
-  table were taken back to back on a quiet machine, so what was measured is
-  repeatability under one condition. Six runs of an unchanged tree on a loaded
-  machine span **1.398x**, which is fourteen times the budget rather than a
-  ninth of it. See "What moved" below for the numbers and for what to do when
-  this metric fails. Nothing about the other two changes: idle RSS is a process
-  property and an image size is a function of the tree.
+  So its ratio is now **0.60**, sized from those six runs, and what that really
+  says is that this metric can only carry a gate against large regressions. See
+  "What moved" below for the measurements, the arithmetic and what to do when it
+  fails.
 - **`api_read_p95_ms`** is gated on a ratio **and** a measured absolute floor
   of 0.05 ms, and **both** must be exceeded before it fails. Two conditions that
   must both hold means the wider one is what is enforced: against the 0.168 ms
@@ -174,7 +179,7 @@ Derived from `gate.json` and `baselines/darwin-arm64-mac17-2.json`:
 | metric | baseline | fails when | effective threshold |
 |---|---|---|---|
 | `api_read_p95_ms` | 0.168 ms | above 0.185 ms **and** more than 0.05 ms above baseline | **0.218 ms (+29.8%)** |
-| `transfer_mb_per_second` | 746.867 MB/s | below 672.180 MB/s | 672.180 MB/s (-10%) |
+| `transfer_mb_per_second` | 746.867 MB/s | below 448.120 MB/s | **448.120 MB/s (-40%)** |
 | `idle_rss_bytes` | 106,725,376 | above 117,397,913.6 | 117,397,913.6 (+10%) |
 | `config_write_p95_ms` | 11.586 ms | above 12.745 ms | 12.745 ms (+10%) |
 | `image_size_bytes` | 69,704,266 | above 73,189,479.3 | 73,189,479.3 (+5%) |
@@ -293,49 +298,76 @@ restarting a container that already has its schema pays the warm number, which
 moved 14.4 ms -> 17.1 ms. Anyone reading this metric as "how long the engine
 takes to come up" is reading the wrong thing, and #635 carries the note.
 
-### `transfer_mb_per_second`, 537.702 -> 746.867 (1.39x, and the weakest number here)
+### `transfer_mb_per_second`, 537.702 -> 746.867 (1.39x), and its ratio 0.90 -> 0.60
 
-This one is recorded WITHOUT an attribution, and that is a statement about the
-metric rather than a gap somebody will close later. Read the recorded value as
-"what a quiet machine produced on 2026-09-08", not as "what this tree does".
+Two things happened here. The recorded value moved and could not be attributed,
+and measuring why turned up something worse: at the ratio it had, this metric
+failed on a tree where nothing changed.
 
-The account that was available for the image is not available here. The transfer
-harness did not exist at `8ad3100` (`core/tests/perfbaseline` is one of the
-uncommitted files that made that record `working_tree_dirty`), so there is no
-old-code side to run today and no way to separate a code improvement from a
-machine that happened to be faster.
+**The value is recorded without an attribution, and that is a statement about the
+metric.** Read it as "what a quiet machine produced on 2026-09-08", not as "what
+this tree does". The account that was available for the image is not available
+here: the transfer harness did not exist at `8ad3100` (`core/tests/perfbaseline`
+is one of the uncommitted files that made that record `working_tree_dirty`), so
+there is no old-code side to run and no way to separate a code improvement from a
+faster machine.
 
-What can be measured is how much of this number is the machine, and the answer is
-most of it. Six runs of the SAME unchanged tree later the same day, while a full
-gate was running and the load average sat between 11.3 and 12.6:
+**What can be measured is how much of the number is the machine, and the answer
+is most of it.** Six runs of the SAME unchanged tree later the same day, while a
+full gate was running and the load average sat between 11.3 and 12.6:
 
 ```
 479.584  492.995  619.020  624.583  651.716  670.434   MB/s
 ```
 
-That is a **1.398x spread with nothing changed**, and every one of the six is
-below the 672.180 MB/s floor this record now sets. The recorded 746.867 was taken
-at 88.33% idle CPU on a load average of 2.84, and is 1.114x the best of the six.
+A **1.398x spread with nothing changed**, against a 0.90 ratio that allows 1.11x.
+The recorded 746.867 was taken at 88.33% idle on a load average of 2.84, and is
+1.114x the best of the six.
 
-So the practical consequences, plainly:
+**So the 0.90 ratio was unpassable.** All six of those runs are below the 672.180
+floor it sets. That is this directory's own failure mode pointed at the future
+instead of the past: a baseline that goes red on an unchanged tree teaches
+everyone to ignore it just as surely as one nobody runs, and the next person to
+use `--compare` would have spent a day on a regression that was a busy afternoon.
 
-- **A candidate captured on a busy machine will fail this metric for reasons that
-  have nothing to do with the tree.** If it fails and nothing touched the
-  transport, re-capture on a quiet host before looking for a regression.
-- **Recording a favourable state raises a floor for everyone.** It is the mirror
-  of a generously recorded regression: that one fails to catch things, this one
-  fails runs that deserve to pass. The old 537.702 had the same property and
-  nobody had measured it.
-- The "0.93% median-to-median movement" in the noise study above is still
-  accurate and still does not cover this. Those two baselines were taken back to
-  back on a quiet machine, so what they measured is repeatability under ONE
-  condition, not sensitivity to condition. A disk-to-disk copy of 256 MiB is the
-  metric here most exposed to what else the machine is doing, and the study could
-  not see that by construction.
+It is not a defect of this capture, either, which is worth knowing before anyone
+proposes reverting the value. **One of those six is also below the 483.932 floor
+the PREVIOUS baseline set.** The old number had the same property at a lower rate
+and nobody had measured it.
 
-Nothing here changes what is gated, because that is a decision about the contract
-rather than a measurement. It is written down so the decision is made with the
-numbers in front of whoever makes it.
+**The threshold is therefore sized from the measurement, which is what every
+other number in `gate.json` claims to be.** 0.60 puts the floor at 448.120 MB/s,
+7.0% below the worst of the six. Not 0.64, which would clear the worst observed
+by 0.3%: six samples at one load level do not locate the tail, and fitting a
+threshold to the worst sample in hand is the same error that produced the 0.93%
+figure in the first place.
+
+Read what that buys honestly. **It is a gate against the structural regression
+class and not a marginal one.** It still refuses a halving, which is the mutation
+`scripts/perf/selftest.sh` applies, so an extra copy in the data path or a lost
+fast path still goes red. It will not notice a 20% loss. That is the real
+capability of this metric on this host, and saying so is better than implying 10%
+and enforcing something nobody has checked.
+
+**Why this is the same rule as `image_size_bytes` and not an exception to it.**
+That metric keeps a tight 1.05 precisely because it is deterministic: two builds
+of one commit are byte-identical, so measurement precision is the only thing
+setting its threshold, and widening it would forgive growth nobody explained.
+This one is not deterministic and now has a number for how far from it: 1.398x.
+One rule, applied to both, is that a threshold comes from measured movement. It
+gives a tight ratio there and a wide one here because the two metrics really are
+that different.
+
+**No `noise_floor_abs`, unlike `api_read_p95_ms`.** That floor exists because a
+sub-millisecond number sits near its own measurement resolution. This quantity is
+large and varies multiplicatively, so a ratio is the right instrument, and the
+0.60 ratio already allows a 298.7 MB/s drop; a second condition on top would only
+widen a rule that is already wide, and two conditions nobody can reason about are
+worse than one they can.
+
+**Still capture this metric on a quiet machine.** The wider ratio makes a loaded
+run pass rather than making the number meaningful. If it does go red and nothing
+touched the transport, re-capture on a quiet host before looking for a regression.
 
 ### The other two
 
@@ -452,3 +484,12 @@ are called out as such, and the one piece of real waste it turned up is written
 down rather than folded into the new number. A re-capture with none of that
 behind it records a regression as the new normal, which is the one use this
 directory must never be put to.
+
+There is a second way to put it to that use, and #635 nearly did. A threshold
+that a normal run cannot meet fails on trees nobody regressed, and a gate that
+always fails gets ignored exactly as fast as a gate nobody runs: the same ending
+by a different road. So the rule has a second half. **A threshold is sized from
+that metric's own measured movement, and a re-cut that leaves one unpassable is
+not finished.** `transfer_mb_per_second` above is the worked example, and the
+check is cheap: run the capture twice under conditions that differ, and see
+whether an unchanged tree clears its own floor both times.
