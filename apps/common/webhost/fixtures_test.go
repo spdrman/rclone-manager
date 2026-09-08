@@ -374,6 +374,42 @@ func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycle
 	return op, nil
 }
 
+// SubmitRunBackupSet mirrors the real service's refusal ORDER, which is
+// the part a handler test can get wrong: the real one checks the
+// configuration revision before it resolves the id, so a caller on a
+// stale screen naming a set that has since been removed is told the
+// screen moved rather than sent hunting a set they can still see.
+func (f *syncFakeBackend) SubmitRunBackupSet(_ context.Context, req service.RunBackupSetRequest) (service.Operation, error) {
+	if f.errOnSubmit != nil {
+		return service.Operation{}, f.errOnSubmit
+	}
+	if req.ConfigRevision != "" && req.ConfigRevision != f.ConfigRevision() {
+		return service.Operation{}, fmt.Errorf("%w: request names %q", service.ErrConfigRevisionStale, req.ConfigRevision)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, op := range f.ops {
+		if op.IdempotencyKey == req.IdempotencyKey {
+			return op, nil
+		}
+	}
+	f.nextID++
+	op := service.Operation{
+		ID:             "op_test_" + strconv.Itoa(f.nextID),
+		IdempotencyKey: req.IdempotencyKey,
+		Actor:          req.Actor,
+		BackupSetID:    req.BackupSetID,
+		ConfigRevision: req.ConfigRevision,
+		Action:         service.ActionRunBackupSet,
+		Status:         "completed",
+		CreatedAt:      time.Now().UTC(),
+		FinishedAt:     time.Now().UTC(),
+		Result:         `{"backup_sets_processed":1,"artifacts_walked":0,"artifacts_through":0}`,
+	}
+	f.ops[op.ID] = op
+	return op, nil
+}
+
 // SubmitRestorePlacement mirrors the real service's refusal ORDER, not
 // just its refusals.
 //
@@ -963,6 +999,13 @@ func (f *asyncFakeBackend) Ready() bool { return true }
 // believe something was restored.
 func (f *asyncFakeBackend) SubmitRestorePlacement(context.Context, service.RestorePlacementRequest) (service.RestoreSubmission, error) {
 	return service.RestoreSubmission{}, service.ErrRestoreUnavailable
+}
+
+// SubmitRunBackupSet refuses, deliberately. This fake exists to exercise
+// a client disconnecting mid-cycle, and a per-set run is not that case;
+// a canned success here would let a test believe one set ran.
+func (f *asyncFakeBackend) SubmitRunBackupSet(context.Context, service.RunBackupSetRequest) (service.Operation, error) {
+	return service.Operation{}, service.ErrBackupSetNotFound
 }
 
 func (f *asyncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {

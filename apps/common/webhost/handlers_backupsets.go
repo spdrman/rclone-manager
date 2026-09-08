@@ -283,6 +283,24 @@ type listBackupSetsResponse struct {
 // destructiveGateExemptRoutes' own justification
 // (router_test.go) for why this route is structurally exempt from
 // requireDestructiveGate in the first place.
+//
+// # The gate refuses the RUN, not the CREATE (issue #597)
+//
+// It used to refuse the whole call with a 403 and persist nothing, and
+// that cost an operator their entire wizard submission for a reason that
+// has nothing to do with creating a backup set. Creating one touches no
+// backup data, which is why this route is exempt from the middleware at
+// all; refusing the create because the RUN could not happen refused a
+// non-destructive action for a destructive one's reason, and the wizard
+// reported it as "Could not save this backup set", which was not what
+// happened. Retrying then hit config.Validate's duplicate-id rejection
+// with no way to tell "already exists because your last attempt worked"
+// from "your request was wrong from the start" — M6's own argument,
+// below, applied to the case M3 created.
+//
+// So the set is persisted, RunImmediately is cleared before the backend
+// is called, and the 201 carries RunError with the gate's own sentence.
+// That is the shape M6 built and nothing in production could reach.
 func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
 
@@ -292,9 +310,15 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.RunImmediately && !destructiveGatePassed(h.gate) {
-		writeDestructiveGateDenied(w)
-		return
+	// The gate decides whether the RUN happens, not whether the CREATE
+	// does. With it shut the set is still persisted and the response says
+	// the run did not start; see this handler's own doc, and the test that
+	// pins both halves.
+	runRefusal := ""
+	runImmediately := body.RunImmediately
+	if runImmediately && !destructiveGatePassed(h.gate) {
+		runImmediately = false
+		runRefusal = destructiveGateRefusal
 	}
 
 	req := service.CreateBackupSetRequest{
@@ -314,7 +338,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
 		Disabled:           body.Disabled,
 		ReadOnly:           body.ReadOnly,
-		RunImmediately:     body.RunImmediately,
+		RunImmediately:     runImmediately,
 		AcknowledgeRepoint: body.AcknowledgeRepoint,
 		Actor:              actorFromContext(r.Context()),
 	}
@@ -347,7 +371,14 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := createBackupSetResponse{backupSetResponse: toBackupSetResponse(result.Set)}
+	resp := createBackupSetResponse{
+		backupSetResponse: toBackupSetResponse(result.Set),
+		// Empty unless the gate refused the run above, in which case it
+		// carries the gate's own sentence. At most one of RunError and
+		// Operation is ever set: nothing was asked to run, so there is no
+		// operation for the client to poll.
+		RunError: runRefusal,
+	}
 	if result.Operation != nil {
 		op := toOperationResponse(*result.Operation)
 		resp.Operation = &op

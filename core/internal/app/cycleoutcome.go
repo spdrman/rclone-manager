@@ -158,6 +158,24 @@ func (r FetchResult) Verdict() CycleVerdict {
 	}
 }
 
+// Outcome is how this fetch ended, in the same three words
+// BackupSetCycleResult.Outcome uses, so a per-set run and a cycle's own
+// per-set result read the same on a screen showing both.
+//
+// It is derived from the verdict rather than from a field, because a
+// fetch has no Err of its own: a systemic failure comes back as the error
+// Fetch returns, and the caller has already acted on that before asking
+// this. There is no stopped case, for Verdict's own reason: Fetch
+// installs no hold watcher, so nothing stops one of these passes part way
+// through.
+func (r FetchResult) Outcome() string {
+	v := r.Verdict()
+	if v.FailedArtifacts > 0 || v.ReconcileErrors > 0 {
+		return SetOutcomeFailed
+	}
+	return SetOutcomeOK
+}
+
 // foldDiscoveryErrors is the one place a backup set's CycleProgress is
 // assembled, from the journal rows a walk drove forward and the candidates
 // discovery could not take in at all. RunCycle and Fetch both call it

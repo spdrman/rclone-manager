@@ -29,8 +29,8 @@ import type { ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { fetchResource, useResource } from "@shared/state/resource";
-import { graph, useCausl } from "@shared/state/graph";
-import { setsNode, versionNode } from "@shared/state/appNodes";
+import { graph } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
 import {
   captureSetEditSnapshot,
   currentSetActivityNode,
@@ -51,6 +51,8 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { RemoveBackupSetDialog } from "@shared/components/RemoveBackupSetDialog";
 import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
+import { RunControlNotice } from "@shared/components/RunControlNotice";
+import { useRunControls } from "@shared/hooks/useRunControls";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { BackupSetRetentionCard } from "./BackupSetRetentionCard";
 import { EDIT_FIELDS, readEditFields, visibleEditFields, withCompanions } from "./backupSetEditFields";
@@ -92,11 +94,22 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // state/backupSetDetailNodes.ts's captureSetEditSnapshot/isSetEditStale).
   const set = useResource(currentSetDetailNode, () => api.getSet(setId), [api, setId]);
   const activity = useResource(currentSetActivityNode, () => api.listActivity(), [api]);
-  // The configuration revision this screen is CURRENTLY showing. A run
+  // Issue #597. Both run controls on this page go through one hook: it
+  // owns the idempotency key, refuses before sending when the
+  // configuration revision has not loaded, and turns whatever comes back
+  // into a line every terminal can read. Scoped to this set, so the
+  // notice below is this set's own.
+  //
+  // The revision it submits is the one this screen is CURRENTLY showing,
+  // read off the graph rather than fetched fresh at submit time: a run
   // submitted against a revision nobody looking at the page has seen is
-  // what CONFIG_REVISION_STALE exists to refuse, so this deliberately
-  // reads the graph rather than fetching a fresh one at submit time.
-  const version = useCausl(versionNode);
+  // what CONFIG_REVISION_STALE exists to refuse.
+  //
+  // useRunControls owns that revision now (issue #597): it reads the graph
+  // at submit time and renders the refusal by typed code, so this page no
+  // longer holds a version of its own. Taking one here as well would be a
+  // second answer to the same question.
+  const run = useRunControls({ kind: "set", id: setId });
   // The live feed for THIS set, narrowed by the `backup_set` the route
   // already takes (issue #596). It is held here rather than inside the
   // panel because the Test Connection button below asks it for a fresh
@@ -614,13 +627,36 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
                 key changed is refused by the transport layer on every
                 cycle (FR-6), which is core's job and not a reason to
                 take the fleet's run away from the operator (#231). */}
+            {/* The per-set run this page has never had (#597). The
+                engine half has existed since FR-1 behind `backup-manager
+                fetch --backup-set`; what was missing was a way to reach
+                it in the serving process, so the work takes the engine's
+                own single-flight lock and lands in its feeds instead of
+                running in a second process against the same journal.
+
+                Unavailable while this set is disabled: a sweep skips a
+                disabled set, and offering a control here that contradicts
+                that would need explaining every time. An operator who
+                means it can still run the command the notice prints. */}
             <button
               className="btn btn--primary"
-              disabled={readOnly}
-              title="Runs one pass over every enabled backup set, not only this one."
-              onClick={() => api.runCycle(version.data?.configRevision ?? "").then(set.reload)}
+              disabled={readOnly || run.busy || !s.enabled}
+              title={
+                s.enabled
+                  ? "Runs one pass over this backup set only."
+                  : "This backup set is disabled, so a run would not visit it."
+              }
+              onClick={() => run.runBackupSet(s.id)}
             >
-              Run all due sets
+              Run this backup set
+            </button>
+            <button
+              className="btn"
+              disabled={readOnly || run.busy}
+              title="Runs one pass over every enabled backup set, not only this one."
+              onClick={run.runAll}
+            >
+              Run all enabled sets
             </button>
             {/* Issue #596. This used to be `onClick={() =>
                 api.testConnection(s.id)}`: the promise was created and
@@ -689,6 +725,12 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           </>
         }
       />
+
+      {/* What a run control on this page last answered, whichever of the
+          two was pressed. A deployment-wide run names every enabled set,
+          so its refusal shows up here too: this set is one the operator
+          just asked to have backed up and did not (#597). */}
+      <RunControlNotice notice={run.notice} />
 
       {/* No actions beside it, deliberately (#245). This banner used to
           offer "Compare fingerprints" and "Keep set halted" and neither

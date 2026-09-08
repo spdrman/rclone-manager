@@ -132,6 +132,10 @@ function undrivenMethods(driven: string[], api: object): string[] {
 
 describe("every request the shared client makes is a declared operation", () => {
   const observed: string[] = [];
+  /** Every recorded call, with the headers it actually sent. Kept beside
+   *  `observed` rather than replacing it so the path assertions below
+   *  keep reading the simple strings they were written against. */
+  const observedCalls: Array<{ method: string; url: string; headers: Record<string, string> }> = [];
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -141,7 +145,13 @@ describe("every request the shared client makes is a declared operation", () => 
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        observed.push(`${(init?.method ?? "GET").toUpperCase()} ${url}`);
+        const method = (init?.method ?? "GET").toUpperCase();
+        observed.push(`${method} ${url}`);
+        observedCalls.push({
+          method,
+          url,
+          headers: (init?.headers ?? {}) as Record<string, string>
+        });
         return {
           ok: true,
           status: 200,
@@ -178,7 +188,11 @@ describe("every request the shared client makes is a declared operation", () => 
       })],
       ["listSets", () => httpApi.listSets()],
       ["getSet", () => httpApi.getSet("src/set-1")],
-      ["runCycle", () => httpApi.runCycle("rev-1")],
+      ["runCycle", () => httpApi.runCycle("rev-1", "idem-run-cycle")],
+      // The second run action on the same route (issue #597, G1.4). Same
+      // reason restoreCopy is listed below: a client method nobody drives
+      // from this list is invisible to the whole file.
+      ["runBackupSet", () => httpApi.runBackupSet("src/set-1", "rev-1", "idem-run-set")],
       // The other action on the same /operations route (EPIC E, FR-34).
       // It is listed here rather than left out because a client method
       // nobody drives from this list is invisible to the whole file: it
@@ -186,7 +200,8 @@ describe("every request the shared client makes is a declared operation", () => 
       // the hole M5 on #194 closed.
       ["restoreCopy", () => httpApi.restoreCopy({
         artifactId: "src/set-1/a.tar.gz", medium: "cold-store",
-        windowDays: 3, acknowledged: true, configRevision: "rev-1"
+        windowDays: 3, acknowledged: true, configRevision: "rev-1",
+        idempotencyKey: "idem-restore"
       })],
       ["testConnection", () => httpApi.testConnection("set-1")],
       ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
@@ -309,6 +324,63 @@ describe("every request the shared client makes is a declared operation", () => 
     );
 
     expect(unmatched.sort()).toEqual(UNIMPLEMENTED_CLIENT_PATHS);
+  });
+
+  /**
+   * Issue #597's third layer, turned into a gate.
+   *
+   * Both generated contracts have always declared Idempotency-Key
+   * required on POST /operations, and the handler has always refused
+   * without it. The client sent no header at all, on every build this
+   * project has shipped, because the `post` helper had no parameter for
+   * one. Nothing noticed, because the assertions in this file were about
+   * PATHS: a request that reached the right URL with the wrong headers
+   * matched every one of them.
+   *
+   * So this reads the requirement off the contract rather than naming the
+   * operation, which is what makes it a rule instead of a patch: a second
+   * operation that grows `idempotencyKey: "required"` is covered on the
+   * commit that adds it, with no edit here.
+   */
+  it("sends Idempotency-Key on every operation whose contract row requires it", () => {
+    const required = API_OPERATIONS.filter((op) => op.idempotencyKey === "required");
+    // An empty scan is not a clean scan. If the field were renamed, or
+    // the generator stopped emitting it, "no operation requires a key"
+    // would be true and worthless.
+    expect(required.length).toBeGreaterThan(0);
+    expect(observedCalls.length).toBeGreaterThan(0);
+
+    const matchers = required.map((op) => ({ op, re: matcherFor(op) }));
+    const missing: string[] = [];
+    let checked = 0;
+    for (const call of observedCalls) {
+      const match = matchers.find(
+        ({ op, re }) => op.method === call.method && re.test(call.url.split("?")[0])
+      );
+      if (!match) continue;
+      checked += 1;
+      const header = Object.entries(call.headers).find(
+        ([name]) => name.toLowerCase() === "idempotency-key"
+      );
+      if (!header || header[1] === "") missing.push(`${match.op.id}: ${call.method} ${call.url}`);
+    }
+    // The positive control for the loop itself: with no call reaching a
+    // key-requiring operation, `missing` is empty for the wrong reason.
+    expect(checked).toBeGreaterThan(0);
+    expect(missing).toEqual([]);
+  });
+
+  it("would notice a request that reached the route without the header", () => {
+    // The positive control for the assertion above. Without it, the
+    // header check passing would be equally consistent with the header
+    // lookup matching anything at all.
+    const header = Object.entries({ "content-type": "application/json" }).find(
+      ([name]) => name.toLowerCase() === "idempotency-key"
+    );
+    expect(header).toBeUndefined();
+    expect(
+      Object.entries({ "Idempotency-Key": "k" }).find(([name]) => name.toLowerCase() === "idempotency-key")
+    ).toEqual(["Idempotency-Key", "k"]);
   });
 
   it("would notice a client method that nothing in the list drives", () => {

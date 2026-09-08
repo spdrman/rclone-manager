@@ -325,6 +325,11 @@ export interface RestoreCopyRequest {
   acknowledged: boolean;
   /** The configuration revision the caller is displaying. */
   configRevision: string;
+  /** One key per LOGICAL restore, reused on every retry of it. POST
+   *  /operations declares the header required and refuses without one;
+   *  see BackupManagerApi.runCycle for why the key belongs to the
+   *  submission rather than to the attempt. */
+  idempotencyKey: string;
 }
 
 /** What a restore looks like the instant it has been accepted.
@@ -1051,11 +1056,14 @@ export interface BackupManagerApi {
   /**
    * Submits a run cycle: one pass over every enabled backup set.
    *
-   * It takes no backup set id, because there is no such operation. A run
-   * cycle is deployment-wide in core (internal/app's RunCycle walks every
-   * enabled set), which is why the durable operation record it produces
-   * carries no backup set id either. The shared UI used to call
-   * `POST /backup-sets/{id}/run`, which no runtime has ever served.
+   * It takes no backup set id, because a run cycle is deployment-wide in
+   * core (internal/app's RunCycle walks every enabled set), which is why
+   * the durable operation record it produces carries none either. That
+   * used to read "because there is no such operation", which was true of
+   * the HTTP surface and never of the engine: runBackupSet below is the
+   * operation, on this same route with its own action. The shared UI also
+   * used to call `POST /backup-sets/{id}/run`, which no runtime has ever
+   * served.
    *
    * configRevision is the revision the CALLER is currently displaying,
    * not one read fresh at submit time. That is the whole point of the
@@ -1063,7 +1071,40 @@ export interface BackupManagerApi {
    * configuration is refused (CONFIG_REVISION_STALE) instead of running
    * against a setup nobody looking at it has seen.
    */
-  runCycle(configRevision: string): Promise<void>;
+  /**
+   * `idempotencyKey` is one key per LOGICAL submission, reused on every
+   * retry of that submission and never regenerated per attempt.
+   *
+   * That is the entire point of the header, and getting it backwards is
+   * worse than omitting it: a client that minted a fresh key per attempt
+   * would turn one dropped response into two backup runs, and the service
+   * would have no way to know the two requests were the same intent. The
+   * key belongs to whoever knows what a retry is, which is the caller,
+   * not this client (useRunControls owns that lifetime today).
+   *
+   * It is a required parameter rather than a defaulted one because the
+   * route refuses without it: for every build this project has shipped,
+   * `post` had no way to send a header at all, so every run submitted
+   * from a browser was answered 400 by a handler that never saw the
+   * body (issue #597).
+   */
+  runCycle(configRevision: string, idempotencyKey: string): Promise<void>;
+  /**
+   * Submits a run of exactly ONE backup set: the same reconcile, discover
+   * and walk `runCycle` performs for every enabled set, narrowed to this
+   * one (issue #597, EPIC G's G1.4).
+   *
+   * `backupSetId` is the full "source/backup-set" id, which is the id
+   * every surface in this product prints and the one `backup-manager
+   * fetch --backup-set` has taken since #569.
+   *
+   * It shares runCycle's route, gate and single-flight lock, so a per-set
+   * run and a deployment-wide one cannot overlap and the loser is refused
+   * with OPERATION_ALREADY_RUNNING rather than queued. Backing up
+   * whatever is on disk now is not made more correct by having been asked
+   * for twice.
+   */
+  runBackupSet(backupSetId: string, configRevision: string, idempotencyKey: string): Promise<void>;
   /**
    * Asks for one archived copy of one backup to be made readable again
    * (EPIC E, FR-34).

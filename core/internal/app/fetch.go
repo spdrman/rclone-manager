@@ -128,7 +128,29 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 		return s.fetchDryRun(ctx, source, bs.ID)
 	}
 
+	// Live progress and the per-set feed, for a caller that installed an
+	// observer (progress.go). Nothing here changes what `backup-manager
+	// fetch` does in its own process: with no observer on ctx, beginCycle
+	// returns ctx unchanged and every call below is a nil-receiver no-op.
+	//
+	// The denominator is 1 and is known before anything starts, which is
+	// the one place a per-set run is honestly better off than a cycle:
+	// Progress's own doc explains why a cycle cannot have one.
+	//
+	// enterSet is what puts this set's id on every reading, and that is
+	// load-bearing rather than cosmetic. The per-set activity feed keys on
+	// it, so a run whose readings carry no set id lands in no set's
+	// terminal at all (issue #597).
+	ctx = beginOneSetCycle(ctx, bs.ID.String())
+	prog := progressFrom(ctx)
+
 	result := FetchResult{Set: bs.ID}
+	defer func() {
+		prog.finishSet()
+		if o, ok := ProgressObserverFrom(ctx).(SetOutcomeObserver); ok {
+			o.ObserveSetOutcome(bs.ID.String(), result.Outcome())
+		}
+	}()
 
 	recRep, err := s.reconcileOne(ctx, source, bs.ID)
 	result.Reconcile = recRep

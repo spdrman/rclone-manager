@@ -1307,6 +1307,21 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay(withRetentionAttribution(retentionOverrides, [found])[0]);
     },
     runCycle: () => delay(undefined),
+    // The mock REFUSES a run of a set it does not have, rather than
+    // answering "fine" whatever it was handed. A mock that accepts every
+    // id makes a page that sent the wrong one look correct in the
+    // browser suite, which is the same shape as the enable/disable mocks
+    // below and the reason those apply to the fixture.
+    runBackupSet: (backupSetId) =>
+      SETS.some((s) => s.id === backupSetId)
+        ? delay(undefined)
+        : Promise.reject(
+            new BackupManagerError({
+              code: "BACKUP_SET_NOT_FOUND",
+              message: "no such backup set",
+              correlationId: "cid_mock404"
+            })
+          ),
     // The mock ECHOES the window it was given rather than a fixed one, so
     // a screen that dropped windowDays on the way to the client looks
     // wrong here rather than plausible. It says the class's published

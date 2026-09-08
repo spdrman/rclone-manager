@@ -79,6 +79,7 @@
           "BACKUP_SET_NOT_FOUND",
           "OPERATION_NOT_FOUND",
           "OPERATION_ALREADY_RUNNING",
+          "BACKUP_SET_HELD_FOR_EDITING",
           "IDEMPOTENCY_KEY_CONFLICT",
           "CONFIG_REVISION_STALE",
           "SSH_KEY_NOT_FOUND",
@@ -129,6 +130,7 @@
           "BACKUP_SET_NOT_FOUND": "wire",
           "OPERATION_NOT_FOUND": "wire",
           "OPERATION_ALREADY_RUNNING": "wire",
+          "BACKUP_SET_HELD_FOR_EDITING": "wire",
           "IDEMPOTENCY_KEY_CONFLICT": "wire",
           "CONFIG_REVISION_STALE": "wire",
           "SSH_KEY_NOT_FOUND": "wire",
@@ -175,6 +177,7 @@
             "RETENTION_PLAN_STALE",
             "RETENTION_APPLY_BUSY",
             "OPERATION_ALREADY_RUNNING",
+            "BACKUP_SET_HELD_FOR_EDITING",
             "IDEMPOTENCY_KEY_CONFLICT",
             "CONFIG_REVISION_STALE",
             "ALREADY_CONFIGURED",
@@ -606,7 +609,7 @@
       },
       "SubmitOperationRequest": {
         "type": "object",
-        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation. action selects which of the parameter objects below is read; restore_placement reads restore, and run_cycle reads none.",
+        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation. action selects which of the parameter objects below is read; restore_placement reads restore, run_backup_set reads backup_set_id, and run_cycle reads neither.",
         "additionalProperties": false,
         "properties": {
           "action": {
@@ -616,6 +619,11 @@
           "config_revision": {
             "type": "string",
             "description": "Optimistic concurrency: the revision the caller believes is current. A stale value is refused with CONFIG_REVISION_STALE and nothing runs."
+          },
+          "backup_set_id": {
+            "type": "string",
+            "description": "The one backup set a run_backup_set acts on, as the source/backup-set id every surface in this product prints. Absent for run_cycle, which is deployment-wide, and refused when a run_cycle carries one: a body naming another action's parameters is a request that has confused two operations.",
+            "x-go-omitempty": true
           },
           "restore": {
             "$ref": "#/components/schemas/RestoreOperationRequest",
@@ -702,7 +710,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -3631,7 +3639,7 @@
     "/operations": {
       "post": {
         "operationId": "submitOperation",
-        "summary": "Submit a durable operation: a run cycle, or a restore of one archived copy.",
+        "summary": "Submit a durable operation: a run cycle, one backup set's run, or a restore of one archived copy.",
         "tags": [
           "operations"
         ],
@@ -3710,7 +3718,7 @@
             ]
           },
           "404": {
-            "description": "Refused: ARTIFACT_NOT_FOUND, COPY_NOT_FOUND.",
+            "description": "Refused: BACKUP_SET_NOT_FOUND, ARTIFACT_NOT_FOUND, COPY_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3719,12 +3727,13 @@
               }
             },
             "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND",
               "ARTIFACT_NOT_FOUND",
               "COPY_NOT_FOUND"
             ]
           },
           "409": {
-            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING, RESTORE_REFUSED. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the others are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
+            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING, BACKUP_SET_HELD_FOR_EDITING, RESTORE_REFUSED. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the others are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3743,6 +3752,7 @@
               "CONFIG_REVISION_STALE",
               "IDEMPOTENCY_KEY_CONFLICT",
               "OPERATION_ALREADY_RUNNING",
+              "BACKUP_SET_HELD_FOR_EDITING",
               "RESTORE_REFUSED"
             ]
           },

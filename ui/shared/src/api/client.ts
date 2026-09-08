@@ -251,8 +251,62 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
 
-const post = (path: string, body?: unknown) =>
-  request<void>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+/**
+ * `headers` is the third parameter rather than a fourth call shape,
+ * because without it this helper could not send an Idempotency-Key and
+ * nothing did.
+ *
+ * That was issue #597's third layer: both generated contracts declare the
+ * header required on POST /operations and the handler refuses without it,
+ * but every state-changing call in this file went through a helper with
+ * no way to set one. The refusal was a 400 that nothing rendered, so it
+ * looked exactly like the dashboard's unwired button. contract.
+ * conformance.test.ts now asserts the header on every operation whose
+ * contract row says it is required, which is what stops the class coming
+ * back rather than this one fix.
+ */
+const post = (path: string, body?: unknown, headers?: Record<string, string>) =>
+  request<void>(path, {
+    method: "POST",
+    body: body ? JSON.stringify(body) : undefined,
+    headers
+  });
+
+/**
+ * The header name POST /operations requires, spelled once.
+ *
+ * Its uniqueness namespace is the whole deployment rather than one route
+ * (apps/common/webhost's package doc spells out why that is easy to get
+ * wrong), and it describes the RETRY rather than the operation, which is
+ * why it travels as a header and not as a body field.
+ */
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
+/**
+ * A fresh idempotency key for one LOGICAL submission.
+ *
+ * Called once per thing an operator asked for, and the SAME key is then
+ * reused on every retry of it, which is the entire point of the header: a
+ * client that minted a new key per attempt would turn a dropped response
+ * into a second backup run, and the service would have no way to know the
+ * two requests were the same intent. See useRunControls, which owns that
+ * lifetime, rather than this file, which cannot know what a retry is.
+ *
+ * randomUUID where the browser has it, and a random fallback where it
+ * does not: crypto.randomUUID is unavailable on a plain-HTTP origin in
+ * some browsers, which is exactly how a NAS on a local network is
+ * reached, so a hard dependency on it would break the header on the
+ * deployments this product is for.
+ */
+export function newIdempotencyKey(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return "k-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
 
 /**
  * apps/common/auth/local's routes use camelCase JSON (matching Go's
@@ -1563,8 +1617,28 @@ export const httpApi: BackupManagerApi = {
   // config_revision is what makes the submission optimistically
   // concurrent: a stale value is refused server-side rather than running
   // against a configuration the caller has not seen.
-  runCycle: (configRevision) =>
-    post("/operations", { action: "run_cycle", config_revision: configRevision }),
+  runCycle: (configRevision, idempotencyKey) =>
+    post(
+      "/operations",
+      { action: "run_cycle", config_revision: configRevision },
+      { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }
+    ),
+  // The second run action on the same route (issue #597). Same route,
+  // same gate, same tier: /operations is where durable, idempotency-keyed,
+  // revision-checked long work is started, and the durable row has always
+  // had a backup set id column that run_cycle correctly leaves empty.
+  //
+  // The engine half is not new either. `backup-manager fetch
+  // --backup-set` has called internal/app.Service.Fetch since FR-1; what
+  // was missing was a way to reach it in the SERVING process, so the work
+  // takes the engine's single-flight lock and shows up in its feeds
+  // instead of running in a second process against the same journal.
+  runBackupSet: (backupSetId, configRevision, idempotencyKey) =>
+    post(
+      "/operations",
+      { action: "run_backup_set", config_revision: configRevision, backup_set_id: backupSetId },
+      { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }
+    ),
   // The same route as runCycle above, with a different action and its own
   // parameter object. Not a route of its own, deliberately: a restore is
   // a durable, idempotency-keyed, configuration-revision-checked
@@ -1578,6 +1652,11 @@ export const httpApi: BackupManagerApi = {
   restoreCopy: async (req) => {
     const r = await request<WireOperation>("/operations", {
       method: "POST",
+      // The same required header the two run actions send. It was missing
+      // here for the same reason and with the same result: this route
+      // refuses without it, so every restore this client asked for was
+      // answered 400 before it reached the service's own logic.
+      headers: { [IDEMPOTENCY_KEY_HEADER]: req.idempotencyKey },
       body: JSON.stringify({
         action: "restore_placement",
         config_revision: req.configRevision,

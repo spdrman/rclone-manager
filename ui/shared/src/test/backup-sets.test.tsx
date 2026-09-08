@@ -81,7 +81,10 @@ describe("backup sets page", () => {
 
     expect(screen.queryAllByRole("button", { name: "Run now" })).toHaveLength(0);
 
-    const run = screen.getAllByRole("button", { name: "Run all due sets" });
+    // "enabled", not "due" (#597): RunCycle skips only the disabled and
+    // the edit-held, and there is no schedule per set, so nothing is ever
+    // due and the old label promised a filter the engine does not have.
+    const run = screen.getAllByRole("button", { name: "Run all enabled sets" });
     expect(run).toHaveLength(1);
     // The label alone cannot say how far the action reaches, so the
     // sentence that does is asserted with it. Without this, a later
