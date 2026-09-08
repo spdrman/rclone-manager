@@ -1203,10 +1203,17 @@ const ledger: CSSProperties = {
   fontSize: 12.5
 };
 const label: CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5 };
+// Background and colour are named rather than left to the user agent
+// (#618). color-scheme now makes the UA's own default follow the theme, so
+// this is no longer load-bearing on its own, but a control on a themed
+// surface should say what it is instead of depending on the browser and
+// the token layer agreeing about which grey.
 const input: CSSProperties = {
   font: "inherit",
   fontSize: 13,
   padding: "6px 8px",
+  background: "var(--surface-2)",
+  color: "var(--text)",
   border: "1px solid var(--border-strong, var(--border))",
   borderRadius: 6
 };
@@ -1230,10 +1237,22 @@ const btn: CSSProperties = {
   border: "1px solid var(--border-strong, var(--border))",
   borderRadius: 6,
   background: "var(--surface)",
+  color: "var(--text)",
   font: "inherit",
   fontSize: 12.5,
   cursor: "pointer",
   alignSelf: "flex-start"
 };
-const btnPrimary: CSSProperties = { background: "var(--accent)", borderColor: "var(--accent)", color: "#fff" };
+// var(--surface) rather than a literal white (#618). The accent is not one
+// colour: it is dark in light mode and LIGHT in dark mode (0.52 vs 0.70
+// lightness), so the text on it has to invert with the theme. A hardcoded
+// white is right in light mode and about 1.9:1 in dark mode, which is the
+// same shape of mistake as the black-on-dark this issue is named for, one
+// layer up. --surface inverts with the theme and is what .btn--primary in
+// the design system already uses.
+const btnPrimary: CSSProperties = {
+  background: "var(--accent)",
+  borderColor: "var(--accent)",
+  color: "var(--surface)"
+};
 const hint: CSSProperties = { fontSize: 11.5, color: "var(--text-3)" };

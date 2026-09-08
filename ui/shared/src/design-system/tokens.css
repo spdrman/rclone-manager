@@ -3,6 +3,13 @@
    --platform-accent / --platform-surface / --platform-titlebar and nothing else. */
 
 :root {
+  /* Which palette the browser should render ITS OWN surfaces in: form
+     fields, scrollbars, autofill, the caret, focus rings. Without this the
+     user agent assumes light whatever data-theme says, so a native control
+     nobody gave a colour to comes out black-on-white in dark mode (#618).
+     It reads correctly in light mode, which is how it survived review. */
+  color-scheme: light;
+
   /* spacing — 4px base */
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
@@ -59,6 +66,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   --bg: #121312;
   --surface: #1b1d1b;
   --surface-2: #202220;

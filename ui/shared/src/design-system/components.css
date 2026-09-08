@@ -39,6 +39,17 @@
 .btn--destructive-confirm { border-color: var(--danger); background: var(--danger); color: var(--surface); font-weight: 600; }
 .btn--sm { height: 29px; padding: 0 11px; font-size: var(--text-sm); }
 
+/* The floor for native controls (#618). One element selector, so every
+   class rule and every inline style still wins: this only catches a
+   control nobody gave a colour to, which would otherwise fall back to the
+   user agent's black and be unreadable on a dark surface. `font: inherit`
+   is here for the same reason, since an unstyled control also drops to the
+   UA's own font. */
+input, select, textarea, button {
+  color: var(--text);
+  font-family: inherit;
+}
+
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field__label { font-size: var(--text-sm); font-weight: 500; color: var(--text-2); }
 .input, .select {

@@ -6,10 +6,15 @@
  * #599). React Router swaps what is inside <main>, so a panel in there
  * unmounts on every navigation and starts its buffer, its cursor and its
  * scroll position again. A sibling of the nav/main row never unmounts, so
- * all of that survives the whole session. Being a flex sibling rather
- * than position: fixed is the other half: the content column shrinks
- * instead of being covered, so nothing overlays the last row of a long
- * table.
+ * all of that survives the whole session.
+ *
+ * It is fixed to the browser window (#617), so it no longer takes space
+ * out of the row and the content column no longer shrinks around it.
+ * <main> reserves the height the dock publishes instead. That padding is
+ * load-bearing rather than cosmetic: without it the last row of a long
+ * table sits behind the terminal permanently, which is the objection the
+ * in-flow arrangement was built around and the reason this reserves
+ * rather than simply letting the panel cover things.
  *
  * The shell is deliberately thin on decisions and carries only two. The
  * titlebar strip appears for embedded providers alone, because drawing
@@ -24,7 +29,7 @@
  */
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { ActivityDock } from "@shared/components/ActivityDock";
+import { ActivityDock, DOCK_BAR_HEIGHT } from "@shared/components/ActivityDock";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { StatusBadge } from "@shared/components/StatusBadge";
@@ -167,7 +172,12 @@ export function AppShell({
           </div>
         </nav>
 
-        <main style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+        <main
+          style={{
+            flex: 1, minWidth: 0, overflow: "auto",
+            paddingBottom: `var(--dock-height, ${DOCK_BAR_HEIGHT}px)`
+          }}
+        >
           <div
             style={{
               maxWidth: 1240, margin: "0 auto", padding: "24px 28px 64px",
