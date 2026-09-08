@@ -136,6 +136,25 @@ func mediumForConfig(surface string) string {
 	return surface
 }
 
+// One consequence of the pair above is worth writing down rather than
+// leaving somebody to find: `--policy-file` and `backup-set retention
+// --policy-file` accept `medium: local` in the YAML they are handed,
+// where the SAME text in config.yaml is refused.
+//
+// That is not an accident of the plumbing (those files are parsed into
+// config.Retention and then projected out through toRetentionTiers, so
+// they meet mediumForSurface like any other read), and it is not a hole.
+// It lands on the right meaning: `local` is the name the picker shows,
+// the name `medium default` takes, and the name `--tier-medium` takes, so
+// an operator who writes it in a policy file has written what every other
+// surface taught them, and the file that gets persisted still spells local
+// by absence. Refusing it here would mean refusing the product's own word
+// on one surface out of five, which is the shape of problem #622 exists to
+// remove rather than an instance of the rule it enforces.
+//
+// config.yaml itself stays strict, deliberately. That is the file an older
+// binary loads, and its round-trip rule is what FR-35 pins.
+
 // localStorageMediumSummary is the local hard drive as the destinations
 // list reports it.
 //
