@@ -248,10 +248,26 @@ func (b *BackupService) SetBackupSetReadOnly(_ context.Context, id string, readO
 // it echo them would turn a read-only "does this still work" button into
 // a request that could quietly test something else.
 //
-// Everything reachable from here is read-only: it lists the configured
-// remote path over the transport this service already uses and discards
-// the result. Nothing is written locally or remotely, and no trust
-// decision is made or revised.
+// The check itself is read-only: it lists the configured remote path over
+// the transport this service already uses and discards the result.
+// Nothing is written remotely, and no trust decision is made or revised.
+//
+// What it CAN write, since issue #624, is this deployment's own
+// config.yaml, and that is worth stating precisely rather than leaving
+// under "read-only" (PR #628 review). A check that passes against a set
+// marked ConnectionUnverified takes the mark off, through
+// clearConnectionUnverified, which is the same path every configuration
+// write in this package takes: under configMu, re-reading the file from
+// disk, encoding, validating, writing atomically and hot-reloading through
+// adoptConfig. Two things follow for a control shaped like a read. A set
+// that carries no mark still writes nothing, so the ordinary "does this
+// still work" press is a read. And on a marked set, a passing press
+// hot-reloads whatever hand edit was made to config.yaml since this
+// process last loaded it, exactly as an edit to any other set would; that
+// is the house rule for every configuration write here rather than
+// something this button chose. backupsetverified.go's own doc carries the
+// argument for why that one transition is a write a check may make, and
+// why a failing check makes none.
 func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) (ConnectionTestResult, error) {
 	sourceName, setName, ok := splitBackupSetID(id)
 	if !ok {
