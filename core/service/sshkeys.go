@@ -600,12 +600,21 @@ func candidateID(path string) string {
 // traversal, or an id for a file outside the fixed locations all fail the
 // same way: they are not in the scan.
 func (b *BackupService) ImportSSHKeyCandidate(ctx context.Context, id string) (SSHKeyRef, error) {
-	if id == "" {
-		return SSHKeyRef{}, fmt.Errorf("%w: a candidate id is required", ErrInvalidRequest)
-	}
 	found, err := b.DiscoverSSHKeyCandidates(ctx)
 	if err != nil {
 		return SSHKeyRef{}, err
+	}
+	return importSSHKeyCandidateFrom(b.configPath, id, found)
+}
+
+// importSSHKeyCandidateFrom is ImportSSHKeyCandidate's configPath-only
+// half, following the split keysDirIn's own doc explains: the first-run
+// surface has no BackupService and imports a candidate through exactly
+// this function, so a fresh instance cannot be talked into accepting a
+// selection a configured one would refuse.
+func importSSHKeyCandidateFrom(configPath, id string, found SSHKeyDiscovery) (SSHKeyRef, error) {
+	if id == "" {
+		return SSHKeyRef{}, fmt.Errorf("%w: a candidate id is required", ErrInvalidRequest)
 	}
 	for _, candidate := range found.Candidates {
 		if candidate.ID != id {
@@ -621,7 +630,7 @@ func (b *BackupService) ImportSSHKeyCandidate(ctx context.Context, id string) (S
 			// place a path reaches a log as well as a screen.
 			return SSHKeyRef{}, fmt.Errorf("%w: that key could not be read from where it was found", ErrInvalidRequest)
 		}
-		ref, err := importSSHKeyInto(b.configPath, raw, "")
+		ref, err := importSSHKeyInto(configPath, raw, "")
 		zeroBytes(raw)
 		return ref, err
 	}

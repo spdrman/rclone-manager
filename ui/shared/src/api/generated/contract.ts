@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b";
+export const CONTRACT_SHA256 = "f4faf5822283818553ccb3e87eba0f21e434a4f44baa98c8b9588500270daf9e";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -55,6 +55,7 @@ export const WIRE_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "SSH_KEY_CANDIDATE_NOT_FOUND",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -122,6 +123,7 @@ export const API_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "SSH_KEY_CANDIDATE_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -882,6 +884,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "listSSHKeys",
+    method: "GET",
+    path: "/ssh-keys",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListSSHKeysResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "importSSHKey",
     method: "POST",
     path: "/ssh-keys",
@@ -894,7 +913,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "ImportSSHKeyResponse",
     successStatus: 201,
     errorCodes: {
-      400: ["INVALID_REQUEST"],
+      400: ["INVALID_REQUEST", "SSH_KEY_CANDIDATE_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       500: ["INTERNAL"],
@@ -916,6 +935,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "HOST_KEY_PROBE_FAILED"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "listSSHKeyCandidates",
+    method: "GET",
+    path: "/ssh/key-candidates",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListSSHKeyCandidatesResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
     }
   },
@@ -1158,6 +1194,7 @@ export interface WireBackupSet {
   remote_path: string;
   retention_is_override: boolean;
   source_name: string;
+  ssh_key_id: string;
   stable_for_seconds: number;
   stale_after_seconds: number;
   trusted_host_key_recorded_at?: string;
@@ -1339,6 +1376,16 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
+/** One of the four claims a verification makes. detail is always a
+ *  sanitized, safe-to-render string built from the server's own words
+ *  and the caller's own values, never a raw transport error. */
+export interface WireConnectionTestStage {
+  detail?: string;
+  duration_ms: number;
+  name: string;
+  status: string;
+}
+
 /** POST /backup-sets. The backup-set spec, plus the two things only a
  *  create can ask for: that the new set also runs at once, and that
  *  it may take over history already on its id. */
@@ -1439,11 +1486,14 @@ export interface WireHostKeyProbeResponse {
   known_hosts_line: string;
 }
 
-/** POST /ssh-keys. Sent once; the caller discards its own copy
- *  immediately. */
+/** POST /ssh-keys. Exactly one of private_key_pem (paste a key) or
+ *  candidate_id (select a listed one) is required. private_key_pem
+ *  was the only mode before candidate_id existed, so every request
+ *  written against the older contract is still a valid one. */
 export interface WireImportSSHKeyRequest {
+  candidate_id?: string;
   passphrase?: string;
-  private_key_pem: string;
+  private_key_pem?: string;
 }
 
 /** The reference a later create-backup-set call carries instead of
@@ -1476,6 +1526,22 @@ export interface WireListBackupSetsResponse {
  *  with. */
 export interface WireListOperationsResponse {
   operations: WireOperation[];
+}
+
+/** GET /ssh/key-candidates. The locations travel beside the
+ *  candidates, in one response, so a client cannot render one without
+ *  the other. */
+export interface WireListSSHKeyCandidatesResponse {
+  candidates: WireSSHKeyCandidate[];
+  locations: WireSSHKeyDiscoveryLocation[];
+}
+
+/** GET /ssh-keys. The read this API never had: an imported key's id
+ *  used to cross the wire exactly once, in the response to the POST
+ *  that created it, so ssh_key_id took a value nothing in the product
+ *  would tell anybody. */
+export interface WireListSSHKeysResponse {
+  keys: WireSSHKey[];
 }
 
 /** GET /system/storage. The manager-wide reading a dashboard gauge is
@@ -1904,6 +1970,57 @@ export interface WireRunningWork {
   stage: string;
 }
 
+/** One key in this deployment's own key store. It carries no
+ *  server-side path: SSHKeyRef.KeyFile is kept off the wire so a
+ *  caller never learns this process's filesystem layout, and an
+ *  inventory is not an exception to that. What travels instead is the
+ *  id, the public half's algorithm and SHA256 fingerprint, the
+ *  authorized_keys line, and which backup sets point at it. */
+export interface WireSSHKey {
+  algorithm: string;
+  fingerprint: string;
+  id: string;
+  imported_at: string;
+  passphrase_protected: boolean;
+  problem?: string;
+  public_key: string;
+  used_by: string[];
+}
+
+/** One private key file this engine can actually see. Unlike SSHKey,
+ *  this DOES carry a path, because a candidate's path is its identity
+ *  to an operator and there is no other way to say which of several
+ *  files is meant. What makes that safe is that the locations
+ *  searched are a closed, constant set decided server-side, never
+ *  caller-supplied and never walked recursively. The handle
+ *  travelling back is the opaque id, never the path. */
+export interface WireSSHKeyCandidate {
+  algorithm: string;
+  fingerprint: string;
+  id: string;
+  in_store: boolean;
+  in_store_id?: string;
+  location: string;
+  mode: string;
+  path: string;
+  public_key: string;
+  reason?: string;
+  selectable: boolean;
+}
+
+/** One place the scan looked, reported whether or not anything was
+ *  found there. Every location is always reported, including the
+ *  absent ones: an empty candidate list has two readings, "you have
+ *  no keys" and "I could not look where your keys are", and on a
+ *  packaged install the engine is a distroless container with five
+ *  mounts and no home directory, so the second is the true one. */
+export interface WireSSHKeyDiscoveryLocation {
+  found: number;
+  kind: string;
+  path: string;
+  problem?: string;
+}
+
 /** GET /auth/session. */
 export interface WireSessionResponse {
   username: string;
@@ -2012,6 +2129,7 @@ export interface WireTestConnectionRequest {
 export interface WireTestConnectionResponse {
   message?: string;
   ok: boolean;
+  stages?: WireConnectionTestStage[];
 }
 
 /** ONE host key a backup set actually pins, named the way an operator

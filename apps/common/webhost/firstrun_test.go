@@ -55,6 +55,26 @@ type fakeFirstRun struct {
 
 func (f *fakeFirstRun) Configured() bool { return f.configured }
 
+// The looking half of the setup surface (#592). A first-run instance has
+// no configuration, so nothing can be USING a key, but it does have a
+// store to list and a machine to scan, and scanning is what a brand new
+// operator needs: a default install has exactly one key on it.
+func (f *fakeFirstRun) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return []service.SSHKeyListing{{
+		ID: "key_1", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:test", UsedBy: nil,
+	}}, nil
+}
+
+func (f *fakeFirstRun) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{
+		Locations: []service.SSHKeyDiscoveryLocation{{Path: "/etc/backup-manager", Kind: "mount"}},
+	}, nil
+}
+
+func (f *fakeFirstRun) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, service.ErrSSHKeyCandidateNotFound
+}
+
 func (f *fakeFirstRun) ImportSSHKey(_ context.Context, raw []byte, _ string) (service.SSHKeyRef, error) {
 	f.imported = raw
 	if f.importErr != nil {

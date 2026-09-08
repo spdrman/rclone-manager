@@ -430,6 +430,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 
+		// Issue #592: the two reads this surface never had. Everything
+		// else under /ssh is a write or a probe, which is exactly why an
+		// imported key's id crossed the wire once and could never be
+		// asked for again.
+		//
+		// Read-only under §50 and unlike their neighbours in the truest
+		// sense: neither opens an outbound connection to anything, so
+		// neither carries requireCSRF, matching every other GET here. The
+		// candidate scan reads a fixed, constant set of locations decided
+		// in core, never a caller-supplied path, so there is no request
+		// shape that turns it into a filesystem oracle.
+		r.Get("/ssh-keys", h.listSSHKeys)
+		r.Get("/ssh/key-candidates", h.listSSHKeyCandidates)
+
 		// Issue #140 (B3.7): the one generic settings surface — a read
 		// and a partial write covering every server-side setting the
 		// shared Web UI administers, rather than a route per setting. See

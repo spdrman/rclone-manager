@@ -87,9 +87,15 @@ var contractBindings = map[string]contractBinding{
 	"getBackupSet":            {nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
 	"listValidators":          {nil, listValidatorsResponse{}, "/api/v1/validators"},
 	"importSSHKey":            {importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
-	"probeHostKey":            {hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
-	"getSettings":             {nil, settingsResponse{}, "/api/v1/settings"},
-	"updateSettings":          {settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
+	// Issue #592's two reads. They are the first GETs under /ssh, and
+	// they are the reason the three writes above stopped being the whole
+	// surface: a key store nothing could list is a key store whose ids
+	// nobody has.
+	"listSSHKeys":          {nil, listSSHKeysResponse{}, "/api/v1/ssh-keys"},
+	"listSSHKeyCandidates": {nil, listSSHKeyCandidatesResponse{}, "/api/v1/ssh/key-candidates"},
+	"probeHostKey":         {hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
+	"getSettings":          {nil, settingsResponse{}, "/api/v1/settings"},
+	"updateSettings":       {settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
 
 	// Issue #211. A backup set is "source/name" and a backup is
 	// "source/set/name", so both identities span path segments and the

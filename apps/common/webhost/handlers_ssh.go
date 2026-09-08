@@ -56,6 +56,25 @@ const (
 type importSSHKeyRequest struct {
 	PrivateKeyPEM string `json:"private_key_pem"`
 	Passphrase    string `json:"passphrase"`
+
+	// CandidateID selects a key GET /api/v1/ssh/key-candidates already
+	// listed, instead of pasting one (#592). It is the mode a brand new
+	// operator uses, because a default install already put a key on the
+	// machine and there is nothing for them to paste.
+	//
+	// The private half is read once, server-side, and goes through
+	// exactly the rclone.ValidateImportedPrivateKey a paste does, so a
+	// candidate cannot be imported through a check a paste would have
+	// failed. The original is left where it is, which is the same promise
+	// `--ssh-key-file` already makes: answering that question differently
+	// here would mean the wizard and the CLI disagreed about what
+	// selecting a key does.
+	//
+	// It is an OPAQUE id, never a path. It resolves only by matching
+	// against a fresh scan of the fixed locations core decides, so a
+	// path, a traversal and an id for a file outside those locations all
+	// fail the same way: they are not in the scan.
+	CandidateID string `json:"candidate_id"`
 }
 
 // importSSHKeyResponse never carries KeyFile (the server-side path
@@ -79,13 +98,48 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, maxImportSSHKeyBodyBytes)
 		return
 	}
-	if body.PrivateKeyPEM == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "private_key_pem is required")
+	var (
+		ref service.SSHKeyRef
+		err error
+	)
+	switch {
+	case body.CandidateID != "" && body.PrivateKeyPEM != "":
+		// Refused rather than resolved by precedence, the same rule
+		// testConnection's own two modes follow below. A request that
+		// pastes a key AND names a discovered one is ambiguous about
+		// which key is being imported, and silently preferring either is
+		// how a caller ends up holding a reference to a key it did not
+		// choose.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"paste a key in private_key_pem, or name a listed one in candidate_id, but not both")
+		return
+	case body.CandidateID != "":
+		if body.Passphrase != "" {
+			// A passphrase belongs to material the caller is holding. A
+			// candidate's material is read server-side, and #269 already
+			// refuses a passphrase-protected key without one, so a
+			// passphrase here would be a value with nothing to apply it
+			// to rather than a way to select an encrypted candidate.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				"passphrase applies to a pasted key; a listed candidate is read and validated on this machine")
+			return
+		}
+		ref, err = h.setup().ImportSSHKeyCandidate(r.Context(), body.CandidateID)
+	case body.PrivateKeyPEM != "":
+		ref, err = h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM), body.Passphrase)
+	default:
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "private_key_pem or candidate_id is required")
 		return
 	}
-
-	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM), body.Passphrase)
 	if err != nil {
+		if errors.Is(err, service.ErrSSHKeyCandidateNotFound) {
+			// The listing the caller acted on is not the machine's
+			// current state, which is an ordinary thing for a wizard pane
+			// left open to run into, not a failure of this deployment.
+			writeError(w, http.StatusBadRequest, "SSH_KEY_CANDIDATE_NOT_FOUND",
+				"no such key candidate; scan again and select from the current listing")
+			return
+		}
 		if errors.Is(err, service.ErrInvalidRequest) {
 			// Safe to echo: rclone.ValidateImportedPrivateKey's own doc
 			// guarantees this never includes the key bytes themselves,
@@ -198,9 +252,31 @@ func (b testConnectionRequest) namesACandidate() bool {
 		b.SSHKeyID != "" || b.KnownHostsLine != "" || b.RemotePath != ""
 }
 
+// connectionTestStageResponse is one of the four claims a verification
+// makes (#592). Detail is always one of core's own sanitized strings or a
+// value the caller itself supplied, never a raw rclone or x/crypto error.
+type connectionTestStageResponse struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Detail     string `json:"detail,omitempty"`
+	DurationMS int    `json:"duration_ms"`
+}
+
 type testConnectionResponse struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
+
+	// Stages is the per-claim breakdown: reached the host, the host key
+	// matched, authenticated, listed the folder. ok and message above are
+	// untouched by it and mean exactly what they meant before, because
+	// #211's callers read those two and nothing else.
+	//
+	// Four entries in order, including the ones never attempted, which
+	// carry status "skipped". A client that could not tell "not
+	// attempted" from "failed" would render three reds for one problem,
+	// and the whole reason this exists is that one red for four problems
+	// was not enough.
+	Stages []connectionTestStageResponse `json:"stages,omitempty"`
 }
 
 // testConnection is POST /api/v1/backup-sets/test-connection: issue
@@ -274,5 +350,14 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, testConnectionResponse{OK: result.OK, Message: result.Message})
+	stages := make([]connectionTestStageResponse, 0, len(result.Stages))
+	for _, stage := range result.Stages {
+		stages = append(stages, connectionTestStageResponse{
+			Name:       stage.Name,
+			Status:     stage.Status,
+			Detail:     stage.Detail,
+			DurationMS: int(stage.Duration.Milliseconds()),
+		})
+	}
+	writeJSON(w, http.StatusOK, testConnectionResponse{OK: result.OK, Message: result.Message, Stages: stages})
 }

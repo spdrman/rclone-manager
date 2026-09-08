@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "fd976f5214fff04b84e61bcd1b4de058c4f878960cd7689467e763649e75726b"
+const ContractSHA256 = "f4faf5822283818553ccb3e87eba0f21e434a4f44baa98c8b9588500270daf9e"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -92,6 +92,7 @@ const (
 	ErrorCodeCopyNotFound                           ErrorCode = "COPY_NOT_FOUND"
 	ErrorCodeMediumNotFound                         ErrorCode = "MEDIUM_NOT_FOUND"
 	ErrorCodeArtifactNotFailed                      ErrorCode = "ARTIFACT_NOT_FAILED"
+	ErrorCodeSSHKeyCandidateNotFound                ErrorCode = "SSH_KEY_CANDIDATE_NOT_FOUND"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -131,6 +132,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
+	ErrorCodeSSHKeyCandidateNotFound,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -194,6 +196,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeCopyNotFound,
 	ErrorCodeMediumNotFound,
 	ErrorCodeArtifactNotFailed,
+	ErrorCodeSSHKeyCandidateNotFound,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -647,11 +650,20 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "listSSHKeys", Method: "GET", Path: "/ssh-keys",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListSSHKeysResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "importSSHKey", Method: "POST", Path: "/ssh-keys",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "ImportSSHKeyRequest", ResponseSchema: "ImportSSHKeyResponse", SuccessStatus: 201,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyCandidateNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			500: {ErrorCodeInternal},
@@ -665,6 +677,15 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeHostKeyProbeFailed},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "listSSHKeyCandidates", Method: "GET", Path: "/ssh/key-candidates",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListSSHKeyCandidatesResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -854,6 +875,7 @@ type BackupSet struct {
 	RemotePath               string           `json:"remote_path"`
 	RetentionIsOverride      bool             `json:"retention_is_override"`
 	SourceName               string           `json:"source_name"`
+	SSHKeyID                 string           `json:"ssh_key_id"`
 	StableForSeconds         int              `json:"stable_for_seconds"`
 	StaleAfterSeconds        int              `json:"stale_after_seconds"`
 	TrustedHostKeyRecordedAt string           `json:"trusted_host_key_recorded_at,omitempty"`
@@ -1035,6 +1057,16 @@ type ConfigRevisionStaleResponse struct {
 	Error          ErrorBody `json:"error"`
 }
 
+// ConnectionTestStage is one of the four claims a verification makes. detail is always a
+// sanitized, safe-to-render string built from the server's own words
+// and the caller's own values, never a raw transport error.
+type ConnectionTestStage struct {
+	Detail     string `json:"detail,omitempty"`
+	DurationMs int    `json:"duration_ms"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+}
+
 // CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the two things only a
 // create can ask for: that the new set also runs at once, and that
 // it may take over history already on its id.
@@ -1137,9 +1169,12 @@ type HostKeyProbeResponse struct {
 	KnownHostsLine string `json:"known_hosts_line"`
 }
 
-// ImportSSHKeyRequest is POST /ssh-keys. Sent once; the caller discards its own copy
-// immediately.
+// ImportSSHKeyRequest is POST /ssh-keys. Exactly one of private_key_pem (paste a key) or
+// candidate_id (select a listed one) is required. private_key_pem
+// was the only mode before candidate_id existed, so every request
+// written against the older contract is still a valid one.
 type ImportSSHKeyRequest struct {
+	CandidateID   string `json:"candidate_id"`
 	Passphrase    string `json:"passphrase"`
 	PrivateKeyPEM string `json:"private_key_pem"`
 }
@@ -1174,6 +1209,22 @@ type ListBackupSetsResponse struct {
 // with.
 type ListOperationsResponse struct {
 	Operations []Operation `json:"operations"`
+}
+
+// ListSSHKeyCandidatesResponse is GET /ssh/key-candidates. The locations travel beside the
+// candidates, in one response, so a client cannot render one without
+// the other.
+type ListSSHKeyCandidatesResponse struct {
+	Candidates []SSHKeyCandidate         `json:"candidates"`
+	Locations  []SSHKeyDiscoveryLocation `json:"locations"`
+}
+
+// ListSSHKeysResponse is GET /ssh-keys. The read this API never had: an imported key's id
+// used to cross the wire exactly once, in the response to the POST
+// that created it, so ssh_key_id took a value nothing in the product
+// would tell anybody.
+type ListSSHKeysResponse struct {
+	Keys []SSHKey `json:"keys"`
 }
 
 // ListStorageStatusResponse is GET /system/storage. The manager-wide reading a dashboard gauge is
@@ -1602,6 +1653,57 @@ type RunningWork struct {
 	Stage    string `json:"stage"`
 }
 
+// SSHKey is one key in this deployment's own key store. It carries no
+// server-side path: SSHKeyRef.KeyFile is kept off the wire so a
+// caller never learns this process's filesystem layout, and an
+// inventory is not an exception to that. What travels instead is the
+// id, the public half's algorithm and SHA256 fingerprint, the
+// authorized_keys line, and which backup sets point at it.
+type SSHKey struct {
+	Algorithm           string   `json:"algorithm"`
+	Fingerprint         string   `json:"fingerprint"`
+	ID                  string   `json:"id"`
+	ImportedAt          string   `json:"imported_at"`
+	PassphraseProtected bool     `json:"passphrase_protected"`
+	Problem             string   `json:"problem,omitempty"`
+	PublicKey           string   `json:"public_key"`
+	UsedBy              []string `json:"used_by"`
+}
+
+// SSHKeyCandidate is one private key file this engine can actually see. Unlike SSHKey,
+// this DOES carry a path, because a candidate's path is its identity
+// to an operator and there is no other way to say which of several
+// files is meant. What makes that safe is that the locations
+// searched are a closed, constant set decided server-side, never
+// caller-supplied and never walked recursively. The handle
+// travelling back is the opaque id, never the path.
+type SSHKeyCandidate struct {
+	Algorithm   string `json:"algorithm"`
+	Fingerprint string `json:"fingerprint"`
+	ID          string `json:"id"`
+	InStore     bool   `json:"in_store"`
+	InStoreID   string `json:"in_store_id,omitempty"`
+	Location    string `json:"location"`
+	Mode        string `json:"mode"`
+	Path        string `json:"path"`
+	PublicKey   string `json:"public_key"`
+	Reason      string `json:"reason,omitempty"`
+	Selectable  bool   `json:"selectable"`
+}
+
+// SSHKeyDiscoveryLocation is one place the scan looked, reported whether or not anything was
+// found there. Every location is always reported, including the
+// absent ones: an empty candidate list has two readings, "you have
+// no keys" and "I could not look where your keys are", and on a
+// packaged install the engine is a distroless container with five
+// mounts and no home directory, so the second is the true one.
+type SSHKeyDiscoveryLocation struct {
+	Found   int    `json:"found"`
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	Problem string `json:"problem,omitempty"`
+}
+
 // SessionResponse is GET /auth/session.
 type SessionResponse struct {
 	Username string `json:"username"`
@@ -1708,8 +1810,9 @@ type TestConnectionRequest struct {
 
 // TestConnectionResponse is the outcome of a pre-save connection test.
 type TestConnectionResponse struct {
-	Message string `json:"message,omitempty"`
-	OK      bool   `json:"ok"`
+	Message string                `json:"message,omitempty"`
+	OK      bool                  `json:"ok"`
+	Stages  []ConnectionTestStage `json:"stages,omitempty"`
 }
 
 // TrustedHostKey is ONE host key a backup set actually pins, named the way an operator
@@ -1822,84 +1925,90 @@ type VersionResponse struct {
 // through this map rather than through a hand-written lookup, so a schema
 // added to the contract cannot quietly go unchecked.
 var SchemaTypes = map[string]any{
-	"ActivityEvent":               ActivityEvent{},
-	"ApplyRetentionRequest":       ApplyRetentionRequest{},
-	"Artifact":                    Artifact{},
-	"ArtifactCheckResponse":       ArtifactCheckResponse{},
-	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
-	"AuthErrorResponse":           AuthErrorResponse{},
-	"BackupSet":                   BackupSet{},
-	"BackupSetEditHold":           BackupSetEditHold{},
-	"BackupSetEditHoldState":      BackupSetEditHoldState{},
-	"BackupSetHealth":             BackupSetHealth{},
-	"BackupSetRetention":          BackupSetRetention{},
-	"BackupSetSpec":               BackupSetSpec{},
-	"CapabilitiesResponse":        CapabilitiesResponse{},
-	"CapacitySettings":            CapacitySettings{},
-	"CatalogFailure":              CatalogFailure{},
-	"CatalogReportResponse":       CatalogReportResponse{},
-	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
-	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
-	"CreateBackupSetRequest":      CreateBackupSetRequest{},
-	"CreateBackupSetResponse":     CreateBackupSetResponse{},
-	"CredentialsRequest":          CredentialsRequest{},
-	"CycleMoveOutcome":            CycleMoveOutcome{},
-	"CycleOutcome":                CycleOutcome{},
-	"ErrorBody":                   ErrorBody{},
-	"ErrorResponse":               ErrorResponse{},
-	"FirstRunStatusResponse":      FirstRunStatusResponse{},
-	"HealthResponse":              HealthResponse{},
-	"HostKeyProbeRequest":         HostKeyProbeRequest{},
-	"HostKeyProbeResponse":        HostKeyProbeResponse{},
-	"ImportSSHKeyRequest":         ImportSSHKeyRequest{},
-	"ImportSSHKeyResponse":        ImportSSHKeyResponse{},
-	"ListActivityResponse":        ListActivityResponse{},
-	"ListArtifactsResponse":       ListArtifactsResponse{},
-	"ListBackupSetsResponse":      ListBackupSetsResponse{},
-	"ListOperationsResponse":      ListOperationsResponse{},
-	"ListStorageStatusResponse":   ListStorageStatusResponse{},
-	"ListValidatorsResponse":      ListValidatorsResponse{},
-	"LiveActivityDeployment":      LiveActivityDeployment{},
-	"LiveActivityEvent":           LiveActivityEvent{},
-	"LiveActivityField":           LiveActivityField{},
-	"LiveActivityResponse":        LiveActivityResponse{},
-	"LiveActivitySet":             LiveActivitySet{},
-	"ManagerStorage":              ManagerStorage{},
-	"MediumPreflightCheck":        MediumPreflightCheck{},
-	"MediumPreflightResponse":     MediumPreflightResponse{},
-	"Operation":                   Operation{},
-	"OperationProgress":           OperationProgress{},
-	"OperationRestore":            OperationRestore{},
-	"Placement":                   Placement{},
-	"RestoreOperationRequest":     RestoreOperationRequest{},
-	"RetentionMove":               RetentionMove{},
-	"RetentionOverride":           RetentionOverride{},
-	"RetentionPlan":               RetentionPlan{},
-	"RetentionSchema":             RetentionSchema{},
-	"RetentionSettings":           RetentionSettings{},
-	"RetentionTier":               RetentionTier{},
-	"RetentionTierSelection":      RetentionTierSelection{},
-	"RetentionVerdict":            RetentionVerdict{},
-	"RetryFailedRequest":          RetryFailedRequest{},
-	"RotatePasswordRequest":       RotatePasswordRequest{},
-	"RunningWork":                 RunningWork{},
-	"SessionResponse":             SessionResponse{},
-	"SetEnabledRequest":           SetEnabledRequest{},
-	"SetReadOnlyRequest":          SetReadOnlyRequest{},
-	"SettingsResponse":            SettingsResponse{},
-	"SettingsSchema":              SettingsSchema{},
-	"StorageMediumSummary":        StorageMediumSummary{},
-	"StorageSchema":               StorageSchema{},
-	"StorageStatus":               StorageStatus{},
-	"SubmitOperationRequest":      SubmitOperationRequest{},
-	"TestConnectionRequest":       TestConnectionRequest{},
-	"TestConnectionResponse":      TestConnectionResponse{},
-	"TrustedHostKey":              TrustedHostKey{},
-	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
-	"UpdateCapacitySettings":      UpdateCapacitySettings{},
-	"UpdateRetentionSettings":     UpdateRetentionSettings{},
-	"UpdateSettingsRequest":       UpdateSettingsRequest{},
-	"Validator":                   Validator{},
-	"VerificationClassInfo":       VerificationClassInfo{},
-	"VersionResponse":             VersionResponse{},
+	"ActivityEvent":                ActivityEvent{},
+	"ApplyRetentionRequest":        ApplyRetentionRequest{},
+	"Artifact":                     Artifact{},
+	"ArtifactCheckResponse":        ArtifactCheckResponse{},
+	"ArtifactReinstateResponse":    ArtifactReinstateResponse{},
+	"AuthErrorResponse":            AuthErrorResponse{},
+	"BackupSet":                    BackupSet{},
+	"BackupSetEditHold":            BackupSetEditHold{},
+	"BackupSetEditHoldState":       BackupSetEditHoldState{},
+	"BackupSetHealth":              BackupSetHealth{},
+	"BackupSetRetention":           BackupSetRetention{},
+	"BackupSetSpec":                BackupSetSpec{},
+	"CapabilitiesResponse":         CapabilitiesResponse{},
+	"CapacitySettings":             CapacitySettings{},
+	"CatalogFailure":               CatalogFailure{},
+	"CatalogReportResponse":        CatalogReportResponse{},
+	"CompleteFirstRunResponse":     CompleteFirstRunResponse{},
+	"ConfigRevisionStaleResponse":  ConfigRevisionStaleResponse{},
+	"ConnectionTestStage":          ConnectionTestStage{},
+	"CreateBackupSetRequest":       CreateBackupSetRequest{},
+	"CreateBackupSetResponse":      CreateBackupSetResponse{},
+	"CredentialsRequest":           CredentialsRequest{},
+	"CycleMoveOutcome":             CycleMoveOutcome{},
+	"CycleOutcome":                 CycleOutcome{},
+	"ErrorBody":                    ErrorBody{},
+	"ErrorResponse":                ErrorResponse{},
+	"FirstRunStatusResponse":       FirstRunStatusResponse{},
+	"HealthResponse":               HealthResponse{},
+	"HostKeyProbeRequest":          HostKeyProbeRequest{},
+	"HostKeyProbeResponse":         HostKeyProbeResponse{},
+	"ImportSSHKeyRequest":          ImportSSHKeyRequest{},
+	"ImportSSHKeyResponse":         ImportSSHKeyResponse{},
+	"ListActivityResponse":         ListActivityResponse{},
+	"ListArtifactsResponse":        ListArtifactsResponse{},
+	"ListBackupSetsResponse":       ListBackupSetsResponse{},
+	"ListOperationsResponse":       ListOperationsResponse{},
+	"ListSSHKeyCandidatesResponse": ListSSHKeyCandidatesResponse{},
+	"ListSSHKeysResponse":          ListSSHKeysResponse{},
+	"ListStorageStatusResponse":    ListStorageStatusResponse{},
+	"ListValidatorsResponse":       ListValidatorsResponse{},
+	"LiveActivityDeployment":       LiveActivityDeployment{},
+	"LiveActivityEvent":            LiveActivityEvent{},
+	"LiveActivityField":            LiveActivityField{},
+	"LiveActivityResponse":         LiveActivityResponse{},
+	"LiveActivitySet":              LiveActivitySet{},
+	"ManagerStorage":               ManagerStorage{},
+	"MediumPreflightCheck":         MediumPreflightCheck{},
+	"MediumPreflightResponse":      MediumPreflightResponse{},
+	"Operation":                    Operation{},
+	"OperationProgress":            OperationProgress{},
+	"OperationRestore":             OperationRestore{},
+	"Placement":                    Placement{},
+	"RestoreOperationRequest":      RestoreOperationRequest{},
+	"RetentionMove":                RetentionMove{},
+	"RetentionOverride":            RetentionOverride{},
+	"RetentionPlan":                RetentionPlan{},
+	"RetentionSchema":              RetentionSchema{},
+	"RetentionSettings":            RetentionSettings{},
+	"RetentionTier":                RetentionTier{},
+	"RetentionTierSelection":       RetentionTierSelection{},
+	"RetentionVerdict":             RetentionVerdict{},
+	"RetryFailedRequest":           RetryFailedRequest{},
+	"RotatePasswordRequest":        RotatePasswordRequest{},
+	"RunningWork":                  RunningWork{},
+	"SSHKey":                       SSHKey{},
+	"SSHKeyCandidate":              SSHKeyCandidate{},
+	"SSHKeyDiscoveryLocation":      SSHKeyDiscoveryLocation{},
+	"SessionResponse":              SessionResponse{},
+	"SetEnabledRequest":            SetEnabledRequest{},
+	"SetReadOnlyRequest":           SetReadOnlyRequest{},
+	"SettingsResponse":             SettingsResponse{},
+	"SettingsSchema":               SettingsSchema{},
+	"StorageMediumSummary":         StorageMediumSummary{},
+	"StorageSchema":                StorageSchema{},
+	"StorageStatus":                StorageStatus{},
+	"SubmitOperationRequest":       SubmitOperationRequest{},
+	"TestConnectionRequest":        TestConnectionRequest{},
+	"TestConnectionResponse":       TestConnectionResponse{},
+	"TrustedHostKey":               TrustedHostKey{},
+	"UpdateBackupSetRequest":       UpdateBackupSetRequest{},
+	"UpdateCapacitySettings":       UpdateCapacitySettings{},
+	"UpdateRetentionSettings":      UpdateRetentionSettings{},
+	"UpdateSettingsRequest":        UpdateSettingsRequest{},
+	"Validator":                    Validator{},
+	"VerificationClassInfo":        VerificationClassInfo{},
+	"VersionResponse":              VersionResponse{},
 }

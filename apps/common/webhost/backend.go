@@ -139,6 +139,23 @@ type BackupServiceClient interface {
 	// for what a non-empty one does (#269).
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 
+	// The three calls the SSH wizard's first step is made of (#592).
+	//
+	// ListSSHKeys backs GET /api/v1/ssh-keys and is the read this API
+	// never had: an imported key's id crossed the wire exactly once, in
+	// the response to the POST that created it, so `--ssh-key-id` and the
+	// edit box both took a value nothing would tell anybody.
+	//
+	// DiscoverSSHKeyCandidates backs GET /api/v1/ssh/key-candidates: what
+	// this engine can actually see, over a fixed set of locations, with
+	// every location reported whether or not it held anything.
+	//
+	// ImportSSHKeyCandidate backs the mode POST /api/v1/ssh-keys grows,
+	// selecting a discovered key by its opaque id rather than pasting it.
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
+
 	// ProbeHostKey backs POST /api/v1/ssh/host-key-probe: the wizard's
 	// "Verify server" step, fetching a real fingerprint instead of a
 	// mock (issue #146). Read-only, per §50.
