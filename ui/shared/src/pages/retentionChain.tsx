@@ -105,11 +105,12 @@ export const CUSTOM_PERIOD = "days";
 
 /** The value of the picker's one unselectable, not-built row (#595).
  *
- *  A sentinel rather than "" so it can never be confused with the local
- *  backup root, which is the row that DOES work and is spelled by naming
- *  no medium at all. It is never submitted: the option is disabled, and
- *  the id is not one a `storage_mediums` entry could declare anyway, since
- *  the config layer requires lower_snake_case starting with a letter. */
+ *  A sentinel rather than "" so it can never be confused with the drive on
+ *  this machine, which is the row that DOES work and is spelled by
+ *  LOCAL_DESTINATION_ID since #622. It is never submitted: the option is
+ *  disabled, and the id is not one a `storage_mediums` entry could declare
+ *  anyway, since the config layer requires lower_snake_case starting with
+ *  a letter. */
 export const NOT_BUILT_LOCAL_VOLUME = "__not_built_local_volume";
 
 /** The chain "Restore default chain" fills the form with, taken from the
@@ -380,9 +381,12 @@ export function TierRow({
                   decision.
 
                   It cannot be built from here. Local means the backup
-                  set's own local_path and nothing else, `local` is a
-                  reserved medium id a tier may not spell, and the config
-                  layer's medium type set is closed to s3 alone.
+                  set's own local_path and nothing else, and the config
+                  layer's medium type set is closed to s3 alone. (`local`
+                  is a name a tier CAN spell on this boundary since #622,
+                  and it still names that one directory: what does not
+                  exist is a SECOND local destination, which is what this
+                  row is about.)
                   transport.MediumTypeLocalDir exists and its own doc says
                   it is NOT configurable, because "'local' as a MEDIUM
                   would be a second answer to where local artifacts live",
