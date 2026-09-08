@@ -77,12 +77,12 @@ export function noticeAsEvent(notice: BrowserNotice, index: number): SetActivity
     sequence: -(index + 1),
     at: new Date(notice.at).toISOString(),
     level: notice.outcome === "ok" ? "info" : "warn",
-    // Stated, in the same vocabulary the engine states its own outcomes
+    // Stated, in the same vocabulary the engine states its own results
     // in (issue #625), so the renderer colours a browser notice by
     // reading a field rather than by carrying a rule about this event.
     // The notice's own finer word (ok, refused, unreachable) stays in
     // the fields, which is where the browser's vocabulary belongs.
-    outcome: notice.outcome === "ok" ? "success" : "warning",
+    result: notice.outcome === "ok" ? "success" : "warn",
     event: BROWSER_NOTICE_EVENT,
     scope: "set",
     message: notice.message,

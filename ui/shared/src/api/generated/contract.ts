@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "6e702725b0991afc4b78b7326cf682c8539306dbb1ab19d02775e6675ceef70d";
+export const CONTRACT_SHA256 = "d2ca5510fa1ad0dd0346deb323823382be96edd6e2a2b754492b68b1e8628a01";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1838,7 +1838,7 @@ export interface WireLiveActivityEvent {
   fields: WireLiveActivityField[];
   level: "debug" | "info" | "warn" | "error";
   message: string;
-  outcome?: "success" | "warning" | "error" | "info";
+  result?: "success" | "warn" | "error" | "info";
   scope: "deployment" | "set";
   sequence: number;
 }

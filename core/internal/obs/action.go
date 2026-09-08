@@ -64,47 +64,47 @@ import (
 // reader can apply it with no lookahead: an action id with no outcome is
 // a start, an action id with an outcome is that start's completion.
 
-// Outcome is how the operation a line reports turned out.
+// Result is how the operation a line reports turned out.
 //
 // Four values, and the fourth is the one that keeps this honest. Not
 // every completion went well or badly: a preview that found nothing to
 // do, a check that was skipped because it did not apply, a plan with
 // nothing in it are all completions with no verdict to give, and forcing
 // one of the other three onto them would make this field the thing an
-// operator learns to distrust. An empty Outcome is different again and
+// operator learns to distrust. An empty Result is different again and
 // means the line states none at all, which is what a start and every
 // ordinary progress note carry.
-type Outcome string
+type Result string
 
 const (
-	// OutcomeSuccess is the value there was no way to say before this
+	// ResultSuccess is the value there was no way to say before this
 	// existed. The operation did what it was asked to do.
-	OutcomeSuccess Outcome = "success"
+	ResultSuccess Result = "success"
 
-	// OutcomeWarning is a completion that finished, and finished with
+	// ResultWarn is a completion that finished, and finished with
 	// something in it worth an operator's attention: a validation that
 	// found the content wrong, a connection test whose steps were
 	// skipped, a request refused for something the caller asked for.
-	OutcomeWarning Outcome = "warning"
+	ResultWarn Result = "warn"
 
-	// OutcomeError is a completion that did not do what it was asked to
+	// ResultError is a completion that did not do what it was asked to
 	// do.
-	OutcomeError Outcome = "error"
+	ResultError Result = "error"
 
-	// OutcomeInfo is a completion with no verdict: it ran, it finished,
+	// ResultInfo is a completion with no verdict: it ran, it finished,
 	// and there is nothing to celebrate or worry about. See the type's
 	// own doc for why this is not folded into success.
-	OutcomeInfo Outcome = "info"
+	ResultInfo Result = "info"
 )
 
-// Outcomes lists every value this vocabulary has, in the order
+// Results lists every value this vocabulary has, in the order
 // api/v1/openapi.json declares them.
 //
 // It exists so the wire contract's enum and this package's vocabulary can
 // be compared rather than both being written down and trusted, which is
 // the same reason service.LiveActivityOutcomes exists for the other
 // enum on that feed.
-var Outcomes = []Outcome{OutcomeSuccess, OutcomeWarning, OutcomeError, OutcomeInfo}
+var Results = []Result{ResultSuccess, ResultWarn, ResultError, ResultInfo}
 
 // Level is the severity a line stating this outcome is emitted at, unless
 // its emitter has a reason to say otherwise.
@@ -122,11 +122,11 @@ var Outcomes = []Outcome{OutcomeSuccess, OutcomeWarning, OutcomeError, OutcomeIn
 // failing at something, and a check that correctly reports the far side
 // as unreachable is the manager working exactly as designed. That line's
 // outcome is an error and its level is a warning, and neither is wrong.
-func (o Outcome) Level() Level {
+func (o Result) Level() Level {
 	switch o {
-	case OutcomeError:
+	case ResultError:
 		return LevelError
-	case OutcomeWarning:
+	case ResultWarn:
 		return LevelWarn
 	default:
 		return LevelInfo
@@ -153,16 +153,27 @@ const (
 // them. A duplicate key in the JSON object is worse than either answer,
 // for the reason DiskPressure's doc records one field along, and worse
 // here than there: the tap takes the first and encoding/json keeps the
-// last, so a line whose event supplied its own "outcome" would tell the
+// last, so a line whose event supplied its own "result" would tell the
 // terminal one thing and the log another about how the very same
 // operation went.
+//
+// "result" and not "outcome", and that is the whole reason this is not
+// called an outcome on the wire. connection_test has carried a field
+// called outcome since issue #596, and taking that name for the mark
+// would have meant renaming a shipped field to make room: fields are not
+// schema'd, nothing in tests/compat catches it, and a query matching
+// event=connection_test AND outcome=failed goes silently empty rather
+// than failing. The newcomer takes a free name and the incumbent keeps
+// the one it shipped with. It also keeps the contract's four properties
+// called outcome from becoming five with a fifth enum, two of which are
+// already nested in one response.
 //
 // emit will not produce that object even if an event tries: a mark whose
 // key an event has already claimed is not written a second time, and the
 // event's own field stands, exactly as contextBackupSet leaves an event's
 // own backup_set alone. See TestAMarkedLineNeverCarriesADuplicateKey.
 const (
-	fieldOutcome  = "outcome"
+	fieldResult   = "result"
 	fieldAction   = "action"
 	fieldActionID = "action_id"
 )
@@ -175,7 +186,7 @@ const (
 // so the zero value means exactly what it should: an ordinary line
 // stating no outcome and belonging to no bracketed action.
 type mark struct {
-	outcome  Outcome
+	result   Result
 	action   string
 	actionID string
 }
@@ -189,8 +200,8 @@ type mark struct {
 // client reading it back cannot tell the two apart.
 func (m mark) attrs() []slog.Attr {
 	var out []slog.Attr
-	if m.outcome != "" {
-		out = append(out, slog.String(fieldOutcome, string(m.outcome)))
+	if m.result != "" {
+		out = append(out, slog.String(fieldResult, string(m.result)))
 	}
 	if m.action != "" {
 		out = append(out, slog.String(fieldAction, m.action))
@@ -300,36 +311,36 @@ func (l *Logger) Begin(ctx context.Context, event, action, msg string, attrs ...
 // (a cycle, a connection test, a retention apply) owes a start as well,
 // because the whole reason the terminal exists is that an operator should
 // not have to wonder whether a button did anything; use Begin for those.
-func (l *Logger) Completed(ctx context.Context, outcome Outcome, event, msg string, attrs ...slog.Attr) {
-	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, event, msg, attrs...)
+func (l *Logger) Completed(ctx context.Context, result Result, event, msg string, attrs ...slog.Attr) {
+	l.emitMarked(ctx, result.Level(), mark{result: result}, event, msg, attrs...)
 }
 
 // CompletedAt is Completed for an emitter whose own severity is not the
-// one its outcome would pick. See Outcome.Level for when that is
+// one its outcome would pick. See Result.Level for when that is
 // legitimate; reach for Completed unless it is.
-func (l *Logger) CompletedAt(ctx context.Context, level Level, outcome Outcome, event, msg string, attrs ...slog.Attr) {
-	l.emitMarked(ctx, level, mark{outcome: outcome}, event, msg, attrs...)
+func (l *Logger) CompletedAt(ctx context.Context, level Level, result Result, event, msg string, attrs ...slog.Attr) {
+	l.emitMarked(ctx, level, mark{result: result}, event, msg, attrs...)
 }
 
 // End closes the action with the outcome it reached.
 //
 // The outcome is a required argument and not a defaulted one, because the
 // whole failure this file addresses is a completion that did not say how
-// it went. The level comes from the outcome (see Outcome.Level), and the
+// it went. The level comes from the outcome (see Result.Level), and the
 // wall-clock duration since Begin rides along as a field: "it finished"
 // and "it took eleven minutes" are both things an operator reads off a
 // completion, and the handle is already holding the only moment from
 // which the second one can be worked out.
-func (a *Action) End(ctx context.Context, outcome Outcome, msg string, attrs ...slog.Attr) {
+func (a *Action) End(ctx context.Context, result Result, msg string, attrs ...slog.Attr) {
 	if a == nil {
 		return
 	}
-	a.EndAt(ctx, outcome.Level(), outcome, msg, attrs...)
+	a.EndAt(ctx, result.Level(), result, msg, attrs...)
 }
 
 // EndAt is End for an action whose own severity is not the one its
-// outcome would pick. See Outcome.Level for when that is legitimate.
-func (a *Action) EndAt(ctx context.Context, level Level, outcome Outcome, msg string, attrs ...slog.Attr) {
+// outcome would pick. See Result.Level for when that is legitimate.
+func (a *Action) EndAt(ctx context.Context, level Level, result Result, msg string, attrs ...slog.Attr) {
 	if a == nil {
 		return
 	}
@@ -350,16 +361,16 @@ func (a *Action) EndAt(ctx context.Context, level Level, outcome Outcome, msg st
 		}
 		all = append(all, b)
 	}
-	a.logger.emitMarked(ctx, level, mark{outcome: outcome, action: a.name, actionID: a.id}, a.event, msg, all...)
+	a.logger.emitMarked(ctx, level, mark{result: result, action: a.name, actionID: a.id}, a.event, msg, all...)
 }
 
-// Succeeded is End with OutcomeSuccess, which is the case worth having a
+// Succeeded is End with ResultSuccess, which is the case worth having a
 // name for: it is the one the codebase had no way to say at all.
 func (a *Action) Succeeded(ctx context.Context, msg string, attrs ...slog.Attr) {
-	a.End(ctx, OutcomeSuccess, msg, attrs...)
+	a.End(ctx, ResultSuccess, msg, attrs...)
 }
 
-// Failed is End with OutcomeError and err attached under the same "error"
+// Failed is End with ResultError and err attached under the same "error"
 // key every other failure in this package uses.
 //
 // It is a method rather than a note in End's doc telling callers to do
@@ -380,7 +391,7 @@ func (a *Action) Failed(ctx context.Context, err error, msg string, attrs ...slo
 		all = append(all, slog.String("error", err.Error()))
 	}
 	all = append(all, attrs...)
-	a.End(ctx, OutcomeError, msg, all...)
+	a.End(ctx, ResultError, msg, all...)
 }
 
 // ID is the id both of this action's lines carry, for a caller that wants

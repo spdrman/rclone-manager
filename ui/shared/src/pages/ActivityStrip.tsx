@@ -42,7 +42,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { BackupSet } from "@shared/types/backup";
-import type { SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
+import type { ActivityResult, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 import { bytes, clock, rate, relativeAge } from "@shared/utilities/format";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import type { StatusTone } from "@shared/components/StatusBadge";
@@ -130,7 +130,7 @@ function pairs(fields: Record<string, string>): string {
  *
  * This is the whole of the fix. The engine states how the operation a line
  * reports WENT, so the tone is read off that, and the level decides only
- * for a line that states no outcome (a start, or an ordinary progress
+ * for a line that states no result (a start, or an ordinary progress
  * note) or where it is the louder of the two. What it replaces was a
  * reconstruction: about eight rules
  * keyed on event names, on which lifecycle state a transition landed in
@@ -144,7 +144,7 @@ function pairs(fields: Record<string, string>): string {
  * this build has never heard of, reporting a success, is green, and one
  * reporting an error is red, with nobody writing a case for it.
  *
- * The outcome and the level are allowed to differ, and where they do the
+ * The result and the level are allowed to differ, and where they do the
  * LOUDER of them wins. Both are the engine's own words, so this is
  * combining two stated facts rather than inventing a third.
  *
@@ -153,7 +153,7 @@ function pairs(fields: Record<string, string>): string {
  * reserves its error severity for the manager failing at something rather
  * than for correctly reporting a problem it found; the outcome of that
  * step is a failure and a failure is what an operator has to see, so the
- * outcome wins. And an emitter that succeeded at what it was asked while
+ * result wins. And an emitter that succeeded at what it was asked while
  * logging loudly about it has asked for attention on purpose, the way a
  * retention pass that refused every deletion has: drawing that green
  * because a field says "success" would put this panel's most reassuring
@@ -166,25 +166,37 @@ const TONE_RANK: Record<LineTone, number> = { ok: 0, info: 0, warn: 1, error: 2 
 
 function toneOf(e: SetActivityEvent): LineTone {
   const byLevel: LineTone = e.level === "error" ? "error" : e.level === "warn" ? "warn" : "info";
-  const stated = statedTone(e.outcome);
-  if (stated === null) return byLevel;
-  // A tie goes to the outcome, which is what lets "success" beat "info".
+  if (e.result === undefined) return byLevel;
+  const stated = statedTone(e.result);
+  // A tie goes to the result, which is what lets "success" beat "info".
   return TONE_RANK[byLevel] > TONE_RANK[stated] ? byLevel : stated;
 }
 
-function statedTone(outcome: SetActivityEvent["outcome"]): LineTone | null {
-  switch (outcome) {
+/**
+ * One stated result as a tone.
+ *
+ * No `default` clause, and the `never` at the end is why. A default would
+ * take a fifth result the engine grows, compile clean, and fall through
+ * to grey, which is precisely the failure this whole change exists to
+ * remove: a value nobody wrote a case for reading as a note about
+ * nothing. This way the compiler names the file and the line instead.
+ *
+ * The absent case is the caller's, so this is total over the values the
+ * type actually has.
+ */
+function statedTone(result: ActivityResult): LineTone {
+  switch (result) {
     case "success":
       return "ok";
-    case "warning":
+    case "warn":
       return "warn";
     case "error":
       return "error";
     case "info":
       return "info";
-    default:
-      return null;
   }
+  const unhandled: never = result;
+  throw new Error("unhandled activity result: " + String(unhandled));
 }
 
 /**
@@ -231,6 +243,21 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       else if (TERMINAL_FAILURES.has(f.to ?? "")) text = f.to!.toLowerCase().replace(/_/g, " ") + ": " + name;
       else text = name + ": " + (f.from ?? "?") + " to " + (f.to ?? "?");
       if (f.detail) text += "\n  " + f.detail;
+      // Both of these are floors rather than the primary rule, and the
+      // first one is easy to read as dead code and delete.
+      //
+      // The engine states an error result on a transition into a failure
+      // state since #625, so against the CURRENT engine the first line
+      // changes nothing. It is here for an engine OLDER than that change:
+      // this app and the engine are two containers and can be two
+      // versions, and a strip that stopped painting a FAILED artifact red
+      // when talking to last month's build would be the exact defect this
+      // issue is about, arriving silently.
+      //
+      // The second is not a floor at all and never becomes one. Which
+      // resting states read as GOOD news is a decision about a screen
+      // (see SETTLED_STATES), the engine deliberately declines to make
+      // it, and this is where it is made.
       if (TERMINAL_FAILURES.has(f.to ?? "")) tone = "error";
       else if (SETTLED_STATES.has(f.to ?? "") && tone === "info") tone = "ok";
       break;
@@ -286,13 +313,13 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
         break;
       }
       const step = f.step.padEnd(13);
-      // The step's own finer word (passed, skipped, failed), which is
-      // what an operator reads across the column. The COLOUR comes from
-      // the line's stated outcome like every other line's does, and the
-      // two are the same fact at two grains rather than two answers: the
-      // field is called step_outcome and not outcome precisely so the
-      // engine's own four-value vocabulary keeps that key to itself.
-      text = step + (f.step_outcome ?? "?") + (f.detail ? "  " + f.detail : "");
+      // The step's own finer word (passed, skipped, failed), under the
+      // name this event has carried since #596. The COLOUR comes from the
+      // line's stated result like every other line's does, and the two
+      // are the same fact at two grains rather than two answers: the
+      // engine's four-value vocabulary goes under `result`, so this field
+      // never had to give up its name.
+      text = step + (f.outcome ?? "?") + (f.detail ? "  " + f.detail : "");
       break;
     }
     case "browser_notice": {

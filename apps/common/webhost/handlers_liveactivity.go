@@ -58,9 +58,9 @@ type liveActivityEventResponse struct {
 	At       string `json:"at"`
 	Level    string `json:"level"`
 
-	// Outcome is how the operation this line reports WENT, and it is not
+	// Result is how the operation this line reports WENT, and it is not
 	// a second spelling of Level (issue #625). The level says how loudly
-	// the emitter logged; the outcome says how the thing turned out, and
+	// the emitter logged; the result says how the thing turned out, and
 	// there is no "success" severity to fold the two into, because a
 	// level is an ordering every reader treats as a threshold. Before
 	// this field existed, a completion that went well arrived at info,
@@ -69,11 +69,17 @@ type liveActivityEventResponse struct {
 	// values, with anything the derivation had never heard of staying
 	// grey. Passed through, never composed here, for the same reason
 	// Level is.
-	Outcome string `json:"outcome,omitempty"`
+	//
+	// Named result and not outcome deliberately. connection_test carries
+	// a field of its own called outcome, and LiveActivitySet.Outcome in
+	// this same response is a third vocabulary again: a client reading
+	// set.outcome beside set.events[i].result is told those are different
+	// questions rather than left to notice it from two enums.
+	Result string `json:"result,omitempty"`
 
 	// Action and ActionID pair a start with its completion. Omitted on
 	// every line that is neither half of a pair; a line carrying an id
-	// and no outcome is a start, and one carrying both closes it.
+	// and no result is a start, and one carrying both closes it.
 	Action   string `json:"action,omitempty"`
 	ActionID string `json:"action_id,omitempty"`
 
@@ -272,7 +278,7 @@ func liveActivityEventsOf(events []service.LiveActivityEvent) []liveActivityEven
 			Sequence: e.Sequence,
 			At:       formatTime(e.At),
 			Level:    e.Level,
-			Outcome:  e.Outcome,
+			Result:   e.Result,
 			Action:   e.Action,
 			ActionID: e.ActionID,
 			Event:    e.Event,

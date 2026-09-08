@@ -276,7 +276,7 @@ func followSeverityRank(level string) int {
 // bytes), and they are already redacted on the way to the wire, so nothing
 // here has to decide what is safe to show.
 //
-// The outcome gets a column of its own rather than being left among the
+// The result gets a column of its own rather than being left among the
 // fields, because it is the answer to the question somebody following a
 // terminal is actually asking (issue #625), and because the two surfaces
 // have to tell the same story: the browser's dock colours a line by this
@@ -286,7 +286,7 @@ func followSeverityRank(level string) int {
 // from the notes around it by having something in that space at all.
 func formatFollowEvent(e apicontract.LiveActivityEvent) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %-5s %-7s %-28s %s", followClock(e.At), strings.ToUpper(e.Level), e.Outcome, e.Event, e.Message)
+	fmt.Fprintf(&b, "%s  %-5s %-7s %-28s %s", followClock(e.At), strings.ToUpper(e.Level), e.Result, e.Event, e.Message)
 	for _, f := range e.Fields {
 		fmt.Fprintf(&b, " %s=%s", f.Key, f.Value)
 	}

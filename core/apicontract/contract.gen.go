@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "6e702725b0991afc4b78b7326cf682c8539306dbb1ab19d02775e6675ceef70d"
+const ContractSHA256 = "d2ca5510fa1ad0dd0346deb323823382be96edd6e2a2b754492b68b1e8628a01"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1453,7 +1453,7 @@ type LiveActivityEvent struct {
 	Fields   []LiveActivityField `json:"fields"`
 	Level    string              `json:"level"`
 	Message  string              `json:"message"`
-	Outcome  string              `json:"outcome,omitempty"`
+	Result   string              `json:"result,omitempty"`
 	Scope    string              `json:"scope"`
 	Sequence int64               `json:"sequence"`
 }

@@ -298,8 +298,8 @@ describe("the line each event renders as", () => {
   });
 
   it("colours a completed step and a failure differently from a plain note", () => {
-    expect(activityLine(event({ sequence: 1, event: "commit", outcome: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
-    expect(activityLine(event({ sequence: 2, level: "error", event: "error", outcome: "error", fields: { op: "verify", error: "boom" } })).tone).toBe("error");
+    expect(activityLine(event({ sequence: 1, event: "commit", result: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
+    expect(activityLine(event({ sequence: 2, level: "error", event: "error", result: "error", fields: { op: "verify", error: "boom" } })).tone).toBe("error");
     expect(activityLine(event({ sequence: 3, level: "warn", event: "retry", fields: { op: "copy_to_local", attempt: "2", category: "transient", error: "reset" } })).tone).toBe("warn");
     expect(activityLine(event({ sequence: 4, event: "discovery", fields: { discovered: "3", pending: "1" } })).tone).toBe("info");
   });
@@ -317,22 +317,22 @@ describe("the line each event renders as", () => {
  * a neutral note, and nothing failed when it did.
  */
 describe("the tone a line takes", () => {
-  it("reads the outcome the engine stated rather than re-deriving one", () => {
-    expect(activityLine(event({ sequence: 1, event: "cycle_end", outcome: "success", message: "cycle finished" })).tone).toBe("ok");
-    expect(activityLine(event({ sequence: 2, level: "warn", event: "validation", outcome: "warning", fields: { artifact: "a/b/one.dump", passed: "false" } })).tone).toBe("warn");
-    expect(activityLine(event({ sequence: 3, level: "error", event: "cycle_end", outcome: "error", fields: { error: "discovery blew up" } })).tone).toBe("error");
-    expect(activityLine(event({ sequence: 4, event: "discovery", outcome: "info", message: "discovery pass complete" })).tone).toBe("info");
+  it("reads the result the engine stated rather than re-deriving one", () => {
+    expect(activityLine(event({ sequence: 1, event: "cycle_end", result: "success", message: "cycle finished" })).tone).toBe("ok");
+    expect(activityLine(event({ sequence: 2, level: "warn", event: "validation", result: "warn", fields: { artifact: "a/b/one.dump", passed: "false" } })).tone).toBe("warn");
+    expect(activityLine(event({ sequence: 3, level: "error", event: "cycle_end", result: "error", fields: { error: "discovery blew up" } })).tone).toBe("error");
+    expect(activityLine(event({ sequence: 4, event: "discovery", result: "info", message: "discovery pass complete" })).tone).toBe("info");
   });
 
   it("colours an event name this build has never heard of by what the engine said about it", () => {
     const line = activityLine(
-      event({ sequence: 1, event: "medium_verify", outcome: "success", message: "offsite_s3 verified", fields: { medium: "offsite_s3" } })
+      event({ sequence: 1, event: "medium_verify", result: "success", message: "offsite_s3 verified", fields: { medium: "offsite_s3" } })
     );
     expect(line.tone).toBe("ok");
     expect(line.text).toMatch(/offsite_s3 verified/);
 
     expect(
-      activityLine(event({ sequence: 2, level: "warn", event: "medium_verify", outcome: "warning", message: "offsite_s3 is unproven" })).tone
+      activityLine(event({ sequence: 2, level: "warn", event: "medium_verify", result: "warn", message: "offsite_s3 is unproven" })).tone
     ).toBe("warn");
   });
 
@@ -352,7 +352,7 @@ describe("the tone a line takes", () => {
         level: "warn",
         event: "connection_test",
         message: "connection test finished",
-        outcome: "error",
+        result: "error",
         action: "connection_test",
         actionId: "ct-1",
         fields: { duration: "1.2s" }
@@ -373,7 +373,7 @@ describe("the tone a line takes", () => {
         sequence: 1,
         level: "error",
         event: "lifecycle_transition",
-        outcome: "error",
+        result: "error",
         fields: { artifact: "a/b/one.dump", from: "VERIFYING", to: "FAILED", detail: "md5 differs" }
       })
     );
@@ -402,30 +402,30 @@ describe("the tone a line takes", () => {
     ).toBe("ok");
   });
 
-  it("still falls back to the level for a line that states no outcome", () => {
+  it("still falls back to the level for a line that states no result", () => {
     expect(activityLine(event({ sequence: 1, level: "error", event: "a_name_this_build_does_not_know", message: "something broke" })).tone).toBe("error");
     expect(activityLine(event({ sequence: 2, level: "info", event: "a_name_this_build_does_not_know", message: "something happened" })).tone).toBe("info");
   });
 
-  it("takes the louder of the two when the outcome and the level disagree", () => {
+  it("takes the louder of the two when the result and the level disagree", () => {
     // A failure the engine deliberately logged quietly. obs reserves its
     // error severity for the manager failing at something, and a check
     // that correctly reports a host as unreachable is the manager working
     // as designed, so the step is a warning in the log and an error
     // outcome on the wire. An operator has to see the failure.
     expect(
-      activityLine(event({ sequence: 1, level: "warn", event: "connection_test", outcome: "error", fields: { step: "host_key", step_outcome: "failed" } })).tone
+      activityLine(event({ sequence: 1, level: "warn", event: "connection_test", result: "error", fields: { step: "host_key", outcome: "failed" } })).tone
     ).toBe("error");
 
     // And the other direction. An emitter that succeeded at what it was
     // asked while logging loudly about it asked for attention on purpose,
     // the way a retention pass that refused every deletion does, and
     // green is the one colour that must not go on that line.
-    expect(activityLine(event({ sequence: 2, level: "warn", event: "retention", outcome: "success", message: "retention applied" })).tone).toBe("warn");
+    expect(activityLine(event({ sequence: 2, level: "warn", event: "retention", result: "success", message: "retention applied" })).tone).toBe("warn");
 
     // A success stated on an ordinary note is still good news: success
     // ranks beside info rather than under it.
-    expect(activityLine(event({ sequence: 3, level: "info", event: "commit", outcome: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
+    expect(activityLine(event({ sequence: 3, level: "info", event: "commit", result: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
   });
 });
 

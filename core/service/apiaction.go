@@ -62,7 +62,7 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 		return
 	}
 
-	outcome, message := apiActionOutcomeAndMessage(action)
+	result, message := apiActionResultAndMessage(action)
 	attrs := []slog.Attr{
 		slog.String("actor", action.Actor),
 		slog.String("route", action.Method+" /api/v1"+action.Route),
@@ -133,13 +133,13 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 	// start line emitted here would be announcing something that had
 	// already happened. Work an action KICKS OFF that takes real time,
 	// a cycle most of all, is bracketed where that work runs.
-	b.logger.Completed(ctx, outcome, obs.EventAPIAction, message, attrs...)
+	b.logger.Completed(ctx, result, obs.EventAPIAction, message, attrs...)
 }
 
-// apiActionOutcomeAndMessage decides how the action went and what the line
+// apiActionResultAndMessage decides how the action went and what the line
 // says.
 //
-// The outcome is the status, because that is what the emitter knows: a
+// The result is the status, because that is what the emitter knows: a
 // refusal an operator caused (a 4xx) is a warning, a failure this process
 // caused (a 5xx) is an error, and anything that was served is a success.
 // That last one is the value there was no way to say before: every action
@@ -148,21 +148,21 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 // in particular, so the surface that exists to tell an operator their
 // button did something told them only that something had been mentioned.
 //
-// The level follows from the outcome (obs.Outcome.Level) rather than being
+// The level follows from the result (obs.Result.Level) rather than being
 // picked separately here, so the two can never tell different stories
 // about one request. Nothing here composes the operator-facing sentence
 // beyond a plain summary; what a moment is worth CALLING belongs to
 // whichever client is presenting it, which is the same argument
 // liveactivity.go already makes for every other event on this feed.
-func apiActionOutcomeAndMessage(action cliecho.APIAction) (obs.Outcome, string) {
+func apiActionResultAndMessage(action cliecho.APIAction) (obs.Result, string) {
 	verb := strings.ToLower(action.Method)
 	switch {
 	case action.Status >= 500:
-		return obs.OutcomeError, verb + " " + action.Route + " failed: " + statusWords(action)
+		return obs.ResultError, verb + " " + action.Route + " failed: " + statusWords(action)
 	case action.Status >= 400:
-		return obs.OutcomeWarning, verb + " " + action.Route + " refused: " + statusWords(action)
+		return obs.ResultWarn, verb + " " + action.Route + " refused: " + statusWords(action)
 	default:
-		return obs.OutcomeSuccess, verb + " " + action.Route
+		return obs.ResultSuccess, verb + " " + action.Route
 	}
 }
 

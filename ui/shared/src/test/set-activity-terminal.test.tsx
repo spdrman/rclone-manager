@@ -99,17 +99,18 @@ function connectionTestEvents(): SetActivityEvent[] {
     event: "connection_test",
     scope: "set",
     // The step states how it went in the engine's own four-value
-    // vocabulary and keeps its finer word in step_outcome, which is the
-    // shape recordConnectionTest emits since issue #625. The two field
-    // names are not interchangeable: `outcome` is the reserved key the
-    // record's own mark is written under, and a step supplying a second
-    // value there is the duplicate-key bug that rule exists to stop.
-    outcome: outcome === "passed" ? "success" : outcome === "skipped" ? "warning" : "error",
+    // vocabulary under `result`, and keeps its own finer word under the
+    // `outcome` it has carried since #596. The two are not
+    // interchangeable and neither had to give up its name: `result` is
+    // the reserved key the record's own mark is written under, and a step
+    // supplying a second value there is the duplicate-key bug that rule
+    // exists to stop.
+    result: outcome === "passed" ? "success" : outcome === "skipped" ? "warn" : "error",
     message: "connection test: " + step + " " + outcome,
     fields: {
       backup_set: "production/postgres-primary",
       step,
-      step_outcome: outcome,
+      outcome,
       detail,
       ...(category ? { category } : {})
     }

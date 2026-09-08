@@ -79,24 +79,24 @@ func TestTheResultKeyDoesNotTakeAnEventsOwnFieldName(t *testing.T) {
 	}
 }
 
-// TestOutcomePicksTheSeverityAStatedOutcomeDeserves is the half that
+// TestResultPicksTheSeverityAStatedResultDeserves is the half that
 // keeps level and outcome from drifting into two different stories about
 // one line. They answer different questions, and an emitter that states
 // an error outcome at info level has said both that it failed and that
 // nobody needs to look.
-func TestOutcomePicksTheSeverityAStatedOutcomeDeserves(t *testing.T) {
+func TestResultPicksTheSeverityAStatedResultDeserves(t *testing.T) {
 	cases := []struct {
-		outcome Outcome
-		want    Level
+		result Result
+		want   Level
 	}{
-		{OutcomeSuccess, LevelInfo},
-		{OutcomeInfo, LevelInfo},
-		{OutcomeWarning, LevelWarn},
-		{OutcomeError, LevelError},
+		{ResultSuccess, LevelInfo},
+		{ResultInfo, LevelInfo},
+		{ResultWarn, LevelWarn},
+		{ResultError, LevelError},
 	}
 	for _, c := range cases {
-		if got := c.outcome.Level(); got != c.want {
-			t.Errorf("outcome %q emits at %v, want %v", c.outcome, got, c.want)
+		if got := c.result.Level(); got != c.want {
+			t.Errorf("result %q emits at %v, want %v", c.result, got, c.want)
 		}
 	}
 }
@@ -119,19 +119,19 @@ func TestCycleEndStatesHowItWentRatherThanLeavingItToBeInferred(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("the sink saw %d records and two cycle ends were logged", len(got))
 	}
-	if got[0].Outcome != OutcomeSuccess {
-		t.Errorf("a clean cycle end states outcome %q, and a completion that does not say it went well reads as a neutral note", got[0].Outcome)
+	if got[0].Result != ResultSuccess {
+		t.Errorf("a clean cycle end states result %q, and a completion that does not say it went well reads as a neutral note", got[0].Result)
 	}
-	if got[1].Outcome != OutcomeError {
-		t.Errorf("a failed cycle end states outcome %q, want %q", got[1].Outcome, OutcomeError)
+	if got[1].Result != ResultError {
+		t.Errorf("a failed cycle end states result %q, want %q", got[1].Result, ResultError)
 	}
 
 	lines := decodeLines(t, &out)
-	if lines[0]["outcome"] != string(OutcomeSuccess) {
-		t.Errorf("the log line for a clean cycle end carries outcome %v; the tap and the line are one fact with two readers", lines[0]["outcome"])
+	if lines[0]["result"] != string(ResultSuccess) {
+		t.Errorf("the log line for a clean cycle end carries result %v; the tap and the line are one fact with two readers", lines[0]["result"])
 	}
-	if lines[1]["outcome"] != string(OutcomeError) {
-		t.Errorf("the log line for a failed cycle end carries outcome %v, want %q", lines[1]["outcome"], OutcomeError)
+	if lines[1]["result"] != string(ResultError) {
+		t.Errorf("the log line for a failed cycle end carries result %v, want %q", lines[1]["result"], ResultError)
 	}
 }
 
@@ -157,13 +157,13 @@ func TestCycleStartAndCycleEndArePairedByMoreThanHabit(t *testing.T) {
 		t.Errorf("the pair names actions %q and %q, want %q for both", start.Action, end.Action, ActionCycle)
 	}
 	if start.ActionID == "" {
-		t.Fatal("a cycle start carries no action id, so nothing can notice a cycle that started and never reported an outcome")
+		t.Fatal("a cycle start carries no action id, so nothing can notice a cycle that started and never reported an result")
 	}
 	if start.ActionID != end.ActionID {
 		t.Errorf("the start's action id is %q and its end's is %q; a pair matched by convention is what this replaces", start.ActionID, end.ActionID)
 	}
-	if start.Outcome != "" {
-		t.Errorf("a start states outcome %q; an action that has not finished has not gone any way yet, and that absence is what marks it as a start", start.Outcome)
+	if start.Result != "" {
+		t.Errorf("a start states result %q; an action that has not finished has not gone any way yet, and that absence is what marks it as a start", start.Result)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestBeginPairsAnyActionWithItsOwnCompletion(t *testing.T) {
 	ctx := context.Background()
 
 	action := l.Begin(ctx, "connection_test", "connection_test", "connection test starting")
-	action.End(ctx, OutcomeWarning, "connection test finished with skipped steps")
+	action.End(ctx, ResultWarn, "connection test finished with skipped steps")
 
 	got := sink.all()
 	if len(got) != 2 {
@@ -186,14 +186,14 @@ func TestBeginPairsAnyActionWithItsOwnCompletion(t *testing.T) {
 	if got[0].ActionID == "" || got[0].ActionID != got[1].ActionID {
 		t.Fatalf("the pair carries action ids %q and %q", got[0].ActionID, got[1].ActionID)
 	}
-	if got[0].Outcome != "" {
-		t.Errorf("the start states outcome %q, and a start has not gone any way yet", got[0].Outcome)
+	if got[0].Result != "" {
+		t.Errorf("the start states result %q, and a start has not gone any way yet", got[0].Result)
 	}
-	if got[1].Outcome != OutcomeWarning {
-		t.Errorf("the completion states outcome %q, want %q", got[1].Outcome, OutcomeWarning)
+	if got[1].Result != ResultWarn {
+		t.Errorf("the completion states result %q, want %q", got[1].Result, ResultWarn)
 	}
 	if got[1].Level != LevelWarn {
-		t.Errorf("a completion stating a warning was emitted at %v; the level follows the outcome so one line does not tell two stories", got[1].Level)
+		t.Errorf("a completion stating a warning was emitted at %v; the level follows the result so one line does not tell two stories", got[1].Level)
 	}
 	if _, ok := fieldValue(got[1], "duration"); !ok {
 		t.Error("the completion carries no duration, and the handle is holding the moment the action started")
@@ -250,7 +250,7 @@ func TestACompletionsOwnAttributeWinsOverTheStarts(t *testing.T) {
 	ctx := context.Background()
 
 	l.Begin(ctx, "medium_verify", "medium_verify", "verifying", slog.String("medium", "offsite_s3"), slog.String("phase", "start")).
-		End(ctx, OutcomeSuccess, "verified", slog.String("phase", "end"))
+		End(ctx, ResultSuccess, "verified", slog.String("phase", "end"))
 
 	end := sink.all()[1]
 	seen := 0
@@ -291,15 +291,15 @@ func TestAnActionClosesOnce(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("the sink saw %d records; one action begun and ended is two lines, and a second completion is a feed holding two verdicts for one id", len(got))
 	}
-	if got[1].Outcome != OutcomeSuccess {
-		t.Errorf("the completion states outcome %q; the first close is the one that happened", got[1].Outcome)
+	if got[1].Result != ResultSuccess {
+		t.Errorf("the completion states result %q; the first close is the one that happened", got[1].Result)
 	}
 }
 
-// TestFailedStatesTheErrorAndTheOutcomeTogether is the shorthand every
+// TestFailedStatesTheErrorAndTheResultTogether is the shorthand every
 // call site would otherwise write by hand, and getting it wrong in one
 // place is how an error ends up logged at info.
-func TestFailedStatesTheErrorAndTheOutcomeTogether(t *testing.T) {
+func TestFailedStatesTheErrorAndTheResultTogether(t *testing.T) {
 	sink := &recordingSink{}
 	l := New(nil, LevelDebug).WithSink(sink)
 	ctx := context.Background()
@@ -309,8 +309,8 @@ func TestFailedStatesTheErrorAndTheOutcomeTogether(t *testing.T) {
 
 	got := sink.all()
 	end := got[len(got)-1]
-	if end.Outcome != OutcomeError {
-		t.Errorf("a failed completion states outcome %q, want %q", end.Outcome, OutcomeError)
+	if end.Result != ResultError {
+		t.Errorf("a failed completion states result %q, want %q", end.Result, ResultError)
 	}
 	if end.Level != LevelError {
 		t.Errorf("a failed completion was emitted at %v, want %v", end.Level, LevelError)
@@ -347,8 +347,8 @@ func TestALifecycleTransitionIntoAFailureIsLoudEnoughToFind(t *testing.T) {
 	if got[0].Level != LevelError {
 		t.Errorf("a transition into a failure state was emitted at %v; `activity --follow --severity error` is where an operator goes to find a backup that did not happen", got[0].Level)
 	}
-	if got[0].Outcome != OutcomeError {
-		t.Errorf("a transition into a failure state states outcome %q, want %q", got[0].Outcome, OutcomeError)
+	if got[0].Result != ResultError {
+		t.Errorf("a transition into a failure state states result %q, want %q", got[0].Result, ResultError)
 	}
 
 	// The ordinary transition is untouched, which is the whole of the
@@ -357,26 +357,26 @@ func TestALifecycleTransitionIntoAFailureIsLoudEnoughToFind(t *testing.T) {
 	if got[1].Level != LevelInfo {
 		t.Errorf("an ordinary transition was emitted at %v, want %v", got[1].Level, LevelInfo)
 	}
-	if got[1].Outcome != "" {
-		t.Errorf("an ordinary transition states outcome %q, and which resting states read as good news is a decision about a screen", got[1].Outcome)
+	if got[1].Result != "" {
+		t.Errorf("an ordinary transition states result %q, and which resting states read as good news is a decision about a screen", got[1].Result)
 	}
 
 	lines := decodeLines(t, &out)
-	if lines[0]["level"] != "ERROR" || lines[0]["outcome"] != string(OutcomeError) {
-		t.Errorf("the log line for a failed transition is level=%v outcome=%v; the tap and the line are one fact with two readers", lines[0]["level"], lines[0]["outcome"])
+	if lines[0]["level"] != "ERROR" || lines[0]["result"] != string(ResultError) {
+		t.Errorf("the log line for a failed transition is level=%v result=%v; the tap and the line are one fact with two readers", lines[0]["level"], lines[0]["result"])
 	}
-	if _, stated := lines[1]["outcome"]; stated {
-		t.Errorf("the log line for an ordinary transition carries an outcome: %v", lines[1]["outcome"])
+	if _, stated := lines[1]["result"]; stated {
+		t.Errorf("the log line for an ordinary transition carries an result: %v", lines[1]["result"])
 	}
 }
 
-// TestAConditionStatesNoOutcomeBecauseNothingRan is the boundary of this
+// TestAConditionStatesNoResultBecauseNothingRan is the boundary of this
 // vocabulary, asserted rather than only written down. A filesystem
 // crossing a threshold is a fact about the world this process noticed,
 // not an operation that went one way or another, and a field that
 // stretched to cover it would be a second vocabulary for severity with
 // the same four values as the first.
-func TestAConditionStatesNoOutcomeBecauseNothingRan(t *testing.T) {
+func TestAConditionStatesNoResultBecauseNothingRan(t *testing.T) {
 	sink := &recordingSink{}
 	l := New(nil, LevelDebug).WithSink(sink)
 	ctx := context.Background()
@@ -385,8 +385,8 @@ func TestAConditionStatesNoOutcomeBecauseNothingRan(t *testing.T) {
 	l.DiskPressure(ctx, "/data", 1, 100, "critical")
 
 	for _, got := range sink.all() {
-		if got.Outcome != "" {
-			t.Errorf("%s states outcome %q, and it reports a condition rather than an operation", got.Event, got.Outcome)
+		if got.Result != "" {
+			t.Errorf("%s states result %q, and it reports a condition rather than an operation", got.Event, got.Result)
 		}
 	}
 	// The level is how these say how much attention they want, and that
@@ -396,44 +396,44 @@ func TestAConditionStatesNoOutcomeBecauseNothingRan(t *testing.T) {
 	}
 }
 
-// TestCompletedStatesAnOutcomeWithNoStartToPairItWith is the honest half
+// TestCompletedStatesAResultWithNoStartToPairItWith is the honest half
 // of a pair, for work that was over before anything could report it. An
 // /api/v1 request is the case: the status IS the outcome, and a start
 // line emitted at the recorder would be announcing something that had
 // already happened.
-func TestCompletedStatesAnOutcomeWithNoStartToPairItWith(t *testing.T) {
+func TestCompletedStatesAResultWithNoStartToPairItWith(t *testing.T) {
 	sink := &recordingSink{}
 	l := New(nil, LevelDebug).WithSink(sink)
 
-	l.Completed(context.Background(), OutcomeSuccess, "api_action", "post /operations")
+	l.Completed(context.Background(), ResultSuccess, "api_action", "post /operations")
 
 	got := sink.all()[0]
-	if got.Outcome != OutcomeSuccess {
-		t.Errorf("the line states outcome %q, want %q", got.Outcome, OutcomeSuccess)
+	if got.Result != ResultSuccess {
+		t.Errorf("the line states result %q, want %q", got.Result, ResultSuccess)
 	}
 	if got.ActionID != "" {
 		t.Errorf("an unpaired completion carries action id %q, which would report as a start nothing will ever close", got.ActionID)
 	}
 }
 
-// TestCompletedAtLetsAnEmitterBeQuieterThanItsOutcome is the exception
+// TestCompletedAtLetsAnEmitterBeQuieterThanItsResult is the exception
 // this package's own convention needs. It reserves LevelError for the
 // manager failing at something, and a check that correctly reports the
 // far side as unreachable is the manager working exactly as designed: an
 // error outcome logged as a warning is two right answers to two
 // questions, not one line contradicting itself.
-func TestCompletedAtLetsAnEmitterBeQuieterThanItsOutcome(t *testing.T) {
+func TestCompletedAtLetsAnEmitterBeQuieterThanItsResult(t *testing.T) {
 	sink := &recordingSink{}
 	l := New(nil, LevelDebug).WithSink(sink)
 
-	l.CompletedAt(context.Background(), LevelWarn, OutcomeError, "connection_test", "connection test: host_key failed")
+	l.CompletedAt(context.Background(), LevelWarn, ResultError, "connection_test", "connection test: host_key failed")
 
 	got := sink.all()[0]
 	if got.Level != LevelWarn {
 		t.Errorf("the line was emitted at %v, and its emitter asked for %v", got.Level, LevelWarn)
 	}
-	if got.Outcome != OutcomeError {
-		t.Errorf("the line states outcome %q, want %q; the whole point of the pair is that the two say different things", got.Outcome, OutcomeError)
+	if got.Result != ResultError {
+		t.Errorf("the line states result %q, want %q; the whole point of the pair is that the two say different things", got.Result, ResultError)
 	}
 }
 
@@ -446,12 +446,12 @@ func TestAnActionOnASilentLoggerIsSilentRatherThanAPanic(t *testing.T) {
 	var l *Logger
 	ctx := context.Background()
 	action := l.Begin(ctx, "cycle", ActionCycle, "cycle starting")
-	action.End(ctx, OutcomeSuccess, "cycle finished")
+	action.End(ctx, ResultSuccess, "cycle finished")
 	action.Succeeded(ctx, "again")
 	action.Failed(ctx, errors.New("boom"), "and again")
 
 	var nilAction *Action
-	nilAction.End(ctx, OutcomeSuccess, "on nothing at all")
+	nilAction.End(ctx, ResultSuccess, "on nothing at all")
 	if nilAction.ID() != "" {
 		t.Errorf("a nil action has id %q", nilAction.ID())
 	}
@@ -476,23 +476,23 @@ func TestAMarkedLineNeverCarriesADuplicateKey(t *testing.T) {
 	sink := &recordingSink{}
 	l := New(&out, LevelDebug).WithSink(sink)
 
-	l.Completed(context.Background(), OutcomeSuccess, "unit_test", "a made-up event with a field of its own",
-		slog.String(fieldOutcome, "passed"))
+	l.Completed(context.Background(), ResultSuccess, "unit_test", "a made-up event with a field of its own",
+		slog.String(fieldResult, "passed"))
 
-	if got := strings.Count(out.String(), `"outcome"`); got != 1 {
-		t.Errorf("the log line carries %d outcome keys:\n%s", got, out.String())
+	if got := strings.Count(out.String(), `"result"`); got != 1 {
+		t.Errorf("the log line carries %d result keys:\n%s", got, out.String())
 	}
 	lines := decodeLines(t, &out)
-	if lines[0][fieldOutcome] != "passed" {
-		t.Errorf("the log line's outcome is %v, and the event named its own; the event is the authority on its own fields", lines[0][fieldOutcome])
+	if lines[0][fieldResult] != "passed" {
+		t.Errorf("the log line's result is %v, and the event named its own; the event is the authority on its own fields", lines[0][fieldResult])
 	}
 
 	got := sink.all()[0]
-	if got.Outcome != OutcomeSuccess {
-		t.Errorf("the record's stated outcome is %q; it is a field of the Record and cannot be shadowed by one of the event's own", got.Outcome)
+	if got.Result != ResultSuccess {
+		t.Errorf("the record's stated result is %q; it is a field of the Record and cannot be shadowed by one of the event's own", got.Result)
 	}
-	if v, ok := fieldValue(got, fieldOutcome); !ok || v != "passed" {
-		t.Errorf("the event's own outcome field reached the tap as %q (present=%v); a field an event logged must not be dropped on the way", v, ok)
+	if v, ok := fieldValue(got, fieldResult); !ok || v != "passed" {
+		t.Errorf("the event's own result field reached the tap as %q (present=%v); a field an event logged must not be dropped on the way", v, ok)
 	}
 }
 
@@ -507,7 +507,7 @@ func TestAMarksOwnAttributesDoNotAlsoArriveAsFields(t *testing.T) {
 	l.CycleEnd(context.Background(), "cycle-42", 0, nil)
 
 	got := sink.all()[0]
-	for _, key := range []string{fieldOutcome, fieldAction, fieldActionID} {
+	for _, key := range []string{fieldResult, fieldAction, fieldActionID} {
 		if v, ok := fieldValue(got, key); ok {
 			t.Errorf("the record carries %q=%q in its fields as well as in its own, so every reader has to filter it back out", key, v)
 		}

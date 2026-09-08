@@ -3159,15 +3159,15 @@
             ],
             "description": "The severity the engine emitted this event at, carried through unchanged."
           },
-          "outcome": {
+          "result": {
             "type": "string",
             "enum": [
               "success",
-              "warning",
+              "warn",
               "error",
               "info"
             ],
-            "description": "How the operation this line reports WENT, stated by the engine rather than re-derived by whoever draws the line. It is not a second spelling of level and it is carried for the same reason level is: the emitter said it. There is no success severity and there cannot be one, because a level is an ordering every reader treats as a threshold, so before this field existed a completion that went well arrived at info and was indistinguishable from a note, and every client wanting to draw one as good news re-derived it from event names and lifecycle state values with anything it did not recognise silently staying neutral. Absent is a real answer rather than a default: a start has not gone any way yet, and an ordinary progress note reports no operation at all.",
+            "description": "How the operation this line reports WENT, stated by the engine rather than re-derived by whoever draws the line. It is not a second spelling of level and it is carried for the same reason level is: the emitter said it. There is no success severity and there cannot be one, because a level is an ordering every reader treats as a threshold, so before this field existed a completion that went well arrived at info and was indistinguishable from a note, and every client wanting to draw one as good news re-derived it from event names and lifecycle state values with anything it did not recognise silently staying neutral. It is called result and not outcome on purpose: connection_test carries a field of its own called outcome, and LiveActivitySet.outcome in this same response is a different vocabulary again, so a client reading set.outcome beside set.events[i].result is told those are different questions. Absent is a real answer rather than a default: a start has not gone any way yet, and an ordinary progress note reports no operation at all.",
             "x-go-omitempty": true
           },
           "action": {

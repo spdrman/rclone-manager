@@ -218,8 +218,8 @@ type LiveActivityEvent struct {
 	Message  string
 	Fields   []LiveActivityField
 
-	// Outcome is how the operation this line reports WENT, one of the
-	// LiveActivityEventOutcome constants, empty when the line states none
+	// Result is how the operation this line reports WENT, one of the
+	// LiveActivityEventResult constants, empty when the line states none
 	// (issue #625).
 	//
 	// It is not a second spelling of Level and it is carried for the
@@ -233,7 +233,13 @@ type LiveActivityEvent struct {
 	//
 	// Absent is a real answer and not a default. A start has not gone any
 	// way yet, and an ordinary progress note reports no operation at all.
-	Outcome string
+	//
+	// It is called result and not outcome because connection_test already
+	// carries a field of its own called outcome (issue #596), and because
+	// LiveActivitySet.Outcome below is a different vocabulary in the same
+	// response: a client reading set.outcome and set.events[i].result for
+	// adjacent facts is told they are adjacent facts.
+	Result string
 
 	// Action and ActionID pair a start with its completion, structurally
 	// rather than by the habit of spelling one event cycle_start and the
@@ -248,21 +254,21 @@ type LiveActivityEvent struct {
 	ActionID string
 }
 
-// LiveActivityEventOutcomes lists every outcome an event on this feed can
+// LiveActivityEventResults lists every result an event on this feed can
 // state, in the order api/v1/openapi.json declares them.
 //
 // It is internal/obs's own vocabulary rather than a second spelling of
 // it, for the same reason LiveActivityOutcomes is internal/app's: this
 // package serves what the emitter said, and a copy of a closed vocabulary
 // is a copy that drifts.
-var LiveActivityEventOutcomes = outcomeNames(obs.Outcomes)
+var LiveActivityEventResults = resultNames(obs.Results)
 
-// outcomeNames renders obs's typed vocabulary as the plain strings this
+// resultNames renders obs's typed vocabulary as the plain strings this
 // package's wire and its contract test compare.
-func outcomeNames(outcomes []obs.Outcome) []string {
-	out := make([]string, 0, len(outcomes))
-	for _, o := range outcomes {
-		out = append(out, string(o))
+func resultNames(results []obs.Result) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, string(r))
 	}
 	return out
 }
@@ -715,7 +721,7 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		// which action it opens or closes, and this package's whole
 		// discipline is to serve what it said rather than a verdict
 		// invented on the way to a screen.
-		Outcome:  string(r.Outcome),
+		Result:   string(r.Result),
 		Action:   r.Action,
 		ActionID: r.ActionID,
 		Fields:   make([]LiveActivityField, 0, len(r.Fields)),
@@ -1143,8 +1149,8 @@ func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
 // rather than a second copy of the tail.
 //
 // A start and its completion are told apart by the rule action.go states:
-// an action id with no outcome opens the action, and an action id with an
-// outcome closes it. Nothing here needs to know either event's name.
+// an action id with no result opens the action, and an action id with a
+// result closes it. Nothing here needs to know either event's name.
 func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
 	held := r.len()
 	// Every completion first, then every start that is not among them.
@@ -1160,7 +1166,7 @@ func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
 	var ended map[string]bool
 	for i := 0; i < held; i++ {
 		e := r.at(i)
-		if e.ActionID == "" || e.Outcome == "" {
+		if e.ActionID == "" || e.Result == "" {
 			continue
 		}
 		if ended == nil {
@@ -1173,7 +1179,7 @@ func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
 	var seen map[string]bool
 	for i := 0; i < held; i++ {
 		e := r.at(i)
-		if e.ActionID == "" || e.Outcome != "" || ended[e.ActionID] || seen[e.ActionID] {
+		if e.ActionID == "" || e.Result != "" || ended[e.ActionID] || seen[e.ActionID] {
 			continue
 		}
 		// One entry per action id, the oldest start of it. An id is

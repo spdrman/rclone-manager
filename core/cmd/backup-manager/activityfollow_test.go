@@ -137,7 +137,7 @@ func TestActivityFollow_PrintsHowEachLineWent(t *testing.T) {
 	done := liveEvent(2, "info", "cycle_end", "cycle finished")
 	done.Action = "cycle"
 	done.ActionID = "cycle-42"
-	done.Outcome = "success"
+	done.Result = "success"
 	e.holdLiveActivity(oneLiveReading("epoch-1", 2, start, done))
 
 	out, _, err := followFor(t, e, followOptions{}, 120*time.Millisecond)
@@ -155,7 +155,7 @@ func TestActivityFollow_PrintsHowEachLineWent(t *testing.T) {
 		t.Fatalf("the follow output is a single line:\n%s", out)
 	}
 	if strings.Contains(first, "success") {
-		t.Errorf("the start line carries an outcome:\n%s", first)
+		t.Errorf("the start line carries a result:\n%s", first)
 	}
 }
 

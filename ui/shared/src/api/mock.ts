@@ -512,7 +512,7 @@ function liveEvent(
    *  completion of anything. Set here rather than left off everywhere,
    *  because a fixture whose completions all read as neutral notes is a
    *  fixture nobody would notice the fix in. */
-  outcome?: SetActivityEvent["outcome"],
+  result?: SetActivityEvent["result"],
   pair?: { action: string; actionId: string }
 ): SetActivityEvent {
   return {
@@ -523,7 +523,7 @@ function liveEvent(
     scope,
     message,
     fields,
-    ...(outcome ? { outcome } : {}),
+    ...(result ? { result } : {}),
     ...(pair ? { action: pair.action, actionId: pair.actionId } : {})
   };
 }

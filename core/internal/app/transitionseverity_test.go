@@ -67,8 +67,8 @@ func TestAnArtifactReachingAnExceptionalStateIsLoggedWhereSeverityFindsIt(t *tes
 		t.Errorf("the transition into %s was logged at %v; an operator asking `activity --follow --severity error` for a backup that did not happen has to be shown this line",
 			lifecycle.Quarantined, quarantining["level"])
 	}
-	if quarantining["outcome"] != "error" {
-		t.Errorf("the transition into %s states outcome %v, want \"error\"", lifecycle.Quarantined, quarantining["outcome"])
+	if quarantining["result"] != "error" {
+		t.Errorf("the transition into %s states result %v, want \"error\"", lifecycle.Quarantined, quarantining["result"])
 	}
 
 	// The control, and it is the half that keeps the call site honest: a
@@ -80,9 +80,9 @@ func TestAnArtifactReachingAnExceptionalStateIsLoggedWhereSeverityFindsIt(t *tes
 	if ordinary["level"] != "INFO" {
 		t.Errorf("an ordinary transition (%v to %v) was logged at %v, want INFO", ordinary["from"], ordinary["to"], ordinary["level"])
 	}
-	if _, stated := ordinary["outcome"]; stated {
-		t.Errorf("an ordinary transition (%v to %v) states an outcome (%v); which resting states read as good news is a decision about a screen",
-			ordinary["from"], ordinary["to"], ordinary["outcome"])
+	if _, stated := ordinary["result"]; stated {
+		t.Errorf("an ordinary transition (%v to %v) states a result (%v); which resting states read as good news is a decision about a screen",
+			ordinary["from"], ordinary["to"], ordinary["result"])
 	}
 }
 

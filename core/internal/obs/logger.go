@@ -298,7 +298,7 @@ func (l *Logger) tap(level Level, m mark, event, msg string, attrs []slog.Attr) 
 		Event:    event,
 		Message:  msg,
 		Fields:   fields,
-		Outcome:  m.outcome,
+		Result:   m.result,
 		Action:   m.action,
 		ActionID: m.actionID,
 	})

@@ -25,22 +25,22 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
-func TestLiveActivity_CarriesTheOutcomeTheEngineStated(t *testing.T) {
+func TestLiveActivity_CarriesTheResultTheEngineStated(t *testing.T) {
 	rec := newLiveActivity(configuredSets("alpha/nightly"))
 
 	rec.RecordEvent(obs.Record{
 		At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
-		Outcome: obs.OutcomeSuccess,
-		Fields:  []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		Result: obs.ResultSuccess,
+		Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
 	})
 
 	got := rec.snapshot("alpha/nightly", 0, 100)
 	if len(got.Events) != 1 {
 		t.Fatalf("the feed holds %d events and one was recorded", len(got.Events))
 	}
-	if got.Events[0].Outcome != string(obs.OutcomeSuccess) {
-		t.Errorf("the feed reports outcome %q for a commit the engine stated as %q; a client that cannot read it is left re-deriving one",
-			got.Events[0].Outcome, obs.OutcomeSuccess)
+	if got.Events[0].Result != string(obs.ResultSuccess) {
+		t.Errorf("the feed reports result %q for a commit the engine stated as %q; a client that cannot read it is left re-deriving one",
+			got.Events[0].Result, obs.ResultSuccess)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestLiveActivity_ReportsAnActionThatStartedAndNeverFinished(t *testing.T) {
 
 	rec.RecordEvent(obs.Record{
 		At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleEnd, Message: "cycle finished",
-		Action: obs.ActionCycle, ActionID: "cycle-42", Outcome: obs.OutcomeSuccess,
+		Action: obs.ActionCycle, ActionID: "cycle-42", Result: obs.ResultSuccess,
 	})
 
 	deployment = deploymentBucket(t, rec)

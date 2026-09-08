@@ -31,7 +31,7 @@ func TestLiveActivity_SerializesHowEachLineWent(t *testing.T) {
 			Sequence: 1,
 			At:       at,
 			Level:    "info",
-			Outcome:  "success",
+			Result:   "success",
 			Event:    "commit",
 			Scope:    service.LiveActivityScopeSet,
 			Message:  "durable commit complete",
@@ -53,15 +53,15 @@ func TestLiveActivity_SerializesHowEachLineWent(t *testing.T) {
 	})
 
 	events := liveEventsOfFirstSet(t, getLiveActivity(t, router, ""))
-	if events[0]["outcome"] != "success" {
-		t.Errorf("a commit serialises outcome %v, want %q; without it a completion that went well is indistinguishable on the wire from a note about nothing",
-			events[0]["outcome"], "success")
+	if events[0]["result"] != "success" {
+		t.Errorf("a commit serialises result %v, want %q; without it a completion that went well is indistinguishable on the wire from a note about nothing",
+			events[0]["result"], "success")
 	}
 	// Absent, not empty. A line that states no outcome has reported no
 	// operation at all, and an "outcome": "" would be a client's evidence
 	// that one was stated and came out blank.
-	if v, ok := events[1]["outcome"]; ok {
-		t.Errorf("a line that states no outcome serialises outcome %v anyway", v)
+	if v, ok := events[1]["result"]; ok {
+		t.Errorf("a line that states no result serialises result %v anyway", v)
 	}
 }
 
@@ -137,8 +137,8 @@ func TestLiveActivity_SerializesTheStartThatNeverGotItsCompletion(t *testing.T) 
 		t.Errorf("the start line serialises action %v id %v; a pair matched by the habit of spelling one event cycle_start is what this replaces",
 			start["action"], start["action_id"])
 	}
-	if v, ok := start["outcome"]; ok {
-		t.Errorf("the start line serialises outcome %v; an action that has not finished has not gone any way yet, and that absence is what marks it as a start", v)
+	if v, ok := start["result"]; ok {
+		t.Errorf("the start line serialises result %v; an action that has not finished has not gone any way yet, and that absence is what marks it as a start", v)
 	}
 }
 

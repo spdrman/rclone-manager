@@ -1354,10 +1354,10 @@ function fromWireLiveActivityEvent(e: WireLiveActivityEvent): SetActivityEvent {
     at: e.at,
     level: e.level,
     // Absent stays absent rather than becoming a null or an empty
-    // string. A line that states no outcome has reported no operation,
+    // string. A line that states no result has reported no operation,
     // which is what a start and every progress note do, and rendering
     // that as a value would make the field the thing nobody trusts.
-    outcome: e.outcome,
+    result: e.result,
     action: e.action,
     actionId: e.action_id,
     event: e.event,

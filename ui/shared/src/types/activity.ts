@@ -27,6 +27,14 @@ export type ActivityLevel = "debug" | "info" | "warn" | "error";
  * How the operation a line reports WENT, stated by the engine (issue
  * #625).
  *
+ * Called a result and not an outcome on purpose. `connection_test`
+ * carries a field of its own called `outcome` and has since #596, and
+ * `SetActivity.outcome` beside this is a third vocabulary again
+ * (ok/failed/stopped) nested in the same response. Taking the name would
+ * have meant renaming a shipped field to make room for a newcomer, and
+ * leaving a client to handle `set.outcome === "ok"` beside
+ * `set.events[i].outcome === "success"` for adjacent facts.
+ *
  * It is not a second spelling of the level beside it. A level is an
  * ORDERING, which is why there is no "success" in it and cannot be: every
  * reader treats a level as a threshold, and success has no place on a line
@@ -40,10 +48,13 @@ export type ActivityLevel = "debug" | "info" | "warn" | "error";
  *
  * "info" is a completion with no verdict: it ran, it finished, and there
  * is nothing to celebrate or worry about. Absent is different again and
- * means the line states no outcome at all, which is what a start and every
+ * means the line states no result at all, which is what a start and every
  * ordinary progress note carry.
+ *
+ * "warn" rather than "warning", matching the `level` on the same line and
+ * every other tone vocabulary in this app.
  */
-export type ActivityOutcome = "success" | "warning" | "error" | "info";
+export type ActivityResult = "success" | "warn" | "error" | "info";
 
 /**
  * An action that announced itself and has not said how it went.
@@ -98,13 +109,14 @@ export interface SetActivityEvent {
   message: string;
   /** How the operation this line reports went, stated by the engine.
    *  Optional rather than nullable, and the two are not the same claim
-   *  here: a line that states no outcome has not measured one badly, it
+   *  here: a line that states no result has not measured one badly, it
    *  has reported no operation at all, which is what a start and every
-   *  progress note do. See ActivityOutcome for why this is not the level. */
-  outcome?: ActivityOutcome;
+   *  progress note do. See ActivityResult for why this is not the level,
+   *  and for why it is not called an outcome. */
+  result?: ActivityResult;
   /** The action this line opens or closes, and the id its two halves are
    *  paired by. Both absent on every line that is neither half of a pair;
-   *  an actionId with no outcome is a start, and one with an outcome
+   *  an actionId with no result is a start, and one with a result
    *  closes it. */
   action?: string;
   actionId?: string;
@@ -153,8 +165,8 @@ export interface SetActivity {
   startedAt: string | null;
   finishedAt: string | null;
   events: SetActivityEvent[];
-  /** Every action inside this set that started and has not reported an
-   *  outcome, oldest first. Deliberately not filtered by the cursor the
+  /** Every action inside this set that started and has not reported a
+   *  result, oldest first. Deliberately not filtered by the cursor the
    *  events were: a cursor asks what is new, and an action that has been
    *  quiet for ten minutes is precisely not new. */
   unfinishedActions?: UnfinishedAction[];
@@ -206,7 +218,7 @@ export interface LiveActivity {
  *  thing as how far through its own pass a deployment is. */
 export interface DeploymentActivity {
   events: SetActivityEvent[];
-  /** The deployment-wide actions still owing an outcome. A cycle is the
+  /** The deployment-wide actions still owing a result. A cycle is the
    *  one this matters most for: it belongs to no single set, so this is
    *  the only bucket a cycle that went quiet can be reported in. */
   unfinishedActions?: UnfinishedAction[];
