@@ -139,8 +139,9 @@ So:
   number over the same noise would only produce a gate that fails against an
   unchanged tree. `scripts/perf/selftest.sh` pins which condition binds, with
   one control just under the floor that must pass and one just over it that
-  must fail, so the band between 0.143 ms and 0.180 ms is exercised rather than
-  assumed.
+  must fail, so the band between 0.185 ms and 0.218 ms is exercised rather than
+  assumed. Those two controls are derived from the record rather than written
+  down, so they follow a re-capture on their own.
 - **`config_write_p95_ms`** is gated on a ratio, with about two times headroom
   over its noise. It is the tightest of the gated metrics and the one most
   likely to need re-measurement rather than a fix if it trips.
@@ -169,7 +170,7 @@ Derived from `gate.json` and `baselines/darwin-arm64-mac17-2.json`:
 
 `api_read_p95_ms` is the only row with two conditions, and because both have to
 hold, the wider of the two is what is enforced. Here that is the floor, so read
-the last column rather than the ratio: 0.180 ms, not 0.143 ms. Every other row
+the last column rather than the ratio: 0.218 ms, not 0.185 ms. Every other row
 has a single condition and the two columns agree.
 
 ## What moved between `8ad3100` and `186ba0c7`, and why each of it moved
