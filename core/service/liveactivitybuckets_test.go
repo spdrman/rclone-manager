@@ -167,6 +167,30 @@ func TestRecordAPIAction_ProbingThisAPIGrowsNothing(t *testing.T) {
 	}
 }
 
+// TestLiveActivity_TheConfigurationIsAskedOnlyWhenABucketIsMinted is the
+// price of the guard, held down.
+//
+// The check walks the running configuration, and RecordEvent runs on the
+// cycle's own goroutine for every event the engine emits, so asking it
+// per event would trade one hot-path cost for another. A bucket that is
+// already open answers the question by existing, so the walk happens
+// once per set for the life of the process.
+func TestLiveActivity_TheConfigurationIsAskedOnlyWhenABucketIsMinted(t *testing.T) {
+	asked := 0
+	rec := newLiveActivity(func(id string) bool {
+		asked++
+		return id == "alpha/nightly"
+	})
+
+	for i := 0; i < 500; i++ {
+		recordSetEvent(rec, "alpha/nightly", obs.EventLifecycleTransition)
+	}
+
+	if asked != 1 {
+		t.Errorf("500 events into one set's bucket walked the configuration %d times; the bucket existing after the first one is the answer", asked)
+	}
+}
+
 // A set that appears in the configuration AFTER the process started is
 // still served: the check reads the running configuration through the
 // same atomic snapshot every other reader does, so a hot reload that adds

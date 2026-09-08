@@ -477,6 +477,12 @@ type liveActivity struct {
 	// service's own atomic snapshot and takes no lock of this package's,
 	// and it is written once, before this feed is reachable by anything,
 	// so it needs none of ours either.
+	//
+	// It is asked only when a bucket has to be MINTED, which is once per
+	// set for the life of the process, so walking the configuration for
+	// the answer costs the event stream nothing: RecordEvent's promise
+	// about what it does per event is the whole reason this feed exists
+	// in this shape.
 	configures func(id string) bool
 
 	mu  sync.Mutex
@@ -581,20 +587,6 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		return
 	}
 	setID, scope := attributeRecord(r)
-	// A line naming a set this deployment does not have is a line about
-	// the deployment, not a line about a set: there is no strip for it
-	// to land on, because LiveActivity builds its list of strips from
-	// the configuration. It is re-scoped rather than dropped so the
-	// global terminal still shows it, which is the whole point of having
-	// a bucket for the lines that belong to no set. See setLocked for
-	// what minting one anyway used to cost.
-	//
-	// Asked before the lock, because the answer comes from the service's
-	// own atomic configuration snapshot and there is no reason to walk
-	// it while holding the feed's mutex.
-	if scope == LiveActivityScopeSet && !l.configuredSet(setID) {
-		setID, scope = "", LiveActivityScopeDeployment
-	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -619,10 +611,13 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 	}
 	st := l.setLocked(setID)
 	if st == nil {
-		// Unreachable through the re-scope above, and handled anyway:
-		// setLocked is the guard, and a caller that reaches it without
-		// checking first gets the deployment's bucket rather than a
-		// panic or a silent drop.
+		// This deployment does not have that set, so there is no strip
+		// for the line to land on: LiveActivity builds its list of
+		// strips from the configuration, and a bucket minted here would
+		// be one nothing can ever read (see setLocked). It goes to the
+		// deployment's bucket rather than being dropped, because that is
+		// what the deployment's bucket is for, and the global terminal
+		// showing somebody probing this API is the point.
 		e.Scope = LiveActivityScopeDeployment
 		l.deployment.add(e)
 		return
