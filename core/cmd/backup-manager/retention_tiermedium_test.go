@@ -114,9 +114,9 @@ func TestRun_TierMediumIsRefusedWhenNoTierOfThatNameWasGiven(t *testing.T) {
 			t.Fatalf("retention with a --tier-medium naming no tier exited 0; it has to be refused")
 		}
 	})
-	for _, want := range []string{"monthy", "--tier"} {
+	for _, want := range []string{"monthy", "names no tier this command line gave", "daily"} {
 		if !strings.Contains(err, want) {
-			t.Errorf("the refusal does not mention %q.\ngot:\n%s", want, err)
+			t.Errorf("the refusal does not mention %q, so it does not say which name went unmatched or what was on offer.\ngot:\n%s", want, err)
 		}
 	}
 }
@@ -132,8 +132,10 @@ func TestRun_TierMediumWithNoTierAtAll(t *testing.T) {
 			t.Fatalf("retention with --tier-medium and no --tier exited 0; it has to be refused")
 		}
 	})
-	if !strings.Contains(err, "--tier") {
-		t.Errorf("the refusal does not point at --tier.\ngot:\n%s", err)
+	for _, want := range []string{"-tier-medium", "no -tier was given"} {
+		if !strings.Contains(err, want) {
+			t.Errorf("the refusal does not mention %q.\ngot:\n%s", want, err)
+		}
 	}
 }
 

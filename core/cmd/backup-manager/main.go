@@ -159,11 +159,17 @@ commands:
                                                   the source itself when it carries one, so --source is only
                                                   needed for the plain set name (#569)
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
+            [--tier NAME:GRANULARITY:KEEP[:WINDOW_UNIT]] [--tier-medium NAME=MEDIUM_ID]
                                                   preview GFS/last-known-good retention decisions. It deletes nothing in
                                                   either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
                                                   through the API's retention preview/apply pair, against a reviewed plan_id.
                                                   Each retention flag overrides the loaded config's own resolved value for
-                                                  this preview only
+                                                  this preview only.
+                                                  --tier is repeatable and replaces the whole chain; --tier-medium says
+                                                  where one of those tiers' copies go, so a supplied chain is previewed
+                                                  against the destinations it names rather than silently against the local
+                                                  backup root. A supplied chain that names none, beside a deployment whose
+                                                  own chain does, says so before the plan (#595)
   retention <source/backup-set> [--dry-run] [the same retention override flags]
                                                   preview that one backup set's decisions instead of every configured
                                                   set's. An id that names no configured backup set is refused and

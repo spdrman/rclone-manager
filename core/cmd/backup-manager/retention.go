@@ -121,6 +121,12 @@ func cmdRetention(args []string) int {
 	// svc was built from (see openService's doc), so this mutation is
 	// this command's own, one-time, explicit preview-input step, not
 	// ambient state Service itself ever reads or writes.
+	//
+	// Read BEFORE the fold, because the fold is what replaces it. This is
+	// the chain the operator's own configuration decides with, and the
+	// only thing that can tell an override that says nothing about
+	// placement apart from one that agrees with the file (issue #595).
+	replacedMediums := tierMediums(cfg.Retention.EffectiveTiers())
 	if err := applyRetentionOverrides(&cfg.Retention, overrides); err != nil {
 		return fail(fmt.Errorf("retention flags: %w", err))
 	}
@@ -144,6 +150,34 @@ func cmdRetention(args []string) int {
 	// different chain for such a set edits the set.
 	if err := cfg.Validate(); err != nil {
 		return fail(fmt.Errorf("retention flags: %w", err))
+	}
+
+	// Issue #595. A -tier chain replaces the file's chain outright, and
+	// before -tier-medium existed the replacement could only ever be an
+	// all-local one: config.RetentionTier.Medium's own doc said so and
+	// deferred the consequence to #239, on the grounds that it was inert
+	// while nothing read the field. #239 landed and it stopped being
+	// inert. What it became is the worst shape a preview can take, a
+	// confident answer to a question nobody asked: the placement plan
+	// below would be computed against local while the deployment's real
+	// chain sends those artifacts somewhere else, and nothing on the page
+	// said which of the two it was about.
+	//
+	// -tier-medium is the fix and this line is the other half of it,
+	// because an operator cannot pass a flag they have not met. It fires
+	// only where the answer actually diverges: a chain supplied here that
+	// names no destination, beside a file's chain that names one. On a
+	// deployment with no medium anywhere there is nothing to diverge from
+	// and nothing is printed, which is every case in the black-box
+	// contract suite and every case in core/tests/compat.
+	//
+	// Unconditional rather than gated on mode.attached(), unlike the
+	// hypothetical-verdicts note below it. That one is about whether a
+	// serving process was asked to agree; this one is about whether the
+	// plan printed underneath describes this deployment at all, which is
+	// as true with nothing serving as with something.
+	if len(overrides.tiers) > 0 && len(overrides.tierMediums) == 0 && len(replacedMediums) > 0 {
+		fmt.Fprintf(os.Stderr, "note: the chain this command line supplied names no destination, so the placement below is planned against the local backup root, while this deployment's own chain sends %s. Name a destination with --tier-medium NAME=MEDIUM_ID to preview against it.\n", strings.Join(replacedMediums, ", "))
 	}
 
 	reports, err := retentionReports(ctx, svc, only)
@@ -520,4 +554,27 @@ func retentionPolicySummary(r config.Retention) string {
 		parts = append(parts, fmt.Sprintf("%s/%d", t.Name, t.Keep))
 	}
 	return fmt.Sprintf("tiers=[%s] timezone=%s", strings.Join(parts, " "), r.Timezone)
+}
+
+// tierMediums names each destination a chain sends a tier to, in chain
+// order, once each, and nothing at all for a chain that is entirely
+// local.
+//
+// EffectiveMedium rather than the raw field, so the reserved local id is
+// what a tier with no medium key resolves to here, and is then dropped:
+// a chain of three local tiers has nothing to say about destinations, and
+// saying "local" three times would be a list an operator has to read past
+// to find out there is nothing in it.
+func tierMediums(tiers []config.RetentionTier) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range tiers {
+		m := t.EffectiveMedium()
+		if m == config.MediumLocal || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
 }
