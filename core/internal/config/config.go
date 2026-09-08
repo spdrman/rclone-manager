@@ -518,6 +518,46 @@ type BackupSet struct {
 	// derived.
 	ReadOnly bool `yaml:"-"`
 
+	// ConnectionUnverified records that this backup set was written
+	// without its SSH connection ever having been proven: issue #624's
+	// mark, and the durable half of `--no-verify` on a create or a
+	// connection-changing edit.
+	//
+	// It exists because --no-verify has a legitimate use, building
+	// configuration offline against a host this machine cannot currently
+	// reach, and the result of using it must not look identical to a set
+	// that was checked against a real server. The sentence the command
+	// prints is read once, by whoever typed it; this is what is still
+	// there tomorrow for the operator who did not.
+	//
+	// Absent is NOT "unverified", and that asymmetry is deliberate. Every
+	// configuration written before this field existed says nothing here,
+	// and a build that read silence as a mark would, on the first upgrade,
+	// declare every backup set on every deployment unproven, which is a
+	// warning nobody can act on and therefore one everybody learns to
+	// ignore. The mark is only ever written by core/service itself, when
+	// a create or an edit was told to skip the check it runs in front of
+	// the write (SkipConnectionCheck on the request, `skip_connection_check`
+	// on the API), exactly as ReadOnlyConfig is only ever written by an
+	// operator who said something. It is never taken from a request: a
+	// mark a caller could set is a mark a caller could omit, and an
+	// earlier shape of the create request that carried it as the caller's
+	// own claim let any client write an unproven set with nothing to say
+	// so (PR #628 review).
+	//
+	// It is cleared, not merely reported: a connection test that PASSES
+	// against this set removes the key (core/service's
+	// clearConnectionUnverified). That is what makes it a state rather
+	// than a scar on a set that happened to be created offline. A test
+	// that fails leaves it exactly where it was, because "somebody pressed
+	// the button" is not the same claim as "this connection works".
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that never uses --no-verify never writes a file an older
+	// build cannot parse (Load's KnownFields(true); see RetentionConfig's
+	// own note on that one-way door).
+	ConnectionUnverified bool `yaml:"connection_unverified,omitempty"`
+
 	Validation   Validation   `yaml:"validation"`
 	Revalidation Revalidation `yaml:"revalidation"`
 }

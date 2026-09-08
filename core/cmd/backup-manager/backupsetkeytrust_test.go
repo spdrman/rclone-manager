@@ -84,7 +84,12 @@ func TestRun_BackupSetPatchRotatesTheSSHKey(t *testing.T) {
 	replacement := writeTestPrivateKey(t)
 	want := privateKeyFingerprint(t, replacement)
 	out := captureStdout(t, func() {
-		args := []string{"backup-set", "--config", configPath, "patch", "api/rotate", "--ssh-key-file", replacement}
+		// --no-verify because source.example.internal is not a machine.
+		// Every case in this file is about what the edit DOES to the key
+		// or to the trust anchor, and #624's check in front of it would
+		// refuse each of them for a host that was never meant to answer.
+		// The check has its own cases in backupsetverify_test.go.
+		args := []string{"backup-set", "--config", configPath, "patch", "api/rotate", "--ssh-key-file", replacement, "--no-verify"}
 		if got := run(args); got != 0 {
 			t.Fatalf("run(%v) = %d, want 0", args, got)
 		}
@@ -111,7 +116,10 @@ func TestRun_BackupSetPatchRefusesAChangedHostKeyUntilAcknowledged(t *testing.T)
 	_, oldFingerprint := createSFTPSetForPatch(t, configPath, "api/retrust")
 	newLine, newFingerprint := hostKeyLineFor(t, "source.example.internal", 2222)
 
-	args := []string{"backup-set", "--config", configPath, "patch", "api/retrust", "--known-hosts-line", newLine}
+	// --no-verify for the reason the rotation case above gives: this is
+	// about the refusal in front of a host-key change, not about whether
+	// a fixture hostname resolves.
+	args := []string{"backup-set", "--config", configPath, "patch", "api/retrust", "--known-hosts-line", newLine, "--no-verify"}
 	out := captureStderr(t, func() {
 		if got := run(args); got == 0 {
 			t.Fatalf("run(%v) = 0, want a refusal: the host key changed and nothing acknowledged it", args)
@@ -145,7 +153,7 @@ func TestRun_BackupSetPatchTakesTheKeyAndTrustFlags(t *testing.T) {
 
 	// Re-sending the line the set already trusts changes no trust, so it
 	// needs no acknowledgement and must be accepted.
-	args := []string{"backup-set", "--config", configPath, "patch", "api/parity", "--known-hosts-line", line}
+	args := []string{"backup-set", "--config", configPath, "patch", "api/parity", "--known-hosts-line", line, "--no-verify"}
 	captureStdout(t, func() {
 		if got := run(args); got != 0 {
 			t.Fatalf("run(%v) = %d, want 0", args, got)

@@ -418,6 +418,15 @@ func createArgs(configPath, keyPath, id string, extra ...string) []string {
 		// written there: no cycle runs for a set created in these tests.
 		"--local-path", "/data/backups/api",
 		"--completion-strategy", "rename",
+		// Issue #624: `create` proves the connection before it writes,
+		// and source.example.internal is a name that resolves nowhere.
+		// Every test in this package is about where the change LANDS, on
+		// which route, in which mode, so they skip the check the way an
+		// operator building configuration offline does. Whether the check
+		// happens at all is core/cmd/backup-manager's own suite, and
+		// whether it happens against two real machines is
+		// scripts/e2e/two-machine-backup.sh.
+		"--no-verify",
 	}, extra...)
 }
 
@@ -1849,6 +1858,15 @@ func TestTheWizardsReadOnlyChoiceSurvivesTheFirstRunSave(t *testing.T) {
 		// The tick under test. Everything above it is here so the save is
 		// a real one rather than a minimal one.
 		ReadOnly: true,
+		// Issue #624: the service proves a first set's connection in front
+		// of the write, and source.example.internal is a name that
+		// resolves nowhere. This case is about the read-only tick surviving
+		// a real save, activation and a read back, not about the check, so
+		// it skips it the way every `backup-set create` in this package
+		// does (createArgs). The check's own cases are in core/service and
+		// apps/common/webhost, and its real-machine proof is
+		// scripts/e2e/two-machine-backup.sh.
+		SkipConnectionCheck: true,
 	}
 
 	code, body := view.post("/api/v1/system/first-run", spec)

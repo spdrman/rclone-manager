@@ -132,6 +132,24 @@ type backupSetRoute interface {
 
 	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
 	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
+
+	// The two modes of the connection check (issue #624). They are here
+	// beside the writes, and not left to the local service, for exactly
+	// mediumRoute's reason: `backup-set create` verifies before it
+	// writes, so the check and the write have to happen in the SAME
+	// world. Proving a route to a host from this shell and then
+	// declaring the set in a process on the other side of a container
+	// boundary would be two claims about two networks reported as one.
+	//
+	// TestBackupSetConnection is here for a second reason of its own: a
+	// check that passes now clears that set's unverified mark, which is
+	// a configuration write, so it belongs on the door configuration
+	// writes go through rather than beside the reads.
+	//
+	// *service.BackupService satisfies both as it already stands, which
+	// is the property this interface's own doc asks to preserve.
+	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+	TestBackupSetConnection(ctx context.Context, id string) (service.ConnectionTestResult, error)
 }
 
 // settingsRoute is `settings patch`'s half of the same seam.

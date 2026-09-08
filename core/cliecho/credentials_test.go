@@ -179,11 +179,12 @@ var flagsThatEchoWhatTheRequestSaid = map[string]string{
 // operand has no flag name in front of it to say what it is, so the only
 // place the claim can be made is against the route that prints it.
 var operandsThatNameTheSubject = map[string]string{
-	"POST /system/first-run":          "source/name, the backup set being created",
-	"POST /backup-sets":               "source/name, the backup set being created",
-	"POST /operations":                "the artifact id a restore names",
-	"POST /storage-mediums":           "the destination's own id",
-	"POST /storage-mediums/preflight": "the candidate destination's id",
+	"POST /system/first-run":            "source/name, the backup set being created",
+	"POST /backup-sets":                 "source/name, the backup set being created",
+	"POST /backup-sets/test-connection": "source/name, the backup set being checked (issue #624)",
+	"POST /operations":                  "the artifact id a restore names",
+	"POST /storage-mediums":             "the destination's own id",
+	"POST /storage-mediums/preflight":   "the candidate destination's id",
 }
 
 // A credential in an endpoint URL, which is the leak the name-based test

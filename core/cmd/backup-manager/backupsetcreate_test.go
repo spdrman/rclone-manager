@@ -72,6 +72,19 @@ func createArgs(configPath, keyPath, id string, extra ...string) []string {
 		"--remote-path", "/srv/backups",
 		"--local-path", "/data/backups/api",
 		"--completion-strategy", "rename",
+		// Issue #624: `create` proves the connection before it writes,
+		// and source.example.internal:2222 is not a machine. Every case
+		// built on this helper is about something else (the flags, the
+		// refusals, the route the write takes), so they skip the check
+		// the way an operator building configuration offline does, and
+		// the cases that ARE about the check build their own arguments
+		// (backupsetverify_test.go).
+		//
+		// Passed here rather than by each caller so the choice is made
+		// once and reads as one decision. A caller that needs the check
+		// to run passes --host and --port of its own and leaves this
+		// off, which package flag allows because a later value wins.
+		"--no-verify",
 	}
 	return append(args, extra...)
 }

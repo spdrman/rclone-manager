@@ -99,6 +99,27 @@ func (c *Client) ProbeHostKey(ctx context.Context, req apicontract.HostKeyProbeR
 	return out, err
 }
 
+// TestConnection is POST /backup-sets/test-connection, in either of its
+// two modes: name BackupSetID to re-check a set that already exists, or
+// fill in the connection details to check a candidate before it is saved
+// (issue #624 gave the CLI a caller for both).
+//
+// Which end runs the check is ProbeHostKey's point restated: the machine
+// that has to be able to reach the source is the one that will be pulling
+// backups off it, and it is also the one whose live feed the six steps
+// belong on. A check run from this host would prove a route the backups
+// never travel and would leave its result in a terminal nobody else can
+// see.
+//
+// One method for both modes because it is one route and one response
+// shape. The contract's own rule, exactly one mode per request, is the
+// caller's to keep: engineroute.go builds one or the other and never both.
+func (c *Client) TestConnection(ctx context.Context, req apicontract.TestConnectionRequest) (apicontract.TestConnectionResponse, error) {
+	var out apicontract.TestConnectionResponse
+	err := c.call(ctx, "testCandidateConnection", nil, req, &out)
+	return out, err
+}
+
 // UpdateBackupSet is PATCH /backup-sets/{source}/{set}.
 func (c *Client) UpdateBackupSet(ctx context.Context, source, set string, req apicontract.UpdateBackupSetRequest) (apicontract.BackupSet, error) {
 	var out apicontract.BackupSet

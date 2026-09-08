@@ -515,15 +515,28 @@ down, where the first configuration is written from the command line.
 (or remove the key, or set it `false`) in `config.yaml` and confirm it with `sources`, which
 prints `status=enabled` or `status=disabled` for exactly this field.
 
-**Testing a connection is `fetch --dry-run`, and it is a good one.** `POST
-/backup-sets/test-connection` authenticates, verifies the host key and lists the remote.
-`fetch --config ./config.yaml --source S --backup-set B --dry-run` does the same real
-authenticate-and-list, against the exact transport code path a real cycle would use, and
-prints every object it finds with its size, which is strictly more than the API route
-returns. It only works for a backup set already in `config.yaml`; to check a *candidate*
-before committing to it, add it to the file (nothing is destructive about an entry that is
-merely present) and run `check` then `fetch --dry-run` against it, removing or fixing the
-entry if it does not check out.
+**Testing a connection is `backup-set test-connection`, and it is no longer a
+work-around.** This entry used to send an operator to `fetch --dry-run`, because `POST
+/backup-sets/test-connection` had no verb at all: the six-step check that route answers with
+(#596) could only be reached from a browser. Issue #624 gave it one. `backup-manager
+backup-set test-connection <source/backup-set>` resolves the host, connects, checks its host
+key against what the set trusts, offers the configured key, authenticates and lists the
+remote folder, and prints all six outcomes with a non-zero exit when any of them fails.
+`preflight` is the same verb under the name the storage-destination side spells it.
+
+Beside a serving engine this command has a route to, the check is made BY that engine, so
+its steps land on the live feed the web UI and `activity --follow` are both reading rather
+than only in this terminal; with nothing serving, it is made here against the same
+`config.yaml` this process would write. A check that passes clears the unverified mark a
+`--no-verify` create or patch left on the set, which is why it goes through the write door
+rather than the read one.
+
+`fetch --config ./config.yaml --source S --backup-set B --dry-run` is still worth knowing:
+it does the same real authenticate-and-list against the exact transport code path a cycle
+uses, and prints every object it finds with its size, which is more detail than either the
+route or the verb returns. A *candidate* that is not in `config.yaml` yet needs neither,
+because `backup-set create` proves the connection before it writes anything and refuses when
+it cannot.
 
 **Provisioning an SSH key and capturing a host key are already fully documented, in
 `docs/ssh-setup.md`, and this is the missing cross-reference.** `POST /ssh-keys` exists so a

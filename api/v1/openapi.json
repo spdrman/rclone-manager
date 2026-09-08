@@ -104,7 +104,8 @@
           "MEDIUM_IN_USE",
           "MEDIUM_EXISTS",
           "STORAGE_CREDENTIAL_NOT_FOUND",
-          "SSH_KEY_CANDIDATE_NOT_FOUND"
+          "SSH_KEY_CANDIDATE_NOT_FOUND",
+          "BACKUP_SET_CONNECTION_NOT_PROVEN"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -156,7 +157,8 @@
           "MEDIUM_IN_USE": "wire",
           "MEDIUM_EXISTS": "wire",
           "STORAGE_CREDENTIAL_NOT_FOUND": "wire",
-          "SSH_KEY_CANDIDATE_NOT_FOUND": "wire"
+          "SSH_KEY_CANDIDATE_NOT_FOUND": "wire",
+          "BACKUP_SET_CONNECTION_NOT_PROVEN": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -189,7 +191,8 @@
             "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
             "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
             "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
-            "ARTIFACT_NOT_FAILED"
+            "ARTIFACT_NOT_FAILED",
+            "BACKUP_SET_CONNECTION_NOT_PROVEN"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -721,7 +724,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -1085,6 +1088,11 @@
           "ssh_key_id": {
             "type": "string",
             "description": "The key-store id this set's key resolves to, the same value POST /ssh-keys returned and GET /ssh-keys lists. The id only: what it resolves to is a server-side path and this API never publishes one. Never omitted, and EMPTY IS A REAL ANSWER, meaning this set uses a key this deployment does not manage, which is every set pointing at a mounted or hand-provisioned key file. It is here because BackupSetPatch has always been able to WRITE ssh_key_id and nothing could read it back, so a surface offering to replace a set's key could not name the key being replaced."
+          },
+          "connection_unverified": {
+            "type": "boolean",
+            "description": "Whether this backup set was written without its SSH connection ever having been proven (issue #624). True means a surface deliberately skipped a check it could have run, which is `backup-set create --no-verify` and nothing else; a connection test that PASSES against the set clears it, and one that fails leaves it alone. ABSENT is not \"unverified\": every configuration written before this field existed says nothing, an engine built before it answers nothing, and a client that read silence as a mark would declare every backup set on every deployment unproven on the first upgrade. Read absence as \"nothing here says this was skipped\".",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -1795,6 +1803,10 @@
           "read_only": {
             "type": "boolean",
             "description": "Declares this backup set's remote source read-only from creation (issue #282): pull backups from here, but never delete the remote original. Omitted or false means exactly what every request meant before this field existed."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this set without proving its connection first (issue #624). The service runs the same six-step check POST /backup-sets/test-connection answers, in front of the write, and refuses with BACKUP_SET_CONNECTION_NOT_PROVEN when it fails; this is the deliberate opt-out, and a set written under it is marked connection_unverified until a test passes. The mark is the service's own record of the skip and is never taken from the request. Omitted or false checks, which is what every create should do."
           }
         },
         "required": [
@@ -2481,6 +2493,10 @@
           "acknowledge_host_key_change": {
             "type": "boolean",
             "description": "Confirms that this edit is meant to change what host keys this backup set trusts for its own address (issue #572). Required when known_hosts_line pins a different key from the one on record, and equally when it would stop pinning one that IS on record; without it the edit is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, naming the fingerprint on record and the one being offered, and nothing is written. Changing remote.port does not exempt an edit from this: a port is how you reach the same machine, so a set that pins a key for host:22 is still having its trust changed by a line that pins something else for host:2222. Separate from acknowledge_repoint on purpose: that one answers \"this is the same data at a new address\" and this one answers \"this is the same host with a new key\", and one flag for both would let an operator who meant one of them quietly grant the other."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this edit without proving the connection first (issue #624). An edit that changes host, port, user, ssh_key_id, known_hosts_line or remote_path is checked against the source before it is written, and refused with BACKUP_SET_CONNECTION_NOT_PROVEN when the check fails; this is the deliberate opt-out, and a set written under it is marked connection_unverified until a test passes. The check is made here rather than by the caller because a sparse edit plus a set whose trust anchor this API never publishes is not something a caller can assemble a candidate out of. Omitted or false checks, which is what every edit that changes a connection field should do."
           }
         }
       },
@@ -4635,7 +4651,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED. This id already has artifacts on record and the set would be created somewhere other than where they came from; re-send with acknowledge_repoint once the message has been read.",
+            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_CONNECTION_NOT_PROVEN. This id already has artifacts on record and the set would be created somewhere other than where they came from, re-sent with acknowledge_repoint once the message has been read; or the connection this set declares could not be proven, re-sent with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4644,7 +4660,8 @@
               }
             },
             "x-error-codes": [
-              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -5924,7 +5941,7 @@
             ]
           },
           "409": {
-            "description": "Refused: ALREADY_CONFIGURED. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations.",
+            "description": "Refused: ALREADY_CONFIGURED, BACKUP_SET_CONNECTION_NOT_PROVEN. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations. Or the connection this first set declares could not be proven, and nothing was written; re-send with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5933,7 +5950,8 @@
               }
             },
             "x-error-codes": [
-              "ALREADY_CONFIGURED"
+              "ALREADY_CONFIGURED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -7042,7 +7060,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED. Either the edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host; re-send with the acknowledgement the message names, once the message has been read.",
+            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, BACKUP_SET_CONNECTION_NOT_PROVEN. The edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host, or it changes the connection and that connection could not be proven. The first two are re-sent with the acknowledgement the message names; the third is re-sent with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7052,7 +7070,8 @@
             },
             "x-error-codes": [
               "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {

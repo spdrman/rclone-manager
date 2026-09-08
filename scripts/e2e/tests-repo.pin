@@ -187,4 +187,34 @@
 # That is the same manual half the paragraphs above keep flagging, and it
 # is not something a bump on this side can close.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=44be7ee378b0844bf023fb9a709f671f3c578b41
+#
+# Moved to 1b79f8d, rclone-manager-tests#60, off their merged main and not
+# off the branch, for the reason the paragraph about a794c38 above already
+# gives. It is the specs half of #624: the add-backup-set wizard will not
+# save a source nobody has proven.
+#
+# Suite B had eighteen wizard cases and not one of them was about that. Two
+# walked straight past it, because Save was gated on a pinned known_hosts
+# line and an imported key and both of those are host IDENTITY: they settle
+# which machine answered and settle nothing about whether the key
+# authenticates or whether the account can read the folder. The new case
+# isolates the connection, and the two existing ones gain a step rather than
+# an assertion, because neither of them is about it.
+#
+# Verified both ways before the bump, the way the notes above ask. Against
+# this branch the wizard spec is 22 of 22 green; against a clean checkout of
+# this repository's main, three fail and nineteen pass. The control is the
+# half that matters: it makes them a test of the product rather than of the
+# component.
+#
+# The bump also carries b5af4c7, rclone-manager-tests#58, which is #617 and
+# #618's specs. Their product half is already on main here (#619), and this
+# branch is rebased onto it, so those arrive green rather than ahead of the
+# feature they describe.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names a commit of this repository that predates
+# #624, so #60's three cases are red over there until it moves to whatever
+# commit this branch merges as. That is the same manual half every paragraph
+# above keeps flagging.
+TESTS_REPO_SHA=1b79f8dbd8f5f99621adcdc3576fa6f3be30a3b4

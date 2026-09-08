@@ -537,6 +537,11 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
       : "Health details are not yet reported by the server for this backup set.",
     enabled: !bs.disabled,
     readOnly: bs.read_only,
+    // Issue #624. Omitted on the wire when false, and an engine built
+    // before this field omits it always, so ?? false is the right
+    // default: absence means "nothing here says this set's connection was
+    // skipped", never "this set was proven".
+    connectionUnverified: bs.connection_unverified ?? false,
     // 0, not undefined, when health could not be read for this set — the
     // same "old placeholder rather than a guess" choice this mapper's own
     // doc above makes for state/stateNote, applied to a count instead of

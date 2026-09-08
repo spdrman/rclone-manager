@@ -304,16 +304,21 @@ func configWritePaths() []configWritePath {
 		}},
 		{"create backup set (#146)", func(t *testing.T, svc *BackupService, f configMountFixture) error {
 			_, err := svc.CreateBackupSet(context.Background(), CreateBackupSetRequest{
-				Name:               "mount-shape-set",
-				Host:               "example.internal",
-				Port:               22,
-				User:               "backup-agent",
-				SSHKeyID:           f.keyID,
-				KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
-				RemotePath:         "/backups/mount-shape-set",
-				LocalPath:          filepath.Join(t.TempDir(), "mount-shape-set"),
-				Include:            []string{"*.dump"},
-				CompletionStrategy: "marker",
+				Name:           "mount-shape-set",
+				Host:           "example.internal",
+				Port:           22,
+				User:           "backup-agent",
+				SSHKeyID:       f.keyID,
+				KnownHostsLine: "example.internal ssh-ed25519 AAAAtestfixtureline",
+				// The skip, for the reason validCreateReq gives: this case
+				// measures the mount shape and nothing else, and a host that
+				// answers nothing would otherwise be refused for its
+				// connection before the write this case is about.
+				SkipConnectionCheck: true,
+				RemotePath:          "/backups/mount-shape-set",
+				LocalPath:           filepath.Join(t.TempDir(), "mount-shape-set"),
+				Include:             []string{"*.dump"},
+				CompletionStrategy:  "marker",
 			})
 			return err
 		}},
@@ -341,16 +346,21 @@ func configWritePaths() []configWritePath {
 				return err
 			}
 			_, err = fr.CreateInitialConfig(context.Background(), CreateBackupSetRequest{
-				Name:               "mount-shape-first-run",
-				Host:               "example.internal",
-				Port:               22,
-				User:               "backup-agent",
-				SSHKeyID:           f.keyID,
-				KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
-				RemotePath:         "/backups/mount-shape-first-run",
-				LocalPath:          filepath.Join(t.TempDir(), "mount-shape-first-run"),
-				Include:            []string{"*.dump"},
-				CompletionStrategy: "marker",
+				Name:           "mount-shape-first-run",
+				Host:           "example.internal",
+				Port:           22,
+				User:           "backup-agent",
+				SSHKeyID:       f.keyID,
+				KnownHostsLine: "example.internal ssh-ed25519 AAAAtestfixtureline",
+				// The skip, for the reason validCreateReq gives: this case
+				// measures the mount shape and nothing else, and a host that
+				// answers nothing would otherwise be refused for its
+				// connection before the write this case is about.
+				SkipConnectionCheck: true,
+				RemotePath:          "/backups/mount-shape-first-run",
+				LocalPath:           filepath.Join(t.TempDir(), "mount-shape-first-run"),
+				Include:             []string{"*.dump"},
+				CompletionStrategy:  "marker",
 			})
 			return err
 		}},
