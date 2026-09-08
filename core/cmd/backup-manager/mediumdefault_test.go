@@ -274,6 +274,55 @@ func TestRun_SettingsPatchTierMediumMovesATierBackToLocal(t *testing.T) {
 	}
 }
 
+// TestRun_SettingsPatchTierMediumKeepsTheRestOfTheRetentionPatch is the
+// case whose absence let a silent wrong write ship.
+//
+// --tier-medium has to REPLACE the chain, because
+// RetentionUpdate.Tiers replaces the operator's whole chain and there is
+// no shape for "change one tier". What it must not replace is the rest of
+// the retention section, and it did: buildSettingsPatch puts the
+// timezone, the week start and protect_last_known_good on the same
+// RetentionUpdate, and building a fresh one for the chain threw all three
+// away and still exited 0.
+//
+// protect_last_known_good is the one that makes this worth a case of its
+// own rather than a line in another. It is what stops a retention pass
+// deleting the newest backup this deployment has actually verified, so a
+// command line that asks to change it, moves a tier instead, and reports
+// success is a wrong write on the axis FR-30 exists for.
+//
+// Both halves are asserted, because the old code passed with either one
+// missing: a case that checked only the tier would have gone green
+// against the bug, and one that checked only the flag would have gone
+// green against a build that ignored --tier-medium entirely.
+func TestRun_SettingsPatchTierMediumKeepsTheRestOfTheRetentionPatch(t *testing.T) {
+	configPath := writeTwoTierMediumConfig(t)
+
+	if got := run([]string{
+		"settings", "--config", configPath, "patch",
+		"--tier-medium", "weekly=cold_offsite",
+		"--timezone", "America/Toronto",
+		"--protect-last-known-good=false",
+		"--acknowledge-medium-disclosure",
+	}); got != 0 {
+		t.Fatalf("settings patch: %d, want 0", got)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if got := tierMediumCount(string(raw), "cold_offsite"); got != 2 {
+		t.Errorf("%d tier(s) name cold_offsite, want 2 (the one that already did, plus weekly):\n%s", got, raw)
+	}
+	if !strings.Contains(string(raw), "timezone: America/Toronto") {
+		t.Errorf("the patch dropped the timezone it was asked to change:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "protect_last_known_good: false") {
+		t.Errorf("the patch dropped protect_last_known_good, which is what stops a retention pass deleting the newest verified backup, and still exited 0:\n%s", raw)
+	}
+}
+
 // TestRun_SettingsPatchTierMediumRefusesATierTheChainDoesNotHave: a name
 // the chain does not carry is a typo, and creating a tier from it would
 // be inventing a retention rule that says neither what to keep nor for

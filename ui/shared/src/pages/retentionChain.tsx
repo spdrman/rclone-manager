@@ -529,23 +529,55 @@ function TierDestinationActions({
 }) {
   const api = useApi();
   const [busy, setBusy] = useState(false);
+  // The report, and the destination it was asked about. They are held
+  // together because a report about somewhere else is not a weaker answer
+  // than no report, it is a wrong one.
+  //
+  // A check writes an object to a bucket and reads it back, so it is slow
+  // by nature, and a picker sits right beside the button. Change the
+  // selection while one is in flight and the old destination's answer
+  // used to render under the new selection, saying "This destination is
+  // ready for a backup" about a destination nobody had checked. That is
+  // the sentence an operator reads before sending a tier's backups
+  // somewhere.
+  //
+  // Keyed by MediumPreflight.Medium, which the engine already fills in
+  // with the id it ran against, rather than by a separate note of what
+  // was requested: the answer says who it is about, so nothing here has
+  // to remember. Everything below renders only when that id is still the
+  // one the tier names, so a stale response is not cancelled, it is
+  // simply never anybody's answer.
+  //
+  // This is the shape #628 reached for the same hazard on the source side
+  // (connectionTestedFor), and it is worth the two files matching: one
+  // epic answering one question two ways is how the next person picks the
+  // weaker one.
   const [report, setReport] = useState<MediumPreflight | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ medium: string; message: string } | null>(null);
   const [adding, setAdding] = useState(false);
 
+  const shown = report && report.medium === tier.medium ? report : null;
+  const shownError = error && error.medium === tier.medium ? error.message : null;
+
   function test() {
+    const asked = tier.medium;
     setBusy(true);
     setReport(null);
     setError(null);
     api
-      .preflightStorageMedium(tier.medium)
+      .preflightStorageMedium(asked)
       .then(setReport)
       .catch((e: unknown) =>
-        setError(
-          e instanceof BackupManagerError
-            ? e.api.message
-            : "Backup Manager could not test the connection to this destination."
-        )
+        // The failure is tagged with what was ASKED, because a rejection
+        // carries no report to read an id off. Same rule either way: an
+        // answer is shown under the destination it is about.
+        setError({
+          medium: asked,
+          message:
+            e instanceof BackupManagerError
+              ? e.api.message
+              : "Backup Manager could not test the connection to this destination."
+        })
       )
       .finally(() => setBusy(false));
   }
@@ -561,9 +593,9 @@ function TierDestinationActions({
             Add a destination
           </button>
         ) : null}
-        {report ? (
+        {shown ? (
           <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>
-            {report.ok
+            {shown.ok
               ? "This destination is ready for a backup."
               : "This destination is not ready. Saving is still allowed; the checks below say why."}
           </span>
@@ -584,10 +616,10 @@ function TierDestinationActions({
         }
       />
 
-      {error ? (
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--danger)" }}>{error}</p>
+      {shownError ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--danger)" }}>{shownError}</p>
       ) : null}
-      {report ? <MediumPreflightChecks report={report} /> : null}
+      {shown ? <MediumPreflightChecks report={shown} /> : null}
 
       {adding ? (
         <S3DestinationWizard

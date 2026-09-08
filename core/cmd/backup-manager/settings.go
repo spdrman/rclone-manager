@@ -253,10 +253,36 @@ func cmdSettings(args []string) int {
 		// rather than whatever this host's config.yaml happens to say.
 		// Beside a serving engine those two can differ, and a patch built
 		// from the wrong one would send the engine a chain it never had.
-		var code int
-		req.Retention, code = chainWithTierMediums(ctx, route, tierMediums.pairs)
+		chain, code := chainWithTierMediums(ctx, route, tierMediums.pairs)
 		if code != exitOK {
 			return code
+		}
+		// Only the TIERS are taken, and that distinction is the whole of
+		// this block rather than a detail of it.
+		//
+		// --tier-medium has to replace the chain, because
+		// RetentionUpdate.Tiers replaces the operator's whole chain by
+		// design and there is no shape on this boundary for "change one
+		// tier". It must not replace the rest of the section, and it did:
+		// buildSettingsPatch puts the timezone, the week start and
+		// protect_last_known_good on the same RetentionUpdate, and
+		// assigning a fresh one over it threw all three away and still
+		// exited 0. `settings patch --protect-last-known-good=false
+		// --tier-medium daily=offsite_s3` moved the tier, dropped the
+		// protection change and reported success.
+		//
+		// protect_last_known_good is why this is worth spelling out. It
+		// is what stops a retention pass deleting the newest backup this
+		// deployment has actually verified, so silently not applying it
+		// is a wrong write on the axis FR-30 exists for, and the exit
+		// code said it worked. The two genuinely compose, so they are
+		// merged rather than made mutually exclusive: an operator
+		// changing a calendar and a destination in one command is asking
+		// for one thing, not two conflicting things.
+		if req.Retention == nil {
+			req.Retention = chain
+		} else {
+			req.Retention.Tiers = chain.Tiers
 		}
 	}
 	req.AcknowledgeMediumDisclosure = *acknowledge

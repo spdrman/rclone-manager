@@ -159,9 +159,31 @@ type LocalTarget struct {
 // A directory of its own rather than a dotfile beside the backups, for
 // probePrefix's reason one storage kind over: an artifact may
 // legitimately be called anything, and a shared namespace is how a probe
-// and a backup come to have one spelling. It is removed on the way out,
-// and an empty one left behind by a process that was killed mid-check is
-// harmless and says what it is.
+// and a backup come to have one spelling.
+//
+// # It is created and never removed, and that is the fix rather than laziness
+//
+// This used to be taken back out on the way through, on the reasoning
+// that a check should leave nothing behind. What it actually left behind
+// was a race. Two checks running at once both MkdirAll it and both remove
+// it, so one can remove it between the other's MkdirAll and its
+// WriteFile, and the loser reports a failed write classified not_found.
+// That is the arm whose sentence says the directory "went away between
+// being looked at and being written to", which is how this product says a
+// NAS volume did not mount, produced by somebody double-clicking a
+// button.
+//
+// Two at once is the ordinary case rather than an exotic one: the
+// destinations card and every retention tier's picker all offer this
+// check on one page, and the local destination is the one they point at
+// by default.
+//
+// So the directory stays. It is empty, it is reserved, it is named for
+// what it is, and transport.MediumKey cannot compose an artifact key
+// under it, so what it costs is an inode. The probe FILE is still
+// removed, which is the claim StepDelete actually makes: a destination
+// this manager can write to and not delete from is one no retention pass
+// could ever clean up.
 const localProbeDir = ".rclone-manager-preflight"
 
 // RunLocal performs one test connection against the local hard drive and
@@ -342,10 +364,6 @@ func (r *localRun) written() {
 	}
 	if err := os.WriteFile(path, probeBody, 0o600); err != nil {
 		r.failWrite(err)
-		// The directory may have been created by the MkdirAll above, so
-		// take it back out rather than leaving a directory behind for a
-		// check that established nothing.
-		_ = os.Remove(dir)
 		return
 	}
 	r.probe = path
@@ -374,11 +392,6 @@ func (r *localRun) written() {
 		r.fail(StepDelete, err, "The probe file could not be deleted, so this check left a file behind. A destination this manager can write to and not delete from is one no retention pass can ever clean up.")
 		return
 	}
-	// The directory is best-effort: it is empty and reserved, so leaving
-	// it is not a failure of anything an operator asked about, and a
-	// second concurrent check holding a probe in it is a legitimate
-	// reason for the remove to fail.
-	_ = os.Remove(dir)
 	r.pass(StepDelete, "The probe file was deleted, so this check left nothing behind.")
 }
 

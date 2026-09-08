@@ -338,6 +338,35 @@ describe("picking a destination under a retention tier (#622)", () => {
     await waitFor(() => expect(picker(4).value).toBe("offsite_s3"));
   });
 
+  // A report belongs to the destination it was asked about, and to no
+  // other. Change the picker while a response is in flight and the old
+  // destination's answer used to render under the new selection, saying
+  // "This destination is ready for a backup" about a destination nobody
+  // checked. That sentence is the one an operator reads before pointing a
+  // tier somewhere, so it is the wrong one to be able to get wrong.
+  //
+  // Driven by holding the response until after the select moves, which is
+  // the whole hazard: an instant answer cannot show it, and a slow one is
+  // the ordinary case for a check that writes an object to a bucket and
+  // reads it back.
+  it("does not show one destination's test result under another", async () => {
+    let release: ((r: MediumPreflight) => void) | null = null;
+    const { preflightStorageMedium } = await renderSettings({
+      preflightStorageMedium: () => new Promise<MediumPreflight>((resolve) => { release = resolve; })
+    });
+
+    fireEvent.click(tier(2).getByRole("button", { name: /Test connection/ }));
+    await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith(LOCAL_DESTINATION_ID));
+
+    // The operator moves on while the check is still running.
+    fireEvent.change(picker(2), { target: { value: "offsite_s3" } });
+    await act(async () => {
+      release!({ medium: LOCAL_DESTINATION_ID, ok: true, checks: [] } as MediumPreflight);
+    });
+
+    expect(tier(2).queryByText(/This destination is ready for a backup/)).toBeNull();
+  });
+
   // EPIC G's standing rule, on the control this issue adds. The line an
   // operator reads under the picker is the command that reproduces the
   // click, so somebody who moved one tier by clicking has read the
