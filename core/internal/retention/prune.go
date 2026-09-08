@@ -988,6 +988,14 @@ func pruneHoldEveryDelete(verdicts []PruneVerdict, why string) {
 // lifecycle/commit.go's own "honest accounting" section for the same kind
 // of limit acknowledged rather than hidden).
 //
+// The same argument, once rather than per artifact, applies to FR-19's
+// own confirmation: before the loop that removes anything, this function
+// re-derives pruneLastKnownGoodUnconfirmed against the disk as it is at
+// that moment, and holds every delete in the pass when the restore point
+// FR-19 reports as protected has no copy anything could read. PruneDecide
+// already asked, and the answer is about a file another process can take
+// away in between (issue #602).
+//
 // # The object half
 //
 // A verdict whose Medium is not local is not a local file, and it is
