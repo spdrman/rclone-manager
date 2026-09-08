@@ -689,9 +689,16 @@ note "3 artifacts: payload.bin (3 MiB), schema.sql, notes.txt"
 # The failing source is the real machine under a username its sshd has
 # never heard of, rather than an address nothing answers. Both fail, and
 # only one of them fails the way the issue is about: the host resolves, the
-# TCP connect succeeds, the host key matches what was just trusted, and
-# then the account cannot authenticate. An unreachable address would prove
-# the check runs and would not prove it can tell those apart.
+# TCP connect succeeds, the host key matches what the set trusts, and then
+# the account cannot authenticate. An unreachable address would prove the
+# check runs and would not prove it can tell those apart.
+#
+# The order is load bearing, and it cost a run to learn. OpenSSH penalises
+# a source address for a few seconds after an authentication failure, so
+# the check that has to SUCCEED goes first and every deliberate failure
+# after it. For the same reason nothing here probes for a host key: the
+# anchor the create above established is reused, so this block makes
+# exactly the connections it is asserting about and no others.
 #
 # Everything this creates is removed before it returns, because the rest of
 # the case asserts on artifacts, health and retention for e2e/source alone
@@ -699,21 +706,74 @@ note "3 artifacts: payload.bin (3 MiB), schema.sql, notes.txt"
 # answers.
 run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   local mgr="$1" prefix="$2" source_ip="$3" sftp_user="$4"
-  local base=(--config /etc/backup-manager/config
-    --host "$source_ip"
-    --ssh-key-file /etc/backup-manager/id_ed25519
-    --trust-host-key
-    --remote-path /upload
-    --completion-strategy rename
-    --state-database /data/state/state.db)
 
   # The configuration file, read off the manager machine rather than
   # through the CLI, because the mark is a durable fact about that file and
   # a command's own report of it is the thing under test.
   config_yaml() { docker exec "$mgr" sh -c "cat '$prefix'/config/*.yaml"; }
 
+  # The trust anchor the main create already established, reused rather
+  # than re-probed. Not a shortcut: probing is a real SSH connection, and
+  # OpenSSH penalises a source address for a few seconds after an
+  # authentication failure, so a probe standing between two deliberate
+  # auth failures fails with a bare EOF and this block would be flaky
+  # about something it is not testing. Everything below therefore makes
+  # exactly the connections it is asserting about and no others.
+  #
+  # Globbed rather than named, because the filename is core/service's own
+  # (source and set folded into one token) and encoding that rule here
+  # would be a second copy of it. Exactly one backup set exists at this
+  # point, so exactly one file is there, and the count is asserted rather
+  # than assumed.
+  local trusted lines
+  trusted="$(docker exec "$mgr" sh -c "cat '$prefix'/config/known_hosts.d/*" | grep -v '^$' || true)"
+  lines="$(printf '%s\n' "$trusted" | grep -c . || true)"
+  [ "$lines" = "1" ] \
+    || die "expected exactly one trusted host-key line beside the configuration, found $lines." \
+           "This block reuses the anchor the create above established rather than probing again," \
+           "so it needs to know which line that is."
+
+  local base=(--config /etc/backup-manager/config
+    --host "$source_ip"
+    --ssh-key-file /etc/backup-manager/id_ed25519
+    --known-hosts-line "$trusted"
+    --remote-path /upload
+    --completion-strategy rename
+    --state-database /data/state/state.db)
+
+  # The working source first, and every failing one after it. Order, not
+  # taste: an authentication failure earns the manager's address a short
+  # penalty on the source, and a check that has to SUCCEED must not be
+  # standing behind one.
+  step "  #624: --no-verify writes a set without proving it, and marks it"
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set create e2e/offline "${base[@]}" \
+    --user "$sftp_user" --local-path /data/backups/offline --no-verify \
+    || die "\`backup-set create --no-verify\` failed against a source it was told not to check."
+  config_yaml | grep -q 'connection_unverified: true' \
+    || die "a --no-verify create left no mark, so it is indistinguishable from one that was proven." \
+           "the configuration is: $(config_yaml)"
+  note "written, and the configuration says its connection was never proven"
+
+  step "  #624: a check that passes clears the mark"
+  local out=""
+  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/offline --config /etc/backup-manager/config 2>&1)" \
+    || die "\`backup-set test-connection\` against the source this script has been backing up all along failed." \
+           "the command said: $out"
+  for want in credentials resolve connect host_key authenticate list; do
+    case "$out" in
+      *"$want"*) : ;;
+      *) die "the passing check does not report the $want step: $out" ;;
+    esac
+  done
+  if config_yaml | grep -q 'connection_unverified: true'; then
+    die "a passing check left the set marked as never proven." \
+        "the configuration is: $(config_yaml)"
+  fi
+  note "six steps reported, and the mark is gone"
+
   step "  #624: a create against a source that cannot authenticate is refused"
-  local refused=0 out=""
+  local refused=0
   out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
     /backup-manager backup-set create e2e/nobody "${base[@]}" \
     --user "nobody-$run_id" --local-path /data/backups/nobody 2>&1)" || refused=$?
@@ -731,54 +791,27 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   fi
   note "refused with exit 1, and the configuration does not carry it"
 
-  step "  #624: --no-verify writes it anyway and marks it as unverified"
+  step "  #624: a check that fails leaves the mark where it was"
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
     /backup-manager backup-set create e2e/nobody "${base[@]}" \
     --user "nobody-$run_id" --local-path /data/backups/nobody --no-verify \
-    || die "\`backup-set create --no-verify\` failed against a source it was told not to check."
-  config_yaml | grep -q 'connection_unverified: true' \
-    || die "a --no-verify create left no mark, so it is indistinguishable from one that was proven." \
-           "the configuration is: $(config_yaml)"
-  note "written, and the configuration says its connection was never proven"
-
-  step "  #624: a check that fails leaves the mark where it was"
+    || die "\`backup-set create --no-verify\` failed for the unreachable set."
   refused=0
   out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/nobody --config /etc/backup-manager/config 2>&1)" || refused=$?
   [ "$refused" = "1" ] \
     || die "\`backup-set test-connection\` against a source that cannot authenticate exited $refused, want 1." \
            "the command said: $out"
-  config_yaml | grep -q 'connection_unverified: true' \
-    || die "a FAILING check cleared the mark, which would make the mark mean somebody pressed the button."
-  note "still marked, which is what stops the mark meaning \"somebody pressed the button\""
-
-  step "  #624: a check that passes clears it"
-  # A set that WOULD work, created offline, which is exactly the case
-  # --no-verify exists for: configuration built before the host was
-  # reachable, proven once it is.
-  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager backup-set create e2e/offline "${base[@]}" \
-    --user "$sftp_user" --local-path /data/backups/offline --no-verify \
-    || die "creating the offline set failed."
-  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/offline --config /etc/backup-manager/config 2>&1)" \
-    || die "\`backup-set test-connection\` against the source this script has been backing up all along failed." \
-           "the command said: $out"
-  for want in credentials resolve connect host_key authenticate list; do
-    case "$out" in
-      *"$want"*) : ;;
-      *) die "the passing check does not report the $want step: $out" ;;
-    esac
-  done
-  # Both sets are still in the file, and only one of them still carries a
-  # mark. Counting rather than grepping for absence, because the bad set's
-  # own mark is the control that stops this passing on a build that clears
-  # every mark it can find.
+  # Exactly one mark, not "the bad set still has one": the proven set has
+  # to have LOST its mark and the unproven one has to have kept it, and a
+  # build that cleared every mark it could find would pass a check that
+  # only looked at one of them.
   local marks
   marks="$(config_yaml | grep -c 'connection_unverified: true' || true)"
   [ "$marks" = "1" ] \
-    || die "after one passing check the configuration carries $marks marks, want exactly 1." \
+    || die "the configuration carries $marks unverified marks, want exactly 1." \
            "The proven set has to lose its mark and the unproven one has to keep it." \
            "the configuration is: $(config_yaml)"
-  note "the proven set is no longer marked, and the unproven one still is"
+  note "still marked, which is what stops the mark meaning \"somebody pressed the button\""
 
   # Removed before the engine comes back, so the rest of this case still
   # asserts about one backup set.
