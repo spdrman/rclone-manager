@@ -321,7 +321,34 @@ func TestStorageMediumMark_IsNeverTakenFromTheLocalHardDrive(t *testing.T) {
 	if local.ConnectionUnverified {
 		t.Error("the local hard drive reports itself unproven; it is not declared, cannot be created and has no connection to prove")
 	}
+
+	// And nothing tries to preflight it, which is what #636 asks for in
+	// so many words. The three verbs that resolve a spec refuse the
+	// reserved id as an invalid request, in one place, BEFORE the check
+	// runs: without that, the check reaches internal/app, which refuses
+	// the id with an error that is neither a validation failure nor
+	// anything a caller can act on, so a request that has always been a
+	// 400 would come back as "this manager broke".
+	spec := unprovableSpec(t, svc, StorageMediumLocalID)
+	for name, err := range map[string]error{
+		"create": errOf(svc.CreateStorageMedium(context.Background(), spec)),
+		"edit":   errOf(svc.UpdateStorageMedium(context.Background(), spec)),
+		"probe":  preflightErrOf(svc.PreflightStorageMediumCandidate(context.Background(), spec)),
+	} {
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("%s of the reserved local id returned %v, want ErrInvalidRequest", name, err)
+		}
+		if errors.Is(err, ErrStorageMediumNotProven) {
+			t.Errorf("%s of the reserved local id was refused for a connection it does not have: %v", name, err)
+		}
+	}
 }
+
+// errOf and preflightErrOf drop the value half of a two-result call, so
+// the table above reads as the question it asks.
+func errOf(_ StorageMediumSummary, err error) error { return err }
+
+func preflightErrOf(_ MediumPreflight, err error) error { return err }
 
 // TestStorageMediumSpec_TheMarkIsNotAFieldACallerCanSet is the review
 // finding #628 landed on the source side, asked here before it can

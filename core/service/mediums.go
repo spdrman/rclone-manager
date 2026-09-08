@@ -664,6 +664,30 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 	if strings.TrimSpace(spec.ID) == "" {
 		return config.StorageMedium{}, fmt.Errorf("%w: a storage medium needs an id", ErrInvalidRequest)
 	}
+	// The reserved local id is refused HERE as of #636, and the reason is
+	// what the check added downstream of this function does with it.
+	//
+	// config.Validate has always refused a declared medium claiming this
+	// id, so a create or an edit naming it came back as an invalid
+	// request. The check now runs BEFORE that, and internal/app refuses
+	// the id with an error of its own that is neither a validation error
+	// nor anything a caller can act on, so a request that was a 400
+	// became a 500 saying the manager broke. It did not: the operator
+	// named the drive their backups already land on and asked this
+	// deployment to declare it, which is a thing they can be told about
+	// in one sentence.
+	//
+	// It also settles #636's own "make sure your check does not try to
+	// preflight the local hard drive" in the one place all three verbs go
+	// through, rather than at each of them. There is nothing to preflight:
+	// the local destination is synthesised on every read, it has no
+	// bucket, no endpoint and no credential, and its own check is
+	// PreflightStorageMedium's separate arm.
+	if strings.TrimSpace(spec.ID) == StorageMediumLocalID {
+		return config.StorageMedium{}, fmt.Errorf(
+			"%w: %q is the drive this deployment's backups land on. It is not declared in the configuration and cannot be declared: every retention tier that names no destination already means this one",
+			ErrInvalidRequest, StorageMediumLocalID)
+	}
 	var creds config.MediumCredentials
 	if !inheritCredentials {
 		var err error
