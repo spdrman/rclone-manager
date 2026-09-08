@@ -883,7 +883,41 @@ func readIdentification(conn net.Conn) (string, net.Conn) {
 		// with far better words than a guess made from a prefix.
 		return "", replay
 	}
-	return line, replay
+	return printableIdentification(line), replay
+}
+
+// printableIdentification renders what the far end said so that printing
+// it can do nothing but print.
+//
+// RFC 4253 restricts the identification string to printable US-ASCII,
+// and until this existed nothing enforced it. The string is appended to
+// the connect step's Detail, which reaches the API response, the obs
+// event, and `activity --follow`'s stdout, which is usually a real TTY.
+// So a server could answer with escape sequences and clear the scrollback
+// an operator was reading as evidence, or scroll its own lines out of
+// sight above the cursor: "SSH-2.0-OpenSSH_9.6p1\x1b[2J\x1b[H\a nothing
+// to see here" did exactly that. The browser panel is not the exposure,
+// because React escapes it; the terminal is. And an operator pointing a
+// test connection at a host somebody else controls is not a stretch, it
+// is what the candidate-mode wizard invites during setup.
+//
+// Escaped rather than dropped, and rather than refused. The banner is
+// the one piece of evidence that says something answered SSH rather than
+// merely accepting a socket, so an operator looking at a host that
+// behaved like this needs to see what it sent, in a form that says so
+// out loud. strconv.QuoteToASCII is exactly that rendering (control
+// bytes as \x1b and \a, anything above 0x7e as \u, and backslashes and
+// quotes escaped so the result is unambiguous) and it is byte-honest
+// about invalid UTF-8, which a rune-by-rune mapping would quietly turn
+// into replacement characters. Its surrounding quotes come off: this is
+// appended into a sentence, not printed as a Go literal.
+//
+// Worst case is a 512-byte banner (maxIdentificationBytes) rendering as
+// about 3 KB of \u escapes, which is bounded, inert, and what a server
+// that sent 512 bytes of control codes deserves to look like.
+func printableIdentification(line string) string {
+	quoted := strconv.QuoteToASCII(line)
+	return quoted[1 : len(quoted)-1]
 }
 
 // replayConn is a net.Conn whose reads start with bytes already taken off
