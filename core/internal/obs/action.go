@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -219,6 +220,39 @@ type Action struct {
 	name    string
 	id      string
 	started time.Time
+
+	// attrs is what Begin was given, held so the completion carries it
+	// too.
+	//
+	// This is not a convenience. service/liveactivity.go routes a record
+	// into a per-set ring or the deployment ring by reading backup_set
+	// off it, and it looks for unfinished actions PER BUCKET, so a start
+	// naming a set whose completion names none is a start in one ring and
+	// a completion in another: the completion clears nothing, and the
+	// set's strip reports an action that announced itself and went quiet
+	// for one that finished cleanly. Nothing at the call site shows that,
+	// because it is two correct-looking calls and the second one is
+	// Succeeded, which takes no attributes at all.
+	//
+	// So the scope an action was opened with is a property of the action
+	// rather than something each completion has to remember to repeat.
+	attrs []slog.Attr
+
+	// closed is what makes a second completion a no-op rather than a
+	// second verdict.
+	//
+	// `defer action.Failed(ctx, err, ...)` beside an explicit Succeeded on
+	// the happy path is the obvious way to write a function that can leave
+	// several ways, and without this it writes both: the feed then holds a
+	// success and an error for one action id, and a terminal shows the
+	// action failing after it succeeded. The first close is the one that
+	// happened, and every later one is dropped.
+	//
+	// Atomic because an action can be closed from a different goroutine
+	// than the one that opened it (a cancel path, a deferred close running
+	// while a worker reports), and this type is otherwise safe to hand
+	// around.
+	closed atomic.Bool
 }
 
 // Begin logs the start of one operator-visible action and returns the
@@ -236,8 +270,18 @@ type Action struct {
 // action is the stable name of what is being done ("cycle",
 // "connection_test", "medium_verify"), which is what an operator reads in
 // "this started and never finished".
+// The attrs are carried onto the completion as well as onto this line.
+// See the Action type's own field for why that is a correctness property
+// rather than a convenience.
 func (l *Logger) Begin(ctx context.Context, event, action, msg string, attrs ...slog.Attr) *Action {
-	a := &Action{logger: l, event: event, name: action, id: newActionID(), started: time.Now()}
+	a := &Action{
+		logger:  l,
+		event:   event,
+		name:    action,
+		id:      newActionID(),
+		started: time.Now(),
+		attrs:   append([]slog.Attr(nil), attrs...),
+	}
 	l.emitMarked(ctx, LevelInfo, mark{action: action, actionID: a.id}, event, msg, attrs...)
 	return a
 }
@@ -289,9 +333,23 @@ func (a *Action) EndAt(ctx context.Context, level Level, outcome Outcome, msg st
 	if a == nil {
 		return
 	}
-	all := make([]slog.Attr, 0, len(attrs)+1)
+	// The first close is the one that happened. See the closed field.
+	if !a.closed.CompareAndSwap(false, true) {
+		return
+	}
+	all := make([]slog.Attr, 0, len(attrs)+len(a.attrs)+1)
 	all = append(all, slog.Duration("duration", time.Since(a.started)))
 	all = append(all, attrs...)
+	// What the start was given, and only where this completion did not
+	// say the same thing itself. The completion is the authority on its
+	// own fields, exactly as an event is against what With bound (see
+	// emit), and a duplicate key is worse than either answer.
+	for _, b := range a.attrs {
+		if attrNamed(all, b.Key) {
+			continue
+		}
+		all = append(all, b)
+	}
 	a.logger.emitMarked(ctx, level, mark{outcome: outcome, action: a.name, actionID: a.id}, a.event, msg, all...)
 }
 

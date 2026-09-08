@@ -175,8 +175,11 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 	// check that correctly reports a source as unreachable is the manager
 	// working exactly as designed.
 	verdict := connectionTestOutcome(report)
-	action.EndAt(ctx, connectionTestLevel(verdict), verdict, "connection test finished",
-		slog.String("backup_set", id))
+	// No backup_set here: the handle carries what Begin was given, so the
+	// completion lands in the same ring the start did. Repeating it was
+	// how this call site happened to be correct while the API let every
+	// other one be wrong.
+	action.EndAt(ctx, connectionTestLevel(verdict), verdict, "connection test finished")
 	return result
 }
 
