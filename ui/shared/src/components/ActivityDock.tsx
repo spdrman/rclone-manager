@@ -26,14 +26,23 @@
  *
  * # What it does with a restart, and why it differs from the strips
  *
- * feedRestarted is the same function DashboardActivity uses and the
- * epoch it compares is the same one, but what the two do with the answer
- * is deliberately opposite. A strip drops everything it holds, because a
+ * The polling loop under this panel is the strips' own (useActivityWindow,
+ * #596), which is where the cursor, the epoch check, the timer and the
+ * out-of-band refresh live. This panel is two options on it: `fold`, so
+ * every bucket in a reading lands in ONE window rather than one per set,
+ * and `onRestart`, because what the two surfaces do about a restart is
+ * deliberately opposite. A strip drops everything it holds, because a
  * progress bar and a step sentence describing a process that no longer
  * exists are active lies about work in flight. A terminal is a log, and
  * throwing away the lines leading up to a crash throws away the only
  * evidence of why it crashed. So this keeps them, draws a rule, and
  * starts a fresh buffer under it.
+ *
+ * It used to be a copy of that loop rather than a caller of it, and the
+ * copy is where its cursor bug lived: rebuilt from the events that
+ * happened to arrive, it fell to zero on every idle poll and asked the
+ * service for its whole held tail again, invisibly, because the merge
+ * deduplicates by sequence.
  *
  * The fresh buffer is structural, not cosmetic: the sequence counter is
  * per process and starts again at 1, so the new process's line 1 would
@@ -50,10 +59,8 @@
  * nowhere else.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
 import { usePlatform } from "@shared/platform/PlatformContext";
-import { feedRestarted, mergeActivity } from "@shared/pages/DashboardActivity";
+import { mergeActivity, useActivityWindow } from "@shared/pages/useActivityFeed";
 import { activityLine, logText } from "@shared/pages/ActivityStrip";
 import type { LineTone } from "@shared/pages/ActivityStrip";
 import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
@@ -68,16 +75,6 @@ import { clock } from "@shared/utilities/format";
  * a week is a leak with a nice name. What is gone is said in the
  * scrollback, and the durable record is the Activity page. */
 const DOCK_BUFFER = 1000;
-
-/** The contract's own per-bucket ceiling, so catching up takes as few
- *  polls as the service will allow. */
-const POLL_LIMIT = 200;
-
-/** The cadence used before the service has answered, or when it answers
- *  with nothing usable. Slow on purpose: the fast cadence is a claim that
- *  something is moving, and before the first answer nothing has claimed
- *  that. */
-const FALLBACK_POLL_MS = 10_000;
 
 const STORAGE = {
   open: "backup-manager.dock.open",
@@ -149,7 +146,11 @@ export function dockEntries(history: DockEntry[], current: SetActivity | undefin
  *
  * Deduplicating by sequence is correct and cheap because the engine's
  * counter is one counter for the whole process, which is the property
- * cursorOf already relies on. The set a line belongs to rides along as
+ * the cursor already relies on. What this does NOT do is decide that
+ * cursor: it is a window, and a window is what happened to arrive.
+ * useActivityWindow takes the cursor from what the service says it holds
+ * (see nextCursor), which is a different number on every idle poll and is
+ * the whole of the defect this panel shipped with. The set a line belongs to rides along as
  * its own `backup_set` field, filled in from the bucket it arrived in for
  * the events that do not already carry one: an event the service put in
  * a set's bucket IS about that set, so writing it down is recording what
@@ -194,7 +195,14 @@ export function foldReading(previous: SetActivity | undefined, next: LiveActivit
     truncated: next.sets.some((s) => s.truncated) || (next.deployment?.truncated ?? false),
     dropped,
     oldestSequence: oldest,
-    latestSequence: events.length > 0 ? events[events.length - 1].sequence : 0
+    // The newest sequence any bucket says it HOLDS, which is not the
+    // newest that arrived: an idle reading hands over nothing while the
+    // service is still holding four thousand lines. Reporting the arrival
+    // here would be a window claiming to be a bound.
+    latestSequence: next.sets.reduce(
+      (high, s) => Math.max(high, s.latestSequence),
+      Math.max(next.deployment?.latestSequence ?? 0, events.length > 0 ? events[events.length - 1].sequence : 0)
+    )
   };
   return mergeActivity(previous, reading, DOCK_BUFFER);
 }
@@ -299,71 +307,32 @@ function writeStored(key: string, value: string): void {
 }
 
 export function ActivityDock() {
-  const api = useApi();
   const { auth } = usePlatform();
   const viewer = auth?.username ?? null;
 
   const [history, setHistory] = useState<DockEntry[]>([]);
-  const [held, setHeld] = useState<SetActivity | undefined>(undefined);
 
   const [open, setOpen] = useState(() => readStored(STORAGE.open) !== "0");
   const [height, setHeight] = useState(() => Number(readStored(STORAGE.height)) || DEFAULT_HEIGHT);
   const [filter, setFilter] = useState<DockFilter>(() => readStored(STORAGE.filter) ?? "all");
   const [copied, setCopied] = useState(false);
 
-  // The cursor and the epoch ride on refs for the reason DashboardActivity
-  // gives: they change on every poll and nothing renders from them, and a
-  // fetch that re-created itself each time its cursor moved would restart
-  // the poll timer before it ever elapsed.
-  const cursor = useRef(0);
-  const epoch = useRef<string | null>(null);
-
-  const live = useAsync<LiveActivity>(
-    () => api.getLiveActivity({ since: cursor.current, limit: POLL_LIMIT }),
-    [api]
+  // Freeze what the dead process left, with a rule under it, and let the
+  // loop start a fresh window. Both halves matter: the lines leading up
+  // to a crash are the evidence, and the new process's sequence numbers
+  // start again at 1 and would otherwise land on top of them.
+  const onRestart = useCallback(
+    (reading: LiveActivity, held: SetActivity | undefined) =>
+      setHistory((current) => [...dockEntries(current, held), { kind: "restart" as const, at: reading.observedAt }].slice(-DOCK_BUFFER)),
+    []
   );
 
-  useEffect(() => {
-    const data = live.data;
-    if (!data) return;
-    const restarted = feedRestarted({ epoch: epoch.current, cursor: cursor.current }, data);
-    epoch.current = data.epoch || null;
-    if (restarted) cursor.current = 0;
-
-    if (restarted) {
-      // Freeze what the dead process left, with a rule under it, and
-      // start a fresh window. Both halves matter: the lines leading up to
-      // a crash are the evidence, and the new process's sequence numbers
-      // start again at 1 and would otherwise land on top of them.
-      setHistory((current) =>
-        [...dockEntries(current, held), { kind: "restart" as const, at: data.observedAt }].slice(-DOCK_BUFFER)
-      );
-      const fresh = foldReading(undefined, data);
-      cursor.current = fresh.latestSequence;
-      setHeld(fresh);
-      return;
-    }
-    setHeld((current) => {
-      const merged = foldReading(current, data);
-      cursor.current = merged.latestSequence;
-      return merged;
-    });
-    // `held` is deliberately not a dependency: it is read only on the
-    // restart branch, and listing it would re-run this effect on every
-    // fold and re-apply the same reading.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.data]);
-
-  const reload = useRef(live.reload);
-  useEffect(() => {
-    reload.current = live.reload;
-  });
-  const tick = useCallback(() => reload.current(), []);
-  const pollAfterMs = live.data?.pollAfterMs && live.data.pollAfterMs > 0 ? live.data.pollAfterMs : FALLBACK_POLL_MS;
-  useEffect(() => {
-    const id = window.setInterval(tick, pollAfterMs);
-    return () => window.clearInterval(id);
-  }, [pollAfterMs, tick]);
+  // The cursor, the epoch, the timer and the out-of-band refresh are the
+  // strips' own loop, unchanged (#596). What is this panel's is the two
+  // options: one window over every bucket rather than one per set, and a
+  // restart that keeps its lines instead of dropping them.
+  const feed = useActivityWindow<SetActivity>({ fold: foldReading, onRestart });
+  const held = feed.held;
 
   useEffect(() => writeStored(STORAGE.open, open ? "1" : "0"), [open]);
   useEffect(() => writeStored(STORAGE.height, String(height)), [height]);
@@ -377,7 +346,7 @@ export function ActivityDock() {
   // The chips are a function of the latest reading rather than state of
   // their own: a set is configured or it is not, and the reading says so
   // on every poll.
-  const sets = useMemo(() => (live.data?.sets ?? []).map((s) => s.setId), [live.data]);
+  const sets = useMemo(() => (feed.reading?.sets ?? []).map((s) => s.setId), [feed.reading]);
   const all = useMemo(() => dockEntries(history, held), [history, held]);
   const shown = useMemo(() => all.filter((e) => passesFilter(e, filter, viewer)), [all, filter, viewer]);
   // The origin this page was loaded from is the address the reader would
@@ -481,8 +450,8 @@ export function ActivityDock() {
         {/* Never a spinner over a word: while the poll is failing the dock
             says the reading is not refreshing rather than drawing
             something that claims the process is alive. */}
-        <span className="mono" style={{ color: live.error ? "var(--warn)" : "var(--text-3)" }}>
-          {live.error ? "not refreshing" : shown.length + (shown.length === 1 ? " line" : " lines")}
+        <span className="mono" style={{ color: feed.error ? "var(--warn)" : "var(--text-3)" }}>
+          {feed.error ? "not refreshing" : shown.length + (shown.length === 1 ? " line" : " lines")}
         </span>
 
         {open ? (

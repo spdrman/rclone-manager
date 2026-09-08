@@ -154,11 +154,23 @@ describe("noticing that the service restarted", () => {
     vi.useRealTimers();
   });
 
-  it("remembers a gap once one has happened", () => {
+  it("remembers a gap while the window still starts later than the service's buffer", () => {
     // The page's own buffer is not re-continuous just because a later
-    // reading answered a caught-up cursor cleanly.
-    const held = mergeActivity(undefined, activity([line(1, "one")], 1, { dropped: true }));
-    const next = mergeActivity(held, activity([line(2, "two")], 2, { dropped: false }));
+    // reading answered a caught-up cursor cleanly. The service is still
+    // holding lines from 100 up and this window starts at 200, so what is
+    // on screen has a hole in it that the clean reading does not fill.
+    const held = mergeActivity(undefined, activity([line(200, "two hundred")], 200, { dropped: true, oldestSequence: 100 }));
+    const next = mergeActivity(held, activity([line(201, "and one")], 201, { dropped: false, oldestSequence: 100 }));
     expect(next.dropped).toBe(true);
+
+    // What it is not is permanent: once the window reaches back at least
+    // as far as the service's own buffer does, every line anybody still
+    // holds is on screen and the warning is about nothing. Left
+    // unconditionally sticky, the one dropped=true the service used to
+    // send to every first read stayed on the panel for the life of the
+    // tab. The full case, and the service half of it, are in
+    // activity-cursor.test.tsx.
+    const caughtUp = mergeActivity(next, activity([line(202, "and two")], 202, { dropped: false, oldestSequence: 300 }));
+    expect(caughtUp.dropped).toBe(false);
   });
 });

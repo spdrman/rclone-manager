@@ -74,6 +74,7 @@ type fakeEngine struct {
 	// one answer is stated rather than produced.
 	liveReadings []apicontract.LiveActivityResponse
 	liveSince    []int64
+	liveScope    []string
 }
 
 // startFakeEngine announces that this process serves the deployment
@@ -763,6 +764,7 @@ func (e *fakeEngine) liveActivity(w http.ResponseWriter, r *http.Request) {
 		e.liveReadings = readings[1:]
 	}
 	e.liveSince = append(e.liveSince, since)
+	e.liveScope = append(e.liveScope, r.URL.Query().Get("scope"))
 	e.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, next)
@@ -784,6 +786,16 @@ func (e *fakeEngine) cursorsSeen() []int64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]int64(nil), e.liveSince...)
+}
+
+// scopesSeen is every `scope` the client sent, in order, empty string
+// included. It is the only way to prove a deployment-scoped follow asked
+// for the deployment bucket rather than merely rendering one it happened
+// to be handed.
+func (e *fakeEngine) scopesSeen() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.liveScope...)
 }
 
 // getEditHold and releaseEditHold are #600's gap, served off the real

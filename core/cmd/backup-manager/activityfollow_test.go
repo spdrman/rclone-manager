@@ -10,6 +10,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/service"
 )
 
 // `backup-manager activity --follow`, driven against a real route.
@@ -66,6 +67,29 @@ func oneLiveReading(epoch string, latest int64, events ...apicontract.LiveActivi
 			Events:         events,
 		}},
 	}
+}
+
+// oneDeploymentReading is what a deployment-scoped read answers with:
+// the bucket that belongs to no backup set, and no sets at all. It is
+// also the shape a fresh install answers EVERY read with, which is the
+// case the deployment bucket was added for (#593).
+func oneDeploymentReading(epoch string, latest int64, events ...apicontract.LiveActivityEvent) apicontract.LiveActivityResponse {
+	return apicontract.LiveActivityResponse{
+		Epoch:       epoch,
+		ObservedAt:  time.Now().Format(time.RFC3339Nano),
+		PollAfterMs: 1,
+		Sets:        []apicontract.LiveActivitySet{},
+		Deployment: &apicontract.LiveActivityDeployment{
+			LatestSequence: latest,
+			Events:         events,
+		},
+	}
+}
+
+func deploymentEvent(seq int64, level, event, message string) apicontract.LiveActivityEvent {
+	e := liveEvent(seq, level, event, message)
+	e.Scope = "deployment"
+	return e
 }
 
 func liveEvent(seq int64, level, event, message string, fields ...apicontract.LiveActivityField) apicontract.LiveActivityEvent {
@@ -165,27 +189,161 @@ func TestActivityFollow_DropsTheCursorWhenTheEngineRestarts(t *testing.T) {
 	}
 }
 
-func TestActivityFollow_NeverReprintsADeploymentWideEventOncePerSet(t *testing.T) {
+func TestActivityFollow_PrintsADeploymentWideLineOnceAndWhereItHappened(t *testing.T) {
 	e := startFakeEngine(t, writeTestConfig(t))
-	// A cycle starting is reported to EVERY set's strip by design, so a
-	// nested walk over sets prints it once per configured set.
-	shared := liveEvent(1, "info", "cycle_start", "cycle starting")
-	shared.Scope = "deployment"
-	reading := oneLiveReading("epoch-1", 1, shared)
-	reading.Sets = append(reading.Sets, apicontract.LiveActivitySet{
-		BackupSetID:    "production/billing-mysql",
-		LatestSequence: 1,
-		ProgressBasis:  "unknown",
-		Events:         []apicontract.LiveActivityEvent{shared},
-	})
-	e.holdLiveActivity(reading, oneLiveReading("epoch-1", 1))
+	// The shape the engine actually answers with since #593: a set's own
+	// lines in that set's bucket, the deployment's own in its own bucket,
+	// and ONE sequence counter across both. The old version of this case
+	// hand-built a reading that copied a deployment-wide event into every
+	// set, which is a reading the engine can no longer produce, so it
+	// passed without exercising the follow at all.
+	//
+	// Two claims, and the second is why the sort exists: every line
+	// reaches the operator exactly once, and they arrive in the order
+	// they happened rather than grouped by whichever bucket the response
+	// listed first.
+	reading := oneLiveReading("epoch-1", 4,
+		liveEvent(2, "info", "discovery", "discovery pass complete"),
+		liveEvent(4, "info", "commit", "durable commit complete"),
+	)
+	reading.Deployment = &apicontract.LiveActivityDeployment{
+		LatestSequence: 4,
+		Events: []apicontract.LiveActivityEvent{
+			deploymentEvent(1, "info", "cycle_start", "cycle starting"),
+			deploymentEvent(3, "warn", "disk_pressure", "the backup volume is filling up"),
+		},
+	}
+	e.holdLiveActivity(reading, oneLiveReading("epoch-1", 4))
 
-	out, _, err := followFor(t, e, followOptions{}, 120*time.Millisecond)
+	out, _, err := followFor(t, e, followOptions{}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatalf("followActivity: %v", err)
 	}
-	if got := strings.Count(out, "cycle starting"); got != 1 {
-		t.Errorf("a deployment-wide event was printed %d times, once per set that carries it:\n%s", got, out)
+	for _, want := range []string{"cycle starting", "discovery pass complete", "the backup volume is filling up", "durable commit complete"} {
+		if got := strings.Count(out, want); got != 1 {
+			t.Errorf("%q was printed %d time(s), want exactly one:\n%s", want, got, out)
+		}
+	}
+	var order []int
+	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		_ = i
+		switch {
+		case strings.Contains(line, "cycle starting"):
+			order = append(order, 1)
+		case strings.Contains(line, "discovery pass complete"):
+			order = append(order, 2)
+		case strings.Contains(line, "the backup volume is filling up"):
+			order = append(order, 3)
+		case strings.Contains(line, "durable commit complete"):
+			order = append(order, 4)
+		}
+	}
+	if len(order) != 4 || order[0] != 1 || order[1] != 2 || order[2] != 3 || order[3] != 4 {
+		t.Errorf("the lines reached the operator in sequence order %v, want 1 2 3 4: the two buckets interleave in time, and a follow that printed one bucket and then the other would put the line before an error somewhere else on the screen:\n%s", order, out)
+	}
+}
+
+// TestActivityFollow_ReadsTheDeploymentBucketOnADeploymentWithNoSets is
+// the case --follow could not answer at all.
+//
+// The loop walked reading.Sets and nothing else, so on a fresh install,
+// where every reading has an empty set list and everything that happens
+// lands in the deployment bucket, it printed nothing, for ever, and its
+// cursor never moved. That is exactly the moment the bucket was added
+// for: a new operator pressing buttons in a wizard with no configured
+// set anywhere to read.
+func TestActivityFollow_ReadsTheDeploymentBucketOnADeploymentWithNoSets(t *testing.T) {
+	e := startFakeEngine(t, writeTestConfig(t))
+	e.holdLiveActivity(
+		oneDeploymentReading("epoch-1", 2,
+			deploymentEvent(1, "info", "startup", "backup-manager starting"),
+			deploymentEvent(2, "info", "api_action", "patch /settings"),
+		),
+		oneDeploymentReading("epoch-1", 2),
+	)
+
+	out, _, err := followFor(t, e, followOptions{}, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("followActivity: %v", err)
+	}
+	for _, want := range []string{"backup-manager starting", "patch /settings"} {
+		if got := strings.Count(out, want); got != 1 {
+			t.Errorf("%q was printed %d time(s) on a deployment whose only bucket is the deployment's own; a follow that reads Sets alone prints nothing here for ever:\n%s", want, got, out)
+		}
+	}
+
+	cursors := e.cursorsSeen()
+	if len(cursors) < 2 {
+		t.Fatalf("the loop made %d reading(s), so it cannot be shown to carry a cursor at all", len(cursors))
+	}
+	if cursors[1] != 2 {
+		t.Errorf("the second reading asked since=%d, want 2, which is the highest sequence the deployment bucket says it holds. A cursor that never advances re-requests the same window for ever", cursors[1])
+	}
+}
+
+// TestActivityFollow_ScopeDeploymentAsksForTheDeploymentBucketAlone is
+// the request half of the same distinction. Naming no set already means
+// "every set", so the deployment's own log is the one reading a cursor
+// cannot express without this.
+func TestActivityFollow_ScopeDeploymentAsksForTheDeploymentBucketAlone(t *testing.T) {
+	e := startFakeEngine(t, writeTestConfig(t))
+	e.holdLiveActivity(oneDeploymentReading("epoch-1", 1, deploymentEvent(1, "info", "cycle_start", "cycle starting")))
+
+	out, _, err := followFor(t, e, followOptions{scope: service.LiveActivityScopeDeployment}, 120*time.Millisecond)
+	if err != nil {
+		t.Fatalf("followActivity: %v", err)
+	}
+	if !strings.Contains(out, "cycle starting") {
+		t.Errorf("the deployment-scoped follow printed nothing:\n%s", out)
+	}
+	scopes := e.scopesSeen()
+	if len(scopes) == 0 || scopes[0] != service.LiveActivityScopeDeployment {
+		t.Errorf("the request carried scope=%q, want %q: without it a terminal following the deployment's own log has to ask for every set as well", scopes, service.LiveActivityScopeDeployment)
+	}
+}
+
+// TestActivityFollow_HoldsTheCursorAtATruncatedBucket is the paging
+// claim, and the reason the engine hands back the OLDEST slice above a
+// cursor rather than the newest.
+//
+// The engine says "there is more of this bucket than the limit let me
+// give you" and expects to be asked again from where it stopped. A
+// client that advances to the highest sequence anywhere in the reading
+// instead steps clean over the rest of that bucket, and nothing in the
+// next response mentions it: the events are still held, still inside the
+// buffer, and simply never requested again. One busy set beside one
+// quiet one is all it takes.
+func TestActivityFollow_HoldsTheCursorAtATruncatedBucket(t *testing.T) {
+	e := startFakeEngine(t, writeTestConfig(t))
+	first := oneLiveReading("epoch-1", 300,
+		liveEvent(1, "info", "discovery", "discovery pass complete"),
+		liveEvent(2, "info", "transfer_stats", "transferring"),
+		liveEvent(3, "info", "commit", "durable commit complete"),
+	)
+	// One page of a bucket that holds up to 300, beside a second set that
+	// is quiet and far ahead. 4..300 are still held and are what the next
+	// reading has to ask for.
+	first.Sets[0].Truncated = true
+	first.Sets = append(first.Sets, apicontract.LiveActivitySet{
+		BackupSetID:    "production/billing-mysql",
+		LatestSequence: 400,
+		ProgressBasis:  "unknown",
+		Events:         []apicontract.LiveActivityEvent{liveEvent(400, "info", "commit", "the other set committed")},
+	})
+	e.holdLiveActivity(first, oneLiveReading("epoch-1", 400,
+		liveEvent(4, "info", "commit", "the line after the page"),
+	))
+
+	_, _, err := followFor(t, e, followOptions{}, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("followActivity: %v", err)
+	}
+	cursors := e.cursorsSeen()
+	if len(cursors) < 2 {
+		t.Fatalf("the loop made %d reading(s), too few to show where the cursor landed", len(cursors))
+	}
+	if cursors[1] != 3 {
+		t.Errorf("the reading after a truncated bucket asked since=%d, want 3: the bucket said it had handed over one page and stopped at 3, so anything above that skips 4..300 permanently, with nothing in the next response saying they were skipped", cursors[1])
 	}
 }
 
@@ -275,6 +433,60 @@ func TestActivityFollow_RefusesWithNoRouteRatherThanReadingTheJournal(t *testing
 	}
 	if !strings.Contains(err.Error(), "--follow") {
 		t.Errorf("the refusal does not name the flag it is about: %v", err)
+	}
+}
+
+// TestActivity_ScopeIsAFollowFlagAndTakesOnlyTheDeploymentScope pins the
+// three ways --scope can be typed wrong, all of which are wrong on every
+// deployment rather than on this one, so all three are settled on the
+// command line before anything is opened.
+func TestActivity_ScopeIsAFollowFlagAndTakesOnlyTheDeploymentScope(t *testing.T) {
+	configPath := writeTestConfig(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			"a scope this contract does not have",
+			[]string{"--follow", "--scope", "sets"},
+			"is not a scope",
+		},
+		{
+			// The durable log is one table of transitions and has no
+			// deployment bucket to narrow to, so this is a flag asking
+			// the wrong feed a question only the other one has.
+			"the durable log has no deployment bucket",
+			[]string{"--scope", "deployment"},
+			"--follow",
+		},
+		{
+			// The engine would answer this one, and answer it about the
+			// set, because a named set is the narrower question. A
+			// command line is where an operator can be told instead of
+			// quietly given the other half of what they typed.
+			"a set and the deployment are two different questions",
+			[]string{"--follow", "--scope", "deployment", "--backup-set", "alpha/nightly"},
+			"--backup-set",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var code int
+			stderr := captureStderr(t, func() {
+				captureStdout(t, func() {
+					code = run(append([]string{"activity", "--config", configPath}, tc.args...))
+				})
+			})
+			if code != exitUsage {
+				t.Errorf("`activity %s` exited %d, want %d\nstderr: %s", strings.Join(tc.args, " "), code, exitUsage, stderr)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("the refusal does not mention %q, which is what the operator has to change\nstderr: %s", tc.want, stderr)
+			}
+			if strings.Contains(stderr, "mode: ") {
+				t.Errorf("the command announced a read mode, so it opened the configuration and the journal before refusing a command line that is wrong whatever they hold\nstderr: %s", stderr)
+			}
+		})
 	}
 }
 

@@ -735,3 +735,57 @@ func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T)
 		t.Errorf("a fresh pass over alpha/nightly still reports outcome %q from the pass before it", got)
 	}
 }
+
+// TestLiveActivity_AFirstReadIsNotToldLinesWereDropped is the honesty
+// flag's own honesty.
+//
+// since=0 means "whatever is still held", and a client that has never
+// asked has missed nothing: it has no cursor for the buffer to have
+// overflowed past, so there is no gap between what it holds (nothing)
+// and the tail it is handed. Reporting a drop there puts "Earlier lines
+// are not held here any more" on the FIRST load of every deployment that
+// has been up long enough to overflow a bucket, and a browser that
+// carries the flag forward once it has seen it keeps that warning on
+// screen for the life of the tab.
+//
+// A gap warning that fires when there is no gap is worse than no warning
+// at all: it is the one signal this feed is proudest of, and an operator
+// who has learnt to ignore it will ignore the real one too.
+func TestLiveActivity_AFirstReadIsNotToldLinesWereDropped(t *testing.T) {
+	rec := newLiveActivity()
+	record := func() {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
+			Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		})
+	}
+	// Comfortably past the bucket's capacity, so it really has thrown
+	// lines away and `evicted` really is above zero.
+	for i := 0; i < liveActivityBufferSize+60; i++ {
+		record()
+	}
+
+	first := rec.snapshot("alpha/nightly", 0, liveActivityMaxLimit)
+	if first.Dropped {
+		t.Errorf("the first read of a set's strip reports dropped=true. since=0 asks for whatever is still held, and a client that has never asked has missed nothing; this is the panel telling every operator on a long-running deployment that its log has a hole in it before they have read a single line")
+	}
+
+	// The deployment's own bucket answers the same question the same way,
+	// and it is the bucket a freshly opened terminal reads first.
+	rec.RecordEvent(obs.Record{At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleStart, Message: "cycle starting"})
+	_, deployment := rec.read(nil, true, 0, liveActivityMaxLimit)
+	if deployment == nil {
+		t.Fatal("the read carries no deployment bucket")
+	}
+	if deployment.Dropped {
+		t.Errorf("the first read of the deployment bucket reports dropped=true, for the same reason and on the same screen")
+	}
+
+	// The control, and the reason this is a narrowing rather than a
+	// removal: a cursor that really did fall off the back still says so.
+	behind := rec.snapshot("alpha/nightly", 5, liveActivityMaxLimit)
+	if !behind.Dropped {
+		t.Errorf("a cursor at 5 after %d events overflowed a %d-event buffer reports dropped=false; narrowing this flag to a client that HAS a cursor must not silence it for the client whose cursor was passed",
+			liveActivityBufferSize+60, liveActivityBufferSize)
+	}
+}

@@ -98,6 +98,17 @@ const (
 // same way ListActivity's already is: an absent or nonsensical value gets
 // the default and an oversized one is clamped, because a client asking for
 // a feed should get a feed rather than a refusal over a number.
+//
+// It is clamped DOWN to the buffer size and deliberately not up to it.
+// Raising every limit to the buffer size would make Truncated impossible
+// to produce, which is one way to make paging safe: no page, no middle to
+// lose. It would also make a caller that asked for ten lines get two
+// hundred, turn a flag every client reads into a field that can never be
+// true, and leave the paging path in each of those clients untested and
+// therefore wrong the day the buffer grows. So the limit means what it
+// says, Truncated stays reachable, and the clients page: they hold their
+// cursor at whichever bucket said it had more, which is the property
+// tailOf's own doc argues for and the one this feed is honest about.
 const (
 	liveActivityDefaultLimit = 50
 	liveActivityMaxLimit     = liveActivityBufferSize
@@ -401,7 +412,15 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 
 	st := b.state.Load()
 	var ids []string
-	if !req.DeploymentOnly {
+	// A named set is answered even when the deployment scope was asked
+	// for beside it, which is what LiveActivityRequest.DeploymentOnly's
+	// own doc promises: setting both is not an error, and the narrower
+	// answer wins. Reading the two flags independently was how a request
+	// carrying both came back with no sets AND no deployment bucket, and
+	// an empty reading is exactly the silence this feed exists to
+	// prevent: it reads as a quiet deployment rather than as a question
+	// nobody answered.
+	if req.BackupSetID != "" || !req.DeploymentOnly {
 		for _, src := range st.inner.Config.Sources {
 			for _, bs := range src.BackupSets {
 				id := src.Name + "/" + bs.Name
@@ -883,7 +902,21 @@ func tailOf(r *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, b
 // cursor and gets a slice back has no way to tell "nothing else happened"
 // from "the rest is gone", and presenting the second as the first is a log
 // that looks continuous and is not.
+//
+// A caller with no cursor at all is the one case where there is nothing
+// to be honest about. since == 0 means "whatever is still held", and a
+// client that has never asked holds nothing, so there is no gap between
+// what it has and the tail it is being handed: the events this buffer
+// discarded are ones that client was never going to be shown either way.
+// Without this, the first load of any deployment up long enough to
+// overflow a bucket said "earlier lines are not held here any more",
+// which is a warning about a hole that does not exist, on the one signal
+// this feed is proudest of. An operator who learns to ignore it will
+// ignore the real one too.
 func droppedSince(since int64, rings ...*liveActivityRing) bool {
+	if since <= 0 {
+		return false
+	}
 	for _, r := range rings {
 		if r != nil && r.evicted > since {
 			return true

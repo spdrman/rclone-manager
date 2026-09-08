@@ -59,6 +59,7 @@ func cmdActivity(args []string) int {
 	limitFlag := fs.Int("limit", 0, "print at most this many matching events (default 200, maximum 1000)")
 	jsonFlag := fs.Bool("json", false, "emit the wire objects unchanged, so a script parses the contract rather than this table")
 	followFlag := fs.Bool("follow", false, "stream the LIVE feed instead of the durable log, until interrupted; needs a route to the serving process")
+	scopeFlag := fs.String("scope", "", "with --follow, narrow the live feed to the deployment's own log: the lines that name no backup set. Takes deployment, or is left out for everything")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -80,6 +81,28 @@ func cmdActivity(args []string) int {
 	}
 	if *limitFlag < 0 {
 		return usageError("activity: --limit %d is not a count", *limitFlag)
+	}
+	// --scope is three ways wrong on the command line and none of them
+	// needs this deployment read to be seen, so all three are settled
+	// here, next to --severity, for the reason above.
+	//
+	// The pair of --backup-set and --scope deployment is the one that
+	// could have been let through: the engine takes both and answers
+	// about the set, because a named set is the narrower question. A
+	// command line is where an operator can be told that instead of
+	// being quietly handed the other half of what they typed, and this
+	// feed's whole argument is that a surface must not be silent about
+	// what it left out.
+	if *scopeFlag != "" {
+		if *scopeFlag != service.LiveActivityScopeDeployment {
+			return usageError("activity: --scope %q is not a scope; it takes %s, which is the log that names no backup set, or is left out for everything", *scopeFlag, service.LiveActivityScopeDeployment)
+		}
+		if !*followFlag {
+			return usageError("activity: --scope %s is a live-feed flag and this read has no --follow; the durable log is one table of transitions and has no deployment bucket to narrow to", service.LiveActivityScopeDeployment)
+		}
+		if *setFlag != "" {
+			return usageError("activity: --scope %s and --backup-set %s ask two different questions, so pick one; the deployment's log is the lines that name no backup set, and %s's feed is that set's own", service.LiveActivityScopeDeployment, *setFlag, *setFlag)
+		}
 	}
 
 	ctx := context.Background()
@@ -113,6 +136,7 @@ func cmdActivity(args []string) int {
 		defer stop()
 		if err := followActivity(followCtx, mode, followOptions{
 			backupSetID: *setFlag,
+			scope:       *scopeFlag,
 			minSeverity: minSeverity,
 			limit:       *limitFlag,
 			asJSON:      *jsonFlag,

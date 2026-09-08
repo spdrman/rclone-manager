@@ -355,10 +355,23 @@ func (c *Client) ListActivity(ctx context.Context, limit int) (apicontract.ListA
 // its cursor and everything it is holding when that changes, or after a
 // restart it goes on showing a dead process's log with a cursor the new
 // one cannot honour (#573).
-func (c *Client) LiveActivity(ctx context.Context, backupSetID string, since int64, limit int) (apicontract.LiveActivityResponse, error) {
+//
+// scope is the half of the set/deployment split that backupSetID cannot
+// express, because naming no set already means "every set" (#593). The
+// contract takes exactly one value, "deployment", and narrows the reading
+// to the log that belongs to no single backup set: the reading a terminal
+// following the deployment's own log wants, and the only reading a fresh
+// install with nothing configured has. Sent together with a backupSetID
+// the narrower question wins and the answer is about that set alone, so
+// the two are never a contradiction the engine has to refuse. Empty means
+// the whole reading.
+func (c *Client) LiveActivity(ctx context.Context, backupSetID, scope string, since int64, limit int) (apicontract.LiveActivityResponse, error) {
 	query := url.Values{}
 	if backupSetID != "" {
 		query.Set("backup_set", backupSetID)
+	}
+	if scope != "" {
+		query.Set("scope", scope)
 	}
 	if since > 0 {
 		query.Set("since", strconv.FormatInt(since, 10))
