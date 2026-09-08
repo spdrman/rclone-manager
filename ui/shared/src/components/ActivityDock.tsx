@@ -165,12 +165,15 @@ export function foldReading(previous: SetActivity | undefined, next: LiveActivit
   for (const e of next.deployment?.events ?? []) events.push(e);
   events.sort((a, b) => a.sequence - b.sequence);
 
-  const dropped =
-    next.sets.some((s) => s.dropped) || (next.deployment?.dropped ?? false);
-  const oldest = Math.min(
-    ...[...next.sets.map((s) => s.oldestSequence), next.deployment?.oldestSequence ?? 0].filter((n) => n > 0),
-    events.length > 0 ? events[0].sequence : Number.MAX_SAFE_INTEGER
-  );
+  const dropped = next.sets.some((s) => s.dropped) || (next.deployment?.dropped ?? false);
+  // The earliest sequence any bucket is still holding. Zero when nothing
+  // is held anywhere, which is the honest answer for a process that has
+  // said nothing yet: a bound taken over an empty set of buckets would
+  // otherwise come out as infinity and read as a window starting after
+  // everything that has ever happened.
+  const bounds = [...next.sets.map((s) => s.oldestSequence), next.deployment?.oldestSequence ?? 0].filter((n) => n > 0);
+  if (events.length > 0) bounds.push(events[0].sequence);
+  const oldest = bounds.length > 0 ? Math.min(...bounds) : 0;
 
   const reading: SetActivity = {
     setId: "",
@@ -190,7 +193,7 @@ export function foldReading(previous: SetActivity | undefined, next: LiveActivit
     events,
     truncated: next.sets.some((s) => s.truncated) || (next.deployment?.truncated ?? false),
     dropped,
-    oldestSequence: Number.isFinite(oldest) ? oldest : 0,
+    oldestSequence: oldest,
     latestSequence: events.length > 0 ? events[events.length - 1].sequence : 0
   };
   return mergeActivity(previous, reading, DOCK_BUFFER);

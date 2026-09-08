@@ -51,11 +51,46 @@ func (r *recordingBackend) last(t *testing.T) cliecho.APIAction {
 	return got[len(got)-1]
 }
 
+// apiRoutePatterns is every /api/v1 route a router registers, keyed the
+// way core/cliecho keys its table.
+func apiRoutePatterns(t *testing.T, router http.Handler) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.HasPrefix(route, "/api/v1/") {
+			// /health/live and /health/ready are unauthenticated infra
+			// probes rather than operator actions, and neither has or
+			// wants a verb.
+			return nil
+		}
+		path := strings.TrimPrefix(route, "/api/v1")
+		if path != "/" {
+			path = strings.TrimSuffix(path, "/")
+		}
+		out[method+" "+path] = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	return out
+}
+
 func TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap(t *testing.T) {
-	router := NewRouter(RouterConfig{
+	configured := NewRouter(RouterConfig{
 		Platform:      allowingPlatform("alice"),
 		Backend:       newSyncFakeBackend(),
 		Gate:          alwaysPassGate{},
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+	// The setup surface a fresh install serves is a different, much
+	// smaller table (issue #176), and its routes are exactly the ones a
+	// new operator meets first. A route that only exists there needs an
+	// answer just as much.
+	unconfigured := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		FirstRun:      &fakeFirstRun{},
 		BinaryVersion: "test",
 		Commit:        "test",
 	})
@@ -65,35 +100,24 @@ func TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap(t *testing.T) {
 		answered[r] = true
 	}
 
+	registered := apiRoutePatterns(t, configured)
+	for route := range apiRoutePatterns(t, unconfigured) {
+		registered[route] = true
+	}
+
 	var checked int
-	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !strings.HasPrefix(route, "/api/v1/") {
-			// /health/live and /health/ready are unauthenticated infra
-			// probes rather than operator actions, and neither has or
-			// wants a verb.
-			return nil
-		}
-		// chi reports a route registered as "/backup-sets/*" with its
-		// trailing slash intact on some shapes; the table is keyed by the
-		// pattern as registered.
-		path := strings.TrimPrefix(route, "/api/v1")
-		if path != "/" {
-			path = strings.TrimSuffix(path, "/")
-		}
+	for route := range registered {
+		method, path, _ := strings.Cut(route, " ")
 		checked++
 		if !answered[method+" "+path] {
 			t.Errorf("%s /api/v1%s has no answer in core/cliecho.\nEvery route this router registers must either build a `backup-manager` command or carry an explicit entry saying there is none and what verb would have to exist. That is what turns EPIC G's CLI parity rule from a promise into something that fails visibly: a UI action with no command to name is a gap that shows up the first time anybody uses the feature, instead of at an audit nobody runs.",
 				method, path)
-			return nil
+			continue
 		}
 		line := cliecho.Echo(cliecho.Action{Method: method, Route: path})
 		if len(line.Command) == 0 && strings.TrimSpace(line.GapDetail) == "" {
 			t.Errorf("%s /api/v1%s prints a gap with no reason. \"No equivalent\" on its own is not actionable; say what verb would have to exist.", method, path)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("chi.Walk: %v", err)
 	}
 	if checked == 0 {
 		t.Fatal("chi.Walk found no /api/v1 routes, so this test would pass vacuously")
@@ -101,21 +125,9 @@ func TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap(t *testing.T) {
 
 	// The other direction, so the table cannot quietly accumulate entries
 	// for routes that no longer exist and go on claiming coverage.
-	registered := make(map[string]bool, checked)
-	_ = chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !strings.HasPrefix(route, "/api/v1/") {
-			return nil
-		}
-		path := strings.TrimPrefix(route, "/api/v1")
-		if path != "/" {
-			path = strings.TrimSuffix(path, "/")
-		}
-		registered[method+" "+path] = true
-		return nil
-	})
 	for _, r := range cliecho.Routes() {
 		if !registered[r] {
-			t.Errorf("core/cliecho answers for %q and this router does not register it; an entry for a route that no longer exists is coverage that is not there", r)
+			t.Errorf("core/cliecho answers for %q and no router registers it; an entry for a route that no longer exists is coverage that is not there", r)
 		}
 	}
 }

@@ -268,11 +268,6 @@ func newCmd(words ...string) *cmd {
 	return &cmd{argv: append([]string{"backup-manager"}, words...)}
 }
 
-func (c *cmd) arg(v string) *cmd {
-	c.argv = append(c.argv, v)
-	return c
-}
-
 // flag appends --name value.
 func (c *cmd) flag(name, value string) *cmd {
 	c.argv = append(c.argv, "--"+name, value)
@@ -358,10 +353,11 @@ func shellQuote(s string) string {
 	if strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">") {
 		return s
 	}
-	if strings.IndexFunc(s, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-			strings.ContainsRune("_@%+=:,./-", r))
-	}) < 0 {
+	safe := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			strings.ContainsRune("_@%+=:,./-", r)
+	}
+	if strings.IndexFunc(s, func(r rune) bool { return !safe(r) }) < 0 {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
