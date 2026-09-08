@@ -8,10 +8,9 @@
  * there: both surfaces poll at the same cadence, but they ask different
  * questions, and a shared node holds one answer.
  *
- * mergeActivity and feedRestarted are re-exported from here because the
- * global terminal (ActivityDock, issue #599) imports them from this
- * module. They live in the hook now; this keeps the one import path
- * rather than making a move of the loop a churn across three files.
+ * mergeActivity and feedRestarted are re-exported from here because
+ * surfaces and tests that grew up around this file import them from it.
+ * They live in the hook next door, which is where the loop is.
  */
 import { ErrorState } from "@shared/components/EmptyState";
 import { ActivityStrip } from "@shared/pages/ActivityStrip";

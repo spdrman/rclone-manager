@@ -8341,7 +8341,7 @@
                 "deployment"
               ]
             },
-            "description": "Narrow the reading to the deployment-wide bucket and no backup set at all, which is what a terminal following the deployment's own log wants. It is the half of the set/deployment distinction that backup_set cannot express, since naming no set already means every set. Any other value is ignored rather than refused, exactly as an unparseable limit is: a panel an operator went to look at should not be blanked over a query string."
+            "description": "Narrow the reading to the deployment-wide bucket and no backup set at all, which is what a terminal following the deployment's own log wants. It is the half of the set/deployment distinction that backup_set cannot express, since naming no set already means every set. Sent together with backup_set the narrower question wins and the reading is about that set alone, with no deployment bucket: naming a set is a narrower question than naming the deployment, and answering a caller who sent both with neither is the empty reading this feed exists to prevent. Any other value is ignored rather than refused, exactly as an unparseable limit is: a panel an operator went to look at should not be blanked over a query string."
           }
         ],
         "responses": {

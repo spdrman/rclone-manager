@@ -163,13 +163,17 @@ commands:
                                                   MATCHING events, so a filter that narrows still fills it. --json
                                                   emits the wire objects unchanged, so a script parses the contract
                                                   rather than this table
-  activity --follow [--backup-set S] [--severity warn|error] [--limit N] [--json]
+  activity --follow [--backup-set S | --scope deployment] [--severity warn|error] [--limit N] [--json]
                                                   stream the LIVE feed instead, until interrupted: the serving
                                                   process's own event stream, which is what the Web UI's docked
                                                   terminal shows. A different feed from the one above rather than a
                                                   mode of it, so it needs a route to that process and refuses
                                                   without one instead of quietly reading the journal. The feed
-                                                  starts again, and says so, if that process restarts (#573, #598)
+                                                  starts again, and says so, if that process restarts (#573, #598).
+                                                  --scope deployment narrows it to the log that names no backup
+                                                  set (a cycle starting, a capacity check, what somebody just
+                                                  clicked), which is the whole feed on a deployment with nothing
+                                                  configured yet (#593)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
                                                   --backup-set takes the source/backup-set id here too, and names
                                                   the source itself when it carries one, so --source is only

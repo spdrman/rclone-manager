@@ -53,6 +53,13 @@ import (
 // followOptions is what the command line asked for, resolved.
 type followOptions struct {
 	backupSetID string
+	// scope narrows the reading to the deployment's own log, and is the
+	// one reading a backup set id cannot ask for: naming no set already
+	// means "every set" (#593). It carries
+	// service.LiveActivityScopeDeployment rather than a spelling of its
+	// own, because the value goes on the wire and the route compares it
+	// against that constant. Empty means the whole feed.
+	scope       string
 	minSeverity int
 	limit       int
 	asJSON      bool
@@ -82,7 +89,7 @@ func followActivity(ctx context.Context, mode readDecision, opts followOptions, 
 		epoch string
 	)
 	for {
-		reading, err := mode.client.LiveActivity(ctx, opts.backupSetID, since, opts.limit)
+		reading, err := mode.client.LiveActivity(ctx, opts.backupSetID, opts.scope, since, opts.limit)
 		if err != nil {
 			// A cancelled context surfaces here as a failed request, and
 			// it is not one: the operator ended the follow.
@@ -136,18 +143,34 @@ func followActivity(ctx context.Context, mode readDecision, opts followOptions, 
 // collectFollowEvents flattens one reading into the lines to print, in the
 // order the engine emitted them.
 //
-// Two things happen here that a straight nested loop would get wrong. A
-// deployment-wide event (a cycle starting, a capacity check) is reported
-// to EVERY set's strip by design, so a naive walk prints it once per
-// configured set; it is de-duplicated by sequence. And the sequence is a
-// per-process counter shared by every set, so sorting by it puts the
-// lines back into the order they actually happened rather than grouping
-// them by whichever set the response listed first.
+// A reading has two kinds of bucket and a follow prints both. Every
+// configured set carries its own lines, and the deployment's bucket
+// carries the ones that belong to no single set: a cycle starting, a
+// capacity check, and every action somebody took through the API on a
+// route that names no backup set (#593). Walking reading.Sets alone
+// printed none of those, so a settings patch, a medium created, a
+// credential imported and a gate refusal all reached the browser's
+// terminal and never the CLI's. On a deployment with nothing configured
+// it printed nothing at all, for ever, which is precisely the case the
+// deployment bucket was added for: a new operator pressing buttons in a
+// wizard with no set anywhere to read.
+//
+// The sort is what makes the two buckets one feed. The sequence is a
+// per-process counter shared by every bucket, so ordering by it puts the
+// lines back into the order they actually happened rather than printing
+// one bucket and then the other, which would move the line before an
+// error somewhere else on the screen.
+//
+// The dedup by sequence stays even though the engine no longer copies one
+// event into more than one bucket. It costs nothing on a correct reading
+// and it is what keeps an overlapping or repeated page harmless, which
+// matters because asking again from where a truncated bucket stopped
+// re-sends whatever a quieter bucket had already handed over.
 func collectFollowEvents(reading apicontract.LiveActivityResponse, minSeverity int) []apicontract.LiveActivityEvent {
 	seen := make(map[int64]bool)
 	out := make([]apicontract.LiveActivityEvent, 0, 16)
-	for _, s := range reading.Sets {
-		for _, e := range s.Events {
+	take := func(events []apicontract.LiveActivityEvent) {
+		for _, e := range events {
 			if seen[e.Sequence] {
 				continue
 			}
@@ -157,6 +180,12 @@ func collectFollowEvents(reading apicontract.LiveActivityResponse, minSeverity i
 			}
 			out = append(out, e)
 		}
+	}
+	for _, s := range reading.Sets {
+		take(s.Events)
+	}
+	if reading.Deployment != nil {
+		take(reading.Deployment.Events)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Sequence < out[j].Sequence })
 	return out
@@ -169,17 +198,58 @@ func collectFollowEvents(reading apicontract.LiveActivityResponse, minSeverity i
 // re-request every filtered-out line for ever: `--severity error` on a
 // healthy deployment would ask for the same window on every tick and
 // never advance.
+//
+// The deployment's bucket counts here for the same reason it is printed:
+// on a deployment with no configured sets it is the only bucket there is,
+// and a cursor built from reading.Sets alone would sit at zero for ever
+// while every poll re-fetched the same window.
+//
+// A truncated bucket holds the cursor back. The engine answers a cursor
+// with the OLDEST slice above it and says when the limit cut that slice
+// short, which is an invitation to ask again from where it ended. A
+// cursor that jumped to the highest sequence anywhere in the reading
+// would step clean over the rest of that bucket: those lines are still
+// held, still inside the engine's buffer, and would simply never be
+// requested again, with nothing in any later response saying they were
+// skipped. One busy set beside one quiet one is all it takes. So the
+// cursor is capped at the last line each truncated bucket actually handed
+// over, and the next poll picks the rest up.
 func highestSequence(reading apicontract.LiveActivityResponse) int64 {
 	var high int64
-	for _, s := range reading.Sets {
-		if s.LatestSequence > high {
-			high = s.LatestSequence
+	// The lowest page boundary among the buckets that said they have more
+	// to hand over, or 0 when none did.
+	var ceiling int64
+	consider := func(events []apicontract.LiveActivityEvent, latest int64, truncated bool) {
+		if latest > high {
+			high = latest
 		}
-		for _, e := range s.Events {
+		for _, e := range events {
 			if e.Sequence > high {
 				high = e.Sequence
 			}
 		}
+		// A bucket that says it was cut short and then hands over nothing
+		// names no page boundary, so there is nothing to hold back to.
+		// The engine cannot produce that reading (it only truncates a
+		// slice it has filled), and treating it as a boundary would stall
+		// the cursor on the same window for ever.
+		if !truncated || len(events) == 0 {
+			return
+		}
+		// Oldest first on the wire, so the last one handed over is the
+		// page boundary.
+		if last := events[len(events)-1].Sequence; ceiling == 0 || last < ceiling {
+			ceiling = last
+		}
+	}
+	for _, s := range reading.Sets {
+		consider(s.Events, s.LatestSequence, s.Truncated)
+	}
+	if reading.Deployment != nil {
+		consider(reading.Deployment.Events, reading.Deployment.LatestSequence, reading.Deployment.Truncated)
+	}
+	if ceiling > 0 && ceiling < high {
+		return ceiling
 	}
 	return high
 }

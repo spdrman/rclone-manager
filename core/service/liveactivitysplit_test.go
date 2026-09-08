@@ -266,3 +266,45 @@ func eventNamesOf(events []LiveActivityEvent) []string {
 	}
 	return out
 }
+
+// TestLiveActivity_ASetNamedBesideTheDeploymentScopeAnswersAboutTheSet
+// is the combination nothing covered, and the one the request's own doc
+// already promised an answer to.
+//
+// DeploymentOnly's doc says setting both is not an error and the
+// narrower answer wins, because a caller that named a set asked about
+// that set. The code read the two flags independently instead: naming a
+// set left the deployment out, and asking for the deployment scope left
+// every set out, so a request carrying both was answered with no sets
+// and no deployment bucket. Nothing won.
+//
+// A reading with nothing in it is the exact failure this whole feed
+// exists to prevent. Silence about a set reads as a quiet set, and a
+// client that sent both parameters (a terminal that remembered a set
+// filter, a hand-typed URL) would watch an empty panel for ever with
+// nothing anywhere saying why.
+func TestLiveActivity_ASetNamedBesideTheDeploymentScopeAnswersAboutTheSet(t *testing.T) {
+	svc := twoSetService(t)
+
+	recordDeploymentEvent(svc.activity, obs.EventCycleStart)
+	recordSetEvent(svc.activity, "alpha/nightly", obs.EventDiscovery)
+	recordSetEvent(svc.activity, "alpha/weekly", obs.EventCommit)
+
+	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{
+		BackupSetID:    "alpha/nightly",
+		DeploymentOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("LiveActivity: %v", err)
+	}
+	if len(live.Sets) != 1 || live.Sets[0].BackupSetID != "alpha/nightly" {
+		t.Fatalf("a read naming alpha/nightly AND the deployment scope reported %d set(s); the narrower of the two is the set, and answering with neither is the empty reading this feed exists to prevent",
+			len(live.Sets))
+	}
+	if got := eventNamesOf(live.Sets[0].Events); len(got) != 1 || got[0] != obs.EventDiscovery {
+		t.Errorf("alpha/nightly's strip reports %v, want its own discovery line alone", got)
+	}
+	if live.Deployment != nil {
+		t.Errorf("the reading also carried the deployment bucket; the caller named a set, and naming a set is the narrower question")
+	}
+}
