@@ -42,18 +42,43 @@
 // provider". A key file this process cannot read is not a network
 // problem and should never be reported as one.
 //
-// # Three dials, and why that is the honest choice
+// # One dial for the first four steps, and no dial at all for the last two
 //
-// StepConnect dials TCP and closes. StepHostKey calls
-// rclone.ProbeHostKey, which dials again and aborts the handshake the
-// instant key exchange hands it the offered key. StepAuthenticate dials a
-// third time, this time with credentials.
+// StepConnect dials TCP once and KEEPS the socket. It reads the server's
+// identification string off the wire ("SSH-2.0-OpenSSH_9.6p1") and
+// replays it into the handshake StepHostKey then runs over that same
+// socket, with NO auth methods offered: the host key is presented during
+// key exchange, which completes before authentication is ever attempted,
+// so the server's identity is established with no private key anywhere
+// near this process. The banner is the one piece of evidence that says
+// something answered SSH rather than merely accepted a socket, and the
+// handshake cannot report it because it deliberately never completes.
 //
-// Carrying one connection through all three would save two round trips
-// against a host that is answering, and would mean reaching into a probe
-// whose entire safety argument is that it never authenticates and holds
-// no credentials. The second dial is cheap and the argument is not, so
-// the dials are separate and the detail says so.
+// StepAuthenticate and StepList come out of ONE Deps.List call, split by
+// the adapter's own transport.Category. This is not an optimisation, it
+// is the only honest arrangement: the sftp session that lists a folder is
+// the session that authenticated to open it, and a second dial holding
+// this process's own copy of the private key would be reporting on a
+// login no backup ever performs. rclone opens key_file itself, which is
+// exactly why key_file exists, and this check never takes that away from
+// it.
+//
+// # Trust is knownhosts', never this package's
+//
+// Deps.Verify is the host key decision and it is knownhosts' own
+// callback over the same file the transport is about to be handed. This
+// package never compares fingerprints to decide anything. It reads the
+// trusted lines through Deps.Trusted only to SAY what was trusted when
+// the decision has already gone against the server, because a mismatch is
+// settled by an operator comparing fingerprints by eye and a callback
+// answers yes or no without ever naming what it wanted.
+//
+// A comparison of its own would be a second opinion about a host key, and
+// a second opinion can be wrong in the permissive direction: a marker
+// (@revoked, @cert-authority) and a line's host patterns are both part of
+// what a known_hosts entry MEANS, and a fingerprint comparison that reads
+// only the key throws both away. That is how a revoked key reports as
+// trusted and how a key pinned for a different host counts for this one.
 //
 // # It proves the same path a cycle takes
 //
@@ -65,15 +90,19 @@
 package sourcecheck
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // Step names one thing this check proves. The set is closed and ordered:
@@ -83,11 +112,18 @@ import (
 type Step string
 
 const (
-	// StepCredentials is whether the private key this backup set names
-	// can be obtained and opened on THIS host: read from its file, its
-	// environment variable or its command, decrypted at rest if this
-	// deployment encrypts keys at rest, and unlocked with the configured
-	// passphrase if it has one. Nothing about the far side.
+	// StepCredentials is whether the key this backup set names can be
+	// USED on this host at all: the reference resolves to something that
+	// is there, and the file's own mode and its whole containing
+	// directory chain are still what a real transfer demands before it
+	// will touch the key (#293/#311). Nothing about the far side.
+	//
+	// It does not open the private half. Every check it makes is an
+	// os.Stat, and the fingerprint in its detail is the PUBLIC half's,
+	// named from this deployment's key store when the key is one this
+	// deployment holds. A step that read the private key to name it would
+	// be pulling key material into this process for a diagnostic, which
+	// is the thing key_file exists to avoid.
 	StepCredentials Step = "credentials"
 
 	// StepResolve is whether the hostname resolves, and to what. Its
@@ -96,30 +132,43 @@ const (
 	// operator can settle the second.
 	StepResolve Step = "resolve"
 
-	// StepConnect is whether TCP to host:port answered, and how fast.
-	// The timing is in the detail on purpose: a connect that succeeds in
-	// four seconds is a different report from one that succeeds in
-	// twelve milliseconds, and neither is a failure.
+	// StepConnect is whether TCP to host:port answered, how fast, and
+	// what identification string came back. The timing is in the detail
+	// on purpose: a connect that succeeds in four seconds is a different
+	// report from one that succeeds in twelve milliseconds, and neither
+	// is a failure. The banner is there because "SSH-2.0-OpenSSH_9.6p1"
+	// is how an operator knows they reached sshd and not a load balancer.
 	StepConnect Step = "connect"
 
 	// StepHostKey is which key the server offered, its SHA256
-	// fingerprint, and whether it matches the line this backup set
-	// trusts. Both fingerprints go in the detail in `ssh-keygen -lf`
-	// form, so an operator can compare them by eye against an
-	// out-of-band source, which is the only thing that actually settles
-	// a mismatch.
+	// fingerprint, and whether the known_hosts file this backup set
+	// verifies against actually trusts it FOR THIS HOST. The decision is
+	// Deps.Verify, which is knownhosts' own callback over the same file
+	// the transport will be handed; this package never makes a
+	// fingerprint comparison of its own to decide it.
+	//
+	// Both fingerprints go in the detail in `ssh-keygen -lf` form when
+	// the answer is no, so an operator can compare them by eye against an
+	// out-of-band source, which is the only thing that actually settles a
+	// mismatch.
 	StepHostKey Step = "host_key"
 
 	// StepAuthenticate is whether the server accepted that key for that
 	// user. It is skipped when the host key did not match: offering a
 	// credential to a server whose identity has not been established is
 	// the thing FR-6 exists to prevent.
+	//
+	// It has no Duration of its own. It is decided from the same
+	// Deps.List call StepList is, because the sftp session that lists a
+	// folder is the session that authenticated to open it.
 	StepAuthenticate Step = "authenticate"
 
 	// StepList is the configured remote path listed over the real
 	// transport, and how many entries came back. It is the only step
 	// that proves the path in the configuration is a path on that
-	// machine.
+	// machine, and, like StepAuthenticate, it carries no Duration of its
+	// own: the two share one call and neither has a timing that is only
+	// about itself.
 	StepList Step = "list"
 )
 
@@ -187,6 +236,18 @@ type Check struct {
 	// Detail is one of this package's own sentences. It never carries an
 	// underlying error's text: see the package doc.
 	Detail string
+
+	// Duration is how long this step took ON ITS OWN, and is ZERO when
+	// there is no such number rather than when the step was instant.
+	//
+	// Only the steps that are measured separately carry one:
+	// credentials, resolve, connect and host_key. StepAuthenticate and
+	// StepList come out of a single Deps.List call and have no timing
+	// that belongs to one of them, so they leave this at zero and every
+	// surface downstream OMITS it rather than printing "0 ms" beside a
+	// green row, which would tell an operator the server answered
+	// instantly when what happened is that nobody measured.
+	Duration time.Duration
 }
 
 // Report is one connection test.
@@ -248,23 +309,44 @@ type TrustedKey struct {
 // Deps is what Run is handed. Every one of them is a real capability
 // wired by the caller; there are no toggles here.
 type Deps struct {
-	// Credentials resolves the private key this backup set names into a
-	// signer, through the same key/passphrase/at-rest-encryption
-	// machinery a real transfer uses. It returns the signer's public
-	// half's SHA256 fingerprint too, which is what an operator compares
-	// against the authorized_keys line on the far side.
-	Credentials func(context.Context) (signer ssh.Signer, fingerprint string, err error)
+	// Credentials proves the key this backup set names can be used on
+	// this host, WITHOUT opening its private half, and names that key's
+	// public fingerprint when this deployment can.
+	//
+	// An empty fingerprint with a nil error is a real answer and not a
+	// half-failure: it means the key is usable and this deployment does
+	// not hold it in its own store, so there is nothing to read the
+	// public half out of. Naming it anyway would mean opening the private
+	// key to derive it, and the whole reason key_file is the documented
+	// preference is that rclone opens the key and this process never
+	// does.
+	Credentials func(context.Context) (fingerprint string, err error)
 
 	// Trusted reads the host keys this backup set's own known_hosts file
-	// pins for this host:port.
+	// pins, for the mismatch DETAIL and for nothing else.
+	//
+	// It decides nothing. Verify below is the decision. This exists
+	// because a callback answers yes or no without naming what it
+	// wanted, and a mismatch is settled by an operator comparing the
+	// offered fingerprint against the trusted one by eye.
 	Trusted func(context.Context) ([]TrustedKey, error)
 
-	// ProbeHostKey captures the key the server offers, without
-	// authenticating. rclone.ProbeHostKey in production.
-	ProbeHostKey func(ctx context.Context, host string, port int) (algorithm, fingerprint string, err error)
+	// Verify is the host key decision: knownhosts.New(path) in
+	// production, over the SAME known_hosts file the transport is about
+	// to verify against.
+	//
+	// It is a dependency rather than a comparison this package makes
+	// because knownhosts is the only reading that honours everything a
+	// known_hosts line means: the marker (@revoked, @cert-authority), the
+	// host patterns, negations, and hashed entries whose per-line salt
+	// nothing else can reproduce. A fingerprint comparison throws all of
+	// that away and it throws it away PERMISSIVELY, so the check would
+	// pass on exactly the connections the transport then refuses.
+	Verify func(hostname string, remote net.Addr, key ssh.PublicKey) error
 
 	// List lists the configured remote path over the real transport and
-	// reports how many entries came back.
+	// reports how many entries came back. It is the one call that decides
+	// both StepAuthenticate and StepList, split by transport.CategoryOf.
 	List func(context.Context) (entries int, err error)
 
 	// Observe, when set, is called once per failed step with the
@@ -285,10 +367,15 @@ func (d Deps) observe(step Step, err error) {
 // rather than holding a button down for a minute.
 const connectTimeout = 5 * time.Second
 
-// authTimeout bounds the SSH handshake and authentication in
-// StepAuthenticate. Longer than the TCP dial because it covers a key
-// exchange and a signature on both ends.
-const authTimeout = 10 * time.Second
+// handshakeTimeout bounds the SSH key exchange in StepHostKey. Longer
+// than the TCP dial because it covers a key exchange on both ends.
+const handshakeTimeout = 10 * time.Second
+
+// maxIdentificationBytes bounds what readIdentification will buffer. RFC
+// 4253 caps an identification string at 255 bytes; this is generous over
+// that and, more importantly, bounded at all, so a socket that answers
+// with an endless stream of bytes and no newline cannot make this hold it.
+const maxIdentificationBytes = 512
 
 // builder accumulates the Report as Run walks the steps, and is the one
 // place the skip rule lives: once a step has failed, every later step
@@ -309,6 +396,19 @@ func (b *builder) pass(step Step, detail string) {
 
 func (b *builder) fail(step Step, category, detail string) {
 	b.byStep[step] = Check{Step: step, Outcome: Failed, Category: category, Detail: detail}
+}
+
+// took records how long a step that is measured on its own took. It is
+// called only for credentials, resolve, connect and host_key; the two
+// steps that share one call never get one, which is what keeps "absent"
+// and "zero" the same thing here and distinguishable downstream.
+func (b *builder) took(step Step, d time.Duration) {
+	c, ok := b.byStep[step]
+	if !ok {
+		return
+	}
+	c.Duration = d
+	b.byStep[step] = c
 }
 
 func (b *builder) skip(step Step, detail string) {
@@ -366,76 +466,170 @@ func (b *builder) report() Report {
 func Run(ctx context.Context, target Target, deps Deps) Report {
 	b := newBuilder(target)
 
-	signer, keyFingerprint, err := deps.Credentials(ctx)
+	started := time.Now()
+	keyFingerprint, err := deps.Credentials(ctx)
+	elapsed := time.Since(started)
 	if err != nil {
 		deps.observe(StepCredentials, err)
 		b.fail(StepCredentials, CategoryCredentials, credentialsFailureDetail(target))
-		b.skipRest(StepResolve, "the key this backup set names could not be opened on this host, so nothing was tried against "+target.Host)
+		b.took(StepCredentials, elapsed)
+		b.skipRest(StepResolve, "the key this backup set names cannot be used on this host, so nothing was tried against "+target.Host)
 		return b.report()
 	}
 	b.pass(StepCredentials, credentialsPassedDetail(target, keyFingerprint))
+	b.took(StepCredentials, elapsed)
 
+	started = time.Now()
 	addresses, err := resolveHost(ctx, target.Host)
+	elapsed = time.Since(started)
 	if err != nil {
 		deps.observe(StepResolve, err)
 		b.fail(StepResolve, CategoryDNS, "this host does not resolve to an address from this machine: "+target.Host)
+		b.took(StepResolve, elapsed)
 		b.skipRest(StepConnect, "the hostname did not resolve, so there was no address to connect to")
 		return b.report()
 	}
 	b.pass(StepResolve, target.Host+" is "+strings.Join(addresses, " and "))
+	b.took(StepResolve, elapsed)
 
 	addr := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
-	elapsed, err := dial(ctx, addr)
+	started = time.Now()
+	conn, err := dial(ctx, addr)
+	elapsed = time.Since(started)
 	if err != nil {
 		deps.observe(StepConnect, err)
-		b.fail(StepConnect, CategoryNetwork, "nothing answered TCP on "+addr+" within "+connectTimeout.String())
+		b.fail(StepConnect, CategoryNetwork, "nothing answered TCP on "+addr+": "+dialProblem(err))
+		b.took(StepConnect, elapsed)
 		b.skipRest(StepHostKey, "nothing answered on "+addr+", so no host key was offered")
 		return b.report()
 	}
-	b.pass(StepConnect, "TCP to "+addr+" in "+roundMillis(elapsed))
+	// The socket stays open through the host key step below: the key
+	// exchange that presents the host key runs over THIS connection, not
+	// a second one.
+	defer func() { _ = conn.Close() }()
 
-	algorithm, offered, err := deps.ProbeHostKey(ctx, target.Host, target.Port)
-	if err != nil {
-		deps.observe(StepHostKey, err)
+	// Read off the wire before the handshake and replay it in, so the
+	// handshake sees the stream exactly as it was sent. The banner is a
+	// nicety and never a verdict: anything that goes wrong leaves it
+	// empty and the stream untouched.
+	banner, replay := readIdentification(conn)
+	connectDetail := "TCP to " + addr + " in " + roundMillis(elapsed)
+	if banner != "" {
+		connectDetail += " · " + banner
+	}
+	b.pass(StepConnect, connectDetail)
+	b.took(StepConnect, elapsed)
+
+	offered, verifyErr, elapsed, handshakeErr := exchangeHostKey(replay, addr, target.User, deps.Verify)
+	b.took(StepHostKey, elapsed)
+
+	if offered == nil {
+		// The key exchange never got as far as presenting a host key, so
+		// nothing was compared. Refused rather than waved through:
+		// proceeding on "I could not check" is the one outcome an
+		// attacker would choose.
+		deps.observe(StepHostKey, handshakeErr)
 		b.fail(StepHostKey, CategoryNetwork, addr+" answered TCP but did not complete an SSH key exchange, so it is not offering a host key this manager can read")
+		b.took(StepHostKey, elapsed)
 		b.skipRest(StepAuthenticate, "no host key was read, so nothing was offered to this server")
 		return b.report()
 	}
 
-	trusted, err := deps.Trusted(ctx)
-	if err != nil {
-		deps.observe(StepHostKey, err)
-		b.fail(StepHostKey, CategoryHostKey, "this backup set's known_hosts file could not be read, so the key "+addr+" offered could not be compared against anything")
-		b.skipRest(StepAuthenticate, "the offered host key was not compared, so nothing was offered to this server")
-		return b.report()
+	algorithm := offered.Type()
+	fingerprint := ssh.FingerprintSHA256(offered)
+
+	// Trusted is read for the SENTENCE, whichever way the decision went,
+	// and its own failure never changes the decision. When it cannot be
+	// read the wording says so instead of naming lines nobody has.
+	trusted, trustedErr := deps.Trusted(ctx)
+	if trustedErr != nil {
+		deps.observe(StepHostKey, trustedErr)
+		trusted = nil
 	}
 
-	match, ok := matchTrusted(trusted, offered)
-	if !ok {
-		deps.observe(StepHostKey, fmt.Errorf("sourcecheck: %s offered %s %s and this set trusts %d other key(s)", addr, algorithm, offered, len(trusted)))
-		b.fail(StepHostKey, CategoryHostKey, hostKeyMismatchDetail(algorithm, offered, trusted))
+	if verifyErr != nil {
+		deps.observe(StepHostKey, verifyErr)
+		b.fail(StepHostKey, CategoryHostKey, hostKeyMismatchDetail(addr, algorithm, fingerprint, trusted, trustedErr, verifyErr))
+		b.took(StepHostKey, elapsed)
 		b.skipRest(StepAuthenticate, "the host key did not match, so nothing was offered to this server")
 		return b.report()
 	}
-	b.pass(StepHostKey, hostKeyMatchDetail(algorithm, offered, match))
+	b.pass(StepHostKey, hostKeyMatchDetail(algorithm, fingerprint, trusted))
+	b.took(StepHostKey, elapsed)
 
-	if err := authenticate(ctx, addr, target.User, signer, offered); err != nil {
-		deps.observe(StepAuthenticate, err)
+	// ONE call for the last two steps. Which of them failed is read off
+	// the adapter's own FR-22 category and never off the error's text.
+	entries, listErr := deps.List(ctx)
+	if listErr == nil {
+		b.pass(StepAuthenticate, "the server accepted publickey for "+target.User)
+		b.pass(StepList, remotePathOf(target)+" listed, "+plural(entries, "entry", "entries"))
+		return b.report()
+	}
+
+	category, _ := transport.CategoryOf(listErr)
+	switch category {
+	case transport.Authentication:
+		deps.observe(StepAuthenticate, listErr)
 		b.fail(StepAuthenticate, CategoryAuthentication, "the server did not accept this key for "+target.User+"@"+target.Host+". On that machine, the public half has to be in "+target.User+"'s authorized_keys")
 		b.skipRest(StepList, "authentication did not succeed, so the remote path was never listed")
-		return b.report()
-	}
-	b.pass(StepAuthenticate, "the server accepted publickey for "+target.User)
 
-	entries, err := deps.List(ctx)
-	if err != nil {
-		deps.observe(StepList, err)
-		b.fail(StepList, CategoryRemotePath, "authentication succeeded and "+remotePathOf(target)+" could not be listed. It may not exist on that machine, or "+target.User+" may not be allowed to read it")
-		return b.report()
-	}
-	b.pass(StepList, remotePathOf(target)+" listed, "+plural(entries, "entry", "entries"))
+	case transport.KeyPermissions:
+		// The transport refused to USE the key, on the same mode and
+		// directory-chain rule the credentials step checked a moment
+		// ago. Reported where it happened rather than blamed on
+		// authenticate: nothing was offered to the server at all, and
+		// "the server refused your key" would send an operator to the
+		// wrong machine. The credentials row is flipped rather than left
+		// green, for the reason HostVerification below is: a
+		// disagreement between two readings of the same fact is not
+		// something anybody should have to reconstruct from a green.
+		deps.observe(StepCredentials, listErr)
+		b.fail(StepCredentials, CategoryCredentials, "this deployment refused to use this backup set's key when the transfer went to open it: its file permissions, or those of a directory containing it, are no longer what a key may be stored with")
+		b.skipRest(StepAuthenticate, "the key was refused on this host before anything was offered to the server")
 
+	case transport.HostVerification:
+		// The step above already passed against the same file, so this
+		// is the transport disagreeing with the comparison this check
+		// just made. Reported where it happened rather than silently
+		// re-scored: a disagreement about a host key is the one thing
+		// here nobody should have to reconstruct from two greens.
+		deps.observe(StepHostKey, listErr)
+		b.fail(StepHostKey, CategoryHostKey, "the sftp session was refused on the host key even though the key exchange above matched; the trusted line may have changed underneath this check")
+		b.took(StepHostKey, elapsed)
+		b.skipRest(StepAuthenticate, "the transport refused the host key, so nothing was offered to this server")
+
+	default:
+		// Authentication is what a listing failure of any other shape
+		// proves: the session got far enough to be refused on the PATH.
+		deps.observe(StepList, listErr)
+		b.pass(StepAuthenticate, "the server accepted publickey for "+target.User)
+		b.fail(StepList, CategoryRemotePath, listProblem(category, target, remotePathOf(target)))
+	}
 	return b.report()
+}
+
+// exchangeHostKey runs the SSH key exchange over an already-open socket
+// with NO auth methods offered, and reports the key the server presented,
+// what verify made of it, and how long the exchange took.
+//
+// The handshake is EXPECTED to fail immediately after key exchange: this
+// client cannot log in and is not trying to. That failure is not a
+// result, it is the shape of a probe that deliberately holds no
+// credential, which is why handshakeErr matters only when no key was
+// presented at all.
+func exchangeHostKey(conn net.Conn, addr, user string, verify func(string, net.Addr, ssh.PublicKey) error) (offered ssh.PublicKey, verifyErr error, elapsed time.Duration, handshakeErr error) {
+	started := time.Now()
+	_, _, _, handshakeErr = ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
+		User: user,
+		Auth: nil,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			offered = key
+			verifyErr = verify(hostname, remote, key)
+			return verifyErr
+		},
+		Timeout: handshakeTimeout,
+	})
+	return offered, verifyErr, time.Since(started), handshakeErr
 }
 
 // remotePathOf is the path this set is configured to read, with the same
@@ -447,22 +641,29 @@ func remotePathOf(t Target) string {
 	return t.RemotePath
 }
 
+// credentialsPassedDetail says what was actually proven, which is less
+// than "the key works" and more than "a path exists": the reference
+// resolves, and the permissions a real transfer insists on are still
+// intact.
+//
+// An empty fingerprint is stated rather than left as a gap. "This
+// deployment does not hold this key, so its public half cannot be named
+// without opening the private one" is a FACT about how this set is
+// configured, not a failure, and a detail that just went quiet there
+// would read as though the naming had been attempted and lost.
 func credentialsPassedDetail(t Target, fingerprint string) string {
-	out := "read the private key " + keyReferenceOf(t)
+	out := "the key " + keyReferenceOf(t) + " is where the configuration says, and its file and directory permissions are still what a transfer requires"
 	if t.PassphraseConfigured {
-		out += " and opened it with the configured passphrase"
+		out += ". It is passphrase-protected, and the passphrase is proven by the authenticate step rather than here, because opening the key to try it is what this step exists not to do"
 	}
 	if fingerprint != "" {
-		out += "; its public half is " + fingerprint
+		return out + ". Its public half is " + fingerprint + ", which is the string that has to appear in the far side's authorized_keys"
 	}
-	return out
+	return out + ". Its public half cannot be named here: this deployment does not hold this key in its own store, and deriving the fingerprint would mean opening the private half"
 }
 
 func credentialsFailureDetail(t Target) string {
-	if t.PassphraseConfigured {
-		return "the private key " + keyReferenceOf(t) + " could not be read on this host, or the configured passphrase does not open it"
-	}
-	return "the private key " + keyReferenceOf(t) + " could not be read on this host"
+	return "the key " + keyReferenceOf(t) + " cannot be used on this host: it is not where the configuration says, or its permissions, or those of a directory containing it, are not what a key may be stored with"
 }
 
 func keyReferenceOf(t Target) string {
@@ -472,21 +673,62 @@ func keyReferenceOf(t Target) string {
 	return t.KeyReference
 }
 
-// hostKeyMatchDetail is the good news, and it still prints both
-// fingerprints rather than the word "matched". An operator reading a log
+// hostKeyMatchDetail is the good news, and it still prints the
+// fingerprint rather than the word "matched". An operator reading a log
 // after a host was rebuilt wants to see WHICH key was accepted, and a
 // panel that only ever says "matched" has nothing to show them.
-func hostKeyMatchDetail(algorithm, offered string, match TrustedKey) string {
-	return "the server offered " + algorithm + " " + offered +
-		", matching the key this backup set trusts on line " + strconv.Itoa(match.Line) + " of its known_hosts"
+//
+// The line number is named when the trusted reading can find the offered
+// key in the file and quietly left out when it cannot. It is decoration
+// on a decision knownhosts already made: a hashed entry pins a key this
+// reading cannot compare by fingerprint, and inventing "no line" there
+// would contradict the pass immediately above it.
+func hostKeyMatchDetail(algorithm, fingerprint string, trusted []TrustedKey) string {
+	out := "the server offered " + algorithm + " " + fingerprint + ", and this backup set's known_hosts trusts it for this host"
+	if match, ok := matchTrusted(trusted, fingerprint); ok {
+		return out + " on line " + strconv.Itoa(match.Line)
+	}
+	return out
 }
 
-func hostKeyMismatchDetail(algorithm, offered string, trusted []TrustedKey) string {
+// hostKeyMismatchDetail names the offered key and every key the file
+// pins, with line numbers, because those strings are the entire content
+// of the decision an operator now has to make. A message naming only the
+// new one would be asking them to confirm something they cannot check.
+//
+// The trusted lines are a REPORT of what is in the file, never the reason
+// for the refusal. verifyErr already is that reason, and the wording
+// distinguishes the two shapes knownhosts reports: a key pinned for this
+// host that is a different key, and a key that is simply not pinned for
+// this host at all, which is what a wrong-host line and a revoked line
+// both come back as.
+func hostKeyMismatchDetail(addr, algorithm, fingerprint string, trusted []TrustedKey, trustedErr, verifyErr error) string {
 	var out strings.Builder
-	out.WriteString("the key this server offers is not the one this backup set trusts. Compare the offered fingerprint out of band before trusting it")
-	out.WriteString("\n  offered  " + offered + " (" + algorithm + ")")
+	var keyErr *knownhosts.KeyError
+	var revoked *knownhosts.RevokedError
+	switch {
+	case errors.As(verifyErr, &revoked):
+		// A line that exists to say NO. Named on its own because it is
+		// the one refusal here that is not ambiguous: nobody has to go
+		// and compare fingerprints out of band, the answer is already
+		// written down, and a message that lumped it in with "this is
+		// not the key we expected" would send an operator off to verify
+		// a key somebody has already decided against.
+		out.WriteString("this key is REVOKED in this backup set's known_hosts. A revoked line is not a stale one: it says this exact key must never be accepted for this host again, so re-pinning it is not the fix")
+	case errors.As(verifyErr, &keyErr) && len(keyErr.Want) > 0:
+		out.WriteString("the key " + addr + " offers is not the one this backup set trusts for it. A host key changes when a server is rebuilt and it changes in exactly the same way when something else is answering in its place, so compare the offered fingerprint against the host itself before you accept it")
+	case errors.As(verifyErr, &keyErr):
+		out.WriteString("this backup set's known_hosts does not trust this key for " + addr + ". Either nothing is pinned for this host, or the line that holds this key pins it for a different host or carries a marker such as @revoked, which is a line that exists precisely to say this key must not be accepted")
+	default:
+		out.WriteString("the key " + addr + " offers was refused by this backup set's known_hosts. Compare the offered fingerprint out of band before trusting it")
+	}
+	out.WriteString("\n  offered  " + fingerprint + " (" + algorithm + ")")
+	if trustedErr != nil {
+		out.WriteString("\n  trusted  unknown: this set's known_hosts could not be read to say what it does pin")
+		return out.String()
+	}
 	if len(trusted) == 0 {
-		out.WriteString("\n  trusted  nothing: this set's known_hosts holds no key for this host")
+		out.WriteString("\n  trusted  nothing: this set's known_hosts holds no key at all")
 		return out.String()
 	}
 	for _, k := range trusted {
@@ -495,6 +737,9 @@ func hostKeyMismatchDetail(algorithm, offered string, trusted []TrustedKey) stri
 	return out.String()
 }
 
+// matchTrusted finds the offered key among the lines the file holds, for
+// the DETAIL only. It decides nothing: Deps.Verify has already answered
+// by the time either caller reaches this.
 func matchTrusted(trusted []TrustedKey, offered string) (TrustedKey, bool) {
 	for _, k := range trusted {
 		if k.Fingerprint == offered {
@@ -532,67 +777,20 @@ func resolveHost(ctx context.Context, host string) ([]string, error) {
 	return out, nil
 }
 
-func dial(ctx context.Context, addr string) (time.Duration, error) {
+// dial opens the connection StepConnect reports on and HANDS IT BACK
+// open, because StepHostKey's key exchange runs over this same socket.
+// Closing it here and dialling again would be a second connection, and
+// then the key the operator is shown would not be the key that was
+// offered on the connection that was measured.
+func dial(ctx context.Context, addr string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	var dialer net.Dialer
-	start := time.Now()
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	elapsed := time.Since(start)
-	if err != nil {
-		return 0, err
-	}
-	_ = conn.Close()
-	return elapsed, nil
-}
-
-// authenticate proves the server accepts this key for this user, and
-// nothing else. It opens no channel, runs no command and reads no path:
-// that is StepList's job over the real transport.
-//
-// The host key callback pins the exact fingerprint StepHostKey already
-// established and matched, rather than reading known_hosts again. Two
-// reasons: this dial must not be able to succeed against a DIFFERENT key
-// than the one just reported to the operator, and re-reading the file
-// would make a passing authenticate step depend on a parse this package
-// has already done once.
-func authenticate(ctx context.Context, addr, user string, signer ssh.Signer, fingerprint string) error {
-	ctx, cancel := context.WithTimeout(ctx, authTimeout)
-	defer cancel()
-
-	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
-
-	cfg := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			if ssh.FingerprintSHA256(key) != fingerprint {
-				return errors.New("sourcecheck: the server offered a different host key than the one just probed")
-			}
-			return nil
-		},
-		Timeout: authTimeout,
-	}
-
-	client, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
-	if err != nil {
-		return err
-	}
-	go ssh.DiscardRequests(reqs)
-	go func() {
-		for ch := range chans {
-			_ = ch.Reject(ssh.Prohibited, "this connection test opens no channels")
-		}
-	}()
-	return client.Close()
+	return conn, nil
 }
 
 // roundMillis renders a duration the way an operator reads one: whole
@@ -611,3 +809,89 @@ func plural(n int, one, many string) string {
 	}
 	return strconv.Itoa(n) + " " + many
 }
+
+// dialProblem says why a connection attempt failed in the shapes an
+// operator can act on, and never by echoing an error whose text may carry
+// a resolver's internals or a path.
+func dialProblem(err error) string {
+	switch {
+	case err == nil:
+		return "no reason was reported"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "it did not answer within " + connectTimeout.String()
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "it did not answer within " + connectTimeout.String()
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return "the connection was refused or unreachable"
+	}
+	return "the connection could not be established"
+}
+
+// listProblem turns the adapter's own category for a failed listing into
+// a sentence about the source, which is where this failure actually is.
+func listProblem(category transport.Category, t Target, path string) string {
+	switch category {
+	case transport.NotFound:
+		return "authentication succeeded and " + path + " is not there on that machine"
+	case transport.PermissionDenied:
+		return t.User + " authenticated and is not allowed to read " + path + ". That is a permissions problem on the source, and nothing to do with the key"
+	case transport.Transient:
+		return "authentication succeeded and the session dropped while listing " + path + "; the server is reachable and something interrupted it"
+	case transport.UnsupportedCapability:
+		return t.User + " authenticated and the server would not serve sftp for that account"
+	default:
+		return "authentication succeeded and " + path + " could not be listed. It may not exist on that machine, or " + t.User + " may not be allowed to read it"
+	}
+}
+
+// readIdentification reads the server's SSH identification string and
+// returns a net.Conn that replays it, so the handshake sees the stream
+// exactly as it was sent.
+//
+// It reads at most one line, under a short deadline, and gives up
+// silently: this is a nicety for the operator ("SSH-2.0-OpenSSH_9.6p1" is
+// how you know you reached sshd and not a load balancer), never a
+// verdict. Anything that goes wrong here leaves the banner empty and the
+// stream untouched.
+func readIdentification(conn net.Conn) (string, net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+
+	buf := make([]byte, 0, 64)
+	one := make([]byte, 1)
+	for len(buf) < maxIdentificationBytes {
+		n, err := conn.Read(one)
+		if n > 0 {
+			buf = append(buf, one[0])
+			if one[0] == '\n' {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	replay := &replayConn{Conn: conn, pending: io.MultiReader(bytes.NewReader(buf), conn)}
+	line := strings.TrimRight(string(buf), "\r\n")
+	if !strings.HasPrefix(line, "SSH-") {
+		// Not an SSH identification string. Not reported as a failure
+		// here: the handshake below is what decides that, and it says so
+		// with far better words than a guess made from a prefix.
+		return "", replay
+	}
+	return line, replay
+}
+
+// replayConn is a net.Conn whose reads start with bytes already taken off
+// the wire. Everything else is the underlying connection's, including
+// Close, so the deferred close in Run still closes the socket.
+type replayConn struct {
+	net.Conn
+	pending io.Reader
+}
+
+func (c *replayConn) Read(p []byte) (int, error) { return c.pending.Read(p) }

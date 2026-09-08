@@ -483,6 +483,95 @@ export interface SSHKeyImportResult {
   fingerprint: string;
 }
 
+/**
+ * Issue #592: one key in this deployment's own store, as GET /ssh-keys
+ * describes it.
+ *
+ * There is no path here and there will not be one. `SSHKeyRef.KeyFile` is
+ * kept off the wire so a caller never learns the server's filesystem
+ * layout, and an inventory is exactly the shape where a path column looks
+ * helpful and is not: the file it would name lives inside a container the
+ * operator has no shell in.
+ *
+ * `publicKey` is the exception and it has to be. It is public material by
+ * definition, and it is the one string that turns a red "could not
+ * authenticate" into something an operator can act on: paste it into the
+ * remote account's authorized_keys.
+ */
+export interface SSHKeyListing {
+  id: string;
+  algorithm: string;
+  fingerprint: string;
+  /** The authorized_keys line. Public material, never the private half. */
+  publicKey: string;
+  /** RFC 3339, or "" when the deployment cannot report it. "" is a real
+   *  answer and must not be rendered as a date. */
+  importedAt: string;
+  /** Listed, and not offerable for verification until its passphrase
+   *  resolves, which is the same rule the import path already applies. */
+  passphraseProtected: boolean;
+  /** Why this row could not be described. Never names a path. */
+  problem?: string;
+  /** Every backup set id pointing at this key, sorted. An EMPTY list is a
+   *  real and useful answer, and it is the column that turns a wall of
+   *  ids into a decision: a key four sets depend on and a key nothing
+   *  references are very different things to point a fifth set at. */
+  usedBy: string[];
+}
+
+/**
+ * One private key file the engine can actually see (GET
+ * /ssh/key-candidates).
+ *
+ * Unlike SSHKeyListing this DOES carry a path, because a candidate's path
+ * is its identity to an operator and there is no other way to say which
+ * of several files is meant. What makes that safe is server-side: the
+ * locations scanned are a closed, constant set, never caller-supplied and
+ * never walked recursively. The handle that travels back is `id`, which
+ * is opaque, so nothing this UI sends can name a file for the server to
+ * read.
+ *
+ * `fingerprint` comes from the .pub beside the key and is "" when there
+ * is none. A candidate with no fingerprint is shown, marked, and not
+ * selectable: deriving one would mean the server read a private key in
+ * order to put it in a list.
+ */
+export interface SSHKeyCandidate {
+  id: string;
+  path: string;
+  location: string;
+  algorithm: string;
+  fingerprint: string;
+  publicKey: string;
+  /** Permission bits as an operator writes them, e.g. "0600". */
+  mode: string;
+  inStore: boolean;
+  inStoreId?: string;
+  selectable: boolean;
+  /** Why it is not selectable. A row nobody can pick and nobody can
+   *  explain is worse than no row. */
+  reason?: string;
+}
+
+/** One place the scan looked, reported whether or not it held anything.
+ *  Rendering these is not optional: an empty candidate list on a packaged
+ *  install means the engine is a distroless container that cannot see the
+ *  operator's home directory, not that they have no keys. */
+export interface SSHKeyDiscoveryLocation {
+  path: string;
+  /** "configured-key-file" | "mount" | "home" | "discovery-dir". */
+  kind: string;
+  found: number;
+  problem?: string;
+}
+
+/** One scan: what was found, and everywhere that was looked. Never one
+ *  without the other. */
+export interface SSHKeyDiscovery {
+  locations: SSHKeyDiscoveryLocation[];
+  candidates: SSHKeyCandidate[];
+}
+
 /** What a host presented, before anyone has decided to trust it. The
  *  fingerprint is for a human to compare against something they already
  *  know; the known-hosts line is what trust would actually be anchored to,
@@ -502,16 +591,21 @@ export interface ConnectionTestOutcome {
   message?: string;
   /**
    * What the test actually DID, one entry per step and always all of
-   * them, in the order they run (issue #596).
+   * them, in the order they run (issues #592 and #596).
    *
    * `ok` and `message` mean exactly what they always meant, so this is
    * additive in both directions: an older client reading only those two
-   * keeps working, and a newer one against an older engine gets an
-   * absent list rather than a wrong one. Absent is also the honest
-   * answer for the candidate mode, which has no persisted set to resolve
-   * a key, a known_hosts file or a remote path from.
+   * keeps working, and a newer one against an older engine gets an empty
+   * list rather than a wrong one. Empty is "this engine reports no
+   * breakdown", which a render site has to draw as that and never as six
+   * failures.
+   *
+   * ONE array for both modes. The persisted mode reads the key, the
+   * known_hosts and the remote path off the set and the candidate mode
+   * off the request, and they answer the same six questions, so nothing
+   * here depends on which request was sent.
    */
-  checks?: ConnectionCheck[];
+  checks: ConnectionCheck[];
 }
 
 /**
@@ -528,7 +622,18 @@ export interface ConnectionCheck {
   step: "credentials" | "resolve" | "connect" | "host_key" | "authenticate" | "list";
   outcome: "passed" | "failed" | "skipped";
   category?: string;
-  detail?: string;
+  detail: string;
+  /**
+   * How long this step took on its own, in milliseconds.
+   *
+   * OPTIONAL, and absent is not zero. Only credentials, resolve, connect
+   * and host_key are measured separately; authenticate and list are
+   * decided from a single call and have no timing of their own. A
+   * surface that defaulted this to 0 would print "0 ms" next to a green
+   * "Authenticated" on every successful run, which says the server
+   * answered instantly when what happened is that nobody measured.
+   */
+  durationMs?: number;
 }
 
 /** The subset of CreateBackupSetRequest's SSH-facing fields a pre-save
@@ -1310,6 +1415,18 @@ export interface BackupManagerApi {
    *  caller discards its own copy of privateKeyPem the instant this
    *  resolves, per that step's own on-screen copy. */
   importSSHKey(privateKeyPem: string): Promise<SSHKeyImportResult>;
+  /** Issue #592: every key in this deployment's store. The read that
+   *  makes `sshKeyId` a value an operator can actually choose, instead of
+   *  one they had to write down at import time months ago. */
+  listSSHKeys(): Promise<SSHKeyListing[]>;
+  /** Issue #592: private keys the engine can see, and every location it
+   *  looked in. Both halves, always: the locations are what make an empty
+   *  list mean something. */
+  listSSHKeyCandidates(): Promise<SSHKeyDiscovery>;
+  /** Issue #592: import a key this machine already holds, by the opaque
+   *  id `listSSHKeyCandidates` gave it. No key material crosses the
+   *  network in either direction, and the original file is left alone. */
+  importSSHKeyCandidate(candidateId: string): Promise<SSHKeyImportResult>;
   /** The wizard's "Verify server" step (#98 step 3): fetches a real
    *  fingerprint for host:port, trusting nothing yet. */
   probeHostKey(host: string, port: number): Promise<HostKeyProbeResult>;

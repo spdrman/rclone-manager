@@ -234,6 +234,20 @@ export interface BackupSet {
    * whatever was last added to it).
    */
   trustedHostKeyRecordedAt: string | null;
+  /**
+   * The key-store id this set authenticates with (issue #592), or "" when
+   * it uses a key this deployment does not manage.
+   *
+   * "" IS A REAL ANSWER and has to be rendered as one: a set pointing at
+   * a mounted or hand-provisioned key file is in perfectly ordinary
+   * shape, and showing a blank where an id goes would say "this set has
+   * no key" about a set that has one.
+   *
+   * It exists because the edit surface could WRITE this and never read it
+   * back, so "replace the key this set uses" was an offer that could not
+   * name what it was replacing.
+   */
+  sshKeyId: string;
 }
 
 /** One pinned host key, in the two strings an operator compares against

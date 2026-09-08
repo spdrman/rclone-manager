@@ -191,6 +191,47 @@ func (f *FirstRun) ImportSSHKey(_ context.Context, raw []byte, passphrase string
 	return importSSHKeyInto(f.defaults.ConfigPath, raw, passphrase)
 }
 
+// ListSSHKeys is BackupService.ListSSHKeys for an instance that has no
+// BackupService yet (#592).
+//
+// It lists the same directory ImportSSHKey above writes into, so an
+// operator who imported a key one pane earlier in setup can select it on
+// the next one instead of pasting it a second time. UsedBy is empty for
+// every row and that is not a stub: an unconfigured instance has no
+// backup sets, so nothing can be using a key yet, and the honest answer
+// is the empty one.
+func (f *FirstRun) ListSSHKeys(_ context.Context) ([]SSHKeyListing, error) {
+	return listSSHKeysIn(f.defaults.ConfigPath, nil)
+}
+
+// DiscoverSSHKeyCandidates is BackupService.DiscoverSSHKeyCandidates for
+// an unconfigured instance, and it is the surface that needs it most: a
+// brand new install has exactly one key on the machine, the one the
+// installer generated and compose mounted, and setup is the moment
+// somebody is looking for it.
+//
+// It passes no configured key files, because there is no configuration to
+// read them from. The other three locations are the same fixed set.
+func (f *FirstRun) DiscoverSSHKeyCandidates(ctx context.Context) (SSHKeyDiscovery, error) {
+	stored, err := f.ListSSHKeys(ctx)
+	if err != nil {
+		return SSHKeyDiscovery{}, err
+	}
+	return discoverSSHKeyCandidates(nil, stored), nil
+}
+
+// ImportSSHKeyCandidate is BackupService.ImportSSHKeyCandidate for an
+// unconfigured instance, through the same function, so a fresh instance
+// cannot be talked into accepting a selection a configured one would
+// refuse.
+func (f *FirstRun) ImportSSHKeyCandidate(ctx context.Context, id string) (SSHKeyRef, error) {
+	found, err := f.DiscoverSSHKeyCandidates(ctx)
+	if err != nil {
+		return SSHKeyRef{}, err
+	}
+	return importSSHKeyCandidateFrom(f.defaults.ConfigPath, id, found)
+}
+
 // ProbeHostKey is BackupService.ProbeHostKey for an unconfigured
 // instance. It needs nothing from a configuration at all — it fetches a
 // host key and neither trusts nor persists anything — so this is the same

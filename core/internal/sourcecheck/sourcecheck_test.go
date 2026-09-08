@@ -6,12 +6,17 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // The tests below drive Run against a REAL SSH server running in this
@@ -29,7 +34,7 @@ import (
 // Pass a nil authorized key for a server that refuses everyone, which is
 // how the authentication failure is provoked without touching anything
 // outside this process.
-func inProcessSSH(t *testing.T, authorized ssh.PublicKey) (host string, port int, hostFingerprint, hostAlgorithm string) {
+func inProcessSSH(t *testing.T, authorized ssh.PublicKey) (host string, port int, hostKey ssh.PublicKey) {
 	t.Helper()
 
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
@@ -82,7 +87,7 @@ func inProcessSSH(t *testing.T, authorized ssh.PublicKey) (host string, port int
 	}()
 
 	addr := ln.Addr().(*net.TCPAddr)
-	return "127.0.0.1", addr.Port, ssh.FingerprintSHA256(hostSigner.PublicKey()), hostSigner.PublicKey().Type()
+	return "127.0.0.1", addr.Port, hostSigner.PublicKey()
 }
 
 // clientKey mints a throwaway ed25519 client key and returns a signer for
@@ -104,49 +109,65 @@ func clientKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 	return signer, sshPub
 }
 
-// realProbe is the same job rclone.ProbeHostKey does, done here so this
-// package's tests do not depend on that package's import graph. It is
-// wired as Deps.ProbeHostKey exactly as production wires the real one.
-func realProbe(ctx context.Context, host string, port int) (string, string, error) {
-	addr := net.JoinHostPort(host, fmt.Sprint(port))
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+// knownHostsVerifier writes a REAL known_hosts file pinning keys for
+// addr and returns knownhosts' own callback over it, which is exactly
+// what production wires into Deps.Verify.
+//
+// A stub that returned nil or an error would prove the wiring and nothing
+// else. The whole point of Verify being a dependency is that the decision
+// belongs to knownhosts, so the tests make it with knownhosts, over a
+// file on disk, the same way the transport will.
+func knownHostsVerifier(t *testing.T, addr string, keys ...ssh.PublicKey) func(string, net.Addr, ssh.PublicKey) error {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	var lines []string
+	for _, k := range keys {
+		lines = append(lines, knownhosts.Line([]string{addr}, k))
+	}
+	body := strings.Join(lines, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing the fixture known_hosts: %v", err)
+	}
+	check, err := knownhosts.New(path)
 	if err != nil {
-		return "", "", err
+		t.Fatalf("knownhosts.New: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
+	return check
+}
 
-	captured := make(chan ssh.PublicKey, 1)
-	stop := errors.New("captured")
-	_, _, _, err = ssh.NewClientConn(conn, addr, &ssh.ClientConfig{
-		User: "probe",
-		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			captured <- key
-			return stop
-		},
-	})
-	select {
-	case key := <-captured:
-		return key.Type(), ssh.FingerprintSHA256(key), nil
-	default:
-		if err == nil {
-			err = errors.New("no host key offered")
-		}
-		return "", "", err
+// trustedKeysOf is the DETAIL half: what the file holds, as the
+// production Trusted dependency reports it. It decides nothing, exactly
+// like the real one.
+func trustedKeysOf(keys ...ssh.PublicKey) []TrustedKey {
+	var out []TrustedKey
+	for i, k := range keys {
+		out = append(out, TrustedKey{Algorithm: k.Type(), Fingerprint: ssh.FingerprintSHA256(k), Line: i + 1})
 	}
+	return out
 }
 
 // depsFor wires every dependency to something real, so a test only has to
 // state the one thing it is changing.
-func depsFor(signer ssh.Signer, trusted []TrustedKey, entries int) Deps {
+//
+// verify is a knownhosts callback over a file this test wrote, and
+// trusted is what that same file holds. They are handed in separately
+// because that separation is the fix: one of them decides, the other one
+// only describes.
+func depsFor(fingerprint string, trusted []TrustedKey, verify func(string, net.Addr, ssh.PublicKey) error, entries int) Deps {
 	return Deps{
-		Credentials: func(context.Context) (ssh.Signer, string, error) {
-			return signer, ssh.FingerprintSHA256(signer.PublicKey()), nil
-		},
-		Trusted:      func(context.Context) ([]TrustedKey, error) { return trusted, nil },
-		ProbeHostKey: realProbe,
-		List:         func(context.Context) (int, error) { return entries, nil },
+		Credentials: func(context.Context) (string, error) { return fingerprint, nil },
+		Trusted:     func(context.Context) ([]TrustedKey, error) { return trusted, nil },
+		Verify:      verify,
+		List:        func(context.Context) (int, error) { return entries, nil },
 	}
+}
+
+// addrOf is the host:port form both the dial and the known_hosts line use.
+func addrOf(host string, port int) string {
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func outcomes(r Report) map[Step]Outcome {
@@ -172,8 +193,10 @@ func checkFor(t *testing.T, r Report, step Step) Check {
 // it, an implementation that failed everything would pass all four
 // failure tests and nothing would notice.
 func TestRun_EveryStepPasses(t *testing.T) {
-	signer, pub := clientKey(t)
-	host, port, fingerprint, algorithm := inProcessSSH(t, pub)
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+	fingerprint := ssh.FingerprintSHA256(hostKey)
 
 	report := Run(context.Background(), Target{
 		BackupSetID:          "api-server/var-backups",
@@ -183,7 +206,7 @@ func TestRun_EveryStepPasses(t *testing.T) {
 		RemotePath:           "/var/backups",
 		KeyReference:         "ssh_key_2",
 		PassphraseConfigured: true,
-	}, depsFor(signer, []TrustedKey{{Algorithm: algorithm, Fingerprint: fingerprint, Line: 1}}, 41))
+	}, depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 41))
 
 	if !report.OK {
 		t.Fatalf("a server that answers, offers the trusted key and accepts the credential reported not OK: %+v", report.Checks)
@@ -203,10 +226,20 @@ func TestRun_EveryStepPasses(t *testing.T) {
 	// The details have to carry the facts an operator acts on, not just
 	// the word "passed". These are the four the issue names.
 	if d := checkFor(t, report, StepCredentials).Detail; !strings.Contains(d, "ssh_key_2") || !strings.Contains(d, "passphrase") {
-		t.Errorf("credentials detail does not name the key or say the passphrase opened it: %q", d)
+		t.Errorf("credentials detail does not name the key or account for the passphrase: %q", d)
+	}
+	if d := checkFor(t, report, StepCredentials).Detail; !strings.Contains(d, "SHA256:aClientKeyFingerprint") {
+		t.Errorf("credentials detail does not name the public half an operator has to put in authorized_keys: %q", d)
 	}
 	if d := checkFor(t, report, StepConnect).Detail; !strings.Contains(d, "ms") && !strings.Contains(d, "s") {
 		t.Errorf("connect detail does not say how fast the connect was: %q", d)
+	}
+	// The identification string is the one piece of evidence that says
+	// something answered SSH rather than merely accepted a socket, and
+	// it is what tells an operator they reached sshd and not a load
+	// balancer.
+	if d := checkFor(t, report, StepConnect).Detail; !strings.Contains(d, "SSH-2.0-") {
+		t.Errorf("connect detail carries no SSH identification string: %q", d)
 	}
 	if d := checkFor(t, report, StepHostKey).Detail; !strings.Contains(d, fingerprint) {
 		t.Errorf("host_key detail does not print the fingerprint that matched: %q", d)
@@ -221,8 +254,10 @@ func TestRun_EveryStepPasses(t *testing.T) {
 // whose identity did not check out, and the two steps that never ran must
 // say they never ran rather than being quietly absent or quietly passed.
 func TestRun_HostKeyMismatchSkipsAuthenticateAndList(t *testing.T) {
-	signer, pub := clientKey(t)
-	host, port, offeredFingerprint, algorithm := inProcessSSH(t, pub)
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+	offeredFingerprint := ssh.FingerprintSHA256(hostKey)
 
 	// A different key entirely, which is exactly what a rebuilt or
 	// re-keyed machine offers.
@@ -234,10 +269,11 @@ func TestRun_HostKeyMismatchSkipsAuthenticateAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ssh.NewSignerFromKey: %v", err)
 	}
-	staleFingerprint := ssh.FingerprintSHA256(otherSigner.PublicKey())
+	stale := otherSigner.PublicKey()
+	staleFingerprint := ssh.FingerprintSHA256(stale)
 
 	listed := false
-	deps := depsFor(signer, []TrustedKey{{Algorithm: algorithm, Fingerprint: staleFingerprint, Line: 3}}, 0)
+	deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(stale), knownHostsVerifier(t, addr, stale), 0)
 	deps.List = func(context.Context) (int, error) {
 		listed = true
 		return 0, nil
@@ -294,17 +330,19 @@ func TestRun_HostKeyMismatchSkipsAuthenticateAndList(t *testing.T) {
 // the skip discipline, from the other end of the list: a key this host
 // cannot open is not a network problem and must not be reported as one.
 func TestRun_UnreadableCredentialSkipsEverythingElse(t *testing.T) {
-	signer, pub := clientKey(t)
-	host, port, fingerprint, algorithm := inProcessSSH(t, pub)
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
 
-	probed := false
-	deps := depsFor(signer, []TrustedKey{{Algorithm: algorithm, Fingerprint: fingerprint, Line: 1}}, 4)
-	deps.Credentials = func(context.Context) (ssh.Signer, string, error) {
-		return nil, "", errors.New("open /var/lib/backup-manager/keys/ssh_key_4: permission denied")
+	verified := false
+	deps := depsFor("", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 4)
+	deps.Credentials = func(context.Context) (string, error) {
+		return "", errors.New("open /var/lib/backup-manager/keys/ssh_key_4: permission denied")
 	}
-	deps.ProbeHostKey = func(ctx context.Context, h string, p int) (string, string, error) {
-		probed = true
-		return realProbe(ctx, h, p)
+	inner := deps.Verify
+	deps.Verify = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		verified = true
+		return inner(hostname, remote, key)
 	}
 
 	var observed []Step
@@ -327,8 +365,8 @@ func TestRun_UnreadableCredentialSkipsEverythingElse(t *testing.T) {
 			t.Errorf("%s: outcome %q, want %q after the credential could not be obtained", step, got[step], Skipped)
 		}
 	}
-	if probed {
-		t.Error("the host key was probed after the credential failed; nothing should touch the far side once the key cannot be opened on this host")
+	if verified {
+		t.Error("a host key was compared after the credential failed; nothing should touch the far side once the key cannot be used on this host")
 	}
 	if len(observed) != 1 || observed[0] != StepCredentials {
 		t.Errorf("Observe was called for %v, want exactly [credentials]: the classified cause goes to the log, once, for the step that failed", observed)
@@ -339,17 +377,21 @@ func TestRun_UnreadableCredentialSkipsEverythingElse(t *testing.T) {
 // the host key is reported on its own. Before this package, a server that
 // answered, offered the trusted key and then refused the credential was
 // the same sentence as a typo'd hostname.
+//
+// The refusal arrives as the adapter's own FR-22 category on the ONE
+// Deps.List call, because that is where it arrives in production: the
+// sftp session that lists a folder is the session that authenticated to
+// open it, and this check does not open a second one holding its own copy
+// of the key. Which of the two steps failed is read off the category and
+// never off the error's text.
 func TestRun_ServerRefusesTheKeyFailsAtAuthenticate(t *testing.T) {
-	signer, _ := clientKey(t)
-	// nil authorized: the server offers a real host key and refuses every
-	// credential, which is exactly an un-authorised key on a real host.
-	host, port, fingerprint, algorithm := inProcessSSH(t, nil)
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
 
-	listed := false
-	deps := depsFor(signer, []TrustedKey{{Algorithm: algorithm, Fingerprint: fingerprint, Line: 1}}, 0)
+	deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 0)
 	deps.List = func(context.Context) (int, error) {
-		listed = true
-		return 0, nil
+		return 0, transport.NewError(transport.Authentication, "list", errors.New("ssh: unable to authenticate"))
 	}
 
 	report := Run(context.Background(), Target{
@@ -370,8 +412,146 @@ func TestRun_ServerRefusesTheKeyFailsAtAuthenticate(t *testing.T) {
 	if got[StepList] != Skipped {
 		t.Errorf("list: outcome %q, want %q after authentication failed", got[StepList], Skipped)
 	}
-	if listed {
-		t.Error("the remote path was listed after authentication failed")
+	if d := checkFor(t, report, StepList).Detail; d == "" {
+		t.Error("list was skipped with no reason, so a reader cannot tell why it never ran")
+	}
+}
+
+// TestRun_ListFailureLeavesAuthenticatePassed is the split the whole
+// convergence is about, from the other side.
+//
+// A folder that cannot be read by an account that authenticated fine is a
+// permissions problem on the source and has nothing to do with keys.
+// Reporting it as an authentication failure is how somebody ends up
+// regenerating a keypair to fix a chmod.
+func TestRun_ListFailureLeavesAuthenticatePassed(t *testing.T) {
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+
+	deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 0)
+	deps.List = func(context.Context) (int, error) {
+		return 0, transport.NewError(transport.PermissionDenied, "list", errors.New("permission denied"))
+	}
+
+	report := Run(context.Background(), Target{
+		BackupSetID: "api-server/var-backups", Host: host, Port: port,
+		User: "backups", RemotePath: "/var/backups", KeyReference: "ssh_key_2",
+	}, deps)
+
+	got := outcomes(report)
+	if got[StepAuthenticate] != Passed {
+		t.Errorf("authenticate: outcome %q, want %q: the account did authenticate, the folder is what it cannot read", got[StepAuthenticate], Passed)
+	}
+	if got[StepList] != Failed {
+		t.Fatalf("list: outcome %q, want %q", got[StepList], Failed)
+	}
+	if c := checkFor(t, report, StepList); c.Category != CategoryRemotePath {
+		t.Errorf("list category %q, want %q", c.Category, CategoryRemotePath)
+	}
+}
+
+// TestRun_TransportHostKeyRefusalFlipsTheHostKeyStep keeps a
+// disagreement where it happened.
+//
+// The key exchange above matched against the same file the transport
+// verifies against, so a transport that then refuses on the host key is
+// two readings of one fact disagreeing. That is reported on host_key and
+// never re-scored as an authentication problem, because a disagreement
+// about a host key is the one thing here nobody should have to
+// reconstruct from two greens.
+func TestRun_TransportHostKeyRefusalFlipsTheHostKeyStep(t *testing.T) {
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+
+	deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 0)
+	deps.List = func(context.Context) (int, error) {
+		return 0, transport.NewError(transport.HostVerification, "list", errors.New("ssh: host key mismatch"))
+	}
+
+	report := Run(context.Background(), Target{
+		BackupSetID: "api-server/var-backups", Host: host, Port: port,
+		User: "backups", RemotePath: "/var/backups", KeyReference: "ssh_key_2",
+	}, deps)
+
+	got := outcomes(report)
+	if got[StepHostKey] != Failed {
+		t.Fatalf("host_key: outcome %q, want %q when the transport refuses on the host key", got[StepHostKey], Failed)
+	}
+	for _, step := range []Step{StepAuthenticate, StepList} {
+		if got[step] != Skipped {
+			t.Errorf("%s: outcome %q, want %q: nothing was offered to a server the transport would not identify", step, got[step], Skipped)
+		}
+	}
+}
+
+// TestRun_TransportKeyPermissionRefusalFlipsCredentials puts a local
+// refusal on the local step.
+//
+// KeyPermissions means this deployment would not USE the key: nothing was
+// offered to the server at all. Reporting it as "the server refused your
+// key" would send an operator to the wrong machine entirely, and the
+// credentials step is the one that already asked this exact question.
+func TestRun_TransportKeyPermissionRefusalFlipsCredentials(t *testing.T) {
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+
+	deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 0)
+	deps.List = func(context.Context) (int, error) {
+		return 0, transport.NewError(transport.KeyPermissions, "list", errors.New("ssh_key_permissions"))
+	}
+
+	report := Run(context.Background(), Target{
+		BackupSetID: "api-server/var-backups", Host: host, Port: port,
+		User: "backups", RemotePath: "/var/backups", KeyReference: "ssh_key_2",
+	}, deps)
+
+	got := outcomes(report)
+	if got[StepCredentials] != Failed {
+		t.Fatalf("credentials: outcome %q, want %q when this deployment refuses to use the key", got[StepCredentials], Failed)
+	}
+	if c := checkFor(t, report, StepCredentials); c.Category != CategoryCredentials {
+		t.Errorf("credentials category %q, want %q: this failure is on this host, not at the far side", c.Category, CategoryCredentials)
+	}
+	for _, step := range []Step{StepAuthenticate, StepList} {
+		if got[step] != Skipped {
+			t.Errorf("%s: outcome %q, want %q: the key never left this host", step, got[step], Skipped)
+		}
+	}
+}
+
+// TestRun_DurationIsAbsentOnTheStepsThatShareOneCall is the "0 ms beside
+// a green Authenticated" bug, asserted rather than described.
+//
+// Four steps are measured on their own and carry a Duration. Two are
+// decided from a single Deps.List call and have no timing that belongs to
+// either of them, so they carry ZERO, which every layer above omits. A
+// zero that rendered as "0 ms" would tell an operator the server answered
+// instantly when what happened is that nobody measured.
+func TestRun_DurationIsAbsentOnTheStepsThatShareOneCall(t *testing.T) {
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
+
+	report := Run(context.Background(), Target{
+		BackupSetID: "api-server/var-backups", Host: host, Port: port,
+		User: "backups", RemotePath: "/var/backups", KeyReference: "ssh_key_2",
+	}, depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 7))
+
+	if !report.OK {
+		t.Fatalf("the fixture did not pass, so the timings below are not the ones being asserted: %+v", report.Checks)
+	}
+	for _, step := range []Step{StepResolve, StepConnect, StepHostKey} {
+		if d := checkFor(t, report, step).Duration; d <= 0 {
+			t.Errorf("%s carries no Duration (%v); it is measured on its own and a surface renders that number", step, d)
+		}
+	}
+	for _, step := range []Step{StepAuthenticate, StepList} {
+		if d := checkFor(t, report, step).Duration; d != 0 {
+			t.Errorf("%s carries a Duration of %v; these two come out of ONE call and neither has a timing of its own, so a number here is one a surface would print as fact", step, d)
+		}
 	}
 }
 
@@ -379,8 +559,7 @@ func TestRun_ServerRefusesTheKeyFailsAtAuthenticate(t *testing.T) {
 // "this name does not exist" and "nothing answered on that port" send an
 // operator to two different places.
 func TestRun_ResolveFailureIsNotANetworkFailure(t *testing.T) {
-	signer, _ := clientKey(t)
-	deps := depsFor(signer, nil, 0)
+	deps := depsFor("SHA256:aClientKeyFingerprint", nil, func(string, net.Addr, ssh.PublicKey) error { return nil }, 0)
 
 	report := Run(context.Background(), Target{
 		BackupSetID: "api-server/var-backups",
@@ -422,28 +601,34 @@ func TestRun_NoDetailCarriesTransportErrorText(t *testing.T) {
 	}
 	poisoned := errors.New(strings.Join(poison, " | "))
 
-	signer, pub := clientKey(t)
-	host, port, fingerprint, algorithm := inProcessSSH(t, pub)
+	_, pub := clientKey(t)
+	host, port, hostKey := inProcessSSH(t, pub)
+	addr := addrOf(host, port)
 
 	for _, tc := range []struct {
 		name string
 		with func(*Deps)
 	}{
 		{"credentials", func(d *Deps) {
-			d.Credentials = func(context.Context) (ssh.Signer, string, error) { return nil, "", poisoned }
+			d.Credentials = func(context.Context) (string, error) { return "", poisoned }
 		}},
-		{"host key probe", func(d *Deps) {
-			d.ProbeHostKey = func(context.Context, string, int) (string, string, error) { return "", "", poisoned }
+		{"host key verification", func(d *Deps) {
+			d.Verify = func(string, net.Addr, ssh.PublicKey) error { return poisoned }
 		}},
 		{"known hosts", func(d *Deps) {
+			// Trusted failing must not change the VERDICT either: it
+			// composes the sentence and nothing else. Paired with a
+			// Verify that refuses, so there is a failed step whose
+			// wording this case can inspect.
 			d.Trusted = func(context.Context) ([]TrustedKey, error) { return nil, poisoned }
+			d.Verify = func(string, net.Addr, ssh.PublicKey) error { return errors.New("knownhosts refused") }
 		}},
 		{"list", func(d *Deps) {
 			d.List = func(context.Context) (int, error) { return 0, poisoned }
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps := depsFor(signer, []TrustedKey{{Algorithm: algorithm, Fingerprint: fingerprint, Line: 1}}, 3)
+			deps := depsFor("SHA256:aClientKeyFingerprint", trustedKeysOf(hostKey), knownHostsVerifier(t, addr, hostKey), 3)
 			tc.with(&deps)
 			report := Run(context.Background(), Target{
 				BackupSetID: "api-server/var-backups", Host: host, Port: port,

@@ -19,6 +19,9 @@ import type {
   RetentionSettings,
   RetentionTierSetting,
   SSHKeyImportResult,
+  SSHKeyListing,
+  SSHKeyDiscovery,
+  ConnectionCheck,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
 } from "./contracts";
@@ -155,7 +158,8 @@ const SETS: BackupSet[] = [
     lastValidation: "passed", expectedIntervalHours: 24,
     retainedCount: 32, retainedBytes: 421 * GB,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM" }],
-    trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+    trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+    sshKeyId: "key_a1b2c3"
   },
   {
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
@@ -179,7 +183,11 @@ const SETS: BackupSet[] = [
       { algorithm: "ssh-ed25519", fingerprint: "SHA256:7bTmQ4Kp+Xr9vNc2yLdE8sJf0UwZoGqR3iHuVeM1kAx" },
       { algorithm: "ssh-rsa", fingerprint: "SHA256:5dWnP1Hj+Kt6xRc9yMbE3sJf8UwZoGqT4iLrDuVeN2m" }
     ],
-    trustedHostKeyRecordedAt: "2026-07-19T09:02:00+02:00"
+    trustedHostKeyRecordedAt: "2026-07-19T09:02:00+02:00",
+    // The same key as the set above, so the listing has a row that is
+    // genuinely used by two sets: "used by nothing" and "used by four
+    // sets" are the two ends of the column the wizard decides on.
+    sshKeyId: "key_a1b2c3"
   },
   {
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
@@ -200,7 +208,8 @@ const SETS: BackupSet[] = [
     // The set whose anchor this deployment did not write: it points at a
     // known_hosts an operator maintains, so there is no honest answer to
     // "when was this trusted" and the panel says so.
-    trustedHostKeyRecordedAt: null
+    trustedHostKeyRecordedAt: null,
+    sshKeyId: "key_d4e5f6"
   },
   {
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
@@ -222,7 +231,11 @@ const SETS: BackupSet[] = [
     lastValidation: "passed", expectedIntervalHours: 168,
     retainedCount: 31, retainedBytes: 3.4 * TB,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:4cRnW2Yk+Qp8mLb6vTdF1sJe9UzXoGhS5iNrCuJeP3t" }],
-    trustedHostKeyRecordedAt: "2026-05-11T14:20:00+02:00"
+    trustedHostKeyRecordedAt: "2026-05-11T14:20:00+02:00",
+    // The set on a key this deployment does not manage: a mounted or
+    // hand-provisioned key.file resolves to no store id, and "" is the
+    // honest answer rather than a blank where an id goes.
+    sshKeyId: ""
   }
 ];
 
@@ -938,6 +951,108 @@ const notFound = <T,>(): Promise<T> =>
 const mockImportedKeyFingerprint = "SHA256:7pMwK3nRt+Vc9jXe1sHfB0oZaGdQ8yTiKrEuM4x";
 const mockProbedFingerprint = "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM";
 
+/** The fingerprint of the key the installer generated and compose
+ *  mounted, which on a default install is the ONE candidate a brand new
+ *  operator has and the whole reason discovery exists. */
+const mockCandidateFingerprint = "SHA256:wjJmbzfYx2FEBhBBqHHnfm7tcyk0SnWVqdWysm/9kho";
+
+/**
+ * Issue #592: the key store this fixture serves.
+ *
+ * Three rows, chosen so the wizard's own list is exercised rather than
+ * decorated: one key several sets share, one nothing references, and one
+ * that is passphrase-protected and therefore listed and not offerable.
+ * "Used by nothing" and "needs a passphrase" are both states the page has
+ * to render differently, and a fixture of three identical healthy keys
+ * would prove neither.
+ */
+const MOCK_SSH_KEYS: SSHKeyListing[] = [
+  {
+    id: "key_a1b2c3",
+    algorithm: "ssh-ed25519",
+    fingerprint: "SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImocksharedkey rclone-manager",
+    importedAt: "2026-03-11T09:00:00+02:00",
+    passphraseProtected: false,
+    usedBy: []
+  },
+  {
+    id: "key_d4e5f6",
+    algorithm: "ssh-ed25519",
+    fingerprint: "SHA256:3anIqszP1Gm9GDNcq51b5ndeWt5yAF/7t1uS6/0HQbE",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockunusedkey rclone-manager",
+    importedAt: "2026-08-02T11:30:00+02:00",
+    passphraseProtected: false,
+    usedBy: []
+  },
+  {
+    id: "key_g7h8i9",
+    algorithm: "ssh-rsa",
+    fingerprint: "SHA256:cDBzeNvm6cSIbi8xmhwQ/SkONr9ZNoVv5NlA1hx8GmE",
+    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADmockprotectedkey rclone-manager",
+    importedAt: "2025-11-27T16:45:00+01:00",
+    passphraseProtected: true,
+    usedBy: []
+  }
+];
+
+/** Which sets currently point at a key, read from the SETS fixture rather
+ *  than written down twice, so the column cannot drift from the sets the
+ *  rest of this mock serves. */
+function mockKeyUsage(keyId: string): string[] {
+  return SETS.filter((s) => s.sshKeyId === keyId)
+    .map((s) => s.id)
+    .sort();
+}
+
+/** A connection test where all six steps hold, in the order they run.
+ *
+ *  ONE fixture for both modes of the route, because there is one array on
+ *  the wire (issues #592 and #596). The mock used to answer the candidate
+ *  mode with stages the server never sent in that mode, which is a
+ *  fixture that agrees with no deployment.
+ *
+ *  Six entries rather than a bare `ok`, because a fixture that answered
+ *  with only the boolean would let a page that ignores the breakdown look
+ *  correct in every browser test.
+ *
+ *  `durationMs` is on the four steps that are measured on their own and
+ *  ABSENT on authenticate and list, which the engine decides from a
+ *  single call. A fixture that put a number on all six would make a
+ *  render site that prints "0 ms" beside a green row look correct here
+ *  and wrong in production.
+ */
+function mockPassingChecks(user: string): ConnectionCheck[] {
+  const addr = SETS[0].host + ":" + SETS[0].port;
+  return [
+    {
+      step: "credentials",
+      outcome: "passed",
+      detail:
+        "this backup set's key resolves to a key this deployment holds, and its file and directory permissions are unchanged; its public half is " +
+        mockImportedKeyFingerprint,
+      durationMs: 3
+    },
+    { step: "resolve", outcome: "passed", detail: SETS[0].host + " is 203.0.113.24 (A)", durationMs: 12 },
+    {
+      step: "connect",
+      outcome: "passed",
+      detail: "TCP to " + addr + " in 41ms · SSH-2.0-OpenSSH_9.6p1",
+      durationMs: 41
+    },
+    {
+      step: "host_key",
+      outcome: "passed",
+      detail:
+        "the server offered " + SETS[0].trustedHostKeys[0].algorithm + " " + SETS[0].trustedHostKeys[0].fingerprint +
+        ", matching the key this backup set trusts on line 1 of its known_hosts",
+      durationMs: 18
+    },
+    { step: "authenticate", outcome: "passed", detail: "the server accepted publickey for " + user },
+    { step: "list", outcome: "passed", detail: SETS[0].remoteFolder + " listed, 41 entries" }
+  ];
+}
+
 function completionMethodFromStrategy(strategy: CreateBackupSetRequest["completionStrategy"]): BackupSet["completionMethod"] {
   if (strategy === "rename") return "atomic-rename";
   if (strategy === "stable") return "stable-size";
@@ -987,7 +1102,8 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     retainedCount: 0,
     retainedBytes: 0,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint }],
-    trustedHostKeyRecordedAt: new Date().toISOString()
+    trustedHostKeyRecordedAt: new Date().toISOString(),
+    sshKeyId: req.sshKeyId
   };
 }
 
@@ -1145,6 +1261,14 @@ const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
   "importSSHKey",
   "probeHostKey",
   "testCandidateConnection",
+  // Issue #592: the setup wizard needs to LOOK before an instance is
+  // configured, and it is the surface that needs it most. A brand new
+  // install has exactly one key on the machine, the one the installer
+  // generated and compose mounted, and setup is the moment somebody is
+  // looking for it.
+  "listSSHKeys",
+  "listSSHKeyCandidates",
+  "importSSHKeyCandidate",
   "login",
   "enrollAdministrator",
   "rotatePassword",
@@ -1360,28 +1484,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         billing:
           "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
       }),
-    // Six steps, not a verdict (issue #596). A mock that answered {ok:
-    // true} alone would let a surface that renders nothing at all look
-    // exactly like one that renders the steps, which is precisely the
-    // state 0.3.2 shipped in.
-    testConnection: () =>
-      delay({
-        ok: true,
-        checks: [
-          { step: "credentials", outcome: "passed", detail: "read the private key this backup set's configured key file names" },
-          { step: "resolve", outcome: "passed", detail: SETS[0].host + " is 203.0.113.24 (A)" },
-          { step: "connect", outcome: "passed", detail: "TCP to 203.0.113.24:" + SETS[0].port + " in 41ms" },
-          {
-            step: "host_key",
-            outcome: "passed",
-            detail:
-              "the server offered " + SETS[0].trustedHostKeys[0].algorithm + " " + SETS[0].trustedHostKeys[0].fingerprint +
-              ", matching the key this backup set trusts on line 1 of its known_hosts"
-          },
-          { step: "authenticate", outcome: "passed", detail: "the server accepted publickey for " + SETS[0].username },
-          { step: "list", outcome: "passed", detail: SETS[0].remoteFolder + " listed, 41 entries" }
-        ]
-      }),
+    // Six steps, not a verdict (issues #592 and #596). A mock that
+    // answered {ok: true} alone would let a surface that renders nothing
+    // at all look exactly like one that renders the steps, which is
+    // precisely the state 0.3.2 shipped in.
+    testConnection: () => delay({ ok: true, checks: mockPassingChecks(SETS[0].username) }),
     // Both APPLY to the SETS fixture rather than resolving and leaving it
     // alone, for the reason updateBackupSet's own comment below gives:
     // a mock that answers "fine" without changing anything makes every
@@ -1492,7 +1599,36 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>
       delay({ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint, knownHostsLine: "mock-host.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5mock" }),
-    testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
+    testCandidateConnection: (params): Promise<ConnectionTestOutcome> =>
+      delay({ ok: true, checks: mockPassingChecks(params.user) }),
+    // Issue #592's two reads. Both answer the way a packaged install
+    // does, which means the scan reports a location it found nothing in:
+    // the page has to be exercised against "I looked here and there was
+    // nothing", because that is what a real deployment mostly returns and
+    // it is the answer a bare empty list would get wrong.
+    listSSHKeys: (): Promise<SSHKeyListing[]> => delay(MOCK_SSH_KEYS.map((k) => ({ ...k, usedBy: mockKeyUsage(k.id) }))),
+    listSSHKeyCandidates: (): Promise<SSHKeyDiscovery> =>
+      delay({
+        locations: [
+          { path: "/etc/backup-manager", kind: "mount", found: 1 },
+          { path: "/home/backup-manager/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
+        ],
+        candidates: [
+          {
+            id: "cand_mock_installer",
+            path: "/etc/backup-manager/id_ed25519",
+            location: "/etc/backup-manager",
+            algorithm: "ssh-ed25519",
+            fingerprint: mockCandidateFingerprint,
+            publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockinstallerkey rclone-manager",
+            mode: "0600",
+            inStore: false,
+            selectable: true
+          }
+        ]
+      }),
+    importSSHKeyCandidate: (): Promise<SSHKeyImportResult> =>
+      delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockCandidateFingerprint }),
 
     listArtifacts: (setId) =>
       delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),

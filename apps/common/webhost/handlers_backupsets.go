@@ -159,7 +159,19 @@ type backupSetResponse struct {
 	// service.SSHKeyRef.KeyFile for the same rule applied to imported
 	// keys).
 	ValidatorID string `json:"validator_id"`
-	Disabled    bool   `json:"disabled"`
+	// SSHKeyID is the key-store id this set's key resolves to (#592), the
+	// same value ImportSSHKey returned and GET /api/v1/ssh-keys lists.
+	// The id only: what it resolves to is a server-side path, and this
+	// package never puts one on the wire (service.SSHKeyRef.KeyFile).
+	//
+	// Never omitted, and EMPTY IS A REAL ANSWER: it means this set uses a
+	// key this deployment does not manage, which is every set pointing at
+	// a mounted or hand-provisioned key file. It is here because
+	// UpdateBackupSetRequest has always been able to WRITE ssh_key_id and
+	// nothing could read it back, so a surface offering to replace a
+	// set's key could not name the key being replaced.
+	SSHKeyID string `json:"ssh_key_id"`
+	Disabled bool   `json:"disabled"`
 	// ReadOnly is the fully-resolved answer (service.BackupSet.ReadOnly):
 	// see backupSetSpec.ReadOnly's own doc for what setting it means.
 	// Never omitted, the same discipline Disabled above already follows:
@@ -227,6 +239,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		StableForSeconds:    int(bs.StableFor / time.Second),
 		StaleAfterSeconds:   int(bs.StaleAfter / time.Second),
 		ValidatorID:         string(bs.ValidatorID),
+		SSHKeyID:            bs.SSHKeyID,
 		Disabled:            bs.Disabled,
 		ReadOnly:            bs.ReadOnly,
 		RetentionIsOverride: bs.RetentionIsOverride,

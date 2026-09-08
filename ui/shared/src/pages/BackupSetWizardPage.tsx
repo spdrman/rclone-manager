@@ -27,7 +27,8 @@ import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
-import type { ValidatorCatalogEntry } from "@shared/api/contracts";
+import type { SSHKeyListing, ValidatorCatalogEntry } from "@shared/api/contracts";
+import { describeFailure } from "@shared/api/failure";
 import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
@@ -122,6 +123,13 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // material itself, which never lives in this component's state at
   // all past the one importSSHKey call below.
   const [importedKeyId, setImportedKeyId] = useState<string | null>(null);
+  // Issue #592: the keys this deployment already holds, which is what
+  // finally puts something behind the "Use managed key" radio. null is
+  // "not read yet" and [] is "read, and there are none", and those are
+  // rendered differently: a wizard that showed an empty list before it
+  // had asked would be telling a brand new operator they have no keys.
+  const [managedKeys, setManagedKeys] = useState<SSHKeyListing[] | null>(null);
+  const [managedKeysError, setManagedKeysError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -216,6 +224,31 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
     };
   }, [api]);
 
+  // Issue #592: the key store, read once when the wizard opens so the
+  // "Use managed key" radio has something behind it. A failure is
+  // reported rather than turned into an empty list, because "you have no
+  // keys" and "I could not read the store" are different sentences and
+  // only one of them is ever true.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSSHKeys()
+      .then((keys) => {
+        if (!cancelled) setManagedKeys(keys);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setManagedKeys([]);
+          setManagedKeysError(
+            describeFailure(e, "The keys this deployment already holds could not be read.").message
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
   const selectedValidator = (validatorCatalog ?? []).find((v) => v.id === validatorId);
 
   const [hasResetOnMount, setHasResetOnMount] = useState(false);
@@ -249,7 +282,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   const saveDisabled =
     !canSave ||
     (!acknowledged && !readOnlySource) ||
-    keySource !== "import" ||
+    keySource === "generate" ||
     !importedKeyId ||
     !trustedKnownHostsLine;
 
@@ -353,11 +386,11 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // resource.ts's fetchResource, exactly as that module's own doc
   // describes for a mutation elsewhere).
   async function handleSave(disabled: boolean, runImmediately: boolean, acknowledgeRepoint = false) {
-    if (keySource !== "import" || !importedKeyId) {
+    if (keySource === "generate" || !importedKeyId) {
       setSaveError(
         keySource === "generate"
-          ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
-          : "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+          ? "Generating a key on save isn't available yet — pick a key this deployment already holds, or import one, on the Authentication step."
+          : "Pick a key on the Authentication step before saving."
       );
       return;
     }
@@ -442,12 +475,12 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   let saveHint = "";
   if (hostKeyChanged) {
     saveHint = "The host key changed since it was trusted — resolve that on the Verify server step before saving.";
-  } else if (keySource !== "import" || !importedKeyId) {
+  } else if (keySource === "generate" || !importedKeyId) {
     saveHint =
       keySource === "generate"
-        ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
+        ? "Generating a key on save isn't available yet — pick a key this deployment already holds, or import one, on the Authentication step."
         : keySource === "managed"
-          ? "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+          ? "Pick one of the keys this deployment already holds before saving."
           : "Import an SSH key on the Authentication step before saving.";
   } else if (!trustedKnownHostsLine) {
     saveHint = "Trust the host's fingerprint on the Verify server step before saving.";
@@ -587,18 +620,72 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                 </div>
               ) : null}
 
-              {/* Issue #299: "Use managed key" used to show a picklist of
+              {/* Issue #299 stripped this radio's picklist, which showed
                   two hardcoded key names and a fabricated "Already
-                  installed on 2 other backup sets" count — there is no
-                  managed-key store behind either. Same treatment as
-                  "Generate" above. */}
+                  installed on 2 other backup sets" count. That was the
+                  right call and it left an honest control that could not
+                  do anything, for exactly one reason: nothing could list
+                  the key store.
+
+                  #592 built that listing, so the picklist is real now.
+                  The names are ids the server returned, the fingerprints
+                  are the public halves it read, and "used by" is counted
+                  from the sets that actually reference each key rather
+                  than invented. */}
               {keySource === "managed" ? (
-                <div className="banner banner--info" style={{ marginTop: 18, fontSize: "var(--text-sm)" }}>
-                  <span aria-hidden="true">i</span>
-                  <span>
-                    Reusing a managed key on save isn&rsquo;t available yet — import a key on the
-                    Authentication step instead.
-                  </span>
+                <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 8 }}>
+                  {managedKeys === null ? (
+                    <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                      Reading the key store&hellip;
+                    </span>
+                  ) : managedKeysError ? (
+                    <div className="banner banner--warn" style={{ fontSize: "var(--text-sm)" }}>
+                      <span aria-hidden="true">!</span>
+                      <span>{managedKeysError}</span>
+                    </div>
+                  ) : managedKeys.length === 0 ? (
+                    <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
+                      <span aria-hidden="true">i</span>
+                      <span>
+                        This deployment holds no imported keys yet. Import one below and it
+                        will be here for the next backup set.
+                      </span>
+                    </div>
+                  ) : (
+                    managedKeys.map((k) => (
+                      <button
+                        key={k.id}
+                        type="button"
+                        className="btn"
+                        aria-pressed={importedKeyId === k.id}
+                        disabled={k.passphraseProtected || k.fingerprint === ""}
+                        style={{
+                          textAlign: "left",
+                          height: "auto",
+                          padding: "10px 14px",
+                          borderColor: importedKeyId === k.id ? "var(--accent)" : undefined
+                        }}
+                        onClick={() => {
+                          setImportedKeyId(k.id);
+                          setImportedFingerprint(k.fingerprint);
+                        }}
+                      >
+                        <span style={{ display: "block", fontWeight: 600, fontSize: "var(--text-base)" }}>
+                          {(k.algorithm || "key") + (k.importedAt ? ", imported " + k.importedAt.slice(0, 10) : "")}
+                        </span>
+                        <span className="mono" style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+                          {k.fingerprint === "" ? "no fingerprint available" : k.fingerprint}
+                        </span>
+                        <span style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                          {k.passphraseProtected
+                            ? "Needs its passphrase to be resolvable before it can be used."
+                            : k.usedBy.length === 0
+                              ? "Not used by any backup set"
+                              : "Used by " + k.usedBy.join(", ")}
+                        </span>
+                      </button>
+                    ))
+                  )}
                 </div>
               ) : null}
 

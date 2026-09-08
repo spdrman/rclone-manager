@@ -804,7 +804,62 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/backup-sets/test-connection");
-    expect(result).toEqual({ ok: true });
+    // checks is [] rather than absent (issues #592 and #596). A response
+    // with no breakdown is an engine that predates the field, and the
+    // render site says exactly that; defaulting to six fabricated
+    // failures, or leaving the key off so a caller has to check for
+    // undefined before every read, are both worse answers than an empty
+    // list.
+    expect(result).toEqual({ ok: true, checks: [] });
+  });
+
+  // Both modes of the route go through ONE mapper, so this asserts the
+  // shape once and then asserts the two entry points agree. Two mappers
+  // is what the two branches had, and it is what made a caller remember
+  // which request it had sent to know which array it was holding.
+  it("maps the six checks the same way on both modes, and never invents a duration", async () => {
+    const wire = {
+      ok: false,
+      message: "the host key did not match",
+      checks: [
+        { step: "credentials", outcome: "passed", detail: "the key is usable", duration_ms: 3 },
+        { step: "resolve", outcome: "passed", detail: "resolves", duration_ms: 12 },
+        { step: "connect", outcome: "passed", detail: "tcp", duration_ms: 41 },
+        { step: "host_key", outcome: "failed", category: "host_key", detail: "the host key did not match", duration_ms: 18 },
+        { step: "authenticate", outcome: "skipped", detail: "nothing was offered" },
+        { step: "list", outcome: "skipped", detail: "never attempted" }
+      ]
+    };
+    const expected = {
+      ok: false,
+      message: "the host key did not match",
+      checks: [
+        { step: "credentials", outcome: "passed", detail: "the key is usable", durationMs: 3 },
+        { step: "resolve", outcome: "passed", detail: "resolves", durationMs: 12 },
+        { step: "connect", outcome: "passed", detail: "tcp", durationMs: 41 },
+        { step: "host_key", outcome: "failed", category: "host_key", detail: "the host key did not match", durationMs: 18 },
+        // No durationMs at all on these two, not a zero. They come out of
+        // one call server-side, and a 0 here renders as "0 ms" beside a
+        // row nobody measured.
+        { step: "authenticate", outcome: "skipped", detail: "nothing was offered" },
+        { step: "list", outcome: "skipped", detail: "never attempted" }
+      ]
+    };
+
+    vi.stubGlobal("fetch", mockFetchOk(wire, 200));
+    expect(await httpApi.testConnection("api/postgres")).toEqual(expected);
+
+    vi.stubGlobal("fetch", mockFetchOk(wire, 200));
+    expect(
+      await httpApi.testCandidateConnection({
+        host: "h",
+        port: 22,
+        user: "u",
+        sshKeyId: "key_1",
+        knownHostsLine: "h ssh-ed25519 AAAA",
+        remotePath: "/backups"
+      })
+    ).toEqual(expected);
   });
 });
 

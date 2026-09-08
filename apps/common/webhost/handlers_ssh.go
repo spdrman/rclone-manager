@@ -56,6 +56,25 @@ const (
 type importSSHKeyRequest struct {
 	PrivateKeyPEM string `json:"private_key_pem"`
 	Passphrase    string `json:"passphrase"`
+
+	// CandidateID selects a key GET /api/v1/ssh/key-candidates already
+	// listed, instead of pasting one (#592). It is the mode a brand new
+	// operator uses, because a default install already put a key on the
+	// machine and there is nothing for them to paste.
+	//
+	// The private half is read once, server-side, and goes through
+	// exactly the rclone.ValidateImportedPrivateKey a paste does, so a
+	// candidate cannot be imported through a check a paste would have
+	// failed. The original is left where it is, which is the same promise
+	// `--ssh-key-file` already makes: answering that question differently
+	// here would mean the wizard and the CLI disagreed about what
+	// selecting a key does.
+	//
+	// It is an OPAQUE id, never a path. It resolves only by matching
+	// against a fresh scan of the fixed locations core decides, so a
+	// path, a traversal and an id for a file outside those locations all
+	// fail the same way: they are not in the scan.
+	CandidateID string `json:"candidate_id"`
 }
 
 // importSSHKeyResponse never carries KeyFile (the server-side path
@@ -79,13 +98,48 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err, maxImportSSHKeyBodyBytes)
 		return
 	}
-	if body.PrivateKeyPEM == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "private_key_pem is required")
+	var (
+		ref service.SSHKeyRef
+		err error
+	)
+	switch {
+	case body.CandidateID != "" && body.PrivateKeyPEM != "":
+		// Refused rather than resolved by precedence, the same rule
+		// testConnection's own two modes follow below. A request that
+		// pastes a key AND names a discovered one is ambiguous about
+		// which key is being imported, and silently preferring either is
+		// how a caller ends up holding a reference to a key it did not
+		// choose.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"paste a key in private_key_pem, or name a listed one in candidate_id, but not both")
+		return
+	case body.CandidateID != "":
+		if body.Passphrase != "" {
+			// A passphrase belongs to material the caller is holding. A
+			// candidate's material is read server-side, and #269 already
+			// refuses a passphrase-protected key without one, so a
+			// passphrase here would be a value with nothing to apply it
+			// to rather than a way to select an encrypted candidate.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				"passphrase applies to a pasted key; a listed candidate is read and validated on this machine")
+			return
+		}
+		ref, err = h.setup().ImportSSHKeyCandidate(r.Context(), body.CandidateID)
+	case body.PrivateKeyPEM != "":
+		ref, err = h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM), body.Passphrase)
+	default:
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "private_key_pem or candidate_id is required")
 		return
 	}
-
-	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM), body.Passphrase)
 	if err != nil {
+		if errors.Is(err, service.ErrSSHKeyCandidateNotFound) {
+			// The listing the caller acted on is not the machine's
+			// current state, which is an ordinary thing for a wizard pane
+			// left open to run into, not a failure of this deployment.
+			writeError(w, http.StatusBadRequest, "SSH_KEY_CANDIDATE_NOT_FOUND",
+				"no such key candidate; scan again and select from the current listing")
+			return
+		}
 		if errors.Is(err, service.ErrInvalidRequest) {
 			// Safe to echo: rclone.ValidateImportedPrivateKey's own doc
 			// guarantees this never includes the key bytes themselves,
@@ -202,20 +256,19 @@ type testConnectionResponse struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
 
-	// Checks is what the test actually did (issue #596): one entry per
-	// step, always all of them, in the order they run. Additive: `ok`
-	// and `message` mean exactly what they meant, so a client reading
-	// only those keeps working.
+	// Checks is what the test actually did (issues #592 and #596): one
+	// entry per step, always all of them, in the order they run.
+	// Additive: `ok` and `message` mean exactly what they meant, so a
+	// client reading only those keeps working.
 	//
-	// Empty in the candidate mode. A candidate has no persisted set to
-	// resolve a key, a known_hosts file or a remote path from, so the
-	// six questions cannot be asked about it, and answering them anyway
-	// would be inventing five of the answers.
+	// Populated in BOTH modes. There is one breakdown on this endpoint
+	// and not one per mode, so a caller never has to remember which
+	// request it sent to know which array it is reading.
 	Checks []connectionCheckResponse `json:"checks,omitempty"`
 }
 
 // connectionCheckResponse is one step of a connection test on the wire.
-// The four fields are core/internal/sourcecheck's Check, flattened to
+// The fields are core/internal/sourcecheck's Check, flattened to
 // strings: `outcome` is passed/failed/skipped, `category` is the
 // machine-readable half a client branches on, and `detail` is a sentence
 // the engine composed, never an underlying transport error's text.
@@ -223,7 +276,13 @@ type connectionCheckResponse struct {
 	Step     string `json:"step"`
 	Outcome  string `json:"outcome"`
 	Category string `json:"category,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Detail   string `json:"detail"`
+
+	// DurationMS is omitted rather than sent as 0 on the steps that are
+	// not measured on their own, which is what `omitempty` buys here:
+	// authenticate and list come out of one call, and a "0 ms" beside a
+	// green step reads as "instantly" when it means "never measured".
+	DurationMS int `json:"duration_ms,omitempty"`
 }
 
 // testConnection is POST /api/v1/backup-sets/test-connection: issue
@@ -305,6 +364,7 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 	for _, c := range result.Checks {
 		out.Checks = append(out.Checks, connectionCheckResponse{
 			Step: c.Step, Outcome: c.Outcome, Category: c.Category, Detail: c.Detail,
+			DurationMS: c.DurationMs,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

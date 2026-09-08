@@ -232,7 +232,10 @@ describe("Test connection says what it actually did", () => {
     );
     vi.spyOn(api, "testConnection").mockImplementation(async () => {
       tested = true;
-      return { ok: false, message: "the connection test stopped at host_key" };
+      // checks is [] and not absent: the shape is one array on both
+      // modes of this route now, so a stub that left it off would be a
+      // shape no engine answers with.
+      return { ok: false, message: "the key this server offers is not the one this backup set trusts", checks: [] };
     });
 
     renderDetail(target.source, target.set, api);

@@ -378,10 +378,36 @@ var routes = map[string]entry{
 		// `backup-set create --ssh-key-file`. There is no import verb, so
 		// there is nothing to print, and what is printed instead names
 		// the flag and never the material.
-		why: "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line",
+		//
+		// #592 gave this route a second mode, selecting a listed
+		// candidate by its opaque id, and that half has no CLI either.
+		// Both halves are named, because they are different gaps: a
+		// pasted key has nowhere to go on a command line, and a selected
+		// one has an id that would sit on one perfectly well if a verb
+		// took it.
+		why: "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line. Selecting a key already on this machine has no verb either: `backup-manager ssh-key import --candidate ID` would be it",
 	},
 	key("POST", "/ssh/host-key-probe"): {
 		why: "there is no verb that probes a host key on its own; a terminal settles it with --trust-host-key or --known-hosts-line while creating or patching a set",
+	},
+
+	// The two reads the wizard's first step is built on (#592). Both are
+	// gaps rather than commands, and the gap sentence is doing real work
+	// here: `backup-set patch --ssh-key-id ID` has existed since #572 and
+	// takes an id nobody has, because nothing on either surface would
+	// print one. So this is the exact shape EPIC G's parity rule exists
+	// to make visible, and it names the verbs that would close it rather
+	// than saying "no equivalent".
+	//
+	// They stay gaps until those verbs exist. Printing a command this
+	// binary does not declare would be printing something an operator
+	// pastes and gets exit 2 from, which the dispatcher-driven parity
+	// test in core/cmd/backup-manager catches on purpose.
+	key("GET", "/ssh-keys"): {
+		why: "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `backup-manager ssh-key list` would be it",
+	},
+	key("GET", "/ssh/key-candidates"): {
+		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `backup-manager ssh-key discover` would be it",
 	},
 
 	// -------------------------------------------------------- settings ---

@@ -542,19 +542,25 @@ func toContractSettings(s service.Settings) apicontract.SettingsResponse {
 // is a legal value for every one of them.
 func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 	return apicontract.BackupSet{
-		ID:                  s.ID,
-		SourceName:          s.SourceName,
-		Name:                s.Name,
-		Host:                s.Host,
-		Port:                s.Port,
-		User:                s.User,
-		RemotePath:          s.RemotePath,
-		LocalPath:           s.LocalPath,
-		Include:             s.Include,
-		CompletionStrategy:  s.CompletionStrategy,
-		StableForSeconds:    int(s.StableFor / time.Second),
-		StaleAfterSeconds:   int(s.StaleAfter / time.Second),
-		ValidatorID:         string(s.ValidatorID),
+		ID:                 s.ID,
+		SourceName:         s.SourceName,
+		Name:               s.Name,
+		Host:               s.Host,
+		Port:               s.Port,
+		User:               s.User,
+		RemotePath:         s.RemotePath,
+		LocalPath:          s.LocalPath,
+		Include:            s.Include,
+		CompletionStrategy: s.CompletionStrategy,
+		StableForSeconds:   int(s.StableFor / time.Second),
+		StaleAfterSeconds:  int(s.StaleAfter / time.Second),
+		ValidatorID:        string(s.ValidatorID),
+		// Issue #592: which key in the store this set uses. Carried for
+		// the reason the guard below states, and it is the field that
+		// makes `backup-set patch --ssh-key-id` reviewable at all: an
+		// engine that reports no key id is one where "replace the key
+		// this set uses" cannot name what it is replacing.
+		SSHKeyID:            s.SSHKeyID,
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
@@ -623,6 +629,7 @@ func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
 		StableFor:           90 * time.Second,
 		StaleAfter:          36 * time.Hour,
 		ValidatorID:         service.ValidatorID("control-validator"),
+		SSHKeyID:            "control-ssh-key-id",
 		Disabled:            true,
 		ReadOnly:            true,
 		RetentionIsOverride: true,

@@ -223,6 +223,14 @@ describe("every request the shared client makes is a declared operation", () => 
       ["listValidators", () => httpApi.listValidators()],
       ["importSSHKey", () => httpApi.importSSHKey("pem")],
       ["probeHostKey", () => httpApi.probeHostKey("h", 22)],
+      // Issue #592: the two reads and the candidate mode of the import.
+      // Listed here for the reason restoreCopy's own comment gives: a
+      // client method nobody drives from this list is invisible to the
+      // whole file, so it could call any path it liked and nothing would
+      // notice.
+      ["listSSHKeys", () => httpApi.listSSHKeys()],
+      ["listSSHKeyCandidates", () => httpApi.listSSHKeyCandidates()],
+      ["importSSHKeyCandidate", () => httpApi.importSSHKeyCandidate("cand_1")],
       ["testCandidateConnection", () => httpApi.testCandidateConnection({
         host: "h", port: 22, user: "u", sshKeyId: "k", knownHostsLine: "l"
       })],

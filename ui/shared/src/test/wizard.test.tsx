@@ -222,16 +222,39 @@ describe("add backup set wizard", () => {
       expect(screen.queryByText(/shape only/i)).toBeNull();
     });
 
-    // #299: this used to assert a fabricated "Already installed on 2
-    // other backup sets" fact with no managed-key store behind it. The
-    // panel now says plainly that this path can't be saved yet, same as
-    // "Generate" above.
-    it("says a managed key can't be reused on save yet, rather than showing a fabricated in-use count", async () => {
+    // #299 stripped this radio's picklist, which showed two hardcoded
+    // key names and a fabricated "Already installed on 2 other backup
+    // sets" count with no managed-key store behind either. That left an
+    // honest control that could not do anything, for exactly one reason:
+    // nothing could list the key store. #592 built that listing, so the
+    // picklist is real, and what this case pins is that every value in it
+    // is one the server sent.
+    it("offers the keys this deployment actually holds, with counts it did not invent", async () => {
       renderWizard();
       await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
       await userEvent.click(screen.getByRole("radio", { name: /Use managed key/ }));
-      expect(screen.getByText(/Reusing a managed key on save isn.t available yet/)).toBeTruthy();
-      expect(screen.queryByText(/other backup sets/i)).toBeNull();
+
+      const listed = await createMockApi().listSSHKeys();
+      expect(listed.length).toBeGreaterThan(0);
+      for (const key of listed) {
+        expect(await screen.findByText(key.fingerprint)).toBeTruthy();
+      }
+
+      // The refusal it replaced is gone, and so is the fabricated count
+      // #299 removed: a key nothing references says so rather than
+      // claiming a number.
+      expect(screen.queryByText(/Reusing a managed key on save isn.t available yet/)).toBeNull();
+      expect(screen.queryByText(/Already installed on/i)).toBeNull();
+
+      // The "used by" column names the sets, and it names the ones the
+      // fixture's own backup sets actually reference. #299 removed a
+      // fabricated COUNT; a count is only worth having when it is
+      // counted, so this checks the sets rather than the number.
+      const used = listed.find((k) => k.usedBy.length > 0);
+      expect(used).toBeTruthy();
+      for (const setId of used?.usedBy ?? []) {
+        expect(screen.getAllByText(new RegExp(setId)).length).toBeGreaterThan(0);
+      }
     });
   });
 

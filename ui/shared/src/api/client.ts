@@ -65,6 +65,8 @@ import type {
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
   WireListOperationsResponse,
+  WireListSSHKeyCandidatesResponse,
+  WireListSSHKeysResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
   WireImportStorageCredentialsResponse,
@@ -77,11 +79,12 @@ import type {
   WireRetentionOverride,
   WireRetentionPlan,
   WireRetentionSettings,
+  WireSSHKey,
+  WireTestConnectionResponse,
   WireRetentionTier,
   WireRunningWork,
   WireSettingsResponse,
   WireUpdateCapacitySettings,
-  WireTestConnectionResponse,
   WireVersionResponse
 } from "./generated/contract";
 import type {
@@ -106,6 +109,7 @@ import type {
   RetentionTierSetting,
   RunningWork,
   SSHKeyImportResult,
+  SSHKeyListing,
   UpdateSettingsRequest
 } from "./contracts";
 import type {
@@ -575,7 +579,74 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
       algorithm: k.algorithm,
       fingerprint: k.fingerprint
     })),
-    trustedHostKeyRecordedAt: bs.trusted_host_key_recorded_at ?? null
+    trustedHostKeyRecordedAt: bs.trusted_host_key_recorded_at ?? null,
+    // Issue #592: which key in the store this set uses. "" is a real
+    // answer meaning "a key this deployment does not manage", which is
+    // every set pointing at a mounted or hand-provisioned key file, and
+    // the `?? ""` covers a server that predates the field. Both arrive
+    // here as "", and the render site says so rather than showing a blank
+    // where an id goes.
+    sshKeyId: bs.ssh_key_id ?? ""
+  };
+}
+
+/**
+ * Issue #592: one stored key, described without a path because the server
+ * sends none. Every optional field is defaulted here rather than left
+ * undefined, so a render site never has to distinguish "the server did
+ * not say" from "there is nothing to say": both mean the row shows what
+ * it can and says why it cannot show the rest.
+ */
+function fromWireSSHKey(k: WireSSHKey): SSHKeyListing {
+  return {
+    id: k.id,
+    algorithm: k.algorithm,
+    fingerprint: k.fingerprint,
+    publicKey: k.public_key,
+    importedAt: k.imported_at,
+    passphraseProtected: k.passphrase_protected,
+    // Spread rather than `problem: undefined`, the same discipline
+    // fromWireBackupSet uses for haltReason: a key that is present and
+    // undefined still reads as the mapper having an opinion.
+    ...(k.problem ? { problem: k.problem } : {}),
+    usedBy: k.used_by ?? []
+  };
+}
+
+/**
+ * Issues #592 and #596: the six steps a connection test ran, whichever
+ * mode asked for it.
+ *
+ * ONE mapper on both `testConnection` and `testCandidateConnection`,
+ * because there is one array on the wire. Two mappers would be two
+ * shapes again, and the caller would be back to remembering which
+ * request it sent to know what it is holding.
+ *
+ * `checks` defaults to [] rather than to six fabricated failures. A
+ * deployment that predates the field reports nothing, and a surface says
+ * "this engine does not report a breakdown" instead of drawing six reds
+ * for steps that were never run.
+ *
+ * Every step comes across, skipped ones included. Filtering to the
+ * interesting ones here is how a surface ends up drawing five steps and
+ * letting a reader assume the sixth passed.
+ *
+ * `durationMs` is spread rather than defaulted to 0: absent means this
+ * step was not measured on its own (authenticate and list come out of
+ * one call), and a 0 there renders as "instantly" when it means "nobody
+ * looked".
+ */
+function fromWireConnectionTestOutcome(r: WireTestConnectionResponse): ConnectionTestOutcome {
+  return {
+    ok: r.ok,
+    ...(r.message ? { message: r.message } : {}),
+    checks: (r.checks ?? []).map((c) => ({
+      step: c.step as ConnectionCheck["step"],
+      outcome: c.outcome as ConnectionCheck["outcome"],
+      ...(c.category ? { category: c.category } : {}),
+      detail: c.detail ?? "",
+      ...(c.duration_ms === undefined ? {} : { durationMs: c.duration_ms })
+    }))
   };
 }
 
@@ -1711,30 +1782,11 @@ export const httpApi: BackupManagerApi = {
   // only the id is the point: this client neither knows nor should have to
   // echo back the key reference and trusted host line the set is
   // configured with.
-  testConnection: async (id) => {
-    const wire = await request<WireTestConnectionResponse>("/backup-sets/test-connection", {
+  testConnection: (id) =>
+    request<WireTestConnectionResponse>("/backup-sets/test-connection", {
       method: "POST",
       body: JSON.stringify({ backup_set_id: id })
-    });
-    // The steps come across exactly as the engine reported them, skipped
-    // ones included (issue #596). Filtering to the interesting ones here
-    // is how a surface ends up drawing five steps and letting a reader
-    // assume the sixth passed.
-    return {
-      ok: wire.ok,
-      ...(wire.message ? { message: wire.message } : {}),
-      ...(wire.checks
-        ? {
-            checks: wire.checks.map((c) => ({
-              step: c.step as ConnectionCheck["step"],
-              outcome: c.outcome as ConnectionCheck["outcome"],
-              ...(c.category ? { category: c.category } : {}),
-              ...(c.detail ? { detail: c.detail } : {})
-            }))
-          }
-        : {})
-    };
-  },
+    }).then(fromWireConnectionTestOutcome),
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
   setReadOnly: (source, set, readOnly) =>
     post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),
@@ -1793,16 +1845,56 @@ export const httpApi: BackupManagerApi = {
       method: "POST",
       body: JSON.stringify({ private_key_pem: privateKeyPem })
     }),
+  // Issue #592's two reads. The listing carries no path by construction
+  // (the server does not send one), so there is nothing to strip here;
+  // the candidate scan does, and its paths are rendered as what they are,
+  // a description of the operator's own machine.
+  listSSHKeys: () =>
+    request<WireListSSHKeysResponse>("/ssh-keys").then((r) => (r.keys ?? []).map(fromWireSSHKey)),
+  listSSHKeyCandidates: () =>
+    request<WireListSSHKeyCandidatesResponse>("/ssh/key-candidates").then((r) => ({
+      // Both halves, always, and `?? []` on each: a deployment that
+      // reports neither must render as "nothing was scanned", which the
+      // wizard says out loud, rather than as "no keys found".
+      locations: (r.locations ?? []).map((l) => ({
+        path: l.path,
+        kind: l.kind,
+        found: l.found,
+        ...(l.problem ? { problem: l.problem } : {})
+      })),
+      candidates: (r.candidates ?? []).map((c) => ({
+        id: c.id,
+        path: c.path,
+        location: c.location,
+        algorithm: c.algorithm,
+        fingerprint: c.fingerprint,
+        publicKey: c.public_key,
+        mode: c.mode,
+        inStore: c.in_store,
+        selectable: c.selectable,
+        ...(c.in_store_id ? { inStoreId: c.in_store_id } : {}),
+        ...(c.reason ? { reason: c.reason } : {})
+      }))
+    })),
+  // The candidate mode of the same import route. It sends an id and
+  // nothing else: the key material stays on the machine that already
+  // holds it, and the server reads it once through the same validation a
+  // pasted key goes through.
+  importSSHKeyCandidate: (candidateId) =>
+    request<SSHKeyImportResult>("/ssh-keys", {
+      method: "POST",
+      body: JSON.stringify({ candidate_id: candidateId })
+    }),
   probeHostKey: (host, port) =>
     request<{ algorithm: string; fingerprint: string; known_hosts_line: string }>("/ssh/host-key-probe", {
       method: "POST",
       body: JSON.stringify({ host, port })
     }).then((r) => ({ algorithm: r.algorithm, fingerprint: r.fingerprint, knownHostsLine: r.known_hosts_line })),
   testCandidateConnection: (params) =>
-    request<ConnectionTestOutcome>("/backup-sets/test-connection", {
+    request<WireTestConnectionResponse>("/backup-sets/test-connection", {
       method: "POST",
       body: JSON.stringify(wireConnectionTestParams(params))
-    }),
+    }).then(fromWireConnectionTestOutcome),
 
   listArtifacts: (setId) =>
     request<WireListArtifactsResponse>(

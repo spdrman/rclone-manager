@@ -78,7 +78,8 @@ const SET: BackupSet = {
   retainedCount: 32,
   retainedBytes: 421 * 1024 ** 3,
   trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
-  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+  sshKeyId: "key_fixture_1"
 };
 
 const SETS: AsyncState<BackupSet[]> = {

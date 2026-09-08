@@ -252,24 +252,33 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
     expect(within(dialog()).queryByRole("group", { name: /discarded/i })).toBeNull();
   });
 
+  // Driven through the REPOINT refusal rather than the host key one.
+  //
+  // Both are acknowledgeable refusals and this page answers them through
+  // the same machinery, keyed by the wire code. The host key one used to
+  // be reachable from here through a write-only "Trusted host key" box;
+  // #592 replaced that box with the wizard, which owns its own
+  // acknowledgement, so the refusal an inline field save can still come
+  // back with is this one. A test that kept driving the removed box would
+  // be asserting against a control no operator can reach.
   it("drops a pending refusal, its acknowledgement and its refused body", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
       new BackupManagerError({
-        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+        code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
         message:
-          "service: this backup set trusts ssh-ed25519 SHA256:oldoldoldold and the line offered is ssh-ed25519 SHA256:newnewnewnew",
-        correlationId: "cid_hostkey_cancel"
+          "service: this backup set has 32 artifacts recorded against /var/backups and this change points it at /var/backups-new",
+        correlationId: "cid_repoint_cancel"
       })
     );
     const target = await firstSet();
     await openEditMode(api, target);
 
-    fireEvent.change(screen.getByLabelText("Trusted host key"), {
-      target: { value: "prod-db-01.internal ssh-ed25519 AAAAnew" }
+    fireEvent.change(screen.getByLabelText("Remote folder"), {
+      target: { value: "/var/backups-new" }
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save remote folder" }));
     });
     expect(screen.getByRole("button", { name: "Save anyway" })).toBeTruthy();
 
@@ -277,10 +286,10 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
       fireEvent.click(screen.getByRole("button", { name: CANCEL }));
     });
 
-    // A half-answered trust decision is the one thing on this page an
-    // operator will remember being in the middle of, so the dialog says
-    // what happens to it rather than leaving it to a box count.
-    expect(within(dialog()).getByText(/known_hosts/)).toBeTruthy();
+    // A half-answered decision is the one thing on this page an operator
+    // will remember being in the middle of, so the dialog says what
+    // happens to it rather than leaving it to a box count.
+    expect(within(dialog()).getByText(/stays pointed at the data it is pointed at now/)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Discard 1 change and exit/ }));
@@ -289,9 +298,9 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
     // The refusal is gone WITH the mode, and no acknowledgement was spent
     // on the way out.
     expect(screen.queryByRole("button", { name: "Save anyway" })).toBeNull();
-    expect(screen.queryByText(/SHA256:newnewnewnew/)).toBeNull();
+    expect(screen.queryByText(/var\/backups-new/)).toBeNull();
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][2].acknowledgeHostKeyChange).toBeUndefined();
+    expect(update.mock.calls[0][2].acknowledgeRepoint).toBeUndefined();
   });
 
   it("leaves the back link alone outside edit mode", async () => {

@@ -280,7 +280,24 @@ func TestTestConnection_Success_ReturnsOKTrue(t *testing.T) {
 // exception.
 func TestTestConnection_Failure_ReturnsOKFalseNotAnHTTPError(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	tr.backend.connectionResult = service.ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}
+	// The message core composes now is the failed STEP's own sentence,
+	// once, in both modes of this route (#592/#596). The old generic
+	// literal was moved here rather than left as a fixture, because a
+	// fixture pinning a sentence the engine no longer writes is a test
+	// that agrees with no deployment.
+	const stopped = "the key this server offers is not the one this backup set trusts for it"
+	tr.backend.connectionResult = service.ConnectionTestResult{
+		OK:      false,
+		Message: stopped,
+		Checks: []service.ConnectionCheck{
+			{Step: "credentials", Outcome: "passed", Detail: "the key is usable on this host", DurationMs: 3},
+			{Step: "resolve", Outcome: "passed", Detail: "prod-db-01.internal is 203.0.113.24 (A)", DurationMs: 12},
+			{Step: "connect", Outcome: "passed", Detail: "TCP in 41ms", DurationMs: 41},
+			{Step: "host_key", Outcome: "failed", Category: "host_key", Detail: stopped, DurationMs: 18},
+			{Step: "authenticate", Outcome: "skipped", Detail: "the host key did not match, so nothing was offered to this server"},
+			{Step: "list", Outcome: "skipped", Detail: "never attempted"},
+		},
+	}
 	rec := postTestConnection(t, tr.router, validTestConnectionBody, true)
 
 	if rec.Code != http.StatusOK {
@@ -295,6 +312,20 @@ func TestTestConnection_Failure_ReturnsOKFalseNotAnHTTPError(t *testing.T) {
 	}
 	if body["message"] == "" || body["message"] == nil {
 		t.Error("message is missing/empty on a failed connection test")
+	}
+	// message is the failed step's detail and not a second sentence
+	// composed beside it. Two places writing the reason is how they end
+	// up disagreeing about the same failure, with a caller reading only
+	// `message` told one thing and a caller reading the rows told
+	// another.
+	if body["message"] != stopped {
+		t.Errorf("message = %q, want the failed step's own detail %q", body["message"], stopped)
+	}
+	// And the skipped steps survive the trip. A response that dropped
+	// them would let a reader assume the two that never ran had passed.
+	checks, _ := body["checks"].([]any)
+	if len(checks) != 6 {
+		t.Fatalf("checks = %d, want 6 including the skipped ones: %s", len(checks), rec.Body.String())
 	}
 }
 

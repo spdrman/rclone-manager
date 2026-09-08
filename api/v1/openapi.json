@@ -103,7 +103,8 @@
           "ARTIFACT_NOT_FAILED",
           "MEDIUM_IN_USE",
           "MEDIUM_EXISTS",
-          "STORAGE_CREDENTIAL_NOT_FOUND"
+          "STORAGE_CREDENTIAL_NOT_FOUND",
+          "SSH_KEY_CANDIDATE_NOT_FOUND"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -154,7 +155,8 @@
           "ARTIFACT_NOT_FAILED": "wire",
           "MEDIUM_IN_USE": "wire",
           "MEDIUM_EXISTS": "wire",
-          "STORAGE_CREDENTIAL_NOT_FOUND": "wire"
+          "STORAGE_CREDENTIAL_NOT_FOUND": "wire",
+          "SSH_KEY_CANDIDATE_NOT_FOUND": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -210,7 +212,7 @@
       },
       "ConnectionCheck": {
         "type": "object",
-        "description": "One step of a connection test. `outcome` is passed, failed or skipped, and skipped is a first-class answer rather than a quiet pass: a surface that renders a skipped authentication as anything but \"this was never tried\" has told an operator their credentials are fine on the strength of a step that never ran. `category` is the machine-readable half a surface branches on; `detail` is a sentence the engine composed and never an underlying transport error's text.",
+        "description": "One step of a connection test. `outcome` is passed, failed or skipped, and skipped is a first-class answer rather than a quiet pass: a surface that renders a skipped authentication as anything but \"this was never tried\" has told an operator their credentials are fine on the strength of a step that never ran. `category` is the machine-readable half a surface branches on; `detail` is a sentence the engine composed and never an underlying transport error's text. This is MediumPreflightCheck's shape asked about a SOURCE instead of a destination, deliberately, so a preflight table and a connection-test table are two renderings of one idea rather than two contracts.",
         "additionalProperties": false,
         "properties": {
           "step": {
@@ -222,7 +224,8 @@
               "host_key",
               "authenticate",
               "list"
-            ]
+            ],
+            "description": "What this step proves. `credentials` is whether the key this backup set names can be resolved and used on THIS host at all: the reference resolves to a key this deployment holds, and the file's own mode and its whole containing directory chain are still what a real transfer demands. Nothing about the far side, and nothing that opens the private half. `resolve` is whether the hostname resolves, and to what, because \"it resolves\" and \"it resolves to the machine you think\" are different claims and only an operator can settle the second. `connect` is whether TCP to host:port answered, and what identification string came back, which is how you know you reached sshd and not a load balancer. `host_key` is which key the server offered and whether the known_hosts this set verifies against actually trusts it for this host: the comparison is knownhosts' own, the same one the transport will make, never a second opinion that could be wrong in the permissive direction. `authenticate` is whether the server accepted that key for that user, and it is skipped when the host key did not match, because offering a credential to a server whose identity has not been established is the thing FR-6 exists to prevent. `list` is the configured remote path listed over the real transport, and how many entries came back; it is the only step that proves the path in the configuration is a path on that machine."
           },
           "outcome": {
             "type": "string",
@@ -230,21 +233,29 @@
               "passed",
               "failed",
               "skipped"
-            ]
+            ],
+            "description": "`skipped` is a real answer and not a quiet pass: it means an earlier step failed in a way that makes this one meaningless, and `detail` says which. A surface that renders a skipped authenticate as anything but \"this was never tried\" has told an operator their key is authorised on the strength of a step that never ran."
           },
           "category": {
             "type": "string",
-            "description": "Empty when the step passed or was skipped.",
+            "description": "The category a failure classified as, absent when the step passed or was skipped. It is the machine-readable half: a client branches on this and never on `detail`.",
             "x-go-omitempty": true
           },
           "detail": {
             "type": "string",
+            "description": "What this step found, in words, for a person to act on. Always present, including on a skipped step, where it is the reason nothing was tried."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long this step took on its own, in milliseconds. Present only on the steps that are measured separately: credentials, resolve, connect and host_key. Absent on authenticate and list, which are decided from ONE call and have no timing of their own, and absent rather than zero, because a 0 ms beside a green step reads as \"instant\" when what it means is \"never measured\".",
             "x-go-omitempty": true
           }
         },
         "required": [
           "step",
-          "outcome"
+          "outcome",
+          "detail"
         ]
       },
       "TrustedHostKey": {
@@ -1070,6 +1081,10 @@
             "format": "date-time",
             "description": "When THIS deployment last wrote the trust anchor above. Absent when the backup set points at a known_hosts file this deployment did not write: a file an operator maintains by hand is usually shared with other sets, so its timestamp is about whatever was last added to it rather than about this set's host, and reporting it would answer \"when was this host key trusted\" with something else.",
             "x-go-omitempty": true
+          },
+          "ssh_key_id": {
+            "type": "string",
+            "description": "The key-store id this set's key resolves to, the same value POST /ssh-keys returned and GET /ssh-keys lists. The id only: what it resolves to is a server-side path and this API never publishes one. Never omitted, and EMPTY IS A REAL ANSWER, meaning this set uses a key this deployment does not manage, which is every set pointing at a mounted or hand-provisioned key file. It is here because BackupSetPatch has always been able to WRITE ssh_key_id and nothing could read it back, so a surface offering to replace a set's key could not name the key being replaced."
           }
         },
         "required": [
@@ -1088,7 +1103,8 @@
           "read_only",
           "stable_for_seconds",
           "stale_after_seconds",
-          "retention_is_override"
+          "retention_is_override",
+          "ssh_key_id"
         ]
       },
       "CreateBackupSetResponse": {
@@ -1137,7 +1153,7 @@
       },
       "ImportSSHKeyRequest": {
         "type": "object",
-        "description": "POST /ssh-keys. Sent once; the caller discards its own copy immediately.",
+        "description": "POST /ssh-keys. Exactly one of private_key_pem (paste a key) or candidate_id (select a listed one) is required. private_key_pem was the only mode before candidate_id existed, so every request written against the older contract is still a valid one.",
         "additionalProperties": false,
         "properties": {
           "private_key_pem": {
@@ -1149,11 +1165,13 @@
             "type": "string",
             "description": "The passphrase that decrypts private_key_pem, when it is passphrase-protected. Optional: omit it, or send an empty string, for a key that is not encrypted, which is every request this field predates. Checked against private_key_pem at import time, so a wrong passphrase is refused here rather than discovered the first time a cycle tries to connect. Write-only, for the same reason private_key_pem is.",
             "writeOnly": true
+          },
+          "candidate_id": {
+            "type": "string",
+            "description": "Select a key GET /ssh/key-candidates already listed, instead of pasting one. This is the mode a brand new operator uses, because a default install already put a key on the machine and there is nothing for them to paste. The private half is read once, server-side, through the same validation a paste goes through, and the original is left where it is. Mutually exclusive with private_key_pem: a request carrying both is refused rather than resolved by precedence."
           }
         },
-        "required": [
-          "private_key_pem"
-        ]
+        "required": []
       },
       "ImportSSHKeyResponse": {
         "type": "object",
@@ -1248,7 +1266,7 @@
       },
       "TestConnectionResponse": {
         "type": "object",
-        "description": "The outcome of a connection test, as a verdict and as the six steps that produced it. `ok` and `message` mean exactly what they have always meant, so a client reading only those keeps working; `checks` is what the test actually DID, one entry per step and always all of them, in the order they run.",
+        "description": "The outcome of a connection test, as a verdict and as the six steps that produced it. `ok` and `message` mean exactly what they have always meant, so a client reading only those keeps working; `checks` is what the test actually DID, one entry per step and always all of them, in the order they run. Both modes of this endpoint answer the same six steps: a caller no longer has to remember which request it sent to know what shape comes back.",
         "additionalProperties": false,
         "properties": {
           "ok": {
@@ -1260,7 +1278,7 @@
           },
           "checks": {
             "type": "array",
-            "description": "One entry per step, always all of them, in the order they run: credentials, resolve, connect, host_key, authenticate, list. Empty for the candidate mode, which has no persisted set to resolve a key, a known_hosts file or a remote path from.",
+            "description": "One entry per step, always all of them, in the order they run: credentials, resolve, connect, host_key, authenticate, list. Both the persisted mode (`backup_set_id`) and the candidate mode (host, user and key) populate it, so there is one breakdown here and not one per mode.",
             "items": {
               "$ref": "#/components/schemas/ConnectionCheck"
             },
@@ -3288,6 +3306,189 @@
           "sets"
         ]
       },
+      "SSHKey": {
+        "type": "object",
+        "description": "One key in this deployment's own key store. It carries no server-side path: SSHKeyRef.KeyFile is kept off the wire so a caller never learns this process's filesystem layout, and an inventory is not an exception to that. What travels instead is the id, the public half's algorithm and SHA256 fingerprint, the authorized_keys line, and which backup sets point at it.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `backup-manager backup-set patch --ssh-key-id` takes."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "The public half's algorithm, or empty when the key could not be described (see problem)."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The SHA256 fingerprint, in the form `ssh-keygen -lf` prints, or empty when the key could not be described."
+          },
+          "public_key": {
+            "type": "string",
+            "description": "The authorized_keys line for this key. Public material by definition, and the one string here an operator has to be able to copy: a verification that reaches the host, matches its key and then fails to authenticate is fixed by pasting exactly this into the remote account's authorized_keys."
+          },
+          "imported_at": {
+            "type": "string",
+            "description": "RFC 3339, or empty when this deployment cannot report it. Never omitted, so a caller can tell an unknown time from a build that does not report one."
+          },
+          "passphrase_protected": {
+            "type": "boolean",
+            "description": "This key needs a passphrase to be usable, so it is listed and cannot be verified until that passphrase resolves."
+          },
+          "problem": {
+            "type": "string",
+            "description": "Why this row could not be described. Never names a path.",
+            "x-go-omitempty": true
+          },
+          "used_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every backup set id pointing at this key, sorted. Never omitted: \"used by nothing\" is a real answer, and it is the column that turns a wall of ids into a decision."
+          }
+        },
+        "required": [
+          "id",
+          "algorithm",
+          "fingerprint",
+          "public_key",
+          "imported_at",
+          "passphrase_protected",
+          "used_by"
+        ]
+      },
+      "ListSSHKeysResponse": {
+        "type": "object",
+        "description": "GET /ssh-keys. The read this API never had: an imported key's id used to cross the wire exactly once, in the response to the POST that created it, so ssh_key_id took a value nothing in the product would tell anybody.",
+        "additionalProperties": false,
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKey"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "SSHKeyCandidate": {
+        "type": "object",
+        "description": "One private key file this engine can actually see. Unlike SSHKey, this DOES carry a path, because a candidate's path is its identity to an operator and there is no other way to say which of several files is meant. What makes that safe is that the locations searched are a closed, constant set decided server-side, never caller-supplied and never walked recursively. The handle travelling back is the opaque id, never the path.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The opaque handle ImportSSHKeyRequest.candidate_id takes. Derived from the path, so it needs no server-side state, and not a path, so no request can name a file for this process to read."
+          },
+          "path": {
+            "type": "string",
+            "description": "Where the file was found."
+          },
+          "location": {
+            "type": "string",
+            "description": "The SSHKeyDiscoveryLocation.path this came from."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "Read from the .pub beside the private key, and empty when there is none. Never derived by reading the private key."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Read from the .pub beside the private key, and empty when there is none. A candidate with no fingerprint is listed and is not selectable, because deriving one would mean reading a private key in order to describe it in a list."
+          },
+          "public_key": {
+            "type": "string",
+            "description": "The .pub's own line, or empty when there is none."
+          },
+          "mode": {
+            "type": "string",
+            "description": "The private file's permission bits as an operator would write them, for example \"0600\"."
+          },
+          "in_store": {
+            "type": "boolean",
+            "description": "A key with this fingerprint is already in the key store, so selecting it here would make a second copy of something already on the other list."
+          },
+          "in_store_id": {
+            "type": "string",
+            "description": "That key's store id when in_store is true, so a client can offer the existing key instead of a duplicate import.",
+            "x-go-omitempty": true
+          },
+          "selectable": {
+            "type": "boolean",
+            "description": "Whether this candidate can be chosen. See reason when it cannot."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this candidate is not selectable. A row an operator cannot pick and cannot explain is worse than no row.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "location",
+          "algorithm",
+          "fingerprint",
+          "public_key",
+          "mode",
+          "in_store",
+          "selectable"
+        ]
+      },
+      "SSHKeyDiscoveryLocation": {
+        "type": "object",
+        "description": "One place the scan looked, reported whether or not anything was found there. Every location is always reported, including the absent ones: an empty candidate list has two readings, \"you have no keys\" and \"I could not look where your keys are\", and on a packaged install the engine is a distroless container with five mounts and no home directory, so the second is the true one.",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Why this location is in the set at all, so a client can render \"the key file your configuration names\" differently from \"a directory that is not mounted in this container\". One of configured-key-file, mount, home, discovery-dir."
+          },
+          "found": {
+            "type": "integer",
+            "description": "How many candidates came from here."
+          },
+          "problem": {
+            "type": "string",
+            "description": "Why nothing could be read from here. Empty when the location was read.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "found"
+        ]
+      },
+      "ListSSHKeyCandidatesResponse": {
+        "type": "object",
+        "description": "GET /ssh/key-candidates. The locations travel beside the candidates, in one response, so a client cannot render one without the other.",
+        "additionalProperties": false,
+        "properties": {
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKeyDiscoveryLocation"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKeyCandidate"
+            }
+          }
+        },
+        "required": [
+          "locations",
+          "candidates"
+        ]
+      },
       "StorageMediumCredentialsReference": {
         "type": "object",
         "description": "Where one storage medium's credentials come from. Exactly one of the four must be set, and none of them is credential MATERIAL: this is a reference in all four spellings. credentials_id is the one a browser uses, because it is the only one that names nothing about the manager's host.",
@@ -4555,6 +4756,61 @@
       }
     },
     "/ssh-keys": {
+      "get": {
+        "operationId": "listSSHKeys",
+        "summary": "List this deployment's own key store: ids, fingerprints and which backup sets use each key, never a path.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSSHKeysResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
       "post": {
         "operationId": "importSSHKey",
         "summary": "Import a private key and get back a reference to it.",
@@ -4590,7 +4846,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST.",
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_CANDIDATE_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4599,7 +4855,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "SSH_KEY_CANDIDATE_NOT_FOUND"
             ]
           },
           "401": {
@@ -4744,6 +5001,63 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": null,
         "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/ssh/key-candidates": {
+      "get": {
+        "operationId": "listSSHKeyCandidates",
+        "summary": "Scan a fixed set of locations for private keys this engine can see, and report every location it looked in.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSSHKeyCandidatesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
         "x-authenticated": true
       }
     },

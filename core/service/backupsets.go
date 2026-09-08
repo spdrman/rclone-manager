@@ -43,6 +43,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -151,6 +152,26 @@ type BackupSet struct {
 	// needs this deployment's filesystem layout, and an edit path has
 	// something to pre-select a picklist with.
 	ValidatorID ValidatorID
+
+	// SSHKeyID is the key-store id this set's configured key file
+	// resolves to (#592), the same value ImportSSHKey returned, ListSSHKeys
+	// lists and UpdateBackupSetRequest.SSHKeyID takes. Never the path,
+	// for the reason ValidatorID above is not one either.
+	//
+	// EMPTY IS A REAL ANSWER and has to be rendered as one: it means this
+	// set uses a key this deployment does not manage, which is every set
+	// pointing at a mounted or hand-provisioned key.file and is a
+	// perfectly ordinary shape. A surface that showed a blank where an id
+	// goes would be saying "this set has no key" about a set that has
+	// one.
+	//
+	// It is here because it was the field that made the edit box
+	// unusable. UpdateBackupSetRequest has always been able to WRITE
+	// ssh_key_id and nothing could read it back, so the detail page could
+	// not name the key it was about to replace, and "replace the existing
+	// method" is meaningless when the thing being replaced is never
+	// shown.
+	SSHKeyID string
 
 	Disabled bool
 
@@ -808,6 +829,7 @@ func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) Back
 		StableFor:          bs.Completion.StableFor.Duration(),
 		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
+		SSHKeyID:           sshKeyIDFor(configPath, bs.Remote),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
 		// resolved answer, the same discipline this field's own doc in
@@ -1079,10 +1101,12 @@ type ConnectionTestResult struct {
 	Message string
 
 	// Checks is what the test actually did, one entry per
-	// sourcecheck.Step and always all of them, in Steps order (issue
-	// #596). Empty for the candidate mode, which has no persisted set to
-	// resolve a key, a known_hosts file or a remote path from and so
-	// cannot answer the six questions.
+	// sourcecheck.Step and always all of them, in Steps order (issues
+	// #592 and #596). BOTH modes fill it: the persisted mode resolves the
+	// key, the known_hosts and the remote path off the set, the candidate
+	// mode off the request, and they answer the same six questions so a
+	// caller never has to remember which request it sent to know what
+	// came back.
 	//
 	// OK keeps meaning exactly what it meant, so a client reading only
 	// ok and message keeps working.
@@ -1109,6 +1133,18 @@ type ConnectionCheck struct {
 	// Detail is one of sourcecheck's own sentences, never an underlying
 	// error's text.
 	Detail string
+
+	// DurationMs is how long this step took on its own, in milliseconds,
+	// and is ABSENT (zero, omitted on the wire) rather than 0 on the
+	// steps that have no timing of their own.
+	//
+	// Absent and zero have to stay distinguishable here, which is why
+	// authenticate and list do not carry one: they are decided from a
+	// single Deps.List call, so there is no separate duration to report,
+	// and rendering "0 ms" beside a green "Authenticated" tells an
+	// operator the server answered instantly when what happened is that
+	// nobody measured.
+	DurationMs int
 }
 
 // TestConnection performs a real, non-destructive reachability/auth
@@ -1165,6 +1201,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		root = "/"
 	}
 
+	// The candidate's known_hosts line was written by the host key probe
+	// through knownhosts.Line, which addresses port 22 as a bare host and
+	// every other port as [host]:port. The steps below dial and verify
+	// against this same number, so it is defaulted here rather than left
+	// at zero: a check that dialled port 0 and then compared the answer
+	// against a line addressed to 22 would be two different questions.
+	port := req.Port
+	if port <= 0 {
+		port = defaultSSHPort
+	}
+
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -1193,18 +1240,51 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		Root:                 root,
 	}
 
-	if _, err := tr.List(testCtx, src); err != nil {
-		// Not %w-wrapped, and not returned as a Go error at all: a failed
-		// connection test is an expected, ordinary OUTCOME (a typo'd
-		// hostname, a not-yet-authorized key), not a service failure, so
-		// it is reported through ConnectionTestResult.OK/Message, exactly
-		// like every other "this is what an operator did wrong, not what
-		// broke" case in this package. err's own text may embed rclone
-		// internals (a dial error, an sftp protocol string), so it is
-		// deliberately not put in Message: TestConnection's caller (the
-		// HTTP layer) gets a generic, safe-to-render reason instead.
-		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
+	// The SAME six steps the persisted mode answers, over the same
+	// sourcecheck (#592, #596). One engine for both modes rather than
+	// two: the questions are identical, the request only differs in
+	// where the key, the trusted line and the path are read FROM, and a
+	// second implementation is how the two modes ended up with two
+	// different breakdowns in the first place.
+	target := sourcecheck.Target{
+		Host:                 req.Host,
+		Port:                 port,
+		User:                 req.User,
+		RemotePath:           root,
+		KeyReference:         "the key you selected",
+		PassphraseConfigured: false,
+	}
+	deps := sourcecheck.Deps{
+		// The candidate's key is a store id by definition (the request
+		// carries one and nothing else is accepted), so the reference has
+		// already resolved by the time we get here and the store can name
+		// its public half. The mode and directory-chain rule is still the
+		// transport's own, asked of the same code.
+		Credentials: func(context.Context) (string, error) {
+			if err := rclone.CheckSourceKeyFile(src); err != nil {
+				return "", err
+			}
+			return storedKeyFingerprint(configPath, req.SSHKeyID), nil
+		},
+		Trusted: func(context.Context) ([]sourcecheck.TrustedKey, error) { return trustedHostKeys(tmpPath) },
+		Verify:  hostKeyVerifier(tmpPath),
+		List: func(ctx context.Context) (int, error) {
+			entries, err := tr.List(ctx, src)
+			if err != nil {
+				return 0, err
+			}
+			return len(entries), nil
+		},
 	}
 
-	return ConnectionTestResult{OK: true}, nil
+	// Not %w-wrapped, and not returned as a Go error at all: a failed
+	// connection test is an expected, ordinary OUTCOME (a typo'd
+	// hostname, a not-yet-authorized key), not a service failure, so it
+	// is reported through ConnectionTestResult.OK/Message, exactly like
+	// every other "this is what an operator did wrong, not what broke"
+	// case in this package. A transport error's own text may embed rclone
+	// internals (a dial error, an sftp protocol string), so it is
+	// deliberately never put in Message or in a check's Detail: both are
+	// built from sourcecheck's own sentences and the caller's own values.
+	return resultFromReport(sourcecheck.Run(testCtx, target, deps)), nil
 }

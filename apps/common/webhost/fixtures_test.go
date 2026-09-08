@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -505,6 +506,18 @@ func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.Updat
 
 func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *syncFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return nil, errors.New("syncFakeBackend: ListSSHKeys not implemented")
+}
+
+func (f *syncFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{}, errors.New("syncFakeBackend: DiscoverSSHKeyCandidates not implemented")
+}
+
+func (f *syncFakeBackend) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKeyCandidate not implemented")
 }
 
 func (f *syncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
@@ -1102,6 +1115,18 @@ func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (servic
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
 
+func (f *asyncFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return nil, errors.New("asyncFakeBackend: ListSSHKeys not implemented")
+}
+
+func (f *asyncFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{}, errors.New("asyncFakeBackend: DiscoverSSHKeyCandidates not implemented")
+}
+
+func (f *asyncFakeBackend) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKeyCandidate not implemented")
+}
+
 func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
 	return service.HostKeyProbe{}, errors.New("asyncFakeBackend: ProbeHostKey not implemented")
 }
@@ -1298,10 +1323,14 @@ type backupSetFakeBackend struct {
 
 func newBackupSetFakeBackend() *backupSetFakeBackend {
 	return &backupSetFakeBackend{
-		syncFakeBackend:  newSyncFakeBackend(),
-		sets:             map[string]service.BackupSet{},
-		keys:             map[string]service.SSHKeyRef{},
-		connectionResult: service.ConnectionTestResult{OK: true},
+		syncFakeBackend: newSyncFakeBackend(),
+		sets:            map[string]service.BackupSet{},
+		keys:            map[string]service.SSHKeyRef{},
+		// A passing verification, with the four stages a real one always
+		// carries (#592). Four rather than none, because a fake that
+		// answered with a bare boolean would let a handler that dropped
+		// the breakdown pass every case here.
+		connectionResult: service.ConnectionTestResult{OK: true, Checks: passingConnectionChecks()},
 	}
 }
 
@@ -1490,6 +1519,86 @@ func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte, passp
 	return ref, nil
 }
 
+// ListSSHKeys serves whatever this fake's store holds, with one key
+// always present so a listing case is never asserting about an empty
+// list. UsedBy is filled from the sets this fake is holding, because the
+// column that turns a wall of uuids into a decision is worth exercising.
+func (f *backupSetFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	if f.errOnImport != nil {
+		return nil, f.errOnImport
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := map[string]service.SSHKeyRef{"key_test_1": {
+		ID: "key_test_1", KeyFile: "/fake/ssh_keys/key_test_1",
+		Algorithm: "ssh-ed25519", Fingerprint: "SHA256:faketestfingerprint",
+	}}
+	for id, ref := range f.keys {
+		keys[id] = ref
+	}
+	usage := map[string][]string{}
+	for id, set := range f.sets {
+		if set.SSHKeyID != "" {
+			usage[set.SSHKeyID] = append(usage[set.SSHKeyID], id)
+		}
+	}
+	var out []service.SSHKeyListing
+	for id, ref := range keys {
+		sort.Strings(usage[id])
+		out = append(out, service.SSHKeyListing{
+			ID:          ref.ID,
+			Algorithm:   ref.Algorithm,
+			Fingerprint: ref.Fingerprint,
+			PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestPublicHalf fake-test-fixture",
+			ImportedAt:  time.Date(2026, 3, 11, 9, 0, 0, 0, time.UTC),
+			UsedBy:      usage[id],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DiscoverSSHKeyCandidates answers the way a packaged install does: the
+// installer's own mounted key, and every location reported whether or not
+// it held anything. The absent ones are the point of the fixture, since
+// "I looked here and found nothing" is what a real deployment mostly
+// returns.
+func (f *backupSetFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	if f.errOnImport != nil {
+		return service.SSHKeyDiscovery{}, f.errOnImport
+	}
+	return service.SSHKeyDiscovery{
+		Locations: []service.SSHKeyDiscoveryLocation{
+			{Path: "/etc/backup-manager", Kind: "mount", Found: 1},
+			{Path: "/home/fake/.ssh", Kind: "home", Problem: "this location is not present in this deployment"},
+		},
+		Candidates: []service.SSHKeyCandidate{{
+			ID:          "cand_test_1",
+			Path:        "/etc/backup-manager/id_ed25519",
+			Location:    "/etc/backup-manager",
+			Algorithm:   "ssh-ed25519",
+			Fingerprint: "SHA256:fakecandidatefingerprint",
+			PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeCandidate fake-test-fixture",
+			Mode:        "0600",
+			Selectable:  true,
+		}},
+	}, nil
+}
+
+func (f *backupSetFakeBackend) ImportSSHKeyCandidate(_ context.Context, id string) (service.SSHKeyRef, error) {
+	if f.errOnImport != nil {
+		return service.SSHKeyRef{}, f.errOnImport
+	}
+	if id != "cand_test_1" {
+		return service.SSHKeyRef{}, service.ErrSSHKeyCandidateNotFound
+	}
+	ref := service.SSHKeyRef{ID: "key_test_2", KeyFile: "/fake/ssh_keys/key_test_2", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:fakecandidatefingerprint"}
+	f.mu.Lock()
+	f.keys[ref.ID] = ref
+	f.mu.Unlock()
+	return ref, nil
+}
+
 func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
 	if f.errOnProbe != nil {
 		return service.HostKeyProbe{}, f.errOnProbe
@@ -1502,6 +1611,24 @@ func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (servi
 		}, nil
 	}
 	return f.probeResult, nil
+}
+
+// passingConnectionChecks is what core reports when all six steps hold:
+// the same steps, in the same order, with plausible timings.
+//
+// The last two carry NO DurationMs, which is the fixture's whole point
+// beyond being green: authenticate and list come out of one call, so a
+// fixture that gave them a number would make a handler that emits "0 ms"
+// beside a green row look correct here and wrong in production.
+func passingConnectionChecks() []service.ConnectionCheck {
+	return []service.ConnectionCheck{
+		{Step: "credentials", Outcome: "passed", Detail: "the key you selected is where the configuration says. Its public half is SHA256:faketestclientfingerprint", DurationMs: 3},
+		{Step: "resolve", Outcome: "passed", Detail: "prod-db-01.internal is 203.0.113.24 (A)", DurationMs: 12},
+		{Step: "connect", Outcome: "passed", Detail: "TCP to prod-db-01.internal:22 in 210ms · SSH-2.0-OpenSSH_9.6p1", DurationMs: 210},
+		{Step: "host_key", Outcome: "passed", Detail: "the server offered ssh-ed25519 SHA256:faketesthostfingerprint, and this backup set's known_hosts trusts it for this host on line 1", DurationMs: 18},
+		{Step: "authenticate", Outcome: "passed", Detail: "the server accepted publickey for backup-agent"},
+		{Step: "list", Outcome: "passed", Detail: "/backups listed, 41 entries"},
+	}
 }
 
 func (f *backupSetFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {

@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -17,7 +19,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
-// What `Test Connection` actually did (EPIC G, issue #596).
+// What `Test Connection` actually did (EPIC G, issues #592 and #596).
 //
 // # The button that could not be told apart from no button
 //
@@ -32,9 +34,28 @@ import (
 // Throwing the error away was right and this file still does it. What is
 // new is that six things are asked separately and answered separately,
 // which is internal/sourcecheck's job; this file is the wiring that gives
-// that package a real key resolver, a real known_hosts reading, a real
-// host key probe and the real transport, and that puts what came back
-// where an operator can read it.
+// that package a real permission check on the configured key, a real
+// known_hosts reading for the wording, knownhosts' own callback for the
+// DECISION, and the real transport, and that puts what came back where an
+// operator can read it.
+//
+// The candidate half of the same route (backupsets.go's testConnectionVia)
+// wires the identical six steps from the request instead of from a
+// persisted set, so a caller never has to know which mode it asked for to
+// know what comes back.
+//
+// # The one host key comparison this repository makes
+//
+// hostKeyVerifier below is knownhosts.New over the file the transport is
+// about to verify against, and it is the only reading of a known_hosts
+// entry anywhere on this path. An earlier version of this file parsed the
+// file itself, kept each line's KEY and dropped the marker and the host
+// patterns, then compared fingerprints. That is permissive in both
+// directions at once: an @revoked line reported as trusted, a key pinned
+// for another host counted for this one, and a hashed entry (whose salt
+// nothing else can reproduce) reported as a mismatch on a host that was
+// perfectly fine. The first two are the dangerous ones and the third is
+// what teaches an operator to click past them.
 //
 // # Why the steps go on the feed and not only in the response
 //
@@ -88,19 +109,15 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 	}
 
 	deps := sourcecheck.Deps{
-		// The same three key sources, the same passphrase handling and
-		// the same at-rest decryption a real transfer uses. A second
-		// resolver here would be a second SSH posture; see
-		// internal/transport/rclone.SourceSigner.
-		Credentials: func(context.Context) (ssh.Signer, string, error) { return rclone.SourceSigner(src) },
-		Trusted:     func(context.Context) ([]sourcecheck.TrustedKey, error) { return trustedHostKeys(src.KnownHosts) },
-		ProbeHostKey: func(ctx context.Context, host string, port int) (string, string, error) {
-			res, err := rclone.ProbeHostKey(ctx, host, port)
-			if err != nil {
-				return "", "", err
-			}
-			return res.Algorithm, res.Fingerprint, nil
+		// The same mode and directory-chain rule a real transfer applies
+		// before it will touch the key, asked of the same code, plus the
+		// public fingerprint out of this deployment's own key store. No
+		// private half is opened anywhere on this path.
+		Credentials: func(context.Context) (string, error) {
+			return b.sourceKeyIdentity(src, set.Remote)
 		},
+		Trusted: func(context.Context) ([]sourcecheck.TrustedKey, error) { return trustedHostKeys(src.KnownHosts) },
+		Verify:  hostKeyVerifier(src.KnownHosts),
 		List: func(ctx context.Context) (int, error) {
 			tr := b.state.Load().inner.Transport
 			if tr == nil {
@@ -135,6 +152,22 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 		report = runLocalConnectionTest(ctx, target, deps)
 	}
 
+	result := resultFromReport(report)
+	b.recordConnectionTest(ctx, id, report)
+	return result
+}
+
+// resultFromReport is how a six-step report becomes the two fields
+// #211's callers have always read, and it is the SAME function for both
+// modes of this endpoint.
+//
+// Message is the failed step's own Detail rather than a generic sentence
+// or a re-derived one. It is a strict improvement for every existing
+// caller: still one safe-to-render string this package composed, and now
+// it says what went wrong instead of naming the whole button. Deriving it
+// once here is also what keeps the two modes from drifting into two
+// different messages for the same failure.
+func resultFromReport(report sourcecheck.Report) ConnectionTestResult {
 	result := ConnectionTestResult{OK: report.OK}
 	for _, c := range report.Checks {
 		result.Checks = append(result.Checks, ConnectionCheck{
@@ -142,22 +175,77 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 			Outcome:  string(c.Outcome),
 			Category: c.Category,
 			Detail:   c.Detail,
+			// Milliseconds, and 0 stays 0: sourcecheck leaves Duration
+			// unset on the steps that share one call, and every layer
+			// above omits the field rather than printing a zero.
+			DurationMs: int(c.Duration.Milliseconds()),
 		})
 	}
-	if !report.OK {
-		// The sentence a client reading only ok/message has always got,
-		// now naming the step it stopped at rather than the whole
-		// button. It stays a sentence this package owns and never
-		// carries an underlying error's text.
-		if stopped, ok := report.StoppedAt(); ok {
-			result.Message = "the connection test stopped at " + string(stopped.Step)
-		} else {
-			result.Message = "could not connect and list the remote path"
+	if report.OK {
+		return result
+	}
+	if stopped, ok := report.StoppedAt(); ok && stopped.Detail != "" {
+		result.Message = stopped.Detail
+		return result
+	}
+	result.Message = "could not connect and list the remote path"
+	return result
+}
+
+// hostKeyVerifier is the host key DECISION, and it is knownhosts' own
+// callback over the very file the transport is about to verify against.
+//
+// This is the only kind of host key comparison this repository makes.
+// backupsethostkey.go reaches for knownhosts.New five times for the same
+// reason: a marker (@revoked, @cert-authority), a line's host patterns
+// and a hashed |1|salt|hash entry are all part of what a known_hosts line
+// MEANS, and a reading that compares only fingerprints discards every one
+// of them. It discards them permissively, too, so a check built that way
+// passes on connections the transport then refuses: a revoked key reports
+// as trusted, and a key pinned for some other host counts for this one.
+//
+// A path that cannot be read produces a callback that refuses everything
+// with the reason, rather than one that accepts. "I could not check" is
+// the outcome an attacker would choose, so it is never a pass.
+func hostKeyVerifier(path string) func(string, net.Addr, ssh.PublicKey) error {
+	if path == "" {
+		return func(string, net.Addr, ssh.PublicKey) error {
+			return fmt.Errorf("service: this backup set names no known_hosts file, so no host key can be trusted for it")
 		}
 	}
+	check, err := knownhosts.New(path)
+	if err != nil {
+		return func(string, net.Addr, ssh.PublicKey) error {
+			return fmt.Errorf("service: this backup set's known_hosts file could not be read, so the offered host key was compared against nothing: %w", err)
+		}
+	}
+	return check
+}
 
-	b.recordConnectionTest(ctx, id, report)
-	return result
+// sourceKeyIdentity answers the credentials step: whether this set's key
+// may be used on this host, and what its public half is called.
+//
+// Two questions, one os.Stat pair and one store lookup, and no private
+// key is opened for either. rclone.CheckSourceKeyFile is the same mode
+// and directory-chain rule a real transfer applies, asked of the same
+// code so the two cannot disagree. The fingerprint comes out of this
+// deployment's key store, which already holds the public half.
+//
+// An empty fingerprint with a nil error is a real answer: this set points
+// at a key this deployment does not manage, which is every set using a
+// mounted or hand-provisioned key file and a perfectly ordinary shape.
+// The step passes and its detail says the public half could not be named
+// without opening the private one, which is a fact about how the set is
+// configured rather than a failure.
+func (b *BackupService) sourceKeyIdentity(src transport.Source, remote config.Remote) (string, error) {
+	if err := rclone.CheckSourceKeyFile(src); err != nil {
+		return "", err
+	}
+	id := sshKeyIDFor(b.configPath, remote)
+	if id == "" {
+		return "", nil
+	}
+	return storedKeyFingerprint(b.configPath, id), nil
 }
 
 // runLocalConnectionTest answers for a backup set whose source is not

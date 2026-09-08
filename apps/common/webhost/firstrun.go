@@ -67,6 +67,9 @@ type FirstRunClient interface {
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
 
 	// CreateInitialConfig writes this deployment's first configuration.
 	// See core/service.FirstRun.CreateInitialConfig for the ordering and
@@ -87,6 +90,15 @@ type SetupClient interface {
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+
+	// Looking, as well as doing (#592). These are here rather than only
+	// on the configured backend because the setup wizard is the surface
+	// that needs them most: a brand new install has exactly one key on
+	// the machine, the one our own installer generated and compose
+	// mounted, and setup is the moment somebody is looking for it.
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
 }
 
 // setup returns the SetupClient this deployment currently has: the
