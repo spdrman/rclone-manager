@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "d9ec3518cdc59fd0b5b24718d1e10f2d5a7ecfd574a9d571013aaafdc7c4a990"
+const ContractSHA256 = "4c7f7bdab02a185a7368608effb3cebc359bee83239f0e43402ee47c5cf3340a"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -340,7 +340,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged},
+			409: {ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
 		},
@@ -839,7 +839,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			409: {ErrorCodeAlreadyConfigured},
+			409: {ErrorCodeAlreadyConfigured, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1087,23 +1087,23 @@ type BackupSetRetention struct {
 // so the wizard that collects these answers can never be right about
 // one operation and wrong about the other.
 type BackupSetSpec struct {
-	CompletionStrategy   string   `json:"completion_strategy"`
-	ConnectionUnverified bool     `json:"connection_unverified"`
-	Disabled             bool     `json:"disabled"`
-	Host                 string   `json:"host"`
-	Include              []string `json:"include"`
-	KnownHostsLine       string   `json:"known_hosts_line"`
-	LocalPath            string   `json:"local_path"`
-	Name                 string   `json:"name"`
-	Port                 int      `json:"port"`
-	ReadOnly             bool     `json:"read_only"`
-	RemotePath           string   `json:"remote_path"`
-	SourceName           string   `json:"source_name"`
-	SSHKeyID             string   `json:"ssh_key_id"`
-	StableForSeconds     int      `json:"stable_for_seconds"`
-	StaleAfterSeconds    int      `json:"stale_after_seconds"`
-	User                 string   `json:"user"`
-	ValidatorID          string   `json:"validator_id"`
+	CompletionStrategy  string   `json:"completion_strategy"`
+	Disabled            bool     `json:"disabled"`
+	Host                string   `json:"host"`
+	Include             []string `json:"include"`
+	KnownHostsLine      string   `json:"known_hosts_line"`
+	LocalPath           string   `json:"local_path"`
+	Name                string   `json:"name"`
+	Port                int      `json:"port"`
+	ReadOnly            bool     `json:"read_only"`
+	RemotePath          string   `json:"remote_path"`
+	SkipConnectionCheck bool     `json:"skip_connection_check"`
+	SourceName          string   `json:"source_name"`
+	SSHKeyID            string   `json:"ssh_key_id"`
+	StableForSeconds    int      `json:"stable_for_seconds"`
+	StaleAfterSeconds   int      `json:"stale_after_seconds"`
+	User                string   `json:"user"`
+	ValidatorID         string   `json:"validator_id"`
 }
 
 // CapabilitiesResponse is GET /system/capabilities. The API expression of the

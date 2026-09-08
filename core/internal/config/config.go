@@ -520,7 +520,8 @@ type BackupSet struct {
 
 	// ConnectionUnverified records that this backup set was written
 	// without its SSH connection ever having been proven: issue #624's
-	// mark, and the durable half of `backup-set create --no-verify`.
+	// mark, and the durable half of `--no-verify` on a create or a
+	// connection-changing edit.
 	//
 	// It exists because --no-verify has a legitimate use, building
 	// configuration offline against a host this machine cannot currently
@@ -534,9 +535,15 @@ type BackupSet struct {
 	// and a build that read silence as a mark would, on the first upgrade,
 	// declare every backup set on every deployment unproven, which is a
 	// warning nobody can act on and therefore one everybody learns to
-	// ignore. The mark is only ever written by a surface that deliberately
-	// skipped a check it could have run, exactly as ReadOnlyConfig is only
-	// ever written by an operator who said something.
+	// ignore. The mark is only ever written by core/service itself, when
+	// a create or an edit was told to skip the check it runs in front of
+	// the write (SkipConnectionCheck on the request, `skip_connection_check`
+	// on the API), exactly as ReadOnlyConfig is only ever written by an
+	// operator who said something. It is never taken from a request: a
+	// mark a caller could set is a mark a caller could omit, and an
+	// earlier shape of the create request that carried it as the caller's
+	// own claim let any client write an unproven set with nothing to say
+	// so (PR #628 review).
 	//
 	// It is cleared, not merely reported: a connection test that PASSES
 	// against this set removes the key (core/service's

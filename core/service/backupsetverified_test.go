@@ -285,50 +285,6 @@ func TestConnectionSourceFor_DialsTheDefaultPortForASetThatNamesNone(t *testing.
 	}
 }
 
-// TestCreateBackupSet_MarksASetItWasNotAskedToProve is the write half:
-// what a --no-verify create leaves behind, asked of the service rather
-// than of the command, because both surfaces write through here.
-//
-// The control matters as much as the case. An ordinary create must leave
-// the key OUT of the file entirely rather than write `false`, because
-// every configuration written before this field existed says nothing and
-// has to keep meaning what it always meant.
-func TestCreateBackupSet_MarksASetItWasNotAskedToProve(t *testing.T) {
-	svc, configPath := openTestService(t)
-
-	req := validCreateReq(t, svc, "offline-set")
-	req.ConnectionUnverified = true
-	if _, err := svc.CreateBackupSet(context.Background(), req); err != nil {
-		t.Fatalf("CreateBackupSet: %v", err)
-	}
-	got, err := svc.GetBackupSet(context.Background(), "api/offline-set")
-	if err != nil {
-		t.Fatalf("GetBackupSet: %v", err)
-	}
-	if !got.ConnectionUnverified {
-		t.Error("a set created without a check reads back as one that was checked")
-	}
-	raw, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !strings.Contains(string(raw), "connection_unverified: true") {
-		t.Errorf("the mark did not reach the configuration file:\n%s", raw)
-	}
-
-	proven := validCreateReq(t, svc, "proven-set")
-	if _, err := svc.CreateBackupSet(context.Background(), proven); err != nil {
-		t.Fatalf("CreateBackupSet: %v", err)
-	}
-	after, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if strings.Count(string(after), "connection_unverified") != 1 {
-		t.Errorf("an ordinary create wrote the key too; absence has to keep meaning what it meant in every file written before this field existed:\n%s", after)
-	}
-}
-
 // The two cases below are PR #628's review findings against the check
 // UpdateBackupSet runs in front of a connection-changing edit: one about
 // what it can cost the rest of the process, one about what it can fail to
@@ -687,6 +643,12 @@ func TestUpdateBackupSet_ResendingTheSameKeyKeepsItsPassphrase(t *testing.T) {
 		t.Fatalf("the fixture did not take the passphrase, so this case proves nothing: %+v", before.Remote.Key)
 	}
 
+	// The mark as the fixture left it, read before the edit rather than
+	// assumed: createSFTPSet builds from validCreateReq, which skips the
+	// create-time check, so the set starts out marked. What this edit must
+	// not do is MOVE it, in either direction.
+	markBefore := readBackupSetFromDisk(t, configPath, source, set).ConnectionUnverified
+
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
 		SSHKeyID: strPtr(keyID),
 	}); err != nil {
@@ -700,7 +662,7 @@ func TestUpdateBackupSet_ResendingTheSameKeyKeepsItsPassphrase(t *testing.T) {
 	if after.Remote.Key.File == "" {
 		t.Errorf("the set has no key.file at all after re-sending its own key: %+v", after.Remote.Key)
 	}
-	if after.ConnectionUnverified {
-		t.Error("nothing about the connection moved, and the set came back marked as unverified")
+	if after.ConnectionUnverified != markBefore {
+		t.Errorf("nothing about the connection moved, and the edit moved the mark from %v to %v", markBefore, after.ConnectionUnverified)
 	}
 }

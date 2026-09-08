@@ -214,12 +214,15 @@ type BackupSet struct {
 	// without its SSH connection ever having been proven (issue #624,
 	// config.BackupSet.ConnectionUnverified).
 	//
-	// True means a surface deliberately skipped a check it could have
-	// run: `backup-set create --no-verify`, and nothing else writes it.
-	// False is every other set, including every set written before the
-	// mark existed, which is why absence is not read as "unverified" (see
-	// the config field's own doc for why an upgrade must not declare
-	// every existing set unproven).
+	// True means the caller told this service to skip the check it runs
+	// in front of every create and every connection-changing edit
+	// (SkipConnectionCheck on either request, `--no-verify` on the CLI,
+	// `skip_connection_check` on the API), and nothing else writes it: the
+	// mark is this service's own record of what it did not do, never a
+	// caller's claim about what it did. False is every other set,
+	// including every set written before the mark existed, which is why
+	// absence is not read as "unverified" (see the config field's own doc
+	// for why an upgrade must not declare every existing set unproven).
 	//
 	// It is reported so a surface can DRAW the difference. A set nobody
 	// ever proved and a set checked against a real server used to be
@@ -338,24 +341,29 @@ type CreateBackupSetRequest struct {
 	// RunImmediately is false or Disabled is true.
 	Actor string
 
-	// ConnectionUnverified declares that this set is being created
-	// WITHOUT its connection having been proven, and asks for it to be
-	// marked as such until a test passes (issue #624).
+	// SkipConnectionCheck writes this set without proving its connection
+	// first (issue #624). It is `backup-set create --no-verify`, spelled
+	// the same way `medium add --no-verify` and
+	// UpdateBackupSetRequest.SkipConnectionCheck are, because it is the
+	// same decision on every write that declares a connection.
 	//
-	// It is a statement about what the CALLER did, not an instruction to
-	// this method: nothing here runs or skips a check, because the check
-	// belongs where the answers are still being collected. `backup-set
-	// create` runs it against the same route the write goes to and sets
-	// this only when --no-verify was given; the wizard cannot save at all
-	// until its own check has passed, so it never sets this.
+	// CreateBackupSet runs the candidate check itself, the same six steps
+	// TestConnection answers for the wizard's button, and refuses with
+	// ErrConnectionNotProven when it fails; this is the way past that. A
+	// set written under it is marked ConnectionUnverified until a test
+	// passes, and the mark is THIS method's own record of what it did not
+	// do rather than anything a caller said. An earlier shape of this
+	// request carried the mark itself, as a statement about what the
+	// caller had done, and that made it a claim the server could not
+	// check: any client that was not this repository's own CLI or wizard
+	// could omit it and write an unproven set indistinguishable on every
+	// screen from one checked against a real server, which is the exact
+	// state the mark exists to end (PR #628 review).
 	//
-	// False is what every request before this field existed meant and
-	// stays the default, so a caller that does not know about the mark
-	// creates an unmarked set rather than silently declaring one proven
-	// that it never checked. That is the honest default for the same
-	// reason config.BackupSet.ConnectionUnverified reads absence as
-	// unmarked: a mark nobody can act on is a mark everybody ignores.
-	ConnectionUnverified bool
+	// Not a pointer, for the same reason the acknowledgement below is
+	// not: it is a yes/no about this one call, and false, the value a
+	// caller gets by not mentioning it, is the one that checks.
+	SkipConnectionCheck bool
 
 	// AcknowledgeRepoint confirms that the caller means to create this
 	// backup set somewhere other than where the history already on its id
@@ -469,12 +477,13 @@ func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSet
 		// with an error naming a directory rather than the cause.
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
-		// Issue #624's mark, carried straight through: a set created
-		// without a check says so in the file, and a set created the
-		// ordinary way leaves the key out entirely (omitempty), which is
-		// what keeps absence meaning what it meant in every configuration
-		// written before this field existed.
-		ConnectionUnverified: req.ConnectionUnverified,
+		// Issue #624's mark, written by this method and not by the caller:
+		// a set the caller told us not to check says so in the file, and a
+		// set created the ordinary way, which is a set whose check passed
+		// before either create path got here, leaves the key out entirely
+		// (omitempty), which is what keeps absence meaning what it meant
+		// in every configuration written before this field existed.
+		ConnectionUnverified: req.SkipConnectionCheck,
 	}
 	// A pointer to a fresh local, never &req.ReadOnly: req is this
 	// function's own by-value parameter, so its address is safe to persist
@@ -516,6 +525,52 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	keyFile, err := b.resolveSSHKeyFile(req.SSHKeyID)
 	if err != nil {
 		return CreateBackupSetResult{}, err
+	}
+
+	// Issue #624: the connection this set declares is proven before it
+	// is written, by this method and not by whoever called it, and the
+	// write is refused when it cannot be. The first shape of the feature
+	// left the check to the CLI and the wizard and took the MARK from the
+	// request, as a statement about what the caller had done; the service
+	// wrote whatever it was told, so any other client could omit the
+	// field and write an unproven set indistinguishable from a checked
+	// one (PR #628 review). The mark is now newBackupSetFor's own record
+	// of the skip below, and nothing a caller sends can write it.
+	//
+	// It is the candidate check, the same TestConnection the wizard's
+	// button and the CLI's own pre-write check call, because a create is
+	// the one write whose request carries everything the check needs.
+	// That is also why it runs HERE, before configMu, and not where
+	// UpdateBackupSet runs its check: nothing about a candidate depends on
+	// the configuration the lock protects, and holding a process-wide
+	// lock across network I/O is the thing this PR's review found, so it
+	// is not done where it does not have to be. It runs after
+	// validateCreateRequest and the key resolution so a malformed request
+	// or an unknown key is refused as what it is rather than as an
+	// unreachable host. The one ordering cost is that a create whose
+	// whole-configuration problem only cfg.Validate below can see, a
+	// duplicate id say, is refused for its connection first when the host
+	// answers nothing and for the duplicate once it does; those are two
+	// things wrong with one request, and each refusal names its own.
+	//
+	// The CLI and the wizard both run this same check before they submit,
+	// so a set created through either is checked twice on the way in.
+	// That is the price of the service never taking a caller's word for
+	// it, and it is a few hundred milliseconds against a host that
+	// answers; against one that does not, the caller's own check refuses
+	// first and this one never runs.
+	if !req.SkipConnectionCheck {
+		result, err := b.TestConnection(ctx, candidateConnectionFor(req))
+		if err != nil {
+			return CreateBackupSetResult{}, err
+		}
+		if !result.OK {
+			// Safe to echo, for the reason UpdateBackupSet gives: Message
+			// is one of internal/sourcecheck's own sentences composed
+			// from the caller's own values, never a transport error's
+			// text.
+			return CreateBackupSetResult{}, fmt.Errorf("%w: %s", ErrConnectionNotProven, result.Message)
+		}
 	}
 
 	sourceName := req.SourceName

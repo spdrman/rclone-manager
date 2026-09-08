@@ -389,8 +389,9 @@ func (e *fakeEngine) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		// The actor is the SESSION's, never the request's. That is the
 		// whole authorization argument for routing: an engine records who
 		// asked, and the caller does not get to say.
-		Actor:              e.username,
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
+		Actor:               e.username,
+		AcknowledgeRepoint:  body.AcknowledgeRepoint,
+		SkipConnectionCheck: body.SkipConnectionCheck,
 	}
 	result, err := e.svc.CreateBackupSet(r.Context(), req)
 	if err != nil {

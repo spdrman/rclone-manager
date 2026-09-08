@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "d9ec3518cdc59fd0b5b24718d1e10f2d5a7ecfd574a9d571013aaafdc7c4a990";
+export const CONTRACT_SHA256 = "4c7f7bdab02a185a7368608effb3cebc359bee83239f0e43402ee47c5cf3340a";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -345,7 +345,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
     }
@@ -1204,7 +1204,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-      409: ["ALREADY_CONFIGURED"],
+      409: ["ALREADY_CONFIGURED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
     }
   },
@@ -1474,7 +1474,6 @@ export interface WireBackupSetRetention {
  *  one operation and wrong about the other. */
 export interface WireBackupSetSpec {
   completion_strategy: "rename" | "marker" | "stable";
-  connection_unverified?: boolean;
   disabled?: boolean;
   host: string;
   include?: string[];
@@ -1484,6 +1483,7 @@ export interface WireBackupSetSpec {
   port: number;
   read_only?: boolean;
   remote_path: string;
+  skip_connection_check?: boolean;
   source_name?: string;
   ssh_key_id: string;
   stable_for_seconds?: number;

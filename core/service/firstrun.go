@@ -283,7 +283,7 @@ func (f *FirstRun) TestConnection(ctx context.Context, req ConnectionTestRequest
 // submit an operation to yet, and starting a backup during setup is not
 // something this function can honestly promise; the operator runs the
 // first cycle from the application once it is up.
-func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetRequest) (BackupSet, error) {
+func (f *FirstRun) CreateInitialConfig(ctx context.Context, req CreateBackupSetRequest) (BackupSet, error) {
 	f.createMu.Lock()
 	defer f.createMu.Unlock()
 
@@ -297,6 +297,34 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 	keyFile, err := resolveSSHKeyFileIn(f.defaults.ConfigPath, req.SSHKeyID)
 	if err != nil {
 		return BackupSet{}, err
+	}
+
+	// Issue #624, on the first configuration too, and for the same reason
+	// CreateBackupSet gives at length: the service proves the connection
+	// and writes the mark itself, rather than taking either from the
+	// caller. This surface has its own TestConnection because the wizard
+	// that walks this flow in a browser needed one, so the check here is
+	// the check that button runs, with the same six steps. The refusal
+	// has a sharper consequence on this path than on the configured one:
+	// there is no configuration at all yet, and a first configuration
+	// written and then reported as failed is the shape a retry silently
+	// folds into, which is why it runs before anything below touches the
+	// disk.
+	//
+	// Under createMu, unlike CreateBackupSet's, which runs before
+	// configMu. createMu guards one exclusive create against a second
+	// submission of the same form, not a configuration other writers are
+	// waiting on, and a second submission parked behind a ten-second
+	// check is a second submission that would have been refused as
+	// already configured anyway.
+	if !req.SkipConnectionCheck {
+		result, err := f.TestConnection(ctx, candidateConnectionFor(req))
+		if err != nil {
+			return BackupSet{}, err
+		}
+		if !result.OK {
+			return BackupSet{}, fmt.Errorf("%w: %s", ErrConnectionNotProven, result.Message)
+		}
 	}
 
 	sourceName := req.SourceName

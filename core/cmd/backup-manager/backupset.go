@@ -477,11 +477,16 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 		RunImmediately:     *f.runNow,
 		Actor:              cliActor,
 		AcknowledgeRepoint: *f.acknowledgeRepoint,
-		// Issue #624: what this invocation is about to skip, recorded on
-		// the set rather than only announced in the terminal. Nothing in
-		// core/service reads this as an instruction to skip anything; the
-		// check below is what actually runs or does not.
-		ConnectionUnverified: *f.noVerify,
+		// Issue #624. The service runs the check itself in front of the
+		// write and marks the set when told not to, so this is the same
+		// flag patch sends and it means the same thing there. The check
+		// this command runs first (proveSourceConnection) is for the
+		// operator's screen: it prints all six steps, where the service's
+		// refusal names only the step that failed. An earlier shape sent
+		// the MARK from here instead, as a claim about what this command
+		// had done, which the service could not check and any other client
+		// could omit (PR #628 review).
+		SkipConnectionCheck: *f.noVerify,
 	}
 
 	ctx := context.Background()

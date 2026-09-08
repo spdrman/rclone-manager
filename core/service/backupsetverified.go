@@ -70,18 +70,42 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
-// ErrConnectionNotProven is an edit that changes what a backup set
-// connects to, refused because that connection could not be proven
-// (issue #624).
+// ErrConnectionNotProven is a write that declares what a backup set
+// connects to, a create or an edit that changes it, refused because that
+// connection could not be proven (issue #624).
 //
 // Its own sentinel, like ErrRepointNotAcknowledged and
 // ErrHostKeyChangeNotAcknowledged beside it, because it is the same
 // SHAPE of answer: not "your request is malformed" and not "this manager
 // broke", but "what you asked for is a decision, and here is what it
-// costs". The way past it is UpdateBackupSetRequest.SkipConnectionCheck,
-// and the message names the step that failed so the operator has
-// something to fix rather than only something to override.
-var ErrConnectionNotProven = errors.New("service: this edit changes the connection and that connection could not be proven")
+// costs". The way past it is SkipConnectionCheck on either request, and
+// the message names the step that failed so the operator has something
+// to fix rather than only something to override.
+var ErrConnectionNotProven = errors.New("service: the connection this backup set declares could not be proven")
+
+// candidateConnectionFor is the check a create runs, built out of the
+// create request itself.
+//
+// A create is the one write that can be checked as a candidate, because
+// the request carries everything the check needs: the key by store id,
+// the trusted line as text, the host, the port, the user and the path.
+// That is the same request the wizard's Test connection button and the
+// CLI's own pre-write check send to TestConnection, so the service asks
+// exactly the question those two ask and gets the same six steps back.
+// One construction rather than a copy in each caller, for the reason
+// connectionSourceFor gives about the persisted shape: two of them is how
+// a check starts proving a slightly different connection from the one
+// that gets written.
+func candidateConnectionFor(req CreateBackupSetRequest) ConnectionTestRequest {
+	return ConnectionTestRequest{
+		Host:           req.Host,
+		Port:           req.Port,
+		User:           req.User,
+		SSHKeyID:       req.SSHKeyID,
+		KnownHostsLine: req.KnownHostsLine,
+		RemotePath:     req.RemotePath,
+	}
+}
 
 // connectionSourceFor builds the transport.Source one connection test
 // runs against, out of a persisted backup set.

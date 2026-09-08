@@ -128,11 +128,13 @@ export interface BackupSet {
    * Issue #624: this backup set was written without its SSH connection
    * ever having been proven.
    *
-   * True means a surface deliberately skipped a check it could have run,
-   * which is `backup-manager backup-set create --no-verify` and nothing
-   * else: the wizard cannot save until its own check has passed. A
-   * connection test that PASSES against the set clears it, and one that
-   * fails leaves it alone.
+   * True means the engine was told to skip the check it runs in front of
+   * every create and every connection-changing edit (`--no-verify` on the
+   * CLI, `skip_connection_check` on the API), and it is the engine's own
+   * record of that: nothing a client sends sets the mark directly, and the
+   * wizard never skips, because it cannot save until its own check has
+   * passed. A connection test that PASSES against the set clears it, and
+   * one that fails leaves it alone.
    *
    * False is not a claim that the connection works today, only that
    * nothing here says it was never proven. An engine built before this

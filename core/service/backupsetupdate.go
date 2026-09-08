@@ -155,15 +155,18 @@ type UpdateBackupSetRequest struct {
 	// ConnectionUnverified until a test passes, so the escape hatch does
 	// not leave a set indistinguishable from one that was proven.
 	//
-	// The check is run HERE rather than by the caller, unlike the create
-	// path's, and the reason is that a caller cannot assemble the
-	// candidate. A sparse edit names two or three fields, the rest come
-	// off the persisted set, and one of them is that set's trusted
-	// known_hosts line, which this API deliberately never publishes: a
-	// caller can be told which fingerprints a set pins and never the line
-	// itself. So the only place with everything the check needs is the
-	// process holding the configuration, which is also the process about
-	// to write it.
+	// The check is run HERE, and on this path it could not be anywhere
+	// else, because a caller cannot assemble the candidate. A sparse edit
+	// names two or three fields, the rest come off the persisted set, and
+	// one of them is that set's trusted known_hosts line, which this API
+	// deliberately never publishes: a caller can be told which
+	// fingerprints a set pins and never the line itself. So the only place
+	// with everything the check needs is the process holding the
+	// configuration, which is also the process about to write it. The
+	// create path runs its check in the service too, since PR #628's
+	// review, for a different reason: a caller that checks for itself is a
+	// caller the service has to take at its word, and one that does not
+	// know about the check writes an unproven set with nothing to say so.
 	//
 	// Not a pointer, for the same reason the two acknowledgements are not:
 	// it is a yes/no about this one call rather than a sparse edit of a

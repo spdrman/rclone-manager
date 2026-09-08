@@ -116,12 +116,12 @@ func (r *engineRoute) CreateBackupSet(ctx context.Context, req service.CreateBac
 			ValidatorID:        string(req.ValidatorID),
 			Disabled:           req.Disabled,
 			ReadOnly:           req.ReadOnly,
-			// Issue #624: whether this create ran its own check. Carried
-			// across because a routed --no-verify that dropped it would
-			// write a set the engine reported as proven, which is exactly
-			// the indistinguishable-from-verified state the mark exists
-			// to prevent.
-			ConnectionUnverified: req.ConnectionUnverified,
+			// Issue #624's opt-out, carried across for the reason the
+			// patch route carries its own: the engine runs the check in
+			// front of the write and marks the set when told not to, so a
+			// routed --no-verify that dropped this flag would be refused
+			// where the direct one writes.
+			SkipConnectionCheck: req.SkipConnectionCheck,
 		},
 		RunImmediately:     req.RunImmediately,
 		AcknowledgeRepoint: req.AcknowledgeRepoint,

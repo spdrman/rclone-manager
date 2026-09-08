@@ -86,18 +86,18 @@ type backupSetSpec struct {
 	// before this issue already meant: FR-15's delete step runs
 	// unchanged.
 	ReadOnly bool `json:"read_only"`
-	// ConnectionUnverified declares that this set is being created
-	// WITHOUT its connection having been proven, and asks for it to be
-	// marked as such until a test passes (issue #624).
-	//
-	// It states what the CALLER did rather than instructing this service
-	// to skip anything. The candidate check is POST
-	// /api/v1/backup-sets/test-connection, which a caller runs before
-	// submitting this; the wizard cannot save until that check has passed,
-	// so it never sets this, and `backup-set create --no-verify` is what
-	// does. Omitted or false is what every request before this field
-	// existed meant.
-	ConnectionUnverified bool `json:"connection_unverified"`
+	// SkipConnectionCheck writes this set without proving its connection
+	// first (issue #624). The service runs the same six-step check POST
+	// /api/v1/backup-sets/test-connection answers, in front of the write,
+	// and refuses with BACKUP_SET_CONNECTION_NOT_PROVEN when it fails;
+	// this is the deliberate opt-out, and a set written under it is
+	// marked connection_unverified until a test passes. The mark is the
+	// service's own record of the skip, never a field a caller sets: an
+	// earlier shape of this body carried connection_unverified as a claim
+	// about what the caller had done, which any client other than this
+	// repository's own could simply omit (PR #628 review). Omitted or
+	// false checks, which is what every create should do.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
 }
 
 // backupSetRequest is POST /api/v1/backup-sets' request body: the spec
@@ -359,26 +359,26 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := service.CreateBackupSetRequest{
-		SourceName:           body.SourceName,
-		Name:                 body.Name,
-		Host:                 body.Host,
-		Port:                 body.Port,
-		User:                 body.User,
-		SSHKeyID:             body.SSHKeyID,
-		KnownHostsLine:       body.KnownHostsLine,
-		RemotePath:           body.RemotePath,
-		LocalPath:            body.LocalPath,
-		Include:              body.Include,
-		CompletionStrategy:   body.CompletionStrategy,
-		ValidatorID:          service.ValidatorID(body.ValidatorID),
-		StableFor:            secondsToDuration(body.StableForSeconds),
-		StaleAfter:           secondsToDuration(body.StaleAfterSeconds),
-		Disabled:             body.Disabled,
-		ReadOnly:             body.ReadOnly,
-		ConnectionUnverified: body.ConnectionUnverified,
-		RunImmediately:       runImmediately,
-		AcknowledgeRepoint:   body.AcknowledgeRepoint,
-		Actor:                actorFromContext(r.Context()),
+		SourceName:          body.SourceName,
+		Name:                body.Name,
+		Host:                body.Host,
+		Port:                body.Port,
+		User:                body.User,
+		SSHKeyID:            body.SSHKeyID,
+		KnownHostsLine:      body.KnownHostsLine,
+		RemotePath:          body.RemotePath,
+		LocalPath:           body.LocalPath,
+		Include:             body.Include,
+		CompletionStrategy:  body.CompletionStrategy,
+		ValidatorID:         service.ValidatorID(body.ValidatorID),
+		StableFor:           secondsToDuration(body.StableForSeconds),
+		StaleAfter:          secondsToDuration(body.StaleAfterSeconds),
+		Disabled:            body.Disabled,
+		ReadOnly:            body.ReadOnly,
+		SkipConnectionCheck: body.SkipConnectionCheck,
+		RunImmediately:      runImmediately,
+		AcknowledgeRepoint:  body.AcknowledgeRepoint,
+		Actor:               actorFromContext(r.Context()),
 	}
 
 	result, err := h.backend.CreateBackupSet(r.Context(), req)

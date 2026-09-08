@@ -1804,9 +1804,9 @@
             "type": "boolean",
             "description": "Declares this backup set's remote source read-only from creation (issue #282): pull backups from here, but never delete the remote original. Omitted or false means exactly what every request meant before this field existed."
           },
-          "connection_unverified": {
+          "skip_connection_check": {
             "type": "boolean",
-            "description": "Declares that this set is being created WITHOUT its connection having been proven, and asks for it to be marked as such until a test passes (issue #624). It states what the CALLER did rather than instructing this service to skip anything: the candidate check is POST /backup-sets/test-connection, which a caller runs before submitting this, and the wizard cannot save at all until that check has passed. Omitted or false is what every request before this field existed meant."
+            "description": "Writes this set without proving its connection first (issue #624). The service runs the same six-step check POST /backup-sets/test-connection answers, in front of the write, and refuses with BACKUP_SET_CONNECTION_NOT_PROVEN when it fails; this is the deliberate opt-out, and a set written under it is marked connection_unverified until a test passes. The mark is the service's own record of the skip and is never taken from the request. Omitted or false checks, which is what every create should do."
           }
         },
         "required": [
@@ -4583,7 +4583,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED. This id already has artifacts on record and the set would be created somewhere other than where they came from; re-send with acknowledge_repoint once the message has been read.",
+            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_CONNECTION_NOT_PROVEN. This id already has artifacts on record and the set would be created somewhere other than where they came from, re-sent with acknowledge_repoint once the message has been read; or the connection this set declares could not be proven, re-sent with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4592,7 +4592,8 @@
               }
             },
             "x-error-codes": [
-              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -5872,7 +5873,7 @@
             ]
           },
           "409": {
-            "description": "Refused: ALREADY_CONFIGURED. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations.",
+            "description": "Refused: ALREADY_CONFIGURED, BACKUP_SET_CONNECTION_NOT_PROVEN. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations. Or the connection this first set declares could not be proven, and nothing was written; re-send with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5881,7 +5882,8 @@
               }
             },
             "x-error-codes": [
-              "ALREADY_CONFIGURED"
+              "ALREADY_CONFIGURED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
