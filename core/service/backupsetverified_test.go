@@ -2,9 +2,14 @@ package service
 
 import (
 	"context"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
 )
 
 // Issue #624 (H2.3): the durable half of "this connection was never
@@ -151,6 +156,124 @@ func TestTestBackupSetConnection_LeavesTheMarkWhenItFails(t *testing.T) {
 	}
 	if !got.ConnectionUnverified {
 		t.Error("a FAILING check cleared the mark, which would make the mark mean that somebody pressed the button rather than that the connection works")
+	}
+}
+
+// TestTestConnection_PutsACandidateCheckOnTheDeploymentsFeed is EPIC H's
+// standing rule applied to the one action that was exempt from it: every
+// operator-visible action says what it is doing and how it went.
+//
+// The persisted check has put its six steps in the terminal since #596.
+// The CANDIDATE check, which is what the wizard's Test connection button
+// runs and what `backup-set create` runs before it writes, left nothing
+// anywhere: the browser that pressed the button saw the steps and every
+// other window, the global terminal and the log that outlives this process
+// saw silence. That is most of what was wrong with the button before #596,
+// surviving in the one mode that issue did not reach.
+//
+// It asserts the DEPLOYMENT feed rather than a set's, which is the half
+// that could go wrong quietly: a candidate names a set that does not
+// exist, so a line carrying a backup_set field would either invent an id
+// or land on somebody else's ring.
+func TestTestConnection_PutsACandidateCheckOnTheDeploymentsFeed(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	// A loopback port with nothing on it: the check really runs and really
+	// fails, which is the ordinary shape of a candidate somebody is still
+	// filling in.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("closing the probe listener: %v", err)
+	}
+
+	if _, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
+		Host:           "127.0.0.1",
+		Port:           port,
+		User:           "backup-agent",
+		SSHKeyID:       ref.ID,
+		KnownHostsLine: "[127.0.0.1]:" + strconv.Itoa(port) + " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7Zq1i0i7Xw3v0m7d3Wl1nZk5Q9tJm2fVYy0m9c8ZqR",
+		RemotePath:     "/srv/backups",
+	}); err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+
+	feed, err := svc.LiveActivity(context.Background(), LiveActivityRequest{DeploymentOnly: true, Limit: 200})
+	if err != nil {
+		t.Fatalf("LiveActivity: %v", err)
+	}
+	if feed.Deployment == nil {
+		t.Fatal("the reading carries no deployment feed at all, so the candidate check went nowhere")
+	}
+	steps := map[string]bool{}
+	for _, e := range feed.Deployment.Events {
+		if e.Event != connectionTestEventName {
+			continue
+		}
+		for _, f := range e.Fields {
+			if f.Key == "step" {
+				steps[f.Value] = true
+			}
+			if f.Key == "backup_set" {
+				t.Errorf("a candidate check carried backup_set=%q, so it landed on a set's own ring instead of the deployment's", f.Value)
+			}
+		}
+	}
+	if len(steps) != len(sourcecheck.Steps) {
+		t.Errorf("the deployment feed carries %d connection-test steps, want %d. Pressing the wizard's Test connection button has to leave the six steps where everybody else can read them, not only in the browser that pressed it: %v",
+			len(steps), len(sourcecheck.Steps), steps)
+	}
+}
+
+// TestConnectionSourceFor_DialsTheDefaultPortForASetThatNamesNone is a
+// regression test for a bug #624's two-machine proof found on the first
+// backup set it created without a --port.
+//
+// A backup set stores port 0 to mean "the default SSH port", which is what
+// config.Remote.Port has always meant. A real transfer is fine with that,
+// because rclone resolves it. internal/sourcecheck opens the TCP
+// connection itself, so the address it built was host:0, and `Test
+// connection` reported "nothing answered TCP on <host>:0" for every set
+// with no explicit port, on hosts that were backing up perfectly well.
+//
+// The candidate mode never had it: testConnectionVia defaults the port
+// with a comment saying exactly why. The persisted mode did not get the
+// same treatment, and this is the case that keeps the two together.
+//
+// A unit test of the resolution rather than a live one, deliberately: the
+// live version would have to bind port 22, which a test cannot do and
+// should not want to. The end-to-end half is the two-machine proof, which
+// is where this was actually found.
+func TestConnectionSourceFor_DialsTheDefaultPortForASetThatNamesNone(t *testing.T) {
+	sftp := func(port int) config.BackupSet {
+		return config.BackupSet{Remote: config.Remote{Type: "sftp", Host: "nas.internal", Port: port}}
+	}
+	for _, tc := range []struct {
+		name string
+		set  config.BackupSet
+		want int
+	}{
+		{"a set that names no port", sftp(0), defaultSSHPort},
+		{"a set that names one", sftp(2222), 2222},
+		{
+			// A local source has no port at all, and the five steps about
+			// reaching an SSH server are skipped for it, so inventing 22
+			// here would put a number on a report about a directory.
+			"a local source", config.BackupSet{Remote: config.Remote{Type: "local"}}, 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := connectionSourceFor(tc.set, config.KeyEncryption{}).Port; got != tc.want {
+				t.Errorf("the check dials port %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -327,6 +327,47 @@ func (b *BackupService) recordConnectionTest(ctx context.Context, id string, rep
 	}
 }
 
+// recordCandidateConnectionTest puts a PRE-SAVE check on the feed, one
+// line per step, attributed to no backup set at all.
+//
+// No `backup_set` field, deliberately, and that is the whole difference
+// from recordConnectionTest above: a candidate names a set that does not
+// exist, and putting an id on these lines would either invent one or land
+// them on somebody else's ring. Without one they go to the deployment's
+// own feed, which is where an action that is about this deployment and no
+// particular set belongs.
+//
+// It is here because of EPIC H's standing rule that every operator-visible
+// action says what it is doing and how it went. The wizard's Test
+// connection button is exactly that kind of action and it used to leave
+// nothing behind at all: the browser that pressed it saw six steps and
+// every other window, the global terminal and the log that outlives this
+// process saw silence. That is most of what was wrong with the button
+// before #596, surviving in the one mode that issue did not reach.
+//
+// The address is named rather than the set, because it is the only thing
+// a reader has to go on. It is a host and a port an operator just typed
+// into a form, never a credential.
+func (b *BackupService) recordCandidateConnectionTest(ctx context.Context, host string, result ConnectionTestResult) {
+	for _, c := range result.Checks {
+		level := obs.LevelInfo
+		if c.Outcome == string(sourcecheck.Failed) {
+			level = obs.LevelWarn
+		}
+		attrs := []slog.Attr{
+			slog.String("candidate", host),
+			slog.String("step", c.Step),
+			slog.String("outcome", c.Outcome),
+			slog.String("detail", c.Detail),
+		}
+		if c.Category != "" {
+			attrs = append(attrs, slog.String("category", c.Category))
+		}
+		b.logger.Event(ctx, level, connectionTestEventName,
+			"connection test: "+c.Step+" "+c.Outcome+" for a backup set that is not saved yet", attrs...)
+	}
+}
+
 // keyReferenceOf is how the configuration NAMES this set's key, for the
 // credentials step's detail. It is the reference an operator would go and
 // look at, never the key and never a path this process resolved: an

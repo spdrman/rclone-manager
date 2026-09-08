@@ -144,7 +144,9 @@ func proveSourceConnection(ctx context.Context, svc sourceConnectionTester, noVe
 //
 // The same six things core/service's changesTheConnection compares, named
 // as flags rather than as fields because this side of the boundary has
-// flags and not a persisted set. It is used for what this command SAYS and
+// flags and not a persisted set. Eight names for six things: the key and
+// the trusted host key each have two spellings on this command, one that
+// carries a reference and one that goes and gets it. It is used for what this command SAYS and
 // never for what it does: the decision to run the check belongs to the
 // process holding the configuration, for the reason
 // UpdateBackupSetRequest.SkipConnectionCheck's own doc gives, and a copy of

@@ -1207,7 +1207,20 @@ type ConnectionCheck struct {
 // decision is final until CreateBackupSet actually runs).
 func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
 	st := b.state.Load()
-	return testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
+	result, err := testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
+	if err != nil {
+		return result, err
+	}
+	// The steps go on the feed here rather than inside testConnectionVia,
+	// because that function is shared with the first-run surface, which
+	// has no BackupService and therefore no feed to write to (firstrun.go).
+	// This is the mode #596 did not reach: the persisted check has put its
+	// six steps in the terminal since that issue and the candidate check
+	// left nothing anywhere, so pressing the wizard's Test connection
+	// button was visible only to the browser that pressed it. See
+	// recordCandidateConnectionTest for why these lines name no backup set.
+	b.recordCandidateConnectionTest(ctx, req.Host, result)
+	return result, nil
 }
 
 // testConnectionVia is TestConnection's transport-and-configPath-only

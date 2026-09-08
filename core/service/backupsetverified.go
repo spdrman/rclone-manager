@@ -98,7 +98,7 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		ID:                   "connection-test",
 		Type:                 r.Type,
 		Host:                 r.Host,
-		Port:                 r.Port,
+		Port:                 connectionTestPort(r),
 		User:                 r.User,
 		KeyFile:              r.Key.File,
 		KeyEnv:               r.Key.Env,
@@ -113,6 +113,39 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		KnownHosts:           r.KnownHosts,
 		Root:                 root,
 	}
+}
+
+// connectionTestPort resolves the port a connection test dials.
+//
+// A backup set stores port 0 to mean "whatever the default SSH port is",
+// which is what config.Remote.Port has always meant and what every set
+// created without a --port says. A real transfer is fine with that: rclone
+// resolves it. internal/sourcecheck is not, because it opens the TCP
+// connection itself, and the address it built for a set with no port was
+// host:0, which nothing anywhere answers.
+//
+// So `Test connection` on the detail page reported "nothing answered TCP on
+// <host>:0" for every backup set with no explicit port, on a host that was
+// backing up perfectly well, and had done since #596 built the check. The
+// candidate mode never had the bug: testConnectionVia defaults the port
+// with a comment saying exactly why, and the persisted mode did not get the
+// same treatment. #624's two-machine end-to-end proof is what found it, on
+// the first set it created without a --port.
+//
+// Resolved here, for the check only, so both halves stay true: the
+// connection is made to 22 and the persisted set still says 0, so a future
+// release that changed the default would carry this set with it rather than
+// freezing today's answer into the configuration. The known_hosts line
+// matches either way, because knownhosts.Line normalises an explicit :22
+// away, which is the same reasoning probePortFor states one surface over.
+//
+// Left alone for a source that is not sftp: a local set has no port at all,
+// and the five steps about reaching an SSH server are skipped for it.
+func connectionTestPort(r config.Remote) int {
+	if r.Type == "sftp" && r.Port <= 0 {
+		return defaultSSHPort
+	}
+	return r.Port
 }
 
 // changesTheConnection reports whether an edit moves any of the six things
