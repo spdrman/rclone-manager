@@ -128,6 +128,7 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
   it("asks before discarding a dirty draft, names the box, and writes nothing when confirmed", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet");
+    const release = vi.spyOn(api, "releaseEditHold");
     const target = await firstSet();
     await openEditMode(api, target);
 
@@ -152,6 +153,9 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
     // The whole point: a discard sends NOTHING. Not the new value, and not
     // the old one either.
     expect(update).not.toHaveBeenCalled();
+    // And the schedule comes back, exactly as it does for the exit that
+    // saves: the hold is tied to the mode, not to the button.
+    await waitFor(() => expect(release).toHaveBeenCalledWith(target.source, target.set));
 
     // Re-opening shows what is persisted, which is what it always was.
     await act(async () => {
@@ -288,6 +292,22 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
     expect(screen.queryByText(/SHA256:newnewnewnew/)).toBeNull();
     expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0][2].acknowledgeHostKeyChange).toBeUndefined();
+  });
+
+  it("leaves the back link alone outside edit mode", async () => {
+    const api = createMockApi();
+    const target = await firstSet();
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Backup sets/ }));
+    });
+
+    // Nothing was being composed, so there is nothing to ask about and
+    // the link is the plain link it has always been.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByText("Backup sets list")).toBeTruthy();
   });
 
   it("sends the header's back link through the same confirmation while the draft is dirty", async () => {
