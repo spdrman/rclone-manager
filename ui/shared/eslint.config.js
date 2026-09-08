@@ -73,12 +73,24 @@ export default tseslint.config(
     },
   },
   {
-    // A Node CLI script (scripts/build-bundles.mjs), not browser code —
-    // needs Node's globals, not the DOM ones the rest of this config
-    // implicitly assumes.
+    // Node scripts (scripts/build-bundles.mjs and the artifact tests
+    // beside it), not browser code — they need Node's globals, not the
+    // DOM ones the rest of this config implicitly assumes.
+    //
+    // URL and fetch are on the list because they are Node globals too and
+    // not only DOM ones, and scripts/offline-bundle.test.mjs uses both to
+    // walk a built bundle over loopback (#631). Naming them here rather
+    // than reaching for globals.node wholesale keeps this list a decision:
+    // a script that starts using something else has to come back and add
+    // it, which is the same argument the config makes about its rules.
     files: ["scripts/**/*.mjs"],
     languageOptions: {
-      globals: { process: "readonly", console: "readonly" },
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        URL: "readonly",
+        fetch: "readonly",
+      },
     },
   },
 );
