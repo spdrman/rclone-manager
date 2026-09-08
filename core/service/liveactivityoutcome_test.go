@@ -140,6 +140,26 @@ func TestLiveActivity_ForgetsAnUnfinishedActionOnceItsStartHasScrolledOut(t *tes
 	}
 }
 
+// TestLiveActivity_ReportsOneRowPerActionEvenIfAnIdIsRepeated is about
+// the ids this package does not mint. A cycle's action id is the cycle
+// id its caller chose, so a caller that reused one would otherwise put
+// two rows on this list claiming to be the same action, and a client
+// keying its list by that id has two rows with one key.
+func TestLiveActivity_ReportsOneRowPerActionEvenIfAnIdIsRepeated(t *testing.T) {
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
+
+	for i := 0; i < 2; i++ {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleStart, Message: "cycle starting",
+			Action: obs.ActionCycle, ActionID: "cycle-42",
+		})
+	}
+
+	if open := deploymentBucket(t, rec).Unfinished; len(open) != 1 {
+		t.Errorf("the deployment bucket reports %d unfinished actions and one action id started twice", len(open))
+	}
+}
+
 // deploymentBucket reads the whole feed and returns the bucket that
 // belongs to no single backup set.
 func deploymentBucket(t *testing.T, rec *liveActivity) *LiveActivityDeployment {

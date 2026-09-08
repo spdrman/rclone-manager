@@ -1147,11 +1147,16 @@ func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
 // outcome closes it. Nothing here needs to know either event's name.
 func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
 	held := r.len()
-	// Ended first, in one pass, so a completion is recognised whether or
-	// not its start is still held: a ring holding the end of an action
-	// whose start has scrolled out must not report the start it cannot
-	// see, and a single forward pass that removed as it went would leave
-	// that case depending on which of the two happened to survive.
+	// Every completion first, then every start that is not among them.
+	//
+	// Two walks rather than one that adds on a start and removes on a
+	// completion, and the second walk is cheap (at most a bucket's two
+	// hundred entries) next to what the single-pass version would cost to
+	// be right. That one has to remove from an ordered result, and it is
+	// only correct at all while a start always precedes its completion
+	// inside one bucket, which is true because of how the sequence is
+	// handed out under the mutex rather than because of anything stated
+	// here. This version does not care about the order at all.
 	var ended map[string]bool
 	for i := 0; i < held; i++ {
 		e := r.at(i)
@@ -1165,11 +1170,22 @@ func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
 	}
 
 	var out []LiveActivityAction
+	var seen map[string]bool
 	for i := 0; i < held; i++ {
 		e := r.at(i)
-		if e.ActionID == "" || e.Outcome != "" || ended[e.ActionID] {
+		if e.ActionID == "" || e.Outcome != "" || ended[e.ActionID] || seen[e.ActionID] {
 			continue
 		}
+		// One entry per action id, the oldest start of it. An id is
+		// minted per action so two live starts cannot share one, but the
+		// id can also come from a caller (a cycle's own id is the
+		// clearest case), and a caller that repeated one would otherwise
+		// put the same action on this list twice, where a client keying
+		// a list by it has two rows claiming to be the same thing.
+		if seen == nil {
+			seen = make(map[string]bool)
+		}
+		seen[e.ActionID] = true
 		out = append(out, LiveActivityAction{
 			Action:    e.Action,
 			ActionID:  e.ActionID,
