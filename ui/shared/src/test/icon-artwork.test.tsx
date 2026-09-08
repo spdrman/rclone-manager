@@ -53,6 +53,7 @@ import {
   Icon,
   iconForLegacyGlyph
 } from "@shared/design-system/icons";
+import type { IconName } from "@shared/design-system/icons";
 import { HEALTH_PRESENTATION, HealthBadge, StatusBadge } from "@shared/components/StatusBadge";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -70,7 +71,7 @@ import type { HealthState } from "@shared/types/backup";
  * only because they were written at different times, which is exactly the
  * kind of drift a shared registry exists to stop.
  */
-const WAS_AN_ICON: Record<string, string> = {
+const WAS_AN_ICON: Record<string, IconName> = {
   "▲": "warning",
   "⚠": "warning",
   "✕": "failure",
@@ -203,6 +204,18 @@ describe("the sweep itself", () => {
   it("does not report punctuation as a retired glyph", () => {
     for (const mark of IS_PUNCTUATION) {
       expect(findRetiredGlyphs('const a = "' + mark + '";')).toEqual([]);
+    }
+  });
+
+  it("names the fourteen the issue named, and lands every one of them on real artwork", () => {
+    // The count is the issue's own, and it is asserted rather than
+    // described so that this table cannot quietly become a different
+    // table. The second half is what stops the right-hand column being
+    // decorative text: every name here has to be one the registry
+    // actually draws.
+    expect(Object.keys(WAS_AN_ICON)).toHaveLength(14);
+    for (const [glyph, name] of Object.entries(WAS_AN_ICON)) {
+      expect(ICON_NAMES, glyph).toContain(name);
     }
   });
 });
