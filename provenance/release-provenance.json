@@ -18,8 +18,8 @@
   "imageReference": "ghcr.io/spdrman/backup-manager:0.3.3",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "4a4dc87812e7ef5a8161a0b4de3292b148ceddb0ccd25242d53c18ac233133c6",
-    "commit": "572dffc6326ab0e1c1cb61bc137d3b10768e241b",
+    "sha256": "528034979df58bb8a593e747ca9179addeea59cfb75555518ca348e04caebc68",
+    "commit": "4d5c2a8412d21df328728dd3e870d61158b4822a",
     "recordedBuildVersion": "0.3.3",
     "architectures": [
       "amd64",
@@ -51,12 +51,12 @@
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "fd1a2528ba6c856949bdcd44156d24ea8bc2395e5193eb176c6529d1611b4879",
+    "sha256": "a54895fd604a5db891ba49bc94cb25e42ed66a9501d147a62bcb09541bd11be6",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "52d186c0274f479b24ad0817dd182b0b051e3ccbac2284a711908a89c87ce645",
+    "sha256": "72ca6e45b3329d8b2747cb4a4b6337950e4efda3764899b108bd7cec0d5dea18",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -163,7 +163,7 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "7577e7302661f4be1af04fa0534b7b7e3fb1f640dd5bd67a9773b60cdb3c9903"
+      "sha256": "5775a2bf796563c428b10a7a34fab4f6744507a0fad88a1787d8091261144421"
     },
     {
       "target": "generic",
