@@ -189,6 +189,23 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
     case "error":
       text = (f.op ? f.op + ": " : "") + (f.error ?? e.message);
       break;
+    case "api_action": {
+      // Something somebody did through the API rather than something the
+      // cycle did (issue #599). The engine composes the summary, the
+      // refusal's own words and the `backup-manager` command line; this
+      // lays them out. Rendering it here rather than only in the dock is
+      // what gives a set's own strip, and every export, the same lines:
+      // logText is built on this function.
+      const parts = [e.message || e.event];
+      if (f.detail) parts.push("  " + f.detail);
+      if (f.command) parts.push(f.command);
+      else if (f.command_gap) {
+        parts.push("# " + f.command_gap + (f.route ? " · " + f.route : ""));
+        if (f.command_gap_detail) parts.push("#   " + f.command_gap_detail);
+      }
+      text = parts.join("\n");
+      break;
+    }
     default: {
       // An event name this build has no rendering for. Its own message
       // plus its own fields is a worse line, not a broken one, and it is

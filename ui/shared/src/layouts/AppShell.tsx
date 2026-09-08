@@ -1,6 +1,15 @@
 /**
- * The frame every signed-in page renders inside: header, section nav, and
- * the content column.
+ * The frame every signed-in page renders inside: header, section nav, the
+ * content column, and the terminal docked under all of it.
+ *
+ * The dock is here rather than on a page for a structural reason (issue
+ * #599). React Router swaps what is inside <main>, so a panel in there
+ * unmounts on every navigation and starts its buffer, its cursor and its
+ * scroll position again. A sibling of the nav/main row never unmounts, so
+ * all of that survives the whole session. Being a flex sibling rather
+ * than position: fixed is the other half: the content column shrinks
+ * instead of being covered, so nothing overlays the last row of a long
+ * table.
  *
  * The shell is deliberately thin on decisions and carries only two. The
  * titlebar strip appears for embedded providers alone, because drawing
@@ -15,6 +24,7 @@
  */
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { ActivityDock } from "@shared/components/ActivityDock";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { StatusBadge } from "@shared/components/StatusBadge";
@@ -168,6 +178,8 @@ export function AppShell({
           </div>
         </main>
       </div>
+
+      <ActivityDock />
     </div>
   );
 }
