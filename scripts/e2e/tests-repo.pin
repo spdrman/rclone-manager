@@ -90,5 +90,31 @@
 # through RM_MODE=local runs the whole of Suite A green, 72 of 72. Their
 # build-under-test.json names 1bed795 and still has to move to this branch's
 # merge commit by hand, which is the half of the lockstep with no automation.
+# Moved to 90c3bb1, rclone-manager-tests#46, read off their merged main and
+# not off the branch, for the reason the paragraph about a794c38 above
+# already gives. It is the specs half of #598: ten Suite B cases driving a
+# failing Activity page, and four Suite A cases plus a usage line for the
+# `activity` verb the same issue adds.
+#
+# This is the pin doing the thing the paragraphs above describe, in both
+# directions at once. Seven of those ten cases fail against this
+# repository's main as it stands, because they drive a mock scenario that
+# does not exist there and assert on a diagnostic that is not written yet,
+# so they were red over there against the old pin and go green here only
+# together with the product change in this same branch. Four of the Suite A
+# cases are the same shape one command over: there is no `activity` verb on
+# main, so `global/g3-usage-lists-every-command` cannot see it.
+#
+# Verified before the bump rather than after, the way the note above asks:
+# a stamped build of this branch through RM_MODE=local runs Suite A green,
+# 76 of 76, and Suite B green against this branch's ui/shared, 198 of 198
+# across the generic and small-window projects. The control matters as much
+# as the pass: the same Suite B file run against a clean checkout of main
+# fails 7 and passes 3, which is what makes it a test of the product rather
+# than of the component.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names 1bed795 of this repository and has to move to
+# whatever commit this branch merges as.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=067385086246c907dfb02a57aaf332061fca726e
+TESTS_REPO_SHA=90c3bb144af007bb4a572ddbe20530fd1ba67254
