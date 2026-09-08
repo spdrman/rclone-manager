@@ -367,11 +367,25 @@ describe("the tone a line takes", () => {
     expect(activityLine(event({ sequence: 2, level: "info", event: "a_name_this_build_does_not_know", message: "something happened" })).tone).toBe("info");
   });
 
-  it("lets a stated outcome win over a level that disagrees with it", () => {
-    // A pass whose emitter logged loudly and still succeeded. The outcome
-    // is the fact about how it went; the level is how loudly it was
-    // logged, and the two are allowed to differ.
-    expect(activityLine(event({ sequence: 1, level: "warn", event: "retention", outcome: "success", message: "retention applied" })).tone).toBe("ok");
+  it("takes the louder of the two when the outcome and the level disagree", () => {
+    // A failure the engine deliberately logged quietly. obs reserves its
+    // error severity for the manager failing at something, and a check
+    // that correctly reports a host as unreachable is the manager working
+    // as designed, so the step is a warning in the log and an error
+    // outcome on the wire. An operator has to see the failure.
+    expect(
+      activityLine(event({ sequence: 1, level: "warn", event: "connection_test", outcome: "error", fields: { step: "host_key", step_outcome: "failed" } })).tone
+    ).toBe("error");
+
+    // And the other direction. An emitter that succeeded at what it was
+    // asked while logging loudly about it asked for attention on purpose,
+    // the way a retention pass that refused every deletion does, and
+    // green is the one colour that must not go on that line.
+    expect(activityLine(event({ sequence: 2, level: "warn", event: "retention", outcome: "success", message: "retention applied" })).tone).toBe("warn");
+
+    // A success stated on an ordinary note is still good news: success
+    // ranks beside info rather than under it.
+    expect(activityLine(event({ sequence: 3, level: "info", event: "commit", outcome: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
   });
 });
 

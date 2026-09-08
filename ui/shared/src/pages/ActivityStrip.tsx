@@ -143,15 +143,36 @@ function pairs(fields: Record<string, string>): string {
  * this build has never heard of, reporting a success, is green, and one
  * reporting an error is red, with nobody writing a case for it.
  *
- * An outcome outranks the level when the two differ, and they are allowed
- * to differ. A connection test that correctly reports a host as
- * unreachable is logged as a warning, because the engine reserves its
- * error severity for the manager failing at something rather than for
- * correctly reporting a problem it found; the OUTCOME of that step is
- * still a failure, and a failure is what an operator has to see.
+ * The two are allowed to differ, and where they do the LOUDER of them
+ * wins. Both are the engine's own words, so this is combining two stated
+ * facts rather than inventing a third.
+ *
+ * It matters in both directions. A connection test that correctly reports
+ * a host as unreachable is logged as a warning, because the engine
+ * reserves its error severity for the manager failing at something rather
+ * than for correctly reporting a problem it found; the outcome of that
+ * step is a failure and a failure is what an operator has to see, so the
+ * outcome wins. And an emitter that succeeded at what it was asked while
+ * logging loudly about it has asked for attention on purpose, the way a
+ * retention pass that refused every deletion has: drawing that green
+ * because a field says "success" would put this panel's most reassuring
+ * colour on the line the emitter went out of its way to raise.
+ *
+ * Success ranks beside a note rather than above it, so a success stated
+ * on an ordinary info line still reads as good news.
  */
+const TONE_RANK: Record<LineTone, number> = { ok: 0, info: 0, warn: 1, error: 2 };
+
 function toneOf(e: SetActivityEvent): LineTone {
-  switch (e.outcome) {
+  const byLevel: LineTone = e.level === "error" ? "error" : e.level === "warn" ? "warn" : "info";
+  const stated = statedTone(e.outcome);
+  if (stated === null) return byLevel;
+  // A tie goes to the outcome, which is what lets "success" beat "info".
+  return TONE_RANK[byLevel] > TONE_RANK[stated] ? byLevel : stated;
+}
+
+function statedTone(outcome: SetActivityEvent["outcome"]): LineTone | null {
+  switch (outcome) {
     case "success":
       return "ok";
     case "warning":
@@ -160,8 +181,9 @@ function toneOf(e: SetActivityEvent): LineTone {
       return "error";
     case "info":
       return "info";
+    default:
+      return null;
   }
-  return e.level === "error" ? "error" : e.level === "warn" ? "warn" : "info";
 }
 
 /**
