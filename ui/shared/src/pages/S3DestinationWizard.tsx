@@ -7,8 +7,11 @@
  *   1. Endpoint and bucket, behind a provider preset that only fills the
  *      endpoint field in.
  *   2. Credentials, in the four spellings the backend accepts.
- *   3. Verify, which runs the engine's eight checks against the CANDIDATE
- *      and writes nothing whatever it answers.
+ *   3. Test connection, which runs the engine's eight checks against the
+ *      CANDIDATE and writes nothing whatever it answers. It is eight here
+ *      and not nine: this pane only ever checks a bucket, and the ninth
+ *      step #622 added belongs to the drive on this machine, which is not
+ *      something this wizard declares.
  *   4. Save, showing the YAML that is about to be written before it is
  *      written.
  *

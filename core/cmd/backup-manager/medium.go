@@ -775,10 +775,16 @@ func printMediumUsage(u service.StorageMediumUsage) {
 // printMediumReport renders one preflight, every step in the engine's own
 // order, skipped ones included.
 //
-// Never a single OK or FAILED. A surface that collapsed eight steps into
+// Never a single OK or FAILED. A surface that collapsed the steps into
 // one verdict would throw away the whole diagnosis, and a skipped write
 // rendered as anything but "this was never tried" tells an operator their
 // bucket is writable on the strength of a credential nobody obtained.
+//
+// It counts nothing and enumerates nothing: it walks whatever the report
+// carries, in the engine's own order. That is what lets it render the
+// drive on this machine as well as a bucket (#622), whose report has a
+// `space` step a bucket has no answer for, without a second renderer for
+// somebody to teach a different word to.
 func printMediumReport(report service.MediumPreflight) {
 	fmt.Printf("storage medium %s: %s\n", report.Medium, verdictWord(report.OK))
 	for _, c := range report.Checks {
