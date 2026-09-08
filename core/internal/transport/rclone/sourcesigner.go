@@ -1,13 +1,3 @@
-// This file is the credentials half of EPIC G's connection test (issue
-// #596): resolving a backup set's private key into something that can
-// actually be offered to a server, through the SAME three sources,
-// passphrase handling and at-rest decryption sftpConfig already uses.
-//
-// It lives here rather than in the checker for the reason keysource.go's
-// package doc already gives: this package is the one place this project's
-// SSH posture lives, and a second resolver that read key_file, key_env
-// and key_command its own way is a second posture. The check needs a
-// signer, not a rclone configmap, and that is the only difference.
 package rclone
 
 import (
@@ -20,6 +10,17 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
+
+// This file is the credentials half of EPIC G's connection test (issue
+// #596): resolving a backup set's private key into something that can
+// actually be offered to a server, through the SAME three sources,
+// passphrase handling and at-rest decryption sftpConfig already uses.
+//
+// It lives here rather than in the checker for the reason keysource.go's
+// package doc already gives: this package is the one place this project's
+// SSH posture lives, and a second resolver that read key_file, key_env
+// and key_command its own way is a second posture. The check needs a
+// signer, not a rclone configmap, and that is the only difference.
 
 // SourceSigner resolves src's configured private key and returns a signer
 // for it, plus the SHA256 fingerprint of its PUBLIC half in the same form
