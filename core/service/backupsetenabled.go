@@ -313,13 +313,13 @@ func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) 
 		Root:                 root,
 	}
 
-	if _, err := st.inner.Transport.List(testCtx, src); err != nil {
-		// Deliberately not %w-wrapped and deliberately not put in
-		// Message, for exactly the reason TestConnection gives: a failed
-		// connection test is an ordinary outcome, and err's own text can
-		// embed transport internals a caller must not have to treat as
-		// safe to render.
-		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
-	}
-	return ConnectionTestResult{OK: true}, nil
+	// Issue #596: six named steps rather than one boolean. The error is
+	// still never returned to the caller, for exactly the reason
+	// TestConnection gives (err's own text can embed transport internals
+	// a caller must not have to treat as safe to render); what changed is
+	// that DNS, the connect, the host key, the credential, the
+	// authentication and the listing are asked and answered separately,
+	// so a typo'd hostname, an unauthorised key, a rotated host key and a
+	// missing path stop reading identically. See connectiontest.go.
+	return b.runConnectionTest(testCtx, id, found, src), nil
 }

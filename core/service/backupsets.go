@@ -1077,6 +1077,38 @@ type ConnectionTestRequest struct {
 type ConnectionTestResult struct {
 	OK      bool
 	Message string
+
+	// Checks is what the test actually did, one entry per
+	// sourcecheck.Step and always all of them, in Steps order (issue
+	// #596). Empty for the candidate mode, which has no persisted set to
+	// resolve a key, a known_hosts file or a remote path from and so
+	// cannot answer the six questions.
+	//
+	// OK keeps meaning exactly what it meant, so a client reading only
+	// ok and message keeps working.
+	Checks []ConnectionCheck
+}
+
+// ConnectionCheck is one step of a connection test, as the wire carries
+// it. It is sourcecheck.Check flattened to strings on purpose: apps/ and
+// the API contract serve these values and neither may reach into
+// core/internal for a type.
+type ConnectionCheck struct {
+	// Step is one of sourcecheck.Steps: credentials, resolve, connect,
+	// host_key, authenticate, list.
+	Step string
+
+	// Outcome is passed, failed or skipped. Skipped is a first-class
+	// answer and never a quiet pass: see sourcecheck's own argument.
+	Outcome string
+
+	// Category is the machine-readable half a surface branches on, empty
+	// when the step passed or was skipped.
+	Category string
+
+	// Detail is one of sourcecheck's own sentences, never an underlying
+	// error's text.
+	Detail string
 }
 
 // TestConnection performs a real, non-destructive reachability/auth

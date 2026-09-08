@@ -1038,6 +1038,56 @@ func TestTestConnection_ByBackupSetIdUsesThePersistedConfiguration(t *testing.T)
 	}
 }
 
+// TestTestConnection_CarriesEveryStepToTheClient is issue #596's half of
+// this route. A verdict is what 0.3.2 served and a test asserting one
+// would have passed against the bug, so this asserts the individual step
+// results reach the client: all six, in order, with their outcomes,
+// categories and details intact.
+func TestTestConnection_CarriesEveryStepToTheClient(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.persistedConnectionResult = service.ConnectionTestResult{
+		OK:      false,
+		Message: "the connection test stopped at host_key",
+		Checks: []service.ConnectionCheck{
+			{Step: "credentials", Outcome: "passed", Detail: "read the private key"},
+			{Step: "resolve", Outcome: "passed", Detail: "cicd.example.net is 198.51.100.7 (A)"},
+			{Step: "connect", Outcome: "passed", Detail: "TCP to 198.51.100.7:22 in 12ms"},
+			{Step: "host_key", Outcome: "failed", Category: "host_key", Detail: "the key this server offers is not the one this backup set trusts"},
+			{Step: "authenticate", Outcome: "skipped", Detail: "the host key did not match, so nothing was offered to this server"},
+			{Step: "list", Outcome: "skipped", Detail: "never attempted"},
+		},
+	}
+
+	rec := rt.post(t, "/api/v1/backup-sets/test-connection", `{"backup_set_id":"production/postgres"}`)
+	mustStatus(t, rec, http.StatusOK)
+
+	var body testConnectionResponse
+	decodeInto(t, rec, &body)
+	if len(body.Checks) != 6 {
+		t.Fatalf("the response carries %d checks, want 6. The steps ARE the feature; a verdict is what shipped: %+v", len(body.Checks), body.Checks)
+	}
+	wantSteps := []string{"credentials", "resolve", "connect", "host_key", "authenticate", "list"}
+	for i, want := range wantSteps {
+		if body.Checks[i].Step != want {
+			t.Errorf("check %d is %q, want %q: the order is the order a surface renders", i, body.Checks[i].Step, want)
+		}
+	}
+	if body.Checks[3].Outcome != "failed" || body.Checks[3].Category != "host_key" {
+		t.Errorf("the host_key check lost its outcome or its category: %+v", body.Checks[3])
+	}
+	// skipped has to survive the wire as skipped. Serialising it as
+	// anything else, or dropping the entry, tells an operator their
+	// credentials are fine on the strength of a step that never ran.
+	for _, i := range []int{4, 5} {
+		if body.Checks[i].Outcome != "skipped" {
+			t.Errorf("check %d (%s) came back as %q, want skipped", i, body.Checks[i].Step, body.Checks[i].Outcome)
+		}
+		if body.Checks[i].Detail == "" {
+			t.Errorf("check %d (%s) came back with no reason for having been skipped", i, body.Checks[i].Step)
+		}
+	}
+}
+
 // TestTestConnection_RefusesBothModesAtOnce. Silently preferring one mode
 // is how a caller ends up shown a green result for something it did not
 // ask about.

@@ -42,6 +42,9 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
+import { SetActivityPanel } from "./SetActivityPanel";
+import { useActivityFeed } from "./useActivityFeed";
+import { emitBrowserNotice } from "@shared/state/browserNotices";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
@@ -94,6 +97,15 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // what CONFIG_REVISION_STALE exists to refuse, so this deliberately
   // reads the graph rather than fetching a fresh one at submit time.
   const version = useCausl(versionNode);
+  // The live feed for THIS set, narrowed by the `backup_set` the route
+  // already takes (issue #596). It is held here rather than inside the
+  // panel because the Test Connection button below asks it for a fresh
+  // reading the moment its request answers: the engine records every step
+  // before it replies, so one poll then is the difference between a
+  // terminal that fills in immediately and one that fills in whenever the
+  // timer next fires.
+  const activityFeed = useActivityFeed(setId);
+  const [testing, setTesting] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   // Issue #391's `removing`/`removeError` pair moved into
@@ -232,6 +244,45 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const s = set.data;
   const [methodLabel, methodDetail] = COMPLETION_COPY[s.completionMethod];
   const events = (activity.data ?? []).filter((e) => e.setId === s.id).slice(0, 6);
+
+  /**
+   * Runs the connection test and makes sure something is said either way
+   * (issue #596).
+   *
+   * Nothing here renders the steps: the ENGINE emitted them, one line
+   * per step, before it answered this request, so they are already on
+   * the feed and the refresh below pulls them in. Rendering the response
+   * here as well would draw every step twice for the person who pressed
+   * the button and once for everybody else, and would make an export
+   * depend on who ran the test.
+   *
+   * The catch is the other half, and it is the one that could not be
+   * done on the server. A refusal produced in FRONT of the engine (a
+   * stale CSRF pair, a dead connection) never reaches a handler, so
+   * there is nothing on the engine that could log it. That is written
+   * into this set's terminal from here, marked as coming from the
+   * browser, rather than being dropped the way this button dropped every
+   * outcome it ever produced.
+   */
+  const runConnectionTest = async () => {
+    setTesting(true);
+    try {
+      await api.testConnection(s.id);
+      activityFeed.refresh();
+    } catch (e) {
+      const failure = describeFailure(e, "Backup Manager could not test this backup set's connection.");
+      emitBrowserNotice({
+        outcome: apiErrorOf(e) === null ? "unreachable" : "refused",
+        code: apiErrorOf(e)?.code ?? "unknown",
+        message: failure.message,
+        ...(failure.remediation ? { remediation: failure.remediation } : {}),
+        ...(failure.correlationId ? { correlationId: failure.correlationId } : {}),
+        backupSetIds: [s.id]
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   // visibleEditFields, not EDIT_FIELDS: a conditional box that is not on
   // screen (the stable-size window, when another completion method is
@@ -499,7 +550,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             >
               Run all due sets
             </button>
-            <button className="btn" disabled={readOnly} onClick={() => api.testConnection(s.id)}>Test connection</button>
+            {/* Issue #596. This used to be `onClick={() =>
+                api.testConnection(s.id)}`: the promise was created and
+                dropped, so nothing read the outcome, nothing caught a
+                rejection and nothing rendered. Pressing it was
+                indistinguishable from not pressing it.
+
+                Now the engine's six steps land in the terminal below
+                (it records them before it answers, so the refresh
+                picks them up), and a refusal that never reached the
+                engine at all is written into that same terminal from
+                here rather than being swallowed. */}
+            <button
+              className="btn"
+              disabled={readOnly || testing}
+              onClick={() => void runConnectionTest()}
+            >
+              {testing ? "Testing\u2026" : "Test connection"}
+            </button>
             {/* Issue #350: Edit is a mode, so this one button is both the
                 way in and the way out. Read-only keeps it unavailable
                 exactly as it always has. */}
@@ -745,7 +813,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           </Section>
 
           <Section title="Activity">
-            <ActivityTimeline events={events} dense />
+            {/* Two feeds, side by side, because neither can be built from
+                the other (types/activity.ts argues this at length). The
+                panel is the bounded in-memory tail that knows a transfer
+                is at 4 MB/s and has forgotten last Tuesday; the timeline
+                under it is the durable, queryable lifecycle record that
+                remembers last Tuesday and has no idea about the 4 MB/s. */}
+            <SetActivityPanel set={s} feed={activityFeed} />
+            <div style={{ marginTop: 14 }}>
+              <ActivityTimeline events={events} dense />
+            </div>
           </Section>
         </div>
 
