@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "f62c80584a579f250bc2ee38aaaa12d0c2653c7af96275ffb2400f2936a19f09";
+export const CONTRACT_SHA256 = "d9ec3518cdc59fd0b5b24718d1e10f2d5a7ecfd574a9d571013aaafdc7c4a990";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -60,6 +60,7 @@ export const WIRE_ERROR_CODES = [
   "MEDIUM_EXISTS",
   "STORAGE_CREDENTIAL_NOT_FOUND",
   "SSH_KEY_CANDIDATE_NOT_FOUND",
+  "BACKUP_SET_CONNECTION_NOT_PROVEN",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -132,6 +133,7 @@ export const API_ERROR_CODES = [
   "MEDIUM_EXISTS",
   "STORAGE_CREDENTIAL_NOT_FOUND",
   "SSH_KEY_CANDIDATE_NOT_FOUND",
+  "BACKUP_SET_CONNECTION_NOT_PROVEN",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -141,7 +143,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -423,7 +425,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
-      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
     }
   },
@@ -1363,6 +1365,7 @@ export interface WireAuthErrorResponse {
 /** A persisted backup set as the API reports it. */
 export interface WireBackupSet {
   completion_strategy: "rename" | "marker" | "stable";
+  connection_unverified?: boolean;
   disabled: boolean;
   host: string;
   id: string;
@@ -1471,6 +1474,7 @@ export interface WireBackupSetRetention {
  *  one operation and wrong about the other. */
 export interface WireBackupSetSpec {
   completion_strategy: "rename" | "marker" | "stable";
+  connection_unverified?: boolean;
   disabled?: boolean;
   host: string;
   include?: string[];
@@ -2461,6 +2465,7 @@ export interface WireUpdateBackupSetRequest {
   local_path?: string;
   port?: number;
   remote_path?: string;
+  skip_connection_check?: boolean;
   ssh_key_id?: string;
   stable_for_seconds?: number;
   stale_after_seconds?: number;

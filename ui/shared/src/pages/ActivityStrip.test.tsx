@@ -21,6 +21,7 @@ import type { BackupSet } from "@shared/types/backup";
 import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "api-server/var-backups",
   source: "api-server",
   set: "var-backups",

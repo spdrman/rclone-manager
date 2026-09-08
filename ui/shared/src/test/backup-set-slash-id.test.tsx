@@ -66,6 +66,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     stableForSeconds: 0,
     destination: "/data/backups/production/api-server/",
     retentionIsOverride: false,
+    connectionUnverified: false,
     validations: ["transfer"],
     state: "healthy",
     stateNote: "Verified nightly.",

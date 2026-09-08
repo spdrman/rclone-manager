@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "f62c80584a579f250bc2ee38aaaa12d0c2653c7af96275ffb2400f2936a19f09"
+const ContractSHA256 = "d9ec3518cdc59fd0b5b24718d1e10f2d5a7ecfd574a9d571013aaafdc7c4a990"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -97,6 +97,7 @@ const (
 	ErrorCodeMediumExists                           ErrorCode = "MEDIUM_EXISTS"
 	ErrorCodeStorageCredentialNotFound              ErrorCode = "STORAGE_CREDENTIAL_NOT_FOUND"
 	ErrorCodeSSHKeyCandidateNotFound                ErrorCode = "SSH_KEY_CANDIDATE_NOT_FOUND"
+	ErrorCodeBackupSetConnectionNotProven           ErrorCode = "BACKUP_SET_CONNECTION_NOT_PROVEN"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -141,6 +142,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
+	ErrorCodeBackupSetConnectionNotProven,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -209,6 +211,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeMediumExists,
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
+	ErrorCodeBackupSetConnectionNotProven,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -216,7 +219,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeBackupSetConnectionNotProven},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -385,7 +388,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
-			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeBackupSetConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -976,6 +979,7 @@ type AuthErrorResponse struct {
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
 	CompletionStrategy       string           `json:"completion_strategy"`
+	ConnectionUnverified     bool             `json:"connection_unverified,omitempty"`
 	Disabled                 bool             `json:"disabled"`
 	Host                     string           `json:"host"`
 	ID                       string           `json:"id"`
@@ -1083,22 +1087,23 @@ type BackupSetRetention struct {
 // so the wizard that collects these answers can never be right about
 // one operation and wrong about the other.
 type BackupSetSpec struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	Include            []string `json:"include"`
-	KnownHostsLine     string   `json:"known_hosts_line"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	ReadOnly           bool     `json:"read_only"`
-	RemotePath         string   `json:"remote_path"`
-	SourceName         string   `json:"source_name"`
-	SSHKeyID           string   `json:"ssh_key_id"`
-	StableForSeconds   int      `json:"stable_for_seconds"`
-	StaleAfterSeconds  int      `json:"stale_after_seconds"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	CompletionStrategy   string   `json:"completion_strategy"`
+	ConnectionUnverified bool     `json:"connection_unverified"`
+	Disabled             bool     `json:"disabled"`
+	Host                 string   `json:"host"`
+	Include              []string `json:"include"`
+	KnownHostsLine       string   `json:"known_hosts_line"`
+	LocalPath            string   `json:"local_path"`
+	Name                 string   `json:"name"`
+	Port                 int      `json:"port"`
+	ReadOnly             bool     `json:"read_only"`
+	RemotePath           string   `json:"remote_path"`
+	SourceName           string   `json:"source_name"`
+	SSHKeyID             string   `json:"ssh_key_id"`
+	StableForSeconds     int      `json:"stable_for_seconds"`
+	StaleAfterSeconds    int      `json:"stale_after_seconds"`
+	User                 string   `json:"user"`
+	ValidatorID          string   `json:"validator_id"`
 }
 
 // CapabilitiesResponse is GET /system/capabilities. The API expression of the
@@ -2076,6 +2081,7 @@ type UpdateBackupSetRequest struct {
 	LocalPath                *string   `json:"local_path"`
 	Port                     *int      `json:"port"`
 	RemotePath               *string   `json:"remote_path"`
+	SkipConnectionCheck      bool      `json:"skip_connection_check"`
 	SSHKeyID                 *string   `json:"ssh_key_id"`
 	StableForSeconds         *int      `json:"stable_for_seconds"`
 	StaleAfterSeconds        *int      `json:"stale_after_seconds"`

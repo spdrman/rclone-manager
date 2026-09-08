@@ -87,6 +87,14 @@ async function advanceToReviewReady() {
   await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
 
   await userEvent.click(screen.getByRole("button", { name: "Review" }));
+  // Issue #624: the connection test is a save precondition now, on the
+  // same footing as the imported key and the trusted host above. It is
+  // here rather than in completeWizardUpToReview because the cases that
+  // isolate "acknowledged" have to have every OTHER precondition met, and
+  // this is one of them. Its own gate is exercised in
+  // wizard-connection-test.test.tsx.
+  await userEvent.click(screen.getByRole("button", { name: /^Test connection$/ }));
+  await waitFor(() => expect(screen.getByText(/This source has been proven/i)).toBeInTheDocument());
 }
 
 async function completeWizardUpToReview() {
@@ -446,6 +454,13 @@ describe("add backup set wizard", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
       await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
       await userEvent.click(screen.getByRole("button", { name: "Review" }));
+      // The connection still has to be proven (issue #624). "Save
+      // disabled" waives the DELETION acknowledgement, which is the one
+      // thing a set that never runs cannot cost anybody; it does not
+      // waive knowing whether the source works, because a set saved off
+      // is turned on later with one click and nothing checks then.
+      await userEvent.click(screen.getByRole("button", { name: /^Test connection$/ }));
+      await waitFor(() => expect(screen.getByText(/This source has been proven/i)).toBeInTheDocument());
       // Deliberately no acknowledgement checkbox click — this is the
       // whole point of the "Save disabled" escape hatch.
 

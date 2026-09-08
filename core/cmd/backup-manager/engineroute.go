@@ -116,6 +116,12 @@ func (r *engineRoute) CreateBackupSet(ctx context.Context, req service.CreateBac
 			ValidatorID:        string(req.ValidatorID),
 			Disabled:           req.Disabled,
 			ReadOnly:           req.ReadOnly,
+			// Issue #624: whether this create ran its own check. Carried
+			// across because a routed --no-verify that dropped it would
+			// write a set the engine reported as proven, which is exactly
+			// the indistinguishable-from-verified state the mark exists
+			// to prevent.
+			ConnectionUnverified: req.ConnectionUnverified,
 		},
 		RunImmediately:     req.RunImmediately,
 		AcknowledgeRepoint: req.AcknowledgeRepoint,
@@ -174,6 +180,12 @@ func (r *engineRoute) UpdateBackupSet(ctx context.Context, id string, req servic
 
 		AcknowledgeRepoint:       req.AcknowledgeRepoint,
 		AcknowledgeHostKeyChange: req.AcknowledgeHostKeyChange,
+		// Issue #624's opt-out, carried across for the same reason the
+		// two acknowledgements are: an edit refused by the engine for a
+		// connection it could not prove has one way past it, and a
+		// routed --no-verify that dropped this flag would be refused
+		// where the direct one succeeds.
+		SkipConnectionCheck: req.SkipConnectionCheck,
 	}
 	if req.ValidatorID != nil {
 		v := string(*req.ValidatorID)
@@ -203,6 +215,65 @@ func (r *engineRoute) UpdateBackupSet(ctx context.Context, id string, req servic
 		return service.BackupSet{}, err
 	}
 	return backupSetFromWire(updated), nil
+}
+
+// TestConnection is POST /backup-sets/test-connection in its CANDIDATE
+// mode: prove a source described by a request, before any set exists for
+// it (issue #624).
+//
+// Made by the ENGINE rather than here, for ProbeHostKey's reason restated
+// with a sharper edge: `backup-set create` verifies before it writes, so
+// the check and the write have to happen in the same world. A route proven
+// from this shell and a set declared in a process on the other side of a
+// container boundary would be two different claims about two different
+// networks, reported as one.
+func (r *engineRoute) TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return connectionTestFromWire(r.client.TestConnection(ctx, apicontract.TestConnectionRequest{
+		Host:           req.Host,
+		Port:           req.Port,
+		User:           req.User,
+		SSHKeyID:       req.SSHKeyID,
+		KnownHostsLine: req.KnownHostsLine,
+		RemotePath:     req.RemotePath,
+	}))
+}
+
+// TestBackupSetConnection is the same route in its PERSISTED mode: prove
+// the set this id names, by id alone.
+//
+// The connection details come off the engine's own configuration, which is
+// the half that makes this mode worth having: a caller asking whether
+// "nas-a/photos" still works neither knows nor has to echo back that set's
+// key reference and trusted line, so a read-only check cannot be turned
+// into a check of something else.
+//
+// This is also where a passing check clears issue #624's unverified mark,
+// in the process that holds the configuration the mark is in.
+func (r *engineRoute) TestBackupSetConnection(ctx context.Context, id string) (service.ConnectionTestResult, error) {
+	if !isBackupSetID(id) {
+		return service.ConnectionTestResult{}, fmt.Errorf("%q is not a backup set id; a backup set id is exactly source/name", id)
+	}
+	return connectionTestFromWire(r.client.TestConnection(ctx, apicontract.TestConnectionRequest{BackupSetID: id}))
+}
+
+// connectionTestFromWire is the one translation both modes come back
+// through, so the routed answer and the direct one cannot describe the
+// same six steps differently.
+func connectionTestFromWire(resp apicontract.TestConnectionResponse, err error) (service.ConnectionTestResult, error) {
+	if err != nil {
+		return service.ConnectionTestResult{}, err
+	}
+	result := service.ConnectionTestResult{OK: resp.OK, Message: resp.Message}
+	for _, c := range resp.Checks {
+		result.Checks = append(result.Checks, service.ConnectionCheck{
+			Step:       c.Step,
+			Outcome:    c.Outcome,
+			Category:   c.Category,
+			Detail:     c.Detail,
+			DurationMs: c.DurationMs,
+		})
+	}
+	return result, nil
 }
 
 // RemoveBackupSet is DELETE /backup-sets/{source}/{set}.
@@ -262,6 +333,12 @@ func backupSetFromWire(s apicontract.BackupSet) service.BackupSet {
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
+		// Issue #624. An engine older than this field answers false,
+		// which reads as "nothing here says this set's connection was
+		// skipped" rather than as a claim that it was proven, and that
+		// is the same reading the configuration file's own absent key
+		// gets.
+		ConnectionUnverified: s.ConnectionUnverified,
 	}
 }
 

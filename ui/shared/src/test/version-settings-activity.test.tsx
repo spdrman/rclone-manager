@@ -39,6 +39,7 @@ const INCOMPATIBLE_VERSION: VersionInfo = {
 };
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "set_test",
   source: "production",
   set: "postgres-primary",

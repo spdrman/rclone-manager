@@ -747,6 +747,36 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           manager will not offer to perform (§77 invariant 5). */}
       <HaltBanner set={s} />
 
+      {/* Issue #624: a backup set nobody ever proved, said out loud.
+          This is what stops `--no-verify` being a hole rather than an
+          escape hatch: the sentence the command printed was read once, by
+          whoever typed it, and this is what is still here for the
+          operator who did not. It clears itself the moment a connection
+          test passes, so it is a state rather than a permanent scar on a
+          set that happened to be created offline.
+
+          It sits above the panels rather than inside the connection one
+          because it is a fact about the whole set: nothing here has been
+          shown to work, including the parts the connection panel does not
+          cover. */}
+      {s.connectionUnverified ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner
+            tone="warn"
+            title="This connection has never been proven"
+            actions={
+              <button className="btn btn--sm" disabled={readOnly || testing} onClick={() => void runConnectionTest()}>
+                {testing ? "Testing\u2026" : "Test connection"}
+              </button>
+            }
+          >
+            This backup set was created without a connection test, so nothing has shown
+            that its key authenticates or that this account can read the remote folder.
+            A test that passes clears this.
+          </WarningBanner>
+        </div>
+      ) : null}
+
       {enterError ? (
         <div style={{ marginBottom: 14 }}>
           <WarningBanner tone="warn" title="Could not open edit mode">

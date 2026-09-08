@@ -125,6 +125,23 @@ export interface BackupSet {
    */
   readOnly: boolean;
   /**
+   * Issue #624: this backup set was written without its SSH connection
+   * ever having been proven.
+   *
+   * True means a surface deliberately skipped a check it could have run,
+   * which is `backup-manager backup-set create --no-verify` and nothing
+   * else: the wizard cannot save until its own check has passed. A
+   * connection test that PASSES against the set clears it, and one that
+   * fails leaves it alone.
+   *
+   * False is not a claim that the connection works today, only that
+   * nothing here says it was never proven. An engine built before this
+   * field answers false, and so does every set written before the mark
+   * existed, which is why a surface says "not verified" for true and says
+   * nothing at all for false rather than drawing a green tick.
+   */
+  connectionUnverified: boolean;
+  /**
    * How many backups in THIS set currently hold a remote source kept only
    * because `readOnly` above is true, not because any one of them was
    * individually reinstated out of quarantine (issue #227's own count,

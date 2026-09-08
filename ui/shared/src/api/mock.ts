@@ -144,6 +144,7 @@ const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride
  */
 const SETS: BackupSet[] = [
   {
+    connectionUnverified: false,
     id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
@@ -162,6 +163,7 @@ const SETS: BackupSet[] = [
     sshKeyId: "key_a1b2c3"
   },
   {
+    connectionUnverified: false,
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
@@ -190,6 +192,7 @@ const SETS: BackupSet[] = [
     sshKeyId: "key_a1b2c3"
   },
   {
+    connectionUnverified: false,
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
@@ -212,6 +215,7 @@ const SETS: BackupSet[] = [
     sshKeyId: "key_d4e5f6"
   },
   {
+    connectionUnverified: false,
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
@@ -1068,6 +1072,7 @@ function completionMethodFromStrategy(strategy: CreateBackupSetRequest["completi
 function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet {
   const sourceName = req.sourceName ?? "api";
   return {
+    connectionUnverified: false,
     id: sourceName + "/" + req.name,
     // The same two halves core/service joins to build the id above
     // (backupsets.go: `ID: sourceName + "/" + bs.Name`), kept separate

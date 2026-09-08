@@ -86,6 +86,18 @@ type backupSetSpec struct {
 	// before this issue already meant: FR-15's delete step runs
 	// unchanged.
 	ReadOnly bool `json:"read_only"`
+	// ConnectionUnverified declares that this set is being created
+	// WITHOUT its connection having been proven, and asks for it to be
+	// marked as such until a test passes (issue #624).
+	//
+	// It states what the CALLER did rather than instructing this service
+	// to skip anything. The candidate check is POST
+	// /api/v1/backup-sets/test-connection, which a caller runs before
+	// submitting this; the wizard cannot save until that check has passed,
+	// so it never sets this, and `backup-set create --no-verify` is what
+	// does. Omitted or false is what every request before this field
+	// existed meant.
+	ConnectionUnverified bool `json:"connection_unverified"`
 }
 
 // backupSetRequest is POST /api/v1/backup-sets' request body: the spec
@@ -206,6 +218,17 @@ type backupSetResponse struct {
 	// deployment did not write. See service.trustedHostKeysFor for why a
 	// hand-maintained file's timestamp answers a different question.
 	TrustedHostKeyRecordedAt string `json:"trusted_host_key_recorded_at,omitempty"`
+	// ConnectionUnverified is issue #624's mark: this set was written
+	// without its connection ever having been proven. Omitted when false,
+	// which is the ordinary case and is also how an engine built before
+	// this field answers, so a client reads absence as "nothing here says
+	// this was skipped" rather than as a claim either way.
+	//
+	// It is here so a surface can DRAW the difference. A set nobody proved
+	// and a set checked against a real server were the same set on every
+	// screen, which is what made --no-verify a hole rather than an escape
+	// hatch.
+	ConnectionUnverified bool `json:"connection_unverified,omitempty"`
 }
 
 // trustedHostKeyResponse is one pinned host key on the wire: the algorithm
@@ -246,6 +269,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 
 		TrustedHostKeys:          trusted,
 		TrustedHostKeyRecordedAt: recordedAt,
+		ConnectionUnverified:     bs.ConnectionUnverified,
 	}
 }
 
@@ -335,25 +359,26 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := service.CreateBackupSetRequest{
-		SourceName:         body.SourceName,
-		Name:               body.Name,
-		Host:               body.Host,
-		Port:               body.Port,
-		User:               body.User,
-		SSHKeyID:           body.SSHKeyID,
-		KnownHostsLine:     body.KnownHostsLine,
-		RemotePath:         body.RemotePath,
-		LocalPath:          body.LocalPath,
-		Include:            body.Include,
-		CompletionStrategy: body.CompletionStrategy,
-		ValidatorID:        service.ValidatorID(body.ValidatorID),
-		StableFor:          secondsToDuration(body.StableForSeconds),
-		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
-		Disabled:           body.Disabled,
-		ReadOnly:           body.ReadOnly,
-		RunImmediately:     runImmediately,
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
-		Actor:              actorFromContext(r.Context()),
+		SourceName:           body.SourceName,
+		Name:                 body.Name,
+		Host:                 body.Host,
+		Port:                 body.Port,
+		User:                 body.User,
+		SSHKeyID:             body.SSHKeyID,
+		KnownHostsLine:       body.KnownHostsLine,
+		RemotePath:           body.RemotePath,
+		LocalPath:            body.LocalPath,
+		Include:              body.Include,
+		CompletionStrategy:   body.CompletionStrategy,
+		ValidatorID:          service.ValidatorID(body.ValidatorID),
+		StableFor:            secondsToDuration(body.StableForSeconds),
+		StaleAfter:           secondsToDuration(body.StaleAfterSeconds),
+		Disabled:             body.Disabled,
+		ReadOnly:             body.ReadOnly,
+		ConnectionUnverified: body.ConnectionUnverified,
+		RunImmediately:       runImmediately,
+		AcknowledgeRepoint:   body.AcknowledgeRepoint,
+		Actor:                actorFromContext(r.Context()),
 	}
 
 	result, err := h.backend.CreateBackupSet(r.Context(), req)
@@ -486,6 +511,20 @@ func (h *handlers) writeBackupSetError(w http.ResponseWriter, r *http.Request, e
 		// this message from its own text plus two fingerprints and the
 		// caller's own address.
 		writeError(w, http.StatusConflict, "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", err.Error())
+	case errors.Is(err, service.ErrConnectionNotProven):
+		// 409 and its own code, beside the three refusals above rather
+		// than folded into any of them: this one is not about a decision
+		// the operator has to confirm, it is about the world not being
+		// the way the edit assumes, and what it offers is "fix the source
+		// and save again" or "save it unproven" rather than "do it
+		// anyway". A client that read it as INVALID_REQUEST would tell an
+		// operator their form was wrong when their form was right and
+		// their server was down.
+		//
+		// Safe to echo: core/service builds this message from
+		// internal/sourcecheck's own sentences and the caller's own
+		// values, never from a transport error's text (issue #624).
+		writeError(w, http.StatusConflict, "BACKUP_SET_CONNECTION_NOT_PROVEN", err.Error())
 	case errors.Is(err, service.ErrRepointNotAcknowledged):
 		// 409 rather than 400, because this is not a malformed request:
 		// it is a well-formed one whose consequences the caller has to
@@ -710,6 +749,16 @@ type updateBackupSetRequest struct {
 	// same host. Two flags rather than one, for the reason
 	// core/service/backupsethostkey.go gives.
 	AcknowledgeHostKeyChange bool `json:"acknowledge_host_key_change"`
+
+	// SkipConnectionCheck writes this edit without proving the connection
+	// first (issue #624). An edit that changes host, port, user,
+	// ssh_key_id, known_hosts_line or remote_path is checked against the
+	// source before it is written and refused with
+	// BACKUP_SET_CONNECTION_NOT_PROVEN when the check fails; this is the
+	// deliberate opt-out, and a set written under it is marked
+	// connection_unverified until a test passes. Not a pointer, for the
+	// reason the two acknowledgements above are not.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
 }
 
 // updateBackupSet is PATCH /api/v1/backup-sets/{source}/{set} (issue
@@ -760,6 +809,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 
 		AcknowledgeRepoint:       body.AcknowledgeRepoint,
 		AcknowledgeHostKeyChange: body.AcknowledgeHostKeyChange,
+		SkipConnectionCheck:      body.SkipConnectionCheck,
 	}
 	if body.ValidatorID != nil {
 		id := service.ValidatorID(*body.ValidatorID)

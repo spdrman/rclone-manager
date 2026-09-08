@@ -38,6 +38,7 @@ import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "production/postgres-primary",
   source: "production",
   set: "postgres-primary",

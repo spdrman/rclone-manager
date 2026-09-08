@@ -123,6 +123,7 @@ commands:
                     --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
                     --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
                     [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
+                    [--no-verify]
                                                   create a backup set. Beside a serving engine this command has a
                                                   route to, that is POST /api/v1/backup-sets against the engine
                                                   (#543); with nothing serving, it is the same service layer that
@@ -130,21 +131,38 @@ commands:
                                                   yet this writes the first one instead (#176), and --state-database
                                                   names the journal it points at; that create has no route, so it is
                                                   refused while something serves that deployment (#536)
+                                                  The connection is proven before anything is written, and the create is
+                                                  refused when it cannot be: --no-verify writes it anyway, says in so many
+                                                  words that nothing was proven, and leaves the set marked as unverified
+                                                  until a connection test passes (#624)
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                     [--ssh-key-file K|--ssh-key-id ID] [--known-hosts-line L|--trust-host-key]
-                    [--acknowledge-repoint] [--acknowledge-host-key-change]
+                    [--acknowledge-repoint] [--acknowledge-host-key-change] [--no-verify]
                                                   change one configured backup set in place; only the flags you pass are
                                                   changed. Beside a serving engine this command has a route to, that is
                                                   PATCH /api/v1/backup-sets/{source}/{set} against the engine and takes
                                                   effect with no restart; with no route it is refused and the file is
                                                   left untouched (#350, #536, #543)
+                                                  An edit that changes the host, port, user, key, trusted host key or
+                                                  remote path is proven before it is written and refused when it cannot
+                                                  be; --no-verify writes it anyway and marks the set unverified (#624)
   backup-set remove <source/backup-set>          take one backup set out of the configuration: DELETE
                                                   /api/v1/backup-sets/{source}/{set} against a serving engine this
                                                   command has a route to, and the same service layer that route is
                                                   built on when nothing is serving. Configuration only: the backups it
                                                   collected stay on storage and stay listed by artifacts, and creating
                                                   the set again with the same source and name takes them back (#391)
+  backup-set test-connection <source/backup-set>
+                                                  prove one configured backup set's source: resolve the host, connect,
+                                                  check its host key against what this set trusts, offer the configured
+                                                  key, authenticate, and list the remote folder. Six named outcomes, and
+                                                  a non-zero exit when any of them fails. Beside a serving engine this
+                                                  command has a route to, the check is made BY that engine, so its steps
+                                                  reach the live feed rather than only this terminal; with nothing
+                                                  serving it is made here. A check that passes clears the unverified mark
+                                                  a --no-verify create or patch left on the set. "preflight" is the same
+                                                  verb under the name the storage-destination side spells it (#596, #624)
   artifacts [--source S] [--backup-set B]        list journal artifacts
                                                   --backup-set takes the source/backup-set id sources, status and
                                                   retention name a backup set by, and a plain set name where one

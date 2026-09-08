@@ -28,6 +28,7 @@ import type { BackupSet } from "@shared/types/backup";
 import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "production/postgres-primary",
   source: "production",
   set: "postgres-primary",

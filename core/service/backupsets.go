@@ -210,6 +210,24 @@ type BackupSet struct {
 	// an answer to "when was this host key trusted".
 	TrustedHostKeyRecordedAt time.Time
 
+	// ConnectionUnverified reports that this backup set was written
+	// without its SSH connection ever having been proven (issue #624,
+	// config.BackupSet.ConnectionUnverified).
+	//
+	// True means a surface deliberately skipped a check it could have
+	// run: `backup-set create --no-verify`, and nothing else writes it.
+	// False is every other set, including every set written before the
+	// mark existed, which is why absence is not read as "unverified" (see
+	// the config field's own doc for why an upgrade must not declare
+	// every existing set unproven).
+	//
+	// It is reported so a surface can DRAW the difference. A set nobody
+	// ever proved and a set checked against a real server used to be
+	// indistinguishable in every list, on every screen and in every
+	// command's output, which is what made --no-verify a hole rather than
+	// an escape hatch.
+	ConnectionUnverified bool
+
 	// RetentionIsOverride reports whether this backup set declares its own
 	// retention policy rather than being retained under the deployment's
 	// (issue #333, config.BackupSet.RetentionIsOverride).
@@ -319,6 +337,25 @@ type CreateBackupSetRequest struct {
 	// run_cycle operation RunImmediately submits. Unused when
 	// RunImmediately is false or Disabled is true.
 	Actor string
+
+	// ConnectionUnverified declares that this set is being created
+	// WITHOUT its connection having been proven, and asks for it to be
+	// marked as such until a test passes (issue #624).
+	//
+	// It is a statement about what the CALLER did, not an instruction to
+	// this method: nothing here runs or skips a check, because the check
+	// belongs where the answers are still being collected. `backup-set
+	// create` runs it against the same route the write goes to and sets
+	// this only when --no-verify was given; the wizard cannot save at all
+	// until its own check has passed, so it never sets this.
+	//
+	// False is what every request before this field existed meant and
+	// stays the default, so a caller that does not know about the mark
+	// creates an unmarked set rather than silently declaring one proven
+	// that it never checked. That is the honest default for the same
+	// reason config.BackupSet.ConnectionUnverified reads absence as
+	// unmarked: a mark nobody can act on is a mark everybody ignores.
+	ConnectionUnverified bool
 
 	// AcknowledgeRepoint confirms that the caller means to create this
 	// backup set somewhere other than where the history already on its id
@@ -432,6 +469,12 @@ func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSet
 		// with an error naming a directory rather than the cause.
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
+		// Issue #624's mark, carried straight through: a set created
+		// without a check says so in the file, and a set created the
+		// ordinary way leaves the key out entirely (omitempty), which is
+		// what keeps absence meaning what it meant in every configuration
+		// written before this field existed.
+		ConnectionUnverified: req.ConnectionUnverified,
 	}
 	// A pointer to a fresh local, never &req.ReadOnly: req is this
 	// function's own by-value parameter, so its address is safe to persist
@@ -846,6 +889,11 @@ func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) Back
 		// point of pinning it is that a later edit to the deployment's
 		// policy will not move it.
 		RetentionIsOverride: bs.RetentionIsOverride(),
+		// Read straight off the configuration rather than derived from
+		// anything: whether a connection was ever proven is not something
+		// a set's own history can answer, so it is only ever what somebody
+		// wrote (issue #624).
+		ConnectionUnverified: bs.ConnectionUnverified,
 
 		TrustedHostKeys:          trusted,
 		TrustedHostKeyRecordedAt: recordedAt,

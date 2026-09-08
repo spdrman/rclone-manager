@@ -44,7 +44,24 @@ var backupSetVerbs = map[string]func([]string) int{
 // them. The switch dispatches on these literals; this list exists so the
 // usage messages and the test that checks usage() against the verbs read
 // them from one place rather than three.
-var backupSetSharedFlagVerbs = []string{"create", "patch", "remove"}
+var backupSetSharedFlagVerbs = []string{"create", "patch", "remove", "test-connection"}
+
+// backupSetVerbAliases are the spellings that reach a verb under another
+// name (issue #624).
+//
+// There is one, and it is here rather than as a second entry in the list
+// above because an alias is not a verb: usage() lists what a command DOES,
+// and two entries for one action would be a menu that reads as two
+// actions. The alias is documented in `test-connection`'s own usage entry,
+// which is where somebody who typed the other word will look.
+//
+// Why it exists at all: the destination noun has spelled this check
+// `medium preflight` since #443, and #622 is renaming that to
+// `test-connection` while keeping `preflight` working. Both nouns
+// answering to both spellings means an operator who learned either word is
+// right on either noun, which is the whole of what "call one thing one
+// name" is supposed to buy, and nothing anybody scripted stops working.
+var backupSetVerbAliases = map[string]string{"preflight": "test-connection"}
 
 // backupSetVerbNames is every verb `backup-set` dispatches, sorted: the
 // shared-flag ones above and the ones with a flag set of their own.
@@ -212,7 +229,12 @@ func cmdBackupSet(args []string) int {
 		return usageError("backup-set: %q is not a backup set id; a backup set id is exactly source/name", operands[1])
 	}
 
-	switch operands[0] {
+	verb := operands[0]
+	if canonical, ok := backupSetVerbAliases[verb]; ok {
+		verb = canonical
+	}
+
+	switch verb {
 	case "create":
 		if code := f.refuseFlagsOfTheOtherVerb("create", backupSetPatchOnlyFlags); code != 0 {
 			return code
@@ -236,6 +258,18 @@ func cmdBackupSet(args []string) int {
 			return code
 		}
 		return backupSetRemove(f, operands[1])
+	case "test-connection":
+		// The same allow-list `remove` uses, and for the same reason: this
+		// verb names one set and nothing else, so a flag from another verb
+		// passed here would be parsed, ignored, and exit 0 having checked
+		// something other than what the operator thought they had asked
+		// about. --no-verify is refused with the rest, and refusing it is
+		// the point: "test the connection without testing the connection"
+		// is not an instruction anybody can mean.
+		if code := f.refuseEveryFlagBut("test-connection", "config"); code != 0 {
+			return code
+		}
+		return backupSetTestConnection(f, operands[1])
 	default:
 		return usageError("backup-set: %q is not a backup-set verb; the verbs are %s", operands[0], strings.Join(backupSetVerbNames(), ", "))
 	}
@@ -275,6 +309,13 @@ type backupSetFlags struct {
 	readOnly      *bool
 	runNow        *bool
 	stateDatabase *string
+
+	// Shared by create and patch, and not a field of the backup set: it
+	// says what this invocation is allowed to skip (issue #624). Spelled
+	// exactly as the destination side spells it, because it is the same
+	// decision about the other half of the same product and two words for
+	// it would be two things to learn.
+	noVerify *bool
 
 	// Shared by create and patch, and not a field of the backup set: it
 	// answers one refusal, on either verb. Removing a set frees its id up
@@ -343,6 +384,9 @@ func declareBackupSetFlags() *backupSetFlags {
 
 	f.acknowledgeHostKeyChange = fs.Bool("acknowledge-host-key-change", false,
 		"patch: confirm trusting a DIFFERENT host key for the same host. Needed only when the line being pinned is not the one on record. The refusal without it names both fingerprints, which is the whole of what there is to compare")
+
+	f.noVerify = fs.Bool("no-verify", false,
+		"create, patch: write the backup set without proving the connection first. The output says in so many words that nothing was proven, and the set stays marked as unverified until a connection test passes; it exists for building configuration offline, against a host this machine cannot currently reach")
 
 	return f
 }
@@ -433,6 +477,11 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 		RunImmediately:     *f.runNow,
 		Actor:              cliActor,
 		AcknowledgeRepoint: *f.acknowledgeRepoint,
+		// Issue #624: what this invocation is about to skip, recorded on
+		// the set rather than only announced in the terminal. Nothing in
+		// core/service reads this as an instruction to skip anything; the
+		// check below is what actually runs or does not.
+		ConnectionUnverified: *f.noVerify,
 	}
 
 	ctx := context.Background()
@@ -445,9 +494,9 @@ func backupSetCreate(f *backupSetFlags, sourceName, name string) int {
 	// the same decision before it opens anything.
 	configFile := config.ResolvePath(*f.cfgPath)
 	if _, statErr := os.Stat(configFile); errors.Is(statErr, os.ErrNotExist) {
-		return createFirstConfig(ctx, configFile, *f.stateDatabase, *f.keyFile, *f.trustHostKey, req)
+		return createFirstConfig(ctx, configFile, *f.stateDatabase, *f.keyFile, *f.trustHostKey, *f.noVerify, req)
 	}
-	return createIntoExistingConfig(ctx, *f.cfgPath, *f.keyFile, *f.trustHostKey, req)
+	return createIntoExistingConfig(ctx, *f.cfgPath, *f.keyFile, *f.trustHostKey, *f.noVerify, req)
 }
 
 // backupSetPatch is the `patch` verb, and openConfigWriteRoute settles
@@ -479,6 +528,15 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	req, named := buildBackupSetPatch(f)
 	req.AcknowledgeRepoint = *f.acknowledgeRepoint
 	req.AcknowledgeHostKeyChange = *f.acknowledgeHostKeyChange
+	// Issue #624. The check itself is the service's rather than this
+	// command's, unlike create's, and the reason is that a sparse edit
+	// cannot be turned into a candidate here: the fields this patch does
+	// not name come off the persisted set, and one of them is that set's
+	// trusted known_hosts line, which the API deliberately never
+	// publishes. So the only place holding everything the check needs is
+	// the process about to do the write, and this flag is how an operator
+	// tells it not to. See core/service's UpdateBackupSetRequest.
+	req.SkipConnectionCheck = *f.noVerify
 	// --ssh-key-file and --trust-host-key name a field to change just as
 	// surely as --ssh-key-id and --known-hosts-line do; they simply have a
 	// step to run first. Counted here rather than in buildBackupSetPatch,
@@ -513,6 +571,16 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 			return fail(err)
 		}
 		req.KnownHostsLine = &line
+	}
+
+	// Said before the write is attempted rather than after it lands, so
+	// an operator reads it whether the write succeeds or not, and reads it
+	// in the same order the destination side prints it. The set printed
+	// below carries the mark too, which is the durable half; this is the
+	// half that says what this particular command chose not to do.
+	if *f.noVerify {
+		fmt.Println("not verified: --no-verify was given, so this edit is written without the connection being proven")
+		fmt.Printf("  prove it afterwards with: backup-manager backup-set test-connection %s\n", id)
 	}
 
 	updated, err := route.UpdateBackupSet(ctx, id, req)
@@ -647,7 +715,7 @@ const cliActor = "cli"
 // createIntoExistingConfig folds one new backup set into a configuration
 // that already exists, through the same BackupService method POST
 // /api/v1/backup-sets calls, in this process.
-func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
+func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, trustHostKey, noVerify bool, req service.CreateBackupSetRequest) int {
 	route, cleanup, err := openConfigWriteRoute(ctx, configPath)
 	if err != nil {
 		return fail(err)
@@ -658,6 +726,13 @@ func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, t
 
 	if err := resolveKeyAndTrust(ctx, route, keyFile, trustHostKey, &req); err != nil {
 		return fail(err)
+	}
+
+	// After the key and the trust anchor are settled and before anything
+	// is written, because those two are what the check needs and the write
+	// is what it is there to stop (issue #624).
+	if code := proveSourceConnection(ctx, route, noVerify, connectionTestFor(req), "backup-manager backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
+		return code
 	}
 
 	result, err := route.CreateBackupSet(ctx, req)
@@ -678,7 +753,7 @@ func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, t
 // (issue #176: a fresh install serves a setup flow rather than refusing
 // to start), so this is the path a machine the installer has just set up
 // actually takes, and the two-machine end-to-end test walks it.
-func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile string, trustHostKey bool, req service.CreateBackupSetRequest) int {
+func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile string, trustHostKey, noVerify bool, req service.CreateBackupSetRequest) int {
 	if req.RunImmediately {
 		// The service ignores RunImmediately here, because a first-run
 		// instance has no BackupService to submit an operation to yet.
@@ -732,6 +807,15 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 
 	if err := resolveKeyAndTrust(ctx, firstRun, keyFile, trustHostKey, &req); err != nil {
 		return fail(err)
+	}
+
+	// The same check the configured path runs, through FirstRun's own
+	// TestConnection, which exists for the wizard that walks this same
+	// flow in a browser. There is no engine to route to here by
+	// construction (this branch was taken because there is no config.yaml
+	// at all), so this is the durable path in the only world it has.
+	if code := proveSourceConnection(ctx, firstRun, noVerify, connectionTestFor(req), "backup-manager backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
+		return code
 	}
 
 	created, err := firstRun.CreateInitialConfig(ctx, req)
@@ -1021,4 +1105,15 @@ func printBackupSet(s service.BackupSet) {
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
 	fmt.Printf("  read_only: %v\n", s.ReadOnly)
+	// Issue #624, and printed as words rather than as a bool because it
+	// is the one line here an operator has to act on. "verified" is the
+	// ordinary answer and is printed too: a line that appeared only when
+	// something was wrong would leave a reader unable to tell a proven
+	// set from a build that does not report this at all, which is the
+	// same reason stale_after says "not reported" rather than nothing.
+	if s.ConnectionUnverified {
+		fmt.Println("  connection: not verified (nothing has proven this source; `backup-manager backup-set test-connection " + s.ID + "` clears this)")
+	} else {
+		fmt.Println("  connection: verified")
+	}
 }
