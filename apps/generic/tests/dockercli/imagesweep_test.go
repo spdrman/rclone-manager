@@ -69,6 +69,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,14 +117,48 @@ const (
 	dockerTimeout = 30 * time.Second
 )
 
-// TestMain removes the image this run built once every test has
-// finished with it.
+// TestMain pins the platform every docker call in this package works
+// on, and removes the image this run built once every test has finished
+// with it.
+//
+// The platform line is issue #635. Nothing here passed --platform, so the
+// target came from DOCKER_DEFAULT_PLATFORM in whatever environment ran
+// `go test`, and on the designated benchmark host that variable is set to
+// linux/amd64 while the daemon is aarch64. So this suite has been
+// building and running an emulated amd64 image, slower and not the
+// artifact this machine ships, while dockercli_test.go's own comment
+// claimed "a single amd64/arm64-native load" and imagelicences_test.go's
+// header claimed "this builds one architecture, natively". Neither was
+// true, and nothing said so, because every docker call agreed with every
+// other about the wrong answer.
+//
+// Setting it here rather than adding a flag to each call is the point.
+// There are more than forty `docker` invocations across this package -
+// build, run, create, cp, inspect, compose - and they have to agree:
+// build one architecture and `docker run` another and the run fails with
+// "pull access denied", because a reference the daemon holds for the
+// other platform looks to it like an image it does not have. One
+// variable in this process's environment reaches all of them, including
+// the ones `docker compose` makes on its own behalf, because
+// exec.Command inherits os.Environ() and every site here either does
+// that or appends to it.
+//
+// runtime.GOARCH is the test binary's own architecture, which is the
+// daemon's too for the local daemon requireDocker probes.
 //
 // os.Exit skips deferred functions, so the removal is written out
 // straight-line before it rather than deferred, and the code from m.Run
 // is carried across it: cleanup must not be able to turn a failing run
 // green or a green run red.
 func TestMain(m *testing.M) {
+	if err := os.Setenv("DOCKER_DEFAULT_PLATFORM", "linux/"+runtime.GOARCH); err != nil {
+		// Not best-effort. Every test below would still run, against
+		// whatever platform the ambient environment named, and
+		// imagesize_test.go would compare a size to a baseline captured
+		// for a different architecture or skip without saying why.
+		fmt.Fprintf(os.Stderr, "cannot pin DOCKER_DEFAULT_PLATFORM: %v\n", err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	removeBuiltImage()
 	os.Exit(code)

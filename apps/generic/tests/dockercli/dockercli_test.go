@@ -145,9 +145,13 @@ var builder imageBuilder
 // still avoids paying even that cost more than once per `go test` run)
 // and returns the reference it built. A single native load (not a
 // multi-arch buildx invocation) is enough here: architecture parity is
-// CI's ugreen-cross-compile job's job, not this suite's. "Native" is
-// asked for explicitly below rather than assumed, which is #635's
-// finding: it was not native on the one machine that matters.
+// CI's ugreen-cross-compile job's job, not this suite's.
+//
+// "Native" is now true rather than assumed, and it was not before #635:
+// see TestMain in imagesweep_test.go, which pins the platform for this
+// build and for every `docker run`, `docker create` and `docker compose`
+// that follows it. They have to agree, and pinning only this one is worse
+// than pinning none.
 //
 // The reference is imageReference(), unique to this test process (#185).
 // It used to be one fixed string shared by every checkout on the machine,
@@ -176,25 +180,6 @@ func buildImage(t *testing.T) string {
 		sweepImages()
 
 		cmd := exec.Command("docker", "build",
-			// Explicit, not inherited (#635). Without it the target
-			// platform is whatever DOCKER_DEFAULT_PLATFORM happens to
-			// say in the environment that ran `go test`, and on the
-			// designated benchmark host that variable is set to
-			// linux/amd64, so this suite has been building and running
-			// an emulated amd64 image on an aarch64 daemon while the
-			// comment above claimed a native load. Two things went
-			// wrong with that. The tests were exercising a binary this
-			// machine does not ship, under emulation, which is slower
-			// and is not the artifact anybody receives; and
-			// imagesize_test.go cannot compare a size to a baseline
-			// unless it knows which architecture produced it, because
-			// the same tree is 75,680,330 bytes at amd64 against
-			// 69,704,266 at arm64 (both measured on this host on
-			// 2026-09-08). runtime.GOARCH is the test process's own
-			// architecture, which on every machine that runs this is
-			// also the daemon's, so this asks for a native build
-			// rather than pinning one architecture into the file.
-			"--platform", "linux/"+runtime.GOARCH,
 			"-f", filepath.Join(root, "container", "Dockerfile"),
 			"-t", imageReference(),
 			"--label", imageLabelKey+"="+imageLabelValue,
