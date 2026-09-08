@@ -727,16 +727,23 @@ function SavePane({
       </p>
 
       {cannotVerify ? (
-        // Not dismissible (#620). This is the sentence that says nothing
-        // was proven, sitting directly above Save, and it is the same
-        // claim `medium add --no-verify` makes out loud on the command
-        // line. Its verified counterpart below can be put away, and that
+        // Not dismissible (#620). This is the sentence that says which
+        // half of the check is happening, sitting directly above Save.
+        // Its verified counterpart below can be put away, and that
         // asymmetry is the point: the reassuring half is disposable and
-        // the unproven half is not.
+        // the one about an unproven destination is not.
+        //
+        // It used to say nothing would be proven at all, and #636 made
+        // that half wrong in the same way it made `medium edit`'s own
+        // line wrong: this page cannot check the destination, because it
+        // cannot read the credential already configured, and the engine
+        // can, because it resolves that credential out of the file it is
+        // about to write. So the save is checked and can be refused, and
+        // the honest sentence is the one that says who is doing it.
         <Banner tone="info" dismissible={false} style={{ fontSize: 12.5 }}>
-          Not verified before saving: this edit keeps the credential already configured, and a
-          candidate cannot be checked with a credential this page cannot read. Verify it from the
-          list once it is saved.
+          Not checked from this page: this edit keeps the credential already configured, which this
+          page cannot read. The manager tests the destination before the edit lands and refuses when
+          it cannot, naming the step that failed.
         </Banner>
       ) : verified ? (
         <Banner tone="info" style={{ fontSize: 12.5 }}>
