@@ -4130,20 +4130,36 @@ class TestTheCarriedReleasePinIsTheRecordedOne(unittest.TestCase):
             f"distribution/packaging/canonical.json.")
 
     def test_the_carried_digest_is_the_recorded_index_digest(self):
-        # .get, not [], and the difference is not tidiness. A release that
-        # is cut and not yet pushed has no index digest to record, so the
-        # manifest omits the key entirely and the installer carries None.
-        # That is a state install_docker_host.py handles deliberately and
-        # says out loud ("... is cut and not pushed, so
-        # container/release-manifest.json records no identity for it"), and
-        # this assertion is that the two AGREE: they agree at None exactly
-        # as much as they agree at a digest.
+        # Two assertions, and the first one is the one that would go
+        # missing if you only read the second.
         #
-        # Reading the key with [] raised KeyError instead, which is not a
-        # failed assertion but a broken test, and it left origin/main red
-        # on `bash scripts/ci-local.sh` from the moment 0.3.3 was cut
-        # (#639, #640) without being pushed. Found by #635 while running
-        # the gate for something else.
+        # The key must be PRESENT. #644 made the hash recorder write
+        # "index_digest": null for a release that is cut and not yet
+        # pushed, which is what its own doc had always promised and what
+        # this file had always assumed. Nothing else in the repository
+        # checks that it kept doing so: distribution/packaging reads the
+        # field as *string, so an absent key decodes to nil, and
+        # release_manifest_test.go only complains about a nil digest when
+        # canonical.json says image.published is true, which for a cut and
+        # unpushed release it is not. So this line is the only automated
+        # detector that the recorder still emits the field at all, and
+        # #635 nearly deleted it: switching the read below to .get without
+        # this made a recorder that dropped the key again a silent pass.
+        self.assertIn(
+            "index_digest", self.manifest(),
+            f"{self.WHERE} has no index_digest key at all. scripts/release/record-release-hashes.sh writes it as null "
+            f"for a release that is cut and not yet pushed (#644), and nothing else in this repository notices when it "
+            f"stops: the Go side reads the field as *string and treats absent as nil, and the published-only arm of "
+            f"release_manifest_test.go never fires for an unpushed release.")
+
+        # And it must agree with what the installer carries. .get rather
+        # than [] now that presence is asserted above: a release that is
+        # cut and not yet pushed records null here and carries None there,
+        # which is a state install_docker_host.py handles deliberately and
+        # says out loud ("... is cut and not pushed, so
+        # container/release-manifest.json records no identity for it").
+        # They agree at None exactly as much as they agree at a digest, and
+        # the failure worth catching is one present and the other not.
         self.assertEqual(
             installer.CARRIED_RELEASE_DIGEST, self.manifest().get("index_digest"),
             f"CARRIED_RELEASE_DIGEST is not the index_digest {self.WHERE} records.\n\n"
