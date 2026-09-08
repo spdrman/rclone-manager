@@ -34,11 +34,17 @@
 // # Why this writes config.yaml, and why that is not a promise broken
 //
 // TestBackupSetConnection has always described itself as read-only, and
-// for every set that carries no mark it still is: the function below
-// returns before it opens anything unless the set is currently marked AND
-// the check passed. The write is the transition and nothing else, so the
-// ordinary "does this still work" button on a set that was proven at
-// creation reads exactly as many files as it did before, which is none.
+// the write below is the TRANSITION and nothing else: it happens on a
+// check that passed against a set that is currently marked, and on nothing
+// else. So the ordinary "does this still work" button on a set that was
+// proven at creation reads the configuration file to find that out and
+// then writes nothing, which is a stat and a read on a button press rather
+// than a change to what the button means.
+//
+// Said precisely rather than as "it still writes nothing", because it does
+// open the file. The claim worth making is the one about config.yaml
+// changing under an operator who pressed a read-only-looking control, and
+// that only ever happens when the control has just earned it.
 //
 // The write happens where the check happened, and that is what settles
 // #624's "which world does this run in" question rather than leaving it
