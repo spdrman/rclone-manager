@@ -298,10 +298,81 @@ describe("the line each event renders as", () => {
   });
 
   it("colours a completed step and a failure differently from a plain note", () => {
-    expect(activityLine(event({ sequence: 1, event: "commit", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
-    expect(activityLine(event({ sequence: 2, level: "error", event: "error", fields: { op: "verify", error: "boom" } })).tone).toBe("error");
+    expect(activityLine(event({ sequence: 1, event: "commit", outcome: "success", fields: { artifact: "a/b/one.dump" } })).tone).toBe("ok");
+    expect(activityLine(event({ sequence: 2, level: "error", event: "error", outcome: "error", fields: { op: "verify", error: "boom" } })).tone).toBe("error");
     expect(activityLine(event({ sequence: 3, level: "warn", event: "retry", fields: { op: "copy_to_local", attempt: "2", category: "transient", error: "reset" } })).tone).toBe("warn");
     expect(activityLine(event({ sequence: 4, event: "discovery", fields: { discovered: "3", pending: "1" } })).tone).toBe("info");
+  });
+});
+
+/**
+ * How a line is coloured, once the engine says how the thing it reports
+ * went (issue #625).
+ *
+ * The old answer was a reconstruction: about eight rules keyed on event
+ * names, on lifecycle state values and on `outcome` fields, every one of
+ * them shaped "if the tone is still info, make it ok". That has the
+ * failure mode you would expect, and these cases are about exactly it: an
+ * event the reconstruction never heard of reported a success and drew as
+ * a neutral note, and nothing failed when it did.
+ */
+describe("the tone a line takes", () => {
+  it("reads the outcome the engine stated rather than re-deriving one", () => {
+    expect(activityLine(event({ sequence: 1, event: "cycle_end", outcome: "success", message: "cycle finished" })).tone).toBe("ok");
+    expect(activityLine(event({ sequence: 2, level: "warn", event: "validation", outcome: "warning", fields: { artifact: "a/b/one.dump", passed: "false" } })).tone).toBe("warn");
+    expect(activityLine(event({ sequence: 3, level: "error", event: "cycle_end", outcome: "error", fields: { error: "discovery blew up" } })).tone).toBe("error");
+    expect(activityLine(event({ sequence: 4, event: "discovery", outcome: "info", message: "discovery pass complete" })).tone).toBe("info");
+  });
+
+  it("colours an event name this build has never heard of by what the engine said about it", () => {
+    const line = activityLine(
+      event({ sequence: 1, event: "medium_verify", outcome: "success", message: "offsite_s3 verified", fields: { medium: "offsite_s3" } })
+    );
+    expect(line.tone).toBe("ok");
+    expect(line.text).toMatch(/offsite_s3 verified/);
+
+    expect(
+      activityLine(event({ sequence: 2, level: "warn", event: "medium_verify", outcome: "warning", message: "offsite_s3 is unproven" })).tone
+    ).toBe("warn");
+  });
+
+  it("still falls back to the level for a line that states no outcome", () => {
+    expect(activityLine(event({ sequence: 1, level: "error", event: "a_name_this_build_does_not_know", message: "something broke" })).tone).toBe("error");
+    expect(activityLine(event({ sequence: 2, level: "info", event: "a_name_this_build_does_not_know", message: "something happened" })).tone).toBe("info");
+  });
+
+  it("lets a stated outcome win over a level that disagrees with it", () => {
+    // A pass whose emitter logged loudly and still succeeded. The outcome
+    // is the fact about how it went; the level is how loudly it was
+    // logged, and the two are allowed to differ.
+    expect(activityLine(event({ sequence: 1, level: "warn", event: "retention", outcome: "success", message: "retention applied" })).tone).toBe("ok");
+  });
+});
+
+/**
+ * The action that started and then went quiet (issue #625).
+ *
+ * cycle_start and cycle_end were paired by habit, so nothing could notice
+ * a start with no completion behind it, which is the one state an
+ * operator most needs named. The feed pairs them by an action id now, and
+ * the strip says so where somebody is already looking.
+ */
+describe("an action that started and never finished", () => {
+  it("says so, and names how long it has been quiet", () => {
+    strip({
+      ...TRANSFERRING,
+      unfinishedActions: [
+        { action: "connection_test", actionId: "ct-1", startedAt: "2026-09-07T00:16:29Z", sequence: 2 }
+      ]
+    });
+    const region = screen.getByRole("region", { name: /activity for api-server \/ var-backups/i });
+    expect(within(region).getByText(/connection_test/)).toBeInTheDocument();
+    expect(within(region).getByText(/has not reported an outcome/i)).toBeInTheDocument();
+  });
+
+  it("says nothing at all when every action that started has reported how it went", () => {
+    strip({ ...TRANSFERRING, unfinishedActions: [] });
+    expect(screen.queryByText(/has not reported an outcome/i)).not.toBeInTheDocument();
   });
 });
 
