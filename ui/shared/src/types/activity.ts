@@ -23,6 +23,66 @@ import type { LiveTransferStage } from "@shared/types/operation";
  *  it decided a line was a warning rather than a note. */
 export type ActivityLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ * How the operation a line reports WENT, stated by the engine (issue
+ * #625).
+ *
+ * Called a result and not an outcome on purpose. `connection_test`
+ * carries a field of its own called `outcome` and has since #596, and
+ * `SetActivity.outcome` beside this is a third vocabulary again
+ * (ok/failed/stopped) nested in the same response. Taking the name would
+ * have meant renaming a shipped field to make room for a newcomer, and
+ * leaving a client to handle `set.outcome === "ok"` beside
+ * `set.events[i].outcome === "success"` for adjacent facts.
+ *
+ * It is not a second spelling of the level beside it. A level is an
+ * ORDERING, which is why there is no "success" in it and cannot be: every
+ * reader treats a level as a threshold, and success has no place on a line
+ * between info and warn. So a completion that went well used to arrive at
+ * info, read as a neutral note, and this app reconstructed a tone for it
+ * from event names, from which lifecycle state a transition landed in, and
+ * from `outcome` fields, across about eight rules all shaped "if the tone
+ * is still info, make it ok". Anything the reconstruction had never heard
+ * of stayed grey, so a new feature reporting a success read as a shrug and
+ * nothing failed when it did.
+ *
+ * "info" is a completion with no verdict: it ran, it finished, and there
+ * is nothing to celebrate or worry about. Absent is different again and
+ * means the line states no result at all, which is what a start and every
+ * ordinary progress note carry.
+ *
+ * "warn" rather than "warning", matching the `level` on the same line and
+ * every other tone vocabulary in this app.
+ */
+export type ActivityResult = "success" | "warn" | "error" | "info";
+
+/**
+ * An action that announced itself and has not said how it went.
+ *
+ * The one state an operator most needs named, and the one nothing could
+ * see: `cycle_start` and `cycle_end` were paired by the habit of spelling
+ * them that way, so nothing modelled an operation as something that begins
+ * and then concludes and nothing could notice the half that never
+ * arrived. The engine pairs them by an action id now and reports what is
+ * still open.
+ *
+ * An action that is legitimately still running appears here too, and that
+ * is right rather than a false alarm. The honest sentence is "started four
+ * minutes ago and has not reported an outcome"; whether four minutes is
+ * long is a judgement the person reading it is far better placed to make.
+ */
+export interface UnfinishedAction {
+  /** The action's stable name, as its start line carried it. */
+  action: string;
+  actionId: string;
+  /** When the start line was emitted, which is the only thing "and it has
+   *  been quiet since" can be worked out from. */
+  startedAt: string;
+  /** The start line's own sequence, so a reader can find the line this is
+   *  about in the tail it already holds. */
+  sequence: number;
+}
+
 /** Whether a line belongs to the backup set carrying it or to the whole
  *  deployment. A cycle starting covers every set, so it belongs to
  *  neither one strip nor all of them: it arrives in the reading's own
@@ -47,6 +107,19 @@ export interface SetActivityEvent {
   event: string;
   scope: ActivityScope;
   message: string;
+  /** How the operation this line reports went, stated by the engine.
+   *  Optional rather than nullable, and the two are not the same claim
+   *  here: a line that states no result has not measured one badly, it
+   *  has reported no operation at all, which is what a start and every
+   *  progress note do. See ActivityResult for why this is not the level,
+   *  and for why it is not called an outcome. */
+  result?: ActivityResult;
+  /** The action this line opens or closes, and the id its two halves are
+   *  paired by. Both absent on every line that is neither half of a pair;
+   *  an actionId with no result is a start, and one with a result
+   *  closes it. */
+  action?: string;
+  actionId?: string;
   /** The event's own structured fields. A record rather than the wire's
    *  array of pairs because every reader here looks fields up by name;
    *  JavaScript preserves insertion order for string keys, so the
@@ -92,6 +165,11 @@ export interface SetActivity {
   startedAt: string | null;
   finishedAt: string | null;
   events: SetActivityEvent[];
+  /** Every action inside this set that started and has not reported a
+   *  result, oldest first. Deliberately not filtered by the cursor the
+   *  events were: a cursor asks what is new, and an action that has been
+   *  quiet for ten minutes is precisely not new. */
+  unfinishedActions?: UnfinishedAction[];
   /** Whether the limit cut this reading short and the rest is still held.
    *  `events` is the OLDEST slice above the cursor, never the newest, so
    *  a client that asks again from where this one ends loses nothing on
@@ -140,6 +218,10 @@ export interface LiveActivity {
  *  thing as how far through its own pass a deployment is. */
 export interface DeploymentActivity {
   events: SetActivityEvent[];
+  /** The deployment-wide actions still owing a result. A cycle is the
+   *  one this matters most for: it belongs to no single set, so this is
+   *  the only bucket a cycle that went quiet can be reported in. */
+  unfinishedActions?: UnfinishedAction[];
   truncated: boolean;
   dropped: boolean;
   oldestSequence: number;
