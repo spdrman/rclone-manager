@@ -1,3 +1,10 @@
+package rclone
+
+import (
+	"fmt"
+	"strings"
+)
+
 // The import half of FR-33's credential story: turning material an
 // operator has just been handed by their provider into the one thing this
 // schema can hold, which is a REFERENCE (G2.2, issue #594).
@@ -28,12 +35,6 @@
 // these functions is an HTTP handler and a CLI, so an error that quoted
 // its input would put a secret in a response body and in a terminal
 // transcript that is copy-to-clipboard and exportable.
-package rclone
-
-import (
-	"fmt"
-	"strings"
-)
 
 // requiredProfile is the one profile name an imported credentials file
 // may carry.

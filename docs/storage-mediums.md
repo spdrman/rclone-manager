@@ -28,6 +28,7 @@ an archive class is not a place a tier can deliver to.
 | Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
 | A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
+| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `backup-manager medium list/show/import-credentials/add/edit/remove` |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
 One limit is worth knowing before you write a chain, and it is the manager
@@ -141,6 +142,29 @@ key**: writing `access_key_id:` or `secret_access_key:` in the config is an
 unknown field, and the config loader refuses the whole file before validation
 even runs. That refusal is deliberate and is not going to be softened.
 
+There is a fourth way to arrive at one of the three, for an operator who has
+just been handed an access key by their provider and has none of them yet
+(#594). It does not add a schema field and does not soften the refusal above:
+
+```
+backup-manager medium import-credentials --stdin
+```
+
+reads AWS shared-credentials text from standard input, writes it to a 0600 file
+in an `s3_credentials` directory beside `config.yaml`, and prints an opaque id.
+`medium add --credentials-id ID` then resolves that id, server-side, back to the
+file's path, and what lands in the configuration is an ordinary
+`credentials.file`. `POST /api/v1/storage-credentials` is the same door for the
+wizard.
+
+Two things about that command are deliberate and worth knowing. It takes the
+material on **stdin** and there is no `--access-key-id` or `--secret-access-key`
+flag anywhere on this surface, because a secret on a command line is in `ps`
+output for every user on the box and in shell history. And it prints the id and
+the fact that a file was written, and never the material: there is no read side
+for it at all, so the only way to get a stored credential back is to be root on
+the host, which is what the file's 0600 already assumes.
+
 Credential files belong under private state (`/var/lib/backup-manager`), never
 under the backup root. Nothing that leaves this process carries key material:
 not a log line at any level, not an error message, not an API response, not the
@@ -163,6 +187,41 @@ and the same check sits behind a button on the settings form, offered at the
 moment you point a tier at a medium and before the save that starts sending
 backups there. It exits non-zero when any check fails, so it composes into a
 deployment script.
+
+Since #594 the same eight checks also run against a destination that is **not
+declared yet**, which is what lets a destination be proved before it is written
+down rather than after:
+
+```
+backup-manager medium preflight --candidate offsite_s3 --bucket nas-backups \
+        --region us-east-1 --prefix monthly --credentials-id 9b41c7e2
+```
+
+It writes no configuration whatever the report says. `medium add` runs exactly
+this check before it writes and refuses to write when it fails, which is the
+non-interactive equivalent of the wizard's Save button staying disabled;
+`--no-verify` skips it and says in its own output that nothing was proven.
+
+### When a check fails on a medium your backups are already on
+
+A preflight that fails on a medium nothing references yet costs you the next
+move that would have used it, and nothing else. A preflight that fails on one
+your backups are already on is a different situation, and this product treats it
+as a REPORT and never as a state change (FR-30).
+
+Nothing is deleted and nothing is marked lost. The copies on that medium read as
+**unreachable**, which means this deployment currently has no way to ask about
+them, and is a different sentence from "the copy is gone". No prune runs against
+them, and no source copy anywhere is reclaimed on the strength of a placement
+that could not be confirmed. `backup-manager medium show <id>` lists what is
+there, per backup set, with a count of how many of those are the only confirmed
+copy of their backup anywhere.
+
+Editing the medium is allowed while it is failing, deliberately: a credential
+that expired is exactly the thing you need to be able to fix. Removing it is
+refused while any copy names it, and the refusal names the backup sets. Removing
+the declaration would not delete those copies; it would leave this deployment
+with no bucket, no endpoint and no credential to reach them with.
 
 It writes. That is the point, and it is worth knowing before you run it against
 production: a reachability ping is answered perfectly well by a wrong region, by
