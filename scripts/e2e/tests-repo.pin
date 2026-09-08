@@ -186,5 +186,27 @@
 # red over there until it moves to whatever commit this branch merges as.
 # That is the same manual half the paragraphs above keep flagging, and it
 # is not something a bump on this side can close.
+#
+# Moved to 82fee27, rclone-manager-tests#62, read off their merged main and not
+# off the branch, for the reason the paragraph about a794c38 above already
+# gives. This is the specs half of #622: seventeen Suite B cases and seventeen
+# Suite A ones covering the local hard drive entry, the default marker and the
+# three invariants around it, the destination picker under every retention tier
+# in both editors, and a local test connection that tells a missing path, a
+# permission problem and a full filesystem apart.
+#
+# It also retires a case that could not fail. `backups.spec.ts` asserted
+# `getByLabel("Storage medium for tier 1")` had `toHaveCount(0)`, and a
+# name-based locator asserted to be EMPTY cannot fail for the reason it claims:
+# "the control is absent" and "the control is present under another name" both
+# resolve to nothing. It survived a rename of the very control it was about,
+# and its own positive control named a different field nobody had renamed, so
+# that was blind too. The replacement reaches the picker by the visible label an
+# operator reads and by its accessible name, then asserts the two are the same
+# element, so a rename breaks one and a restructure breaks the other.
+#
+# The product half is in this same branch, because either one alone leaves a
+# gate red: theirs was red against the old pin until this line moved, and ours
+# was red the moment #622 put a picker on a form their spec said had none.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=44be7ee378b0844bf023fb9a709f671f3c578b41
+TESTS_REPO_SHA=82fee279feb55b670a026f96df1b17d0c33aa2e5
