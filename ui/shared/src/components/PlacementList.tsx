@@ -1,4 +1,5 @@
 import type { BackupPlacement, PlacementAccess } from "@shared/types/backup";
+import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import type { StorageSchema } from "@shared/api/contracts";
 import { StatusBadge, type StatusTone } from "@shared/components/StatusBadge";
 import { bytes, stamp } from "@shared/utilities/format";
@@ -146,7 +147,14 @@ export function PlacementList({
                   <tr key={p.medium + "|" + p.location}>
                     <td>
                       <div style={{ fontWeight: 500 }}>
-                        {p.medium === "local" ? "Local backup root" : p.medium}
+                        {/* One name for the drive on this machine, wherever
+                            it is shown (#622). It used to be "Local backup
+                            root" here and in the tier picker, and the picker
+                            now names the drive it writes to, so this row says
+                            the same words minus the path: a placement list has
+                            no path to show and two names for one destination is
+                            what that issue exists to remove. */}
+                        {p.medium === LOCAL_DESTINATION_ID ? "The hard drive on this machine" : p.medium}
                       </div>
                       <div className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                         {/* An empty mediumType is the honest answer for a medium the

@@ -294,7 +294,7 @@ export function S3DestinationWizard({
           busy={busy}
           onBack={() => setStep(1)}
           onNext={cannotVerify ? () => setStep(4) : toVerify}
-          nextLabel={cannotVerify ? "Next: save" : "Next: verify"}
+          nextLabel={cannotVerify ? "Next: save" : "Next: test connection"}
         />
       ) : null}
 
@@ -652,7 +652,8 @@ function VerifyPane({
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Not saved.</div>
           <p style={{ margin: 0, maxWidth: "74ch" }}>
             Steps after the failing one were never tried, so nothing below claims anything about
-            them. Fix the destination or the key policy and verify again. Save stays disabled.
+            them. Fix the destination or the key policy and test the connection again. Save stays
+            disabled.
           </p>
         </div>
       ) : null}
@@ -670,7 +671,7 @@ function VerifyPane({
           Back
         </button>
         <button className="btn" type="button" disabled={busy} onClick={onVerifyAgain}>
-          Verify again
+          Test connection again
         </button>
         <button
           className="btn btn--primary"

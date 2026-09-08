@@ -161,8 +161,8 @@ func TestMinioWizard_ProvesACandidateBeforeItIsDeclaredAndThenDeclaresIt(t *test
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	if len(settings.Mediums) != 0 {
-		t.Fatalf("a candidate preflight declared %+v", settings.Mediums)
+	if declared := declaredMediums(settings.Mediums); len(declared) != 0 {
+		t.Fatalf("a candidate preflight declared %+v", declared)
 	}
 
 	// The probe object is gone, asked of the endpoint rather than of the
@@ -294,9 +294,29 @@ func TestMinioWizard_AWrongSecretIsARefusalThatWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	if len(settings.Mediums) != 0 {
-		t.Fatalf("a failing candidate preflight declared %+v", settings.Mediums)
+	if declared := declaredMediums(settings.Mediums); len(declared) != 0 {
+		t.Fatalf("a failing candidate preflight declared %+v", declared)
 	}
+}
+
+// declaredMediums drops the local hard drive from a destinations list,
+// leaving what the operator actually declared in config.yaml.
+//
+// The list is total since H2.2 (#622): it carries the drive backups land
+// on as well as the buckets, and that entry is synthesised from the
+// configuration rather than declared in it. These cases are about a
+// candidate preflight writing NOTHING, so what they have to count is the
+// declarations, and a count over the whole list would go red for the
+// addition rather than for the behaviour it pins.
+func declaredMediums(mediums []service.StorageMediumSummary) []service.StorageMediumSummary {
+	out := make([]service.StorageMediumSummary, 0, len(mediums))
+	for _, m := range mediums {
+		if m.IsLocal {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // TestMinioWizard_ABucketThatIsNotThereNamesTheBucket is the other refusal

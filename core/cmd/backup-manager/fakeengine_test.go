@@ -521,6 +521,11 @@ func toContractSettings(s service.Settings) apicontract.SettingsResponse {
 		out.Mediums = append(out.Mediums, apicontract.StorageMediumSummary{
 			ID: m.ID, Type: m.Type, Bucket: m.Bucket, Region: m.Region,
 			StorageClass: m.StorageClass, ReadsRequireRestore: m.ReadsRequireRestore,
+			// H2.2's three (#622), carried across for this fake's whole
+			// reason for existing: it mirrors the real projection field
+			// for field, and a field it drops is a field every routed
+			// test here would go on passing without.
+			Path: m.Path, IsLocal: m.IsLocal, IsDefault: m.IsDefault,
 		})
 	}
 	return out
