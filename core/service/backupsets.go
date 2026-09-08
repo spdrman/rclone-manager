@@ -152,6 +152,26 @@ type BackupSet struct {
 	// something to pre-select a picklist with.
 	ValidatorID ValidatorID
 
+	// SSHKeyID is the key-store id this set's configured key file
+	// resolves to (#592), the same value ImportSSHKey returned, ListSSHKeys
+	// lists and UpdateBackupSetRequest.SSHKeyID takes. Never the path,
+	// for the reason ValidatorID above is not one either.
+	//
+	// EMPTY IS A REAL ANSWER and has to be rendered as one: it means this
+	// set uses a key this deployment does not manage, which is every set
+	// pointing at a mounted or hand-provisioned key.file and is a
+	// perfectly ordinary shape. A surface that showed a blank where an id
+	// goes would be saying "this set has no key" about a set that has
+	// one.
+	//
+	// It is here because it was the field that made the edit box
+	// unusable. UpdateBackupSetRequest has always been able to WRITE
+	// ssh_key_id and nothing could read it back, so the detail page could
+	// not name the key it was about to replace, and "replace the existing
+	// method" is meaningless when the thing being replaced is never
+	// shown.
+	SSHKeyID string
+
 	Disabled bool
 
 	// ReadOnly is the fully-resolved answer to issue #282's "may this
@@ -808,6 +828,7 @@ func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) Back
 		StableFor:          bs.Completion.StableFor.Duration(),
 		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
+		SSHKeyID:           sshKeyIDFor(configPath, bs.Remote),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
 		// resolved answer, the same discipline this field's own doc in
@@ -1077,6 +1098,26 @@ type ConnectionTestRequest struct {
 type ConnectionTestResult struct {
 	OK      bool
 	Message string
+
+	// Stages is the per-claim breakdown (#592, backupsetverify.go): what
+	// was reached, whether the host key matched, whether the account
+	// authenticated, and whether the folder listed, each with its own
+	// timing.
+	//
+	// OK and Message above are untouched by it and mean exactly what they
+	// meant before, because #211's callers read those two and nothing
+	// else. This is additive on purpose: a caller that has never heard of
+	// stages keeps getting the same answer to the same question, and a
+	// caller that has can tell "the key is not authorised" from "the
+	// account cannot read the folder", which is the whole reason the
+	// boolean was not enough.
+	//
+	// Always four entries, in order, including the ones that were never
+	// attempted. A stage after a failure carries ConnectionStageSkipped,
+	// which is a result rather than an absence: a client that could not
+	// tell "not attempted" from "failed" would render three reds for one
+	// problem.
+	Stages []ConnectionTestStage
 }
 
 // TestConnection performs a real, non-destructive reachability/auth
@@ -1161,18 +1202,46 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		Root:                 root,
 	}
 
-	if _, err := tr.List(testCtx, src); err != nil {
-		// Not %w-wrapped, and not returned as a Go error at all: a failed
-		// connection test is an expected, ordinary OUTCOME (a typo'd
-		// hostname, a not-yet-authorized key), not a service failure, so
-		// it is reported through ConnectionTestResult.OK/Message, exactly
-		// like every other "this is what an operator did wrong, not what
-		// broke" case in this package. err's own text may embed rclone
-		// internals (a dial error, an sftp protocol string), so it is
-		// deliberately not put in Message: TestConnection's caller (the
-		// HTTP layer) gets a generic, safe-to-render reason instead.
-		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
-	}
+	// The four claims, each reported on its own (#592). The listing is
+	// the last of them and is still this same tr.List over the same
+	// Source: a green verification has to be evidence about the call a
+	// real cycle's discovery step makes, not about a probe that resembles
+	// it.
+	stages := runVerification(testCtx, req.Host, req.Port, req.User, tmpPath, func(ctx context.Context) error {
+		_, err := tr.List(ctx, src)
+		return err
+	})
 
-	return ConnectionTestResult{OK: true}, nil
+	// Not %w-wrapped, and not returned as a Go error at all: a failed
+	// connection test is an expected, ordinary OUTCOME (a typo'd
+	// hostname, a not-yet-authorized key), not a service failure, so it
+	// is reported through ConnectionTestResult.OK/Message, exactly like
+	// every other "this is what an operator did wrong, not what broke"
+	// case in this package. A transport error's own text may embed rclone
+	// internals (a dial error, an sftp protocol string), so it is
+	// deliberately never put in Message or in a stage's Detail: both are
+	// built from this package's own sentences and the caller's own
+	// values.
+	return resultFromStages(stages), nil
+}
+
+// resultFromStages keeps OK and Message exactly as #211's callers have
+// always seen them while the stages carry the detail.
+//
+// Message is the failed stage's own sentence rather than the old generic
+// one, which is a strict improvement for every existing caller: it is
+// still one safe-to-render string, and it now says which of the four
+// things went wrong instead of naming all four at once.
+func resultFromStages(stages []ConnectionTestStage) ConnectionTestResult {
+	for _, stage := range stages {
+		if stage.Status != ConnectionStageFailed {
+			continue
+		}
+		message := stage.Detail
+		if message == "" {
+			message = "could not connect and list the remote path"
+		}
+		return ConnectionTestResult{OK: false, Message: message, Stages: stages}
+	}
+	return ConnectionTestResult{OK: true, Stages: stages}
 }
