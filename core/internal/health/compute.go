@@ -350,5 +350,11 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reins
 		// fourth injected display-only fact, and like the other three it
 		// is never handed to decideState above.
 		HaltReason: in.HaltReason,
+
+		// The fifth, and it reaches decideState no more than the other
+		// four do: see BackupSetHealth.RetentionHoldReason for why a set
+		// whose retention is held is not thereby a set whose backups are
+		// degraded.
+		RetentionHoldReason: in.RetentionHoldReason,
 	}
 }

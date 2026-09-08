@@ -76,6 +76,17 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  newest known-good backup: %s\n", ageOrNever(bs.NewestGoodBackupAge))
 		fmt.Printf("  stale threshold: %s\n", bs.StaleThreshold)
 		fmt.Printf("  current transfers: %d, pending deletes: %d, failures: %d\n", len(bs.CurrentTransfers), bs.PendingDeletes, bs.Failures)
+		// FR-30's hold (issue #602), printed only when there is one, for
+		// the same reason as the conditional lines below it. It comes
+		// third from the top all the same, because unlike those it is not
+		// a count to be aware of: retention for this set has stopped and
+		// will not start again until somebody acts, and nothing else on
+		// this screen would ever say so.
+		if bs.RetentionHoldReason != "" {
+			fmt.Printf("  retention held: %s\n", bs.RetentionHoldReason)
+			fmt.Printf("    nothing in this set is being deleted, and nothing will be until a reconciliation settles what it holds.\n")
+			fmt.Printf("    the backups themselves are fine; what is wrong is that this manager cannot confirm the newest one.\n")
+		}
 		fmt.Printf("  quarantined: %d (of which unrecoverable: %d)\n", bs.QuarantinedCount, bs.QuarantinedLostCount)
 		// Issue #227. Printed only when there are any, because for most
 		// deployments this is permanently zero and a line that always

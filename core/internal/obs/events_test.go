@@ -51,6 +51,7 @@ func TestEventNamesAreStable(t *testing.T) {
 		{"EventRemoteDelete", EventRemoteDelete, "remote_delete"},
 		{"EventReconciliation", EventReconciliation, "reconciliation"},
 		{"EventRetention", EventRetention, "retention"},
+		{"EventRetentionHold", EventRetentionHold, "retention_hold"},
 		{"EventRetry", EventRetry, "retry"},
 		{"EventStaleBackup", EventStaleBackup, "stale_backup"},
 		{"EventDiskPressure", EventDiskPressure, "disk_pressure"},

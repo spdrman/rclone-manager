@@ -200,8 +200,43 @@ func (s *Service) PruneApplySnapshot(ctx context.Context, set model.BackupSetID,
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune apply: %s: %w", set, err)
 	}
+	s.reportRetentionHold(ctx, set, verdicts)
 	s.recordRetentionRun(set)
 	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride(), Retention: bs.Retention, HomePlan: homePlan}, nil
+}
+
+// reportRetentionHold logs FR-30's hold once, at warn, when a pass this
+// package just applied refused every deletion in a backup set because the
+// restore point FR-19 protects has no confirmed readable copy (issue
+// #602).
+//
+// It is the one refusal internal/retention produces that means
+// "reconciliation is needed" rather than "retention decided not to delete
+// this", and until this existed it reached nothing at all: no log line, no
+// event, no alert, only a REFUSE inside a verdict list somebody had to ask
+// for. A backup set can sit in it indefinitely, with local copies
+// accumulating and every other reading looking normal, until FR-21's
+// capacity refusal starts refusing transfers for a reason that names
+// neither this set nor this cause.
+//
+// Once per pass, not once per verdict: the hold is a fact about the SET,
+// and every held verdict carries the identical sentence. A pass over a
+// thousand artifacts writing a thousand identical warnings is a pass
+// nobody reads.
+//
+// From the apply and never from the preview (PrunePreviewAt deliberately
+// does not call this), for the reason obs.Logger.RetentionHold's own doc
+// gives: the condition lasts until somebody fixes it, so a preview surface
+// that emitted it would write one per dashboard poll for as long as the
+// set stayed broken.
+func (s *Service) reportRetentionHold(ctx context.Context, set model.BackupSetID, verdicts []retention.PruneVerdict) {
+	for _, v := range verdicts {
+		if v.HoldReason == "" {
+			continue
+		}
+		s.logger().RetentionHold(ctx, set.String(), v.HoldReason)
+		return
+	}
 }
 
 // homePlanFor is FR-27's home-medium pass over one backup set, computed
