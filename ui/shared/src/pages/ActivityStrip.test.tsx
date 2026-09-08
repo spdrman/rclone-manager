@@ -336,6 +336,32 @@ describe("the tone a line takes", () => {
     ).toBe("warn");
   });
 
+  it("reads a bracketing line by its message rather than as a step with no name", () => {
+    // A connection test's start and its verdict are the same event name
+    // as its six steps and carry no step of their own, because they are
+    // about the whole test. A renderer that padded an absent step would
+    // draw "?            ?" for the two lines that say the test began
+    // and how it went.
+    const start = activityLine(event({ sequence: 1, event: "connection_test", message: "connection test starting", action: "connection_test", actionId: "ct-1" }));
+    expect(start.text).toBe("connection test starting");
+    expect(start.tone).toBe("info");
+
+    const done = activityLine(
+      event({
+        sequence: 2,
+        level: "warn",
+        event: "connection_test",
+        message: "connection test finished",
+        outcome: "error",
+        action: "connection_test",
+        actionId: "ct-1",
+        fields: { duration: "1.2s" }
+      })
+    );
+    expect(done.text).toBe("connection test finished");
+    expect(done.tone).toBe("error");
+  });
+
   it("still falls back to the level for a line that states no outcome", () => {
     expect(activityLine(event({ sequence: 1, level: "error", event: "a_name_this_build_does_not_know", message: "something broke" })).tone).toBe("error");
     expect(activityLine(event({ sequence: 2, level: "info", event: "a_name_this_build_does_not_know", message: "something happened" })).tone).toBe("info");

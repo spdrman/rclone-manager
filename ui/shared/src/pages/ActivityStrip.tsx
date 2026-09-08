@@ -89,15 +89,22 @@ const TERMINAL_FAILURES = new Set(["FAILED", "QUARANTINED", "QUARANTINED_LOST"])
  * remote next. It is left out here because it is the one state in the list
  * that is not a resting place. It is the inside of FR-15's delete window,
  * the moment before an irreversible act on somebody else's machine, and
- * the deed itself already gets its own uncoloured line further down
- * (remote_delete renders "remote source deleted" and takes its tone from
- * the event's level alone). Painting the intention green while the deed
- * stays grey would have this panel most enthusiastic about the step an
- * operator would most want to notice.
+ * the deed itself has a line of its own further down: remote_delete says
+ * "remote source deleted" and states its own success or failure since
+ * issue #625. So the deed is where the colour belongs, and colouring the
+ * INTENTION as well would put this panel's loudest good news on the step
+ * before the one an operator would most want to notice.
  *
  * Nothing here counts towards the progress bar. The numerator beside it is
  * activity.artifactsCompleted, which the engine counts over the rows a
  * pass is actually driving forward; this set only ever picks a colour.
+ *
+ * This is one of the two derivations left after #625 took the rest of
+ * them out, and it survived on the argument it was already making: the
+ * wire carries the state an artifact moved into, which is the fact, and
+ * WHICH resting states in the FR-10 machine deserve to read as good news
+ * is a decision about a screen. internal/obs declines to make it for the
+ * same reason, in the note above its event catalog.
  */
 const SETTLED_STATES = new Set(["VERIFIED", "COMMITTED", "COMPLETE", "REMOTE_RETAINED"]);
 
@@ -244,7 +251,18 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       // engine's own sentence, never a transport error's text, and it may
       // carry its own indented lines (the two fingerprints in a host key
       // mismatch), so it is joined below rather than flattened.
-      const step = (f.step ?? "?").padEnd(13);
+      // The two lines that BRACKET the test carry no step, because they
+      // are about the whole of it: the test starting, and the test
+      // finishing with a verdict (issue #625). They are the same event
+      // name on purpose, since a start and a completion are told apart
+      // by whether they state an outcome rather than by being spelled
+      // differently, so this reads the message rather than padding an
+      // absent step into a column of question marks.
+      if (!f.step) {
+        text = e.message || e.event;
+        break;
+      }
+      const step = f.step.padEnd(13);
       // The step's own finer word (passed, skipped, failed), which is
       // what an operator reads across the column. The COLOUR comes from
       // the line's stated outcome like every other line's does, and the
