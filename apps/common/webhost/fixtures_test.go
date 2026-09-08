@@ -863,6 +863,33 @@ func (f *syncFakeBackend) RemoveStorageMedium(_ context.Context, id string) erro
 	return fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
 }
 
+// SetDefaultStorageMedium moves the destination a newly created retention
+// tier starts on (#622), and marks exactly one entry.
+//
+// The exactly-one part is the fake's whole job here. The real service
+// derives IsDefault from one config key on every read, so it cannot get
+// two, and a fake that just set a flag without clearing the others would
+// let a handler test pass against a list no real deployment can produce.
+func (f *syncFakeBackend) SetDefaultStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	found := -1
+	for i := range f.mediums {
+		f.mediums[i].IsDefault = false
+		if f.mediums[i].ID == id {
+			found = i
+		}
+	}
+	if found < 0 {
+		return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+	}
+	f.mediums[found].IsDefault = true
+	return f.mediums[found], nil
+}
+
 // summaryOfSpec is the fake's own projection, and it deliberately drops
 // the credential exactly as the real one does: there is no field on
 // service.StorageMediumSummary a credential reference could land in, so a
@@ -1230,6 +1257,10 @@ func (f *asyncFakeBackend) UpdateStorageMedium(context.Context, service.StorageM
 }
 
 func (f *asyncFakeBackend) RemoveStorageMedium(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) SetDefaultStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{ID: id, IsDefault: true}, nil
+}
 
 func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
 	return service.ArtifactReinstatement{}, nil

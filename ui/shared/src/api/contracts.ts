@@ -667,15 +667,21 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
-  /** The storage medium this tier's backups live on, by id; undefined
-   *  means the local backup root, which is what every tier of every
-   *  configuration written before storage mediums existed means.
+  /** The storage destination this tier's backups live on, by id.
    *
    *  It is on the shape that is both READ and WRITTEN because a settings
    *  write replaces the whole chain: a field this UI could read but not
    *  send back is a field that editing one tier's keep would silently
    *  delete from another tier, moving somebody's backups back onto local
-   *  disk without saying so. */
+   *  disk without saying so.
+   *
+   *  Since #622 the backend always names one, LOCAL_DESTINATION_ID
+   *  included, so nothing on this side has to know that an absent value
+   *  used to mean the local backup root. It stays optional in the TYPE
+   *  because this is also the WRITE shape and an older caller that omits
+   *  it is still understood, and because the settings schema's default
+   *  chain is the same type; a reader should use the value it gets and
+   *  fall back to LOCAL_DESTINATION_ID rather than to "". */
   medium?: string;
 }
 
@@ -691,6 +697,11 @@ export interface RetentionTierSetting {
  */
 export interface StorageMedium {
   id: string;
+  /** What kind of place this is. `s3` is a bucket an operator declared;
+   *  `local` is the drive this deployment's backups land on. Branch on
+   *  `isLocal` rather than on this word: the set grows by architecture
+   *  decision, and a second local-ish backend added one day must not
+   *  silently make an entry undeletable. */
   type: string;
   bucket: string;
   region?: string;
@@ -710,7 +721,40 @@ export interface StorageMedium {
    *  Computed by the backend, so this UI holds no list of its own of which
    *  classes count as archive. */
   readsRequireRestore: boolean;
+
+  /** The drive the LOCAL destination writes to, resolved by the backend
+   *  exactly as the capacity section resolves its backup root, so one
+   *  deployment cannot show two mounts. Absent for a declared medium,
+   *  because a bucket has no path on the manager's host, and absent for a
+   *  local entry the configuration cannot place yet (no backup set, or
+   *  sets on different volumes), which reads as "not known yet" rather
+   *  than as a blank path. */
+  path?: string;
+
+  /** True for the one entry that is the drive this deployment's backups
+   *  land on (#622). It is not declared in the configuration, so it has
+   *  no Edit and no Remove, and a surface decides that from this rather
+   *  than by comparing an id against a reserved string of its own. */
+  isLocal: boolean;
+
+  /** True for the destination a NEWLY CREATED retention tier starts on.
+   *  Exactly one entry in a list carries it. It says nothing about where
+   *  anything currently is: moving it moves no backup and rewrites no
+   *  tier, which is why it needs no confirmation. */
+  isDefault: boolean;
 }
+
+/**
+ * The id of the drive this deployment's backups land on (#622).
+ *
+ * It is a constant rather than a literal at each call site because it is
+ * the one string in this product that has to mean the same thing in a
+ * placement record, in a retention tier, in an API response and in a
+ * picker. The backend reserves it: no declared destination may claim it,
+ * and a configuration file spells this destination by absence, which the
+ * server translates in one place so nothing here has to.
+ */
+export const LOCAL_DESTINATION_ID = "local";
 
 /**
  * Where one storage medium's credentials come from, in the four spellings
@@ -1626,6 +1670,14 @@ export interface BackupManagerApi {
   createStorageMedium(spec: StorageMediumSpec): Promise<StorageMedium>;
   updateStorageMedium(mediumId: string, spec: StorageMediumSpec): Promise<StorageMedium>;
   removeStorageMedium(mediumId: string): Promise<void>;
+
+  /** Make this the destination a NEWLY CREATED retention tier starts on
+   *  (#622). It moves that and nothing else: no existing tier is
+   *  rewritten and no backup is relocated, which is why it needs no
+   *  acknowledgment in front of it. It answers with the destination that
+   *  is now the default, so a caller re-renders from the answer rather
+   *  than from its own optimistic guess. */
+  setDefaultStorageMedium(mediumId: string): Promise<StorageMedium>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see

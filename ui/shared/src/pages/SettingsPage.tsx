@@ -46,6 +46,20 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   const version = useCausl(versionNode);
   const configured = useCausl(configuredNode);
 
+  // The two cards below read the same destinations twice, from two
+  // endpoints, into two independent fetches: the destinations card lists
+  // them, and the retention card needs them for its per-tier picker and
+  // for which one a NEW tier starts on. Neither can reload the other, so
+  // the page holds the one fact they have to agree about (#634).
+  //
+  // A revision rather than lifting the fetch itself, deliberately. The
+  // two reads answer different questions of different endpoints, and
+  // hoisting them into one would put a settings fetch in a page that has
+  // no other use for it and give the destinations card a shape nothing
+  // else on this page wants. What actually has to travel between them is
+  // one bit, "what you read is now out of date", and this is that bit.
+  const [destinationsRevision, setDestinationsRevision] = useState(0);
+
   return (
     <>
       <PageHeader
@@ -81,7 +95,7 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
               default, and the chain is not three fixed tiers). It is now
               the real thing, read from and written to the running
               config. */}
-          <RetentionPolicyCard readOnly={readOnly} />
+          <RetentionPolicyCard readOnly={readOnly} destinationsRevision={destinationsRevision} />
 
           {/* G2.2 (#594). Beside the retention plan deliberately: a
               retention tier's Medium field is a picker over exactly this
@@ -90,7 +104,10 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
               screen. Before this card there was no such place at all, and
               declaring a destination meant editing config.yaml by hand,
               which is the one thing EPIC G is about not having to do. */}
-          <StorageDestinationsCard readOnly={readOnly} />
+          <StorageDestinationsCard
+            readOnly={readOnly}
+            onChanged={() => setDestinationsRevision((n) => n + 1)}
+          />
 
           <section className="card">
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>

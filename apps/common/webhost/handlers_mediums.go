@@ -414,6 +414,36 @@ func (h *handlers) writeStorageMedium(w http.ResponseWriter, r *http.Request, up
 	writeJSON(w, status, toStorageMediumBody(medium))
 }
 
+// setDefaultStorageMedium is PUT
+// /api/v1/storage-mediums/{id}/default: make this the destination a
+// NEWLY CREATED retention tier starts on (H2.2, issue #622).
+//
+// CSRF, and deliberately not the destructive gate, and not the
+// storage-medium disclosure either. It moves no backup and rewrites no
+// tier: an existing tier goes on naming whatever it named, and the only
+// thing that changes is where the next tier somebody adds begins. The
+// disclosure stands in front of the settings save that actually sends a
+// tier's backups off this machine, and a second acknowledgment in front
+// of a write with no consequence would train an operator to click through
+// the one that matters. That is createStorageMedium's own argument, and
+// this write is even quieter than a create.
+//
+// The local hard drive is a legal target, named by its reserved id. It is
+// what a deployment that has never chosen anything already has, so
+// "put it back" has to be expressible or the first move to S3 would be
+// one-way.
+//
+// It is registered AFTER the static routes and under the "{id}" prefix,
+// so nothing here can read "preflight" as a medium id.
+func (h *handlers) setDefaultStorageMedium(w http.ResponseWriter, r *http.Request) {
+	medium, err := h.backend.SetDefaultStorageMedium(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeStorageMediumWriteError(w, r, err, "failed to set the default storage destination")
+		return
+	}
+	writeJSON(w, http.StatusOK, toStorageMediumBody(medium))
+}
+
 // removeStorageMedium is DELETE /api/v1/storage-mediums/{id}: FR-30's
 // refusal, at the surface that could otherwise break the invariant with
 // one click.
@@ -439,8 +469,21 @@ func (h *handlers) removeStorageMedium(w http.ResponseWriter, r *http.Request) {
 // was understood perfectly and is being declined on the state of the
 // deployment, which is what 409 means; a 400 would read as "you sent me
 // something malformed" and send an operator to check their JSON.
+//
+// ErrStorageMediumIsDefault (#622) is a 409 for the identical reason and
+// under a code of its own, because the two refusals call for opposite
+// next steps: MEDIUM_IN_USE means backups are there and the caller wants
+// the list of affected backup sets, and MEDIUM_IS_DEFAULT means nothing
+// is necessarily there and the caller wants to move one setting. A
+// surface that could not tell them apart would render an empty
+// "what is affected" list under a refusal that was never about that.
 func (h *handlers) writeStorageMediumWriteError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
 	switch {
+	case service.AsStorageMediumIsDefault(err):
+		// This package's own sentence plus an id. Nothing about a path, a
+		// credential or an endpoint can reach it: see core/service's
+		// storageMediumIsDefaultRefusal.
+		writeError(w, http.StatusConflict, "MEDIUM_IS_DEFAULT", err.Error())
 	case service.AsStorageMediumInUse(err):
 		// The message is this package's own sentence plus a count and a
 		// list of backup set ids. No path, no credential and no endpoint

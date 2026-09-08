@@ -7,8 +7,11 @@
  *   1. Endpoint and bucket, behind a provider preset that only fills the
  *      endpoint field in.
  *   2. Credentials, in the four spellings the backend accepts.
- *   3. Verify, which runs the engine's eight checks against the CANDIDATE
- *      and writes nothing whatever it answers.
+ *   3. Test connection, which runs the engine's eight checks against the
+ *      CANDIDATE and writes nothing whatever it answers. It is eight here
+ *      and not nine: this pane only ever checks a bucket, and the ninth
+ *      step #622 added belongs to the drive on this machine, which is not
+ *      something this wizard declares.
  *   4. Save, showing the YAML that is about to be written before it is
  *      written.
  *
@@ -67,7 +70,7 @@ import {
   addCommand,
   editCommand,
   importCredentialsCommand,
-  preflightCandidateCommand
+  testConnectionCandidateCommand
 } from "@shared/pages/storageDestinationCommands";
 
 /**
@@ -118,7 +121,17 @@ export function S3DestinationWizard({
 }: {
   editing?: StorageMedium;
   onClose(): void;
-  onSaved(): void;
+  /** Called once the destination is written, with the destination the
+   *  engine answered with.
+   *
+   *  It carries the saved medium since #622, because the wizard is now
+   *  opened from INSIDE a retention tier's picker as well as from the
+   *  settings list, and the tier has to be able to select what was just
+   *  created. Handing back the engine's own answer rather than the draft
+   *  is the point: an id the engine resolved differently, or a class it
+   *  defaulted, is what the tier should end up pointing at. Callers that
+   *  only reload a list ignore the argument. */
+  onSaved(saved?: StorageMedium): void;
 }) {
   const api = useApi();
   const fieldId = useId();
@@ -204,9 +217,10 @@ export function S3DestinationWizard({
     setBusy(true);
     setFailure(null);
     try {
-      if (editing) await api.updateStorageMedium(editing.id, spec);
-      else await api.createStorageMedium(spec);
-      onSaved();
+      const saved = editing
+        ? await api.updateStorageMedium(editing.id, spec)
+        : await api.createStorageMedium(spec);
+      onSaved(saved);
     } catch (e) {
       setFailure(apiErrorOf(e));
     } finally {
@@ -284,7 +298,7 @@ export function S3DestinationWizard({
           busy={busy}
           onBack={() => setStep(1)}
           onNext={cannotVerify ? () => setStep(4) : toVerify}
-          nextLabel={cannotVerify ? "Next: save" : "Next: verify"}
+          nextLabel={cannotVerify ? "Next: save" : "Next: test connection"}
         />
       ) : null}
 
@@ -648,7 +662,8 @@ function VerifyPane({
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Not saved.</div>
           <p style={{ margin: 0, maxWidth: "74ch" }}>
             Steps after the failing one were never tried, so nothing below claims anything about
-            them. Fix the destination or the key policy and verify again. Save stays disabled.
+            them. Fix the destination or the key policy and test the connection again. Save stays
+            disabled.
           </p>
         </Banner>
       ) : null}
@@ -659,14 +674,14 @@ function VerifyPane({
         <MediumPreflightChecks report={report} />
       ) : null}
 
-      <CommandEcho label="the same thing from a terminal" commands={[preflightCandidateCommand(spec)]} />
+      <CommandEcho label="the same thing from a terminal" commands={[testConnectionCandidateCommand(spec)]} />
 
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn" type="button" onClick={onBack}>
           Back
         </button>
         <button className="btn" type="button" disabled={busy} onClick={onVerifyAgain}>
-          Verify again
+          Test connection again
         </button>
         <button
           className="btn btn--primary"

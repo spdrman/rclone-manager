@@ -25,7 +25,7 @@ import type {
   UpdateSettingsRequest,
   ValidatorCatalogEntry
 } from "./contracts";
-import { BackupManagerError } from "./contracts";
+import { BackupManagerError, LOCAL_DESTINATION_ID } from "./contracts";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -1185,27 +1185,46 @@ function defaultSettings(): AppSettings {
     retention: {
       timezone: "Europe/Berlin",
       weekStartsOn: "monday",
+      // Every tier names a destination, the local hard drive included,
+      // which is what a real deployment answers since #622. A fixture
+      // that left the local tiers naming nothing would let a surface that
+      // still reads absence as local pass here and break against the
+      // server.
       tiers: [
-        { name: "daily", granularity: "day", keep: 7 },
-        { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+        { name: "daily", granularity: "day", keep: 7, medium: LOCAL_DESTINATION_ID },
+        { name: "weekly", granularity: "week", keep: 3, windowUnit: "month", medium: LOCAL_DESTINATION_ID },
         { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
       ],
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
-    // Two mediums, one of them an archive class, so the dev server shows
-    // both halves of the picker: a place that serves on demand and a place
-    // that cannot be read at all without a restore.
+    // The local hard drive leads, then two declared mediums, one of them
+    // an archive class, so the dev server shows all three halves of the
+    // picker: the drive backups already land on, a place that serves on
+    // demand, and a place that cannot be read at all without a restore.
+    //
+    // The local entry is here rather than synthesised by the mock's own
+    // list call, because it is part of the settings response on a real
+    // deployment: the retention form reads the destinations out of
+    // `mediums` and the destinations card reads them out of
+    // listStorageMediums, and a fixture that only fed one of the two
+    // would let one surface go green while the other has no local entry
+    // at all.
     mediums: [
+      {
+        id: LOCAL_DESTINATION_ID, type: "local", bucket: "", path: "/data/backups",
+        storageClass: "", uploadVerification: "readback",
+        readsRequireRestore: false, isLocal: true, isDefault: true
+      },
       {
         id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
         prefix: "monthly", storageClass: "STANDARD_IA", uploadVerification: "readback",
-        readsRequireRestore: false
+        readsRequireRestore: false, isLocal: false, isDefault: false
       },
       {
         id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
         prefix: "annual", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback",
-        readsRequireRestore: true
+        readsRequireRestore: true, isLocal: false, isDefault: false
       }
     ],
     schema: {
@@ -1375,8 +1394,19 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // of the product rather than of a configuration, and a deployment with
     // one local copy per backup still has copies whose class means
     // something.
-    settings.mediums = [];
-    settings.retention.tiers = settings.retention.tiers.map((t) => ({ ...t, medium: undefined }));
+    // The drive backups land on STAYS, and that is what a medium-free
+    // deployment actually looks like since #622: the local entry is
+    // synthesised from the configuration rather than declared in it, so a
+    // file that never mentioned storage_mediums still has one
+    // destination and every tier still names it. What this scenario is
+    // about is a deployment that declared nothing, and a fixture with an
+    // empty list would now be modelling an engine older than this page
+    // rather than a configuration.
+    settings.mediums = settings.mediums.filter((m) => m.isLocal);
+    settings.retention.tiers = settings.retention.tiers.map((t) => ({
+      ...t,
+      medium: LOCAL_DESTINATION_ID
+    }));
   }
   // Every backup keeps exactly one local copy under that scenario: the
   // shape migration 0007's backfill leaves every pre-EPIC-E deployment in.
@@ -1981,7 +2011,13 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             region: spec.region,
             storageClass: spec.storageClass ?? "STANDARD",
             uploadVerification: spec.uploadVerification ?? "readback",
-            readsRequireRestore: archive
+            readsRequireRestore: archive,
+            // A candidate is by definition not declared, so it is neither
+            // the local hard drive nor the default. This report is about
+            // whether the place works, and nothing here would read either
+            // field.
+            isLocal: false,
+            isDefault: false
           },
           archive
         ),
@@ -2026,8 +2062,47 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             "confirmed copy of their artifact anywhere",
           correlationId: "cid_mockmedium409inuse"
         }));
+      if (settings.mediums[at].isLocal)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IS_DEFAULT",
+          message:
+            "service: storage medium is this deployment's default destination: local is the drive this deployment's " +
+            "backups land on. It is not declared in the configuration and cannot be un-declared",
+          correlationId: "cid_mockmedium409local"
+        }));
+      if (settings.mediums[at].isDefault)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IS_DEFAULT",
+          message:
+            "service: storage medium is this deployment's default destination: " + mediumId +
+            " is the destination a newly created retention tier starts on, so this deployment would have no default " +
+            "if it went away. Nothing is necessarily stored on it. Make another destination the default first, then " +
+            "remove this one",
+          correlationId: "cid_mockmedium409default"
+        }));
       settings.mediums.splice(at, 1);
+      // #622's third invariant: a removal that leaves exactly one
+      // destination leaves that one as the default. Here it is
+      // belt-and-braces, since the two refusals above already make it
+      // unreachable, and it is written anyway so this fixture cannot
+      // produce a list with no default in it.
+      if (settings.mediums.length === 1) settings.mediums[0].isDefault = true;
       return delay(undefined, 300);
+    },
+
+    // Moving the destination a NEWLY CREATED retention tier starts on.
+    // Exactly one entry carries the mark, which is the invariant a
+    // surface renders, so the fixture clears the others rather than only
+    // setting one: a list with two defaults is a list no deployment can
+    // be in and would let a broken renderer pass.
+    setDefaultStorageMedium: (mediumId) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      settings.mediums.forEach((m) => {
+        m.isDefault = false;
+      });
+      settings.mediums[at].isDefault = true;
+      return delay(structuredClone(settings.mediums[at]), 300);
     },
 
     scanCatalog: () =>
@@ -2110,7 +2185,14 @@ function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
     prefix: spec.prefix,
     storageClass,
     uploadVerification: spec.uploadVerification ?? "readback",
-    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE"
+    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE",
+    // A destination declared through this fixture is never local and is
+    // never the default. Declaring one moves nothing and starts nothing:
+    // the default moves only through setDefaultStorageMedium, which is a
+    // separate act, and a create that quietly took it would be the one
+    // behaviour #622 says a create must not have.
+    isLocal: false,
+    isDefault: false
   };
 }
 

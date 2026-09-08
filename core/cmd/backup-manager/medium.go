@@ -68,7 +68,28 @@ var mediumVerbs = map[string]mediumVerb{
 	"add":                {operand: "<medium-id>", run: mediumAdd},
 	"edit":               {operand: "<medium-id>", run: mediumEdit},
 	"remove":             {operand: "<medium-id>", run: mediumRemove},
-	"preflight":          {operand: "<medium-id>", run: mediumPreflightVerb},
+	// `test-connection` and `preflight` are ONE check under two names
+	// (H2.2, issue #622), and the two entries are the whole of how that
+	// is kept true: they name the same function, so there is no second
+	// implementation to drift.
+	//
+	// The same idea used to be called three things. "Verify" on the
+	// destinations card, `preflight` here, and "Test connection" on the
+	// source side of this very product, which is one operator learning
+	// three words for one button. `test-connection` is the name that
+	// wins, because it is the one already in use for the other half of
+	// the same question and the one an operator would guess.
+	//
+	// `preflight` stays, forever, and not as a deprecation. It is in
+	// shell scripts and deployment steps that were written against it,
+	// its removal would buy nobody anything, and the usage block lists
+	// both so somebody reading the only reference the binary gives them
+	// finds whichever they came looking for. What CHANGED is which name
+	// the product says first: the button, the echoed command line and
+	// this table's own preferred entry all say test-connection now.
+	"test-connection": {operand: "<medium-id>", run: mediumPreflightVerb},
+	"preflight":       {operand: "<medium-id>", run: mediumPreflightVerb},
+	"default":         {operand: "<medium-id>", run: mediumDefault},
 }
 
 // mediumVerbNames is every verb `medium` dispatches, sorted, so a refusal
@@ -377,8 +398,13 @@ func mediumList(ctx context.Context, cfgPath, _ string, f mediumFlags) int {
 			return printMediumJSON(mediums)
 		}
 		if len(mediums) == 0 {
-			fmt.Println("this deployment declares no storage destinations")
-			return 0
+			// Unreachable since #622 made the local hard drive part of
+			// every list, and kept as a hole rather than deleted: a build
+			// that reached it has broken the "there is never zero
+			// destinations" invariant, and an empty list printed as
+			// nothing at all would be that break arriving silently.
+			fmt.Println("this deployment lists no storage destinations at all, which should be impossible: the drive backups land on is always one of them")
+			return 1
 		}
 		for _, m := range mediums {
 			printMedium(m)
@@ -653,10 +679,60 @@ func mediumPreflightVerb(ctx context.Context, cfgPath, id string, f mediumFlags)
 	return mediumPreflight(ctx, svc, id)
 }
 
+// mediumDefault is `medium default <medium-id>`: move the destination a
+// NEWLY CREATED retention tier starts on (H2.2, issue #622).
+//
+// It is EPIC G's parity rule applied to the one control #622 adds to the
+// settings page that is not a picker. The web UI's "Make default" button
+// echoes this exact line, so an operator who moved a default by clicking
+// has, by the end, read the command that moves it on the next fifty
+// hosts.
+//
+// It moves nothing else, and the output says so out loud. An operator
+// reading "the default is now offsite_s3" beside a settings page could
+// reasonably fear their backups just started moving, and the sentence
+// that costs one line here is the one that stops somebody reaching for a
+// rollback.
+//
+// It goes through openConfigWriteRoute like every other write in this
+// command, for #538's reason: a configuration change left in the file
+// beside a running engine is a change that process would never read.
+func mediumDefault(ctx context.Context, cfgPath, id string, _ mediumFlags) int {
+	return withMediumRoute(ctx, cfgPath, func(route configWriteRoute) int {
+		medium, err := route.SetDefaultStorageMedium(ctx, id)
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Printf("%s is now this deployment's default storage destination\n", medium.ID)
+		fmt.Println("  a retention tier created from here on starts on it")
+		fmt.Println("  nothing moved: every tier that already names a destination goes on naming it, and no backup was relocated")
+		printMedium(medium)
+		return 0
+	})
+}
+
 // printMedium renders one destination, and carries no credential of any
 // kind, because service.StorageMediumSummary has no field one could be in.
+//
+// The local hard drive is rendered differently, and it has to be: it has
+// no bucket, no region, no endpoint and no storage class, so the S3 shape
+// printed against it would be six empty labels. What it does have is the
+// drive it writes to, which is the fact #622 says the list has to carry.
 func printMedium(m service.StorageMediumSummary) {
 	fmt.Printf("%s\n", m.ID)
+	if m.IsDefault {
+		fmt.Println("  default: a retention tier created from here on starts on this destination")
+	}
+	if m.IsLocal {
+		fmt.Println("  type: local (this deployment's own hard drive, which every retention tier that names no destination means)")
+		if m.Path != "" {
+			fmt.Printf("  path: %s\n", m.Path)
+		} else {
+			fmt.Println("  path: not known yet: this configuration has no backup set to derive one from, or its sets are on different volumes")
+		}
+		fmt.Println("  not declared: it is not a storage_mediums entry, so it cannot be edited or removed")
+		return
+	}
 	fmt.Printf("  type: %s\n", m.Type)
 	fmt.Printf("  bucket: %s\n", m.Bucket)
 	if m.Prefix != "" {
@@ -699,10 +775,16 @@ func printMediumUsage(u service.StorageMediumUsage) {
 // printMediumReport renders one preflight, every step in the engine's own
 // order, skipped ones included.
 //
-// Never a single OK or FAILED. A surface that collapsed eight steps into
+// Never a single OK or FAILED. A surface that collapsed the steps into
 // one verdict would throw away the whole diagnosis, and a skipped write
 // rendered as anything but "this was never tried" tells an operator their
 // bucket is writable on the strength of a credential nobody obtained.
+//
+// It counts nothing and enumerates nothing: it walks whatever the report
+// carries, in the engine's own order. That is what lets it render the
+// drive on this machine as well as a bucket (#622), whose report has a
+// `space` step a bucket has no answer for, without a second renderer for
+// somebody to teach a different word to.
 func printMediumReport(report service.MediumPreflight) {
 	fmt.Printf("storage medium %s: %s\n", report.Medium, verdictWord(report.OK))
 	for _, c := range report.Checks {
@@ -725,7 +807,19 @@ func printMediumJSON(v any) int {
 // everything from the opened service onward, once cmdMedium has decided
 // which verb it is.
 func mediumPreflight(ctx context.Context, svc *app.Service, id string) int {
-	report, err := svc.PreflightMedium(ctx, id)
+	// The local hard drive answers this too (H2.2, #622). It is dispatched
+	// on the id here rather than inside app.PreflightMedium because the
+	// two checks share nothing below this line: there is no declared
+	// medium behind the local id, no MediumStore that could reach it, and
+	// the resolver refuses it in so many words. What they share is the
+	// report, which is everything this function does with the answer.
+	//
+	// Without this arm, `medium test-connection local` refused with "this
+	// configuration does not declare that storage medium", which is both
+	// true and useless: local is never declared, and the destination an
+	// operator just picked in a tier would be the one destination they
+	// could not check.
+	report, err := preflightAnyDestination(ctx, svc, id)
 	if err != nil {
 		return fail(err)
 	}
@@ -741,6 +835,19 @@ func mediumPreflight(ctx context.Context, svc *app.Service, id string) int {
 		return 1
 	}
 	return 0
+}
+
+// preflightAnyDestination runs the right check for the destination id it
+// is given: the local hard drive's, or a declared storage medium's.
+//
+// One function so the verb above has one answer to render. Both produce a
+// mediumcheck.Report, which is the whole reason the local check was
+// written into that package rather than beside a surface.
+func preflightAnyDestination(ctx context.Context, svc *app.Service, id string) (mediumcheck.Report, error) {
+	if id == service.StorageMediumLocalID {
+		return svc.PreflightLocalMedium(ctx)
+	}
+	return svc.PreflightMedium(ctx, id)
 }
 
 // verdictWord renders the whole report's answer as something an operator

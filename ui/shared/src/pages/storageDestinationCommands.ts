@@ -47,6 +47,7 @@
  * one function decides what the equivalent command IS, so the terminal and
  * the on-screen copy cannot come to name two different commands.
  */
+import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import type { StorageMediumSpec } from "@shared/api/contracts";
 
 /** The one command that ever handles material, and it reads it on stdin.
@@ -58,12 +59,19 @@ export function importCredentialsCommand(): string {
   return "backup-manager medium import-credentials --stdin";
 }
 
-/** `medium preflight --candidate`: the wizard's step 3, proving a
+/** `medium test-connection --candidate`: the wizard's step 3, proving a
  *  destination that has not been saved. It writes nothing whatever the
  *  report says, which is why it is safe to offer as a copy-pasteable line
- *  beside a form the operator has not submitted. */
-export function preflightCandidateCommand(spec: StorageMediumSpec): string {
-  return ["backup-manager medium preflight --candidate", spec.id, ...specFlags(spec)].join(" ");
+ *  beside a form the operator has not submitted.
+ *
+ *  The verb changed name in #622 and the check did not: `preflight` is
+ *  the same entry in the same dispatch table and still runs, kept as an
+ *  alias so anything scripted against it goes on working. What these
+ *  lines print is the name the buttons above them now carry, because a
+ *  command printed under a button that says something else teaches the
+ *  wrong word. */
+export function testConnectionCandidateCommand(spec: StorageMediumSpec): string {
+  return ["backup-manager medium test-connection --candidate", spec.id, ...specFlags(spec)].join(" ");
 }
 
 /** `medium add`: the wizard's step 4. It takes the same flags the
@@ -80,9 +88,43 @@ export function editCommand(spec: StorageMediumSpec): string {
   return ["backup-manager medium edit", spec.id, ...specFlags(spec)].join(" ");
 }
 
-/** `medium preflight <id>`: the Verify button on the destinations list. */
-export function preflightCommand(id: string): string {
-  return `backup-manager medium preflight ${id}`;
+/** `medium test-connection <id>`: the Test connection button, on the
+ *  destinations list and under a retention tier's picker.
+ *
+ *  It takes the local hard drive's id like any other, which is the point
+ *  of #622's local entry: the destination an operator is most likely to
+ *  be on is the one that used to have nothing to check. */
+export function testConnectionCommand(id: string): string {
+  return `backup-manager medium test-connection ${id}`;
+}
+
+/** `medium default <id>`: the Make default button.
+ *
+ *  Printed for the destination being MOVED TO, never for the one that is
+ *  already the default, because a command that would change nothing is a
+ *  command an operator learns nothing from. */
+export function setDefaultCommand(id: string): string {
+  return `backup-manager medium default ${id}`;
+}
+
+/** `settings patch --tier-medium NAME=MEDIUM_ID`: the picker under a
+ *  retention tier.
+ *
+ *  One tier per line, because that is what the picker changes and what
+ *  the flag takes. The acknowledgment is appended when the destination is
+ *  not the local hard drive, which is the same condition the server puts
+ *  the FR-27 disclosure behind: a tier moving somewhere other than local
+ *  for the first time is refused without it, and a line an operator
+ *  pastes has to be the line that works.
+ *
+ *  It is a whole-chain write on the wire (RetentionUpdate.Tiers replaces
+ *  the chain), and this flag is the CLI's own way of spelling "change one
+ *  tier and leave the rest", so the command and the click produce the
+ *  same request rather than merely the same outcome. */
+export function tierMediumCommand(tier: string, mediumId: string): string {
+  const parts = ["backup-manager settings patch --tier-medium", `${tier}=${mediumId}`];
+  if (mediumId !== LOCAL_DESTINATION_ID) parts.push("--acknowledge-medium-disclosure");
+  return parts.join(" ");
 }
 
 /** `medium remove <id>`: the Remove button, including when it is refused.

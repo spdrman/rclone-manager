@@ -186,6 +186,21 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"PUT /api/v1/storage-mediums/{id}":       true,
 	"DELETE /api/v1/storage-mediums/{id}":    true,
 
+	// H2.2 (issue #622): moving the destination a NEWLY CREATED retention
+	// tier starts on. It is the quietest write on this list and is
+	// exempt for a reason narrower than any of the five above.
+	//
+	// It changes one configuration key and nothing else. Every tier that
+	// already names a destination goes on naming it, no journal row
+	// moves, and no object is written, read or deleted anywhere: what
+	// changes is where the NEXT tier somebody adds begins. The gate
+	// stands in front of operations that can destroy backup data, and
+	// this one cannot reach a backup at all, not even to move it. The
+	// write that CAN send a tier's backups off local disk is PATCH
+	// /settings, which is on this list too and whose own dangerous case
+	// is settled by the FR-27 disclosure rather than by the gate.
+	"PUT /api/v1/storage-mediums/{id}/default": true,
+
 	// Issue #140 (B3.7): editing server-side configuration is §50's
 	// "state-changing but non-destructive" bucket, alongside "create/edit
 	// backup set" — nothing reachable from this route touches, moves or

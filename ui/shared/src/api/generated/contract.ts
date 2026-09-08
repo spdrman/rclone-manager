@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "9774ee54281bac0f91bf9b9b4cdc1dbf2f9477f9afb3942f99ac8782779cb50e";
+export const CONTRACT_SHA256 = "04ed9f8c3312872ee2accb9189e0a7443ea97b5bd934877703fe955657e1b515";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -57,6 +57,7 @@ export const WIRE_ERROR_CODES = [
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
   "MEDIUM_IN_USE",
+  "MEDIUM_IS_DEFAULT",
   "MEDIUM_EXISTS",
   "STORAGE_CREDENTIAL_NOT_FOUND",
   "SSH_KEY_CANDIDATE_NOT_FOUND",
@@ -130,6 +131,7 @@ export const API_ERROR_CODES = [
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
   "MEDIUM_IN_USE",
+  "MEDIUM_IS_DEFAULT",
   "MEDIUM_EXISTS",
   "STORAGE_CREDENTIAL_NOT_FOUND",
   "SSH_KEY_CANDIDATE_NOT_FOUND",
@@ -143,7 +145,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED", "BACKUP_SET_CONNECTION_NOT_PROVEN", "MEDIUM_IS_DEFAULT"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -1078,7 +1080,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["MEDIUM_NOT_FOUND"],
-      409: ["MEDIUM_IN_USE"],
+      409: ["MEDIUM_IN_USE", "MEDIUM_IS_DEFAULT"],
       500: ["INTERNAL"],
     }
   },
@@ -1117,6 +1119,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["MEDIUM_NOT_FOUND", "STORAGE_CREDENTIAL_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "setDefaultStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}/default",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
       500: ["INTERNAL"],
     }
   },
@@ -1943,7 +1965,7 @@ export interface WireMediumPreflightCheck {
   category?: string;
   detail: string;
   outcome: "passed" | "failed" | "skipped";
-  step: "credentials" | "reach" | "deliverable" | "write" | "read_back" | "storage_class" | "verification" | "delete";
+  step: "credentials" | "reach" | "deliverable" | "space" | "write" | "read_back" | "storage_class" | "verification" | "delete";
 }
 
 /** The result of proving one storage medium works. The preflight
@@ -2358,11 +2380,14 @@ export interface WireStorageMediumSummary {
   bucket: string;
   endpoint?: string;
   id: string;
+  is_default: boolean;
+  is_local: boolean;
+  path?: string;
   prefix?: string;
   reads_require_restore: boolean;
   region?: string;
   storage_class: string;
-  type: "s3";
+  type: "s3" | "local";
   upload_verification: "readback" | "attested";
 }
 

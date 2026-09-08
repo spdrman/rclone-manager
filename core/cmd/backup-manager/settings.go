@@ -110,6 +110,15 @@ func cmdSettings(args []string) int {
 	safetyMarginBytes := fs.Int64("safety-margin-bytes", 0, "patch only; ignored otherwise: capacity.safety_margin_bytes")
 	policyFile := fs.String("policy-file", "",
 		`patch only; ignored otherwise: replace the deployment's whole retention chain from a file holding the CONTENTS of a config.yaml "retention:" block (the key itself omitted); "-" reads standard input`)
+	tierMediums := &retentionTierMediumFlag{}
+	fs.Var(tierMediums, "tier-medium",
+		"patch only; ignored otherwise: point one retention tier at a storage destination, written NAME=MEDIUM_ID (H2.2, #622). "+
+			"Repeatable, at most once per tier, and refused when the deployment's chain has no tier of that name. It changes that "+
+			"one tier's destination and leaves the rest of the chain exactly as it is, which is what the picker under a tier in the "+
+			"web UI does and the command that panel echoes. MEDIUM_ID is a declared storage_mediums id, or `local` for the drive "+
+			"this deployment's backups already land on, which is how a tier is moved back. Sending a tier somewhere other than "+
+			"local for the first time needs --acknowledge-medium-disclosure; without it the write is refused and the refusal is the "+
+			"disclosure. It cannot be combined with --policy-file, which carries the whole chain")
 	acknowledge := fs.Bool("acknowledge-medium-disclosure", false,
 		"patch only; ignored otherwise: acknowledge the storage-medium disclosure, which a chain needs the first time it sends one of its tiers to a non-local medium; without it that write is refused, and the refusal is the disclosure")
 
@@ -169,7 +178,7 @@ func cmdSettings(args []string) int {
 		// accepting it silently would teach an operator the flag did
 		// something.
 		if *acknowledge && len(named) == 0 {
-			return usageError("settings patch: --acknowledge-medium-disclosure acknowledges a retention policy write, and this command line writes no policy; pass it alongside --policy-file")
+			return usageError("settings patch: --acknowledge-medium-disclosure acknowledges a retention policy write, and this command line writes no policy; pass it alongside --policy-file or --tier-medium")
 		}
 	}
 
@@ -236,6 +245,46 @@ func cmdSettings(args []string) int {
 	if chain != nil {
 		req.Retention = chain
 	}
+	if len(tierMediums.pairs) > 0 {
+		// Built AFTER the route is open, unlike --policy-file above,
+		// because it is not a file: this reads the chain currently in
+		// force through the same door the write goes through, so what is
+		// edited is the chain the deployment is actually deciding with
+		// rather than whatever this host's config.yaml happens to say.
+		// Beside a serving engine those two can differ, and a patch built
+		// from the wrong one would send the engine a chain it never had.
+		chain, code := chainWithTierMediums(ctx, route, tierMediums.pairs)
+		if code != exitOK {
+			return code
+		}
+		// Only the TIERS are taken, and that distinction is the whole of
+		// this block rather than a detail of it.
+		//
+		// --tier-medium has to replace the chain, because
+		// RetentionUpdate.Tiers replaces the operator's whole chain by
+		// design and there is no shape on this boundary for "change one
+		// tier". It must not replace the rest of the section, and it did:
+		// buildSettingsPatch puts the timezone, the week start and
+		// protect_last_known_good on the same RetentionUpdate, and
+		// assigning a fresh one over it threw all three away and still
+		// exited 0. `settings patch --protect-last-known-good=false
+		// --tier-medium daily=offsite_s3` moved the tier, dropped the
+		// protection change and reported success.
+		//
+		// protect_last_known_good is why this is worth spelling out. It
+		// is what stops a retention pass deleting the newest backup this
+		// deployment has actually verified, so silently not applying it
+		// is a wrong write on the axis FR-30 exists for, and the exit
+		// code said it worked. The two genuinely compose, so they are
+		// merged rather than made mutually exclusive: an operator
+		// changing a calendar and a destination in one command is asking
+		// for one thing, not two conflicting things.
+		if req.Retention == nil {
+			req.Retention = chain
+		} else {
+			req.Retention.Tiers = chain.Tiers
+		}
+	}
 	req.AcknowledgeMediumDisclosure = *acknowledge
 	settings, err := route.UpdateSettings(ctx, req)
 	if err != nil {
@@ -245,6 +294,67 @@ func cmdSettings(args []string) int {
 	return 0
 }
 
+// chainWithTierMediums reads the retention chain currently in force and
+// returns it with the named tiers pointed at the named destinations
+// (H2.2, issue #622).
+//
+// # Why the whole chain
+//
+// UpdateSettingsRequest has no "change one tier's medium" shape and is
+// not getting one. RetentionUpdate.Tiers REPLACES the chain, deliberately
+// (a tier's fields are not independent, and a partial chain has no honest
+// meaning), so the only way to change one tier's destination is to send
+// the whole chain back with that one field different. That is exactly
+// what the picker in the web UI does, which is the point: this command
+// and that panel produce the same request, so the line echoed under the
+// picker is the line that reproduces the click.
+//
+// # Why it is refused rather than silently adding a tier
+//
+// A name the chain does not carry is a typo, and creating a tier from it
+// would be creating a retention rule nobody wrote, deciding what to keep
+// and for how long from a flag that says neither. The refusal lists the
+// tiers there are, because the operator's next question is always which
+// ones.
+//
+// An exit code rather than an error, like readDeploymentChain beside it:
+// a mistyped tier name is a usage problem this package owns and prints
+// itself, not a service refusal for fail() to render.
+func chainWithTierMediums(ctx context.Context, route settingsRoute, pairs []tierMediumOverride) (*service.RetentionUpdate, int) {
+	current, err := route.Settings(ctx)
+	if err != nil {
+		return nil, fail(err)
+	}
+	chain := append([]service.RetentionTier(nil), current.Retention.Tiers...)
+	names := make([]string, 0, len(chain))
+	for _, t := range chain {
+		names = append(names, t.Name)
+	}
+
+	for _, pair := range pairs {
+		at := -1
+		for i := range chain {
+			if chain[i].Name == pair.tier {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			return nil, usageError(
+				"settings patch: --tier-medium names tier %q and this deployment's retention chain has no such tier; it has %s. "+
+					"Nothing was written: a tier is created by writing the whole chain with --policy-file, because a tier needs a granularity and a keep and this flag carries neither",
+				pair.tier, strings.Join(names, ", "))
+		}
+		// The id goes in as the operator typed it, `local` included.
+		// core/service is where that becomes the absence a configuration
+		// file spells local with, and where a destination nothing
+		// declares is refused; a second opinion here would be a second
+		// rule free to disagree with the first.
+		chain[at].Medium = pair.medium
+	}
+	return &service.RetentionUpdate{Tiers: chain}, exitOK
+}
+
 // settingsPatchFlagNames lists every flag cmdSettings declares that is
 // meaningful only under the "patch" operand -- shared between
 // visitedSettingsPatchFlags (which refuses them when "patch" is absent)
@@ -252,6 +362,7 @@ func cmdSettings(args []string) int {
 // two lists cannot drift apart on which flags are patch-only.
 var settingsPatchFlagNames = []string{
 	"timezone", "week-starts-on", "protect-last-known-good", "policy-file",
+	"tier-medium",
 	"acknowledge-medium-disclosure",
 	"cap-bytes", "warning-free-bytes", "critical-free-bytes", "safety-margin-bytes",
 }
@@ -266,6 +377,12 @@ var settingsPatchFlagNames = []string{
 // counting it would make it acknowledge itself.
 var settingsRetentionSectionFlagNames = []string{
 	"policy-file", "timezone", "week-starts-on", "protect-last-known-good",
+	// --tier-medium writes the retention section too (#622), so it is
+	// subject to the same two refusals: --policy-file carries the whole
+	// chain and cannot be combined with it, and
+	// --acknowledge-medium-disclosure acknowledges a policy write and is
+	// refused on a command line that makes none.
+	"tier-medium",
 }
 
 // visitedRetentionSectionFlags returns the retention-section flags
@@ -433,11 +550,22 @@ func printSettings(s service.Settings) {
 		}
 		// Where this tier's copies go, so an operator can read the
 		// destination without opening YAML (#595). Appended only when the
-		// tier names one, which is printBackupSetRetention's own rule for
-		// the identical field and is what keeps a medium-free deployment
-		// printing exactly the line it printed before this existed: every
-		// case in core/tests/compat is one.
-		if t.Medium != "" {
+		// tier is NOT on the local hard drive, which is
+		// printBackupSetRetention's own rule for the identical field and
+		// is what keeps a medium-free deployment printing exactly the
+		// line it printed before this existed: every case in
+		// core/tests/compat is one.
+		//
+		// The rule used to be spelled "when the tier names a medium at
+		// all", and it is the same rule: #622 made every tier name a
+		// destination on this boundary, the local hard drive included, so
+		// the condition now names the id it used to express as absence.
+		// That is a RENDERING decision (a destination column is worth a
+		// reader's attention when it is not the one every deployment
+		// already has) and not a second answer to where the tier points;
+		// see core/service/storagedestinations.go, which is where that
+		// question is settled once.
+		if t.Medium != "" && t.Medium != service.StorageMediumLocalID {
 			fmt.Printf(" medium=%s", t.Medium)
 		}
 		fmt.Println()

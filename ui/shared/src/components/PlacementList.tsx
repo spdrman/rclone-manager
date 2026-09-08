@@ -1,4 +1,5 @@
 import type { BackupPlacement, PlacementAccess } from "@shared/types/backup";
+import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import type { StorageSchema } from "@shared/api/contracts";
 import { StatusBadge, type StatusTone } from "@shared/components/StatusBadge";
 import { Icon } from "@shared/design-system/icons";
@@ -151,7 +152,20 @@ export function PlacementList({
                   <tr key={p.medium + "|" + p.location}>
                     <td>
                       <div style={{ fontWeight: 500 }}>
-                        {p.medium === "local" ? "Local backup root" : p.medium}
+                        {/* "Local backup root" here, and "The hard drive on
+                            this machine" in the tier picker, which is one
+                            name too many and is a hold rather than an
+                            oversight.
+
+                            This column says where a copy IS, and the
+                            black-box suite in spdrman/rclone-manager-tests
+                            pins these words at the sha this repository
+                            pins. #622 is about where a tier SENDS its
+                            backups, so renaming this one costs two specs
+                            over there and buys nothing that issue asked
+                            for. It wants doing in the same commit that
+                            moves the pin. */}
+                        {p.medium === LOCAL_DESTINATION_ID ? "Local backup root" : p.medium}
                       </div>
                       <div className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                         {/* An empty mediumType is the honest answer for a medium the

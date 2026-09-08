@@ -58,6 +58,38 @@ type Config struct {
 	// gate rather than an intention.
 	StorageMediums []StorageMedium `yaml:"storage_mediums,omitempty"`
 
+	// DefaultStorageMedium is the destination a NEWLY CREATED retention
+	// tier starts on (H2.2, issue #622).
+	//
+	// It governs that and nothing else, which is the whole of what
+	// "default" means here and is worth stating in the schema rather than
+	// only in a UI. It never moves a backup that is already somewhere: a
+	// tier that names a destination goes on naming it when this key
+	// changes, and an existing tier that names none goes on meaning the
+	// local backup root. Moving the default is a decision about the NEXT
+	// tier somebody adds, so it is a write with no consequence for a
+	// single artifact already on disk, which is exactly why it is safe to
+	// put behind one click.
+	//
+	// EMPTY MEANS LOCAL, and empty is the ONLY spelling of local, which is
+	// RetentionTier.Medium's rule applied to the same fact for the same
+	// reason. "default_storage_medium: local" is refused rather than
+	// accepted as a synonym (validateDefaultStorageMedium), so a
+	// deployment that has never chosen a destination cannot acquire this
+	// key by having its configuration re-marshaled: core/service rewrites
+	// the whole Config on every settings save, and a key injected into a
+	// file that never asked for it is refused outright by an older binary
+	// under Load's KnownFields(true). FR-35 makes that a gate rather than
+	// an intention, and omitempty below is what keeps it true.
+	//
+	// A value that no storage_mediums entry declares is a validation
+	// error, not a fall-back to local. Silently starting a new tier
+	// somewhere other than where the operator wrote is the wrong
+	// direction on the one decision this field exists to make, and it is
+	// the same rule validateTierMediumReferences already applies one
+	// level down.
+	DefaultStorageMedium string `yaml:"default_storage_medium,omitempty"`
+
 	// MaxMovesPerCycle bounds how many artifacts one retention cycle
 	// relocates between mediums (EPIC E, FR-30). It sits beside
 	// StorageMediums rather than inside Retention for the same reason
@@ -1295,6 +1327,23 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 // artifactstore to say so (this package sits under everything and imports
 // nothing of the sort), so the agreement is pinned by a test instead.
 const MediumLocal = "local"
+
+// EffectiveDefaultStorageMedium is the destination a newly created
+// retention tier starts on: the id DefaultStorageMedium names, or
+// MediumLocal when it names none (issue #622).
+//
+// An accessor rather than a default Validate writes back into the struct,
+// which is RetentionTier.EffectiveMedium's own argument applied to the
+// same fact: a resolved value written into the struct would be
+// re-marshaled into the operator's own config file by the next settings
+// save, freezing a key into a file that never chose it (issue #294) and
+// breaking FR-35's "no new key in a medium-free config" rule outright.
+func (c *Config) EffectiveDefaultStorageMedium() string {
+	if c == nil || c.DefaultStorageMedium == "" {
+		return MediumLocal
+	}
+	return c.DefaultStorageMedium
+}
 
 // DefaultMaxMovesPerCycle is what Config.MaxMovesPerCycle resolves to in
 // a deployment that declares a medium and says nothing about the bound.

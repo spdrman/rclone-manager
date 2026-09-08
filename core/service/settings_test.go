@@ -59,9 +59,9 @@ func TestSettings_ReportsTheRunningRetentionPolicyAsAResolvedChain(t *testing.T)
 			name:      "a file with neither spelling resolves to the 7/3/12 default chain",
 			retention: defaultChainRetentionBlock,
 			want: []RetentionTier{
-				{Name: "daily", Granularity: GranularityDay, Keep: 7},
-				{Name: "weekly", Granularity: GranularityWeek, Keep: 3, WindowUnit: GranularityMonth},
-				{Name: "monthly", Granularity: GranularityMonth, Keep: 12},
+				{Name: "daily", Granularity: GranularityDay, Keep: 7, Medium: StorageMediumLocalID},
+				{Name: "weekly", Granularity: GranularityWeek, Keep: 3, WindowUnit: GranularityMonth, Medium: StorageMediumLocalID},
+				{Name: "monthly", Granularity: GranularityMonth, Keep: 12, Medium: StorageMediumLocalID},
 			},
 		},
 		{
@@ -71,9 +71,9 @@ func TestSettings_ReportsTheRunningRetentionPolicyAsAResolvedChain(t *testing.T)
 				"  week_starts_on: monday\n" +
 				"  daily_days: 14\n",
 			want: []RetentionTier{
-				{Name: "daily", Granularity: GranularityDay, Keep: 14},
-				{Name: "weekly", Granularity: GranularityWeek, Keep: 3, WindowUnit: GranularityMonth},
-				{Name: "monthly", Granularity: GranularityMonth, Keep: 12},
+				{Name: "daily", Granularity: GranularityDay, Keep: 14, Medium: StorageMediumLocalID},
+				{Name: "weekly", Granularity: GranularityWeek, Keep: 3, WindowUnit: GranularityMonth, Medium: StorageMediumLocalID},
+				{Name: "monthly", Granularity: GranularityMonth, Keep: 12, Medium: StorageMediumLocalID},
 			},
 		},
 		{
@@ -90,8 +90,8 @@ func TestSettings_ReportsTheRunningRetentionPolicyAsAResolvedChain(t *testing.T)
 				"      granularity: year\n" +
 				"      keep: 5\n",
 			want: []RetentionTier{
-				{Name: "fortnightly", Granularity: GranularityDays, PeriodDays: 14, Keep: 6},
-				{Name: "annual", Granularity: GranularityYear, Keep: 5},
+				{Name: "fortnightly", Granularity: GranularityDays, PeriodDays: 14, Keep: 6, Medium: StorageMediumLocalID},
+				{Name: "annual", Granularity: GranularityYear, Keep: 5, Medium: StorageMediumLocalID},
 			},
 		},
 	}
@@ -141,10 +141,16 @@ func TestUpdateSettings_PersistsARetentionChainAndHotReloadsIt(t *testing.T) {
 	svc, configPath := openTestService(t)
 	revisionBefore := svc.ConfigRevision()
 
+	// Every tier names the local hard drive by its reserved id, which is
+	// how a destination is spelled on this boundary since #622, and this
+	// literal is the WRITE as well as the expectation. So it is the round
+	// trip in one case: what a form reads back is what it sends, and the
+	// file that comes out of it carries no medium: key at all, which the
+	// config.LoadAndValidate below would refuse if it did.
 	want := []RetentionTier{
-		{Name: "daily", Granularity: GranularityDay, Keep: 10},
-		{Name: "fortnightly", Granularity: GranularityDays, PeriodDays: 14, Keep: 6},
-		{Name: "annual", Granularity: GranularityYear, Keep: 5},
+		{Name: "daily", Granularity: GranularityDay, Keep: 10, Medium: StorageMediumLocalID},
+		{Name: "fortnightly", Granularity: GranularityDays, PeriodDays: 14, Keep: 6, Medium: StorageMediumLocalID},
+		{Name: "annual", Granularity: GranularityYear, Keep: 5, Medium: StorageMediumLocalID},
 	}
 	got, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{
 		Retention: &RetentionUpdate{Tiers: want},
@@ -991,10 +997,12 @@ func TestSettings_DefaultTiersDoesNotTrackTheRunningPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
 	}
-	assertTiersEqual(t, got.Retention.Tiers, []RetentionTier{{Name: "annual", Granularity: GranularityYear, Keep: 2}})
+	assertTiersEqual(t, got.Retention.Tiers, []RetentionTier{
+		{Name: "annual", Granularity: GranularityYear, Keep: 2, Medium: StorageMediumLocalID},
+	})
 	assertTiersEqual(t, RetentionSchema().DefaultTiers, []RetentionTier{
-		{Name: "daily", Granularity: GranularityDay, Keep: config.DefaultDailyDays},
-		{Name: "weekly", Granularity: GranularityWeek, Keep: config.DefaultWeeklyMonths, WindowUnit: GranularityMonth},
-		{Name: "monthly", Granularity: GranularityMonth, Keep: config.DefaultMonthlyMonths},
+		{Name: "daily", Granularity: GranularityDay, Keep: config.DefaultDailyDays, Medium: StorageMediumLocalID},
+		{Name: "weekly", Granularity: GranularityWeek, Keep: config.DefaultWeeklyMonths, WindowUnit: GranularityMonth, Medium: StorageMediumLocalID},
+		{Name: "monthly", Granularity: GranularityMonth, Keep: config.DefaultMonthlyMonths, Medium: StorageMediumLocalID},
 	})
 }

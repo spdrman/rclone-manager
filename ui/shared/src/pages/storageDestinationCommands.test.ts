@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   addCommand,
   importCredentialsCommand,
-  preflightCandidateCommand,
-  preflightCommand,
+  setDefaultCommand,
+  testConnectionCandidateCommand,
+  testConnectionCommand,
+  tierMediumCommand,
   removeCommand
 } from "@shared/pages/storageDestinationCommands";
 import type { StorageMediumSpec } from "@shared/api/contracts";
@@ -44,9 +46,11 @@ describe("the echoed backup-manager command", () => {
   it("names the credential by reference and never carries material", () => {
     const printed = [
       importCredentialsCommand(),
-      preflightCandidateCommand(SPEC),
+      testConnectionCandidateCommand(SPEC),
       addCommand(SPEC),
-      preflightCommand("offsite_s3"),
+      testConnectionCommand("offsite_s3"),
+      setDefaultCommand("offsite_s3"),
+      tierMediumCommand("monthly", "offsite_s3"),
       removeCommand("offsite_s3")
     ].join("\n");
 
@@ -77,9 +81,9 @@ describe("the echoed backup-manager command", () => {
     );
   });
 
-  it("spells the candidate preflight as the same flags the add takes", () => {
-    expect(preflightCandidateCommand(SPEC)).toBe(
-      "backup-manager medium preflight --candidate offsite_s3 --type s3 --region us-east-1 " +
+  it("spells the candidate test connection as the same flags the add takes", () => {
+    expect(testConnectionCandidateCommand(SPEC)).toBe(
+      "backup-manager medium test-connection --candidate offsite_s3 --type s3 --region us-east-1 " +
         "--bucket nas-backups --prefix monthly --storage-class STANDARD_IA " +
         "--upload-verification readback --credentials-id 9b41c7e2"
     );
@@ -102,8 +106,23 @@ describe("the echoed backup-manager command", () => {
       .toContain("--credentials-env BACKUP_S3_OFFSITE");
   });
 
-  it("prints the two settings-list buttons as the commands they are", () => {
-    expect(preflightCommand("offsite_s3")).toBe("backup-manager medium preflight offsite_s3");
+  it("prints the settings-list buttons as the commands they are", () => {
+    expect(testConnectionCommand("offsite_s3")).toBe("backup-manager medium test-connection offsite_s3");
+    expect(setDefaultCommand("offsite_s3")).toBe("backup-manager medium default offsite_s3");
     expect(removeCommand("offsite_s3")).toBe("backup-manager medium remove offsite_s3");
+  });
+
+  // The picker under a tier (#622). The acknowledgment rides along only
+  // where the server actually demands one, so the line an operator pastes
+  // is the line that works: a tier moving somewhere other than the local
+  // hard drive for the first time is refused without it, and a tier
+  // moving back is not.
+  it("appends the disclosure acknowledgment only when the tier is leaving local disk", () => {
+    expect(tierMediumCommand("monthly", "offsite_s3")).toBe(
+      "backup-manager settings patch --tier-medium monthly=offsite_s3 --acknowledge-medium-disclosure"
+    );
+    expect(tierMediumCommand("monthly", "local")).toBe(
+      "backup-manager settings patch --tier-medium monthly=local"
+    );
   });
 });

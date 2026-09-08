@@ -94,6 +94,55 @@ func TestRun_TierMediumPreviewsAgainstTheRealMediumChain(t *testing.T) {
 	}
 }
 
+// TestRun_TierMediumAcceptsTheLocalHardDriveByName is the case that used
+// to be a refusal, reversed on purpose by H2.2 (#622).
+//
+// The old rule was "local is spelled by leaving the medium out, so
+// --tier-medium daily=local is refused in config.Validate's own words".
+// That was right while the local backup root had no name anywhere an
+// operator could see it. #622 gave it one: it is an entry in the
+// destinations list, an option in every tier picker, a legal operand of
+// `medium default`, and the value the web UI sends when somebody moves a
+// tier back off S3. A flag that accepted that name on every surface
+// except this one would be exactly the two-spellings problem the issue
+// exists to remove, arriving as "why does --tier-medium daily=local work
+// in settings patch and not in retention".
+//
+// So the CLI translates it to the absence a configuration file spells
+// local with, in one place (applyRetentionOverrides), which is the same
+// translation core/service does at its own boundary. What is NOT
+// translated is anything else: an undeclared id and an illegally spelled
+// one are still refused by the config layer, in its own words, which the
+// test above pins.
+//
+// The assertion is the preview, not the exit code. A case that only
+// checked acceptance would pass against a build that quietly dropped the
+// tier's destination, and "the tier went somewhere the operator did not
+// ask for" is the failure this whole flag exists to prevent.
+func TestRun_TierMediumAcceptsTheLocalHardDriveByName(t *testing.T) {
+	configPath := writeOffsiteTestConfig(t)
+
+	out := captureStdout(t, func() {
+		got := run([]string{
+			"retention", "--config", configPath, "--dry-run",
+			"--tier", "daily:day:14",
+			"--tier-medium", "daily=local",
+		})
+		if got != 0 {
+			t.Fatalf("retention --tier-medium daily=local: %d, want 0", got)
+		}
+	})
+
+	// The positive control is the sibling test above: the identical
+	// command line naming cold_offsite DOES print a move. So a preview
+	// with no move here is this tier resolving to the local backup root,
+	// which is what naming the local hard drive has to mean, rather than
+	// this test being unable to tell the two apart.
+	if strings.Contains(out, "MOVE") {
+		t.Errorf("a tier pointed at the local hard drive planned a move off it.\ngot:\n%s", out)
+	}
+}
+
 // TestRun_TierMediumIsRefusedWhenNoTierOfThatNameWasGiven: the value is
 // attached to the thing it belongs to, so a name attached to nothing is a
 // mistake rather than a no-op.
@@ -141,10 +190,15 @@ func TestRun_TierMediumWithNoTierAtAll(t *testing.T) {
 
 // TestRun_TierMediumRefusalsComeFromTheConfigLayer is the "one rule in one
 // place" half. --tier-medium hands its value on unparsed, so a medium that
-// is not declared, and the reserved local id, are refused in the words
+// is not declared, and one spelled illegally, are refused in the words
 // config.Validate uses for the identical mistake written into config.yaml.
 // A copy of either rule here would be a second rule free to disagree with
 // the first.
+//
+// The reserved local id used to be a third row here and is now
+// TestRun_TierMediumAcceptsTheLocalHardDriveByName below, which is a
+// deliberate reversal rather than a case somebody deleted. See that test
+// for the argument.
 func TestRun_TierMediumRefusalsComeFromTheConfigLayer(t *testing.T) {
 	configPath := writeOffsiteTestConfig(t)
 
@@ -157,11 +211,6 @@ func TestRun_TierMediumRefusalsComeFromTheConfigLayer(t *testing.T) {
 			name:  "a medium no storage_mediums entry declares",
 			spec:  "daily=not_declared",
 			wants: []string{"not_declared", "not declared by any storage_mediums entry", "no fall-back to local"},
-		},
-		{
-			name:  "the reserved local id, which is unspellable",
-			spec:  "daily=local",
-			wants: []string{"local", "implicit local medium", "omit the medium key"},
 		},
 		{
 			name:  "a medium id that is not lower_snake_case",

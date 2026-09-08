@@ -284,7 +284,20 @@ func TestToStorageMediumSummaries_DescribeThePlaceAndNeverTheKey(t *testing.T) {
 			Credentials: config.MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"}},
 	}}
 
-	got := toStorageMediumSummaries(cfg)
+	// The local hard drive leads the list and is not declared anywhere
+	// (H2.2, #622), so it is asserted on its own terms and the declared
+	// ones are compared after it. Indexing past it rather than asserting
+	// it would leave the one entry this issue added unchecked by the very
+	// test that pins this projection.
+	all := toStorageMediumSummaries(cfg)
+	if len(all) == 0 || !all[0].IsLocal || all[0].ID != StorageMediumLocalID {
+		t.Fatalf("the projection does not lead with the local hard drive: %+v", all)
+	}
+	if !all[0].IsDefault {
+		t.Errorf("the local hard drive is not the default in a config that names none: %+v", all[0])
+	}
+
+	got := all[1:]
 	want := []StorageMediumSummary{
 		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", Region: "us-east-1",
 			StorageClass: config.StorageClassStandard, UploadVerification: config.UploadVerificationReadback,
@@ -308,7 +321,7 @@ func TestToStorageMediumSummaries_DescribeThePlaceAndNeverTheKey(t *testing.T) {
 	// come from, let alone what they are. A path is not a secret, but it
 	// is a fact about this machine that an API caller has no use for and a
 	// reader of an exported response has every use for.
-	rendered, err := json.Marshal(got)
+	rendered, err := json.Marshal(all)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -386,12 +399,16 @@ func TestSettings_TheMediumsSurfaceCarriesNoCredentialMaterial(t *testing.T) {
 	}
 
 	// The positive control. Without it, an empty mediums list would
-	// satisfy every absence below and this test would prove nothing.
-	if len(settings.Mediums) != 1 {
-		t.Fatalf("Settings reported %d mediums, want 1: the absence checks below need something to be absent FROM", len(settings.Mediums))
+	// satisfy every absence below and this test would prove nothing. It
+	// counts the DECLARED ones, because the list always carries the local
+	// hard drive too (H2.2, #622) and that entry has no credential to be
+	// absent from.
+	declared := declaredOnly(settings.Mediums)
+	if len(declared) != 1 {
+		t.Fatalf("Settings reported %d declared mediums, want 1: the absence checks below need something to be absent FROM", len(declared))
 	}
-	if settings.Mediums[0].ID != "offsite_s3" || settings.Mediums[0].Bucket != "nas-backups" {
-		t.Fatalf("the medium came back as %+v, which is not the one the config declares", settings.Mediums[0])
+	if declared[0].ID != "offsite_s3" || declared[0].Bucket != "nas-backups" {
+		t.Fatalf("the medium came back as %+v, which is not the one the config declares", declared[0])
 	}
 
 	rendered, err := json.Marshal(settings)
@@ -757,7 +774,10 @@ func TestSetBackupSetRetention_AcceptsTheSameWriteWithTheAcknowledgment(t *testi
 	}
 	// The deployment's own daily tier is still local: the consent was
 	// for this set's artifacts, and the write was to this set's block.
-	if got.Deployment.Tiers[0].Medium != "" {
+	// Local is spelled by its reserved id on this boundary since #622, so
+	// this asserts the id rather than an empty string; the file still
+	// carries no medium: key for it, which the count below checks.
+	if got.Deployment.Tiers[0].Medium != StorageMediumLocalID {
 		t.Errorf("a per-set write moved the deployment's daily tier: %+v", got.Deployment.Tiers[0])
 	}
 	raw, err := os.ReadFile(configPath)

@@ -302,8 +302,14 @@ describe("the no-medium scenario is a deployment that never heard of storage med
     }
 
     const settings = await api.getSettings();
-    expect(settings.mediums).toEqual([]);
-    expect(settings.retention.tiers.every((t) => t.medium === undefined)).toBe(true);
+    // One destination, and it is the drive the backups are already on.
+    // That is what "declared no medium" looks like since #622: the local
+    // entry is synthesised from the configuration rather than declared in
+    // it, so a file that never mentioned storage_mediums still has
+    // somewhere for its tiers to point, and every tier points there.
+    expect(settings.mediums.map((m) => m.id)).toEqual(["local"]);
+    expect(settings.mediums[0].isLocal).toBe(true);
+    expect(settings.retention.tiers.every((t) => t.medium === "local")).toBe(true);
     // The ladder is a property of the product, not of a configuration, so
     // it stays: a deployment with one local copy per backup still has
     // copies whose verification class means something.
@@ -314,6 +320,9 @@ describe("the no-medium scenario is a deployment that never heard of storage med
     const api = createMockApi();
     const list = await api.listArtifacts();
     expect(list.some((a) => a.placements.some((p) => p.medium !== "local"))).toBe(true);
-    expect((await api.getSettings()).mediums.length).toBeGreaterThan(0);
+    // More than the local one, which is the difference that makes the
+    // comparison above mean something: a count above zero would now be
+    // true of both scenarios.
+    expect((await api.getSettings()).mediums.filter((m) => !m.isLocal).length).toBeGreaterThan(0);
   });
 });

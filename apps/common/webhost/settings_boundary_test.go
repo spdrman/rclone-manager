@@ -299,9 +299,15 @@ func TestConfigFileEditIsVisibleThroughTheSettingsEndpoint(t *testing.T) {
 	if got.Retention.ProtectLastKnownGood {
 		t.Error("protect_last_known_good = true, but the file says false")
 	}
+	// Both tiers name the local hard drive by its reserved id, which is
+	// what a tier that named no destination reports since #622: above
+	// core/service every tier names where its backups live, so a caller
+	// never has to interpret an absent field. The file itself still
+	// carries no medium: key for either of them, which is the round trip
+	// core/service's own cases pin.
 	wantTiers := []retentionTierBody{
-		{Name: "hourly_ish", Granularity: "days", PeriodDays: 1, Keep: 30},
-		{Name: "annual", Granularity: "year", Keep: 7},
+		{Name: "hourly_ish", Granularity: "days", PeriodDays: 1, Keep: 30, Medium: "local"},
+		{Name: "annual", Granularity: "year", Keep: 7, Medium: "local"},
 	}
 	if len(got.Retention.Tiers) != len(wantTiers) {
 		t.Fatalf("tiers = %+v, want %+v", got.Retention.Tiers, wantTiers)

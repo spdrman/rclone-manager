@@ -817,7 +817,17 @@ function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
     prefix: m.prefix,
     storageClass: m.storage_class,
     uploadVerification: m.upload_verification,
-    readsRequireRestore: m.reads_require_restore
+    readsRequireRestore: m.reads_require_restore,
+    // H2.2's three (#622). is_local and is_default are required on the
+    // wire and defaulted anyway, because this mapping also runs against
+    // an engine older than the fields: a list that came back with no
+    // default marked would render every row as "not the default", which
+    // is a list no deployment can be in, and reading undefined as false
+    // is the honest version of that rather than a guess at which row it
+    // would have been.
+    path: m.path,
+    isLocal: m.is_local ?? false,
+    isDefault: m.is_default ?? false
   };
 }
 
@@ -2085,6 +2095,15 @@ export const httpApi: BackupManagerApi = {
     request<void>("/storage-mediums/" + encodeURIComponent(mediumId), {
       method: "DELETE"
     }).then(() => undefined),
+
+  // No body. The whole content of the request is which destination, and
+  // that is in the path, so a body would be a second place for one fact
+  // and a second thing for the engine to reconcile against the path.
+  setDefaultStorageMedium: (mediumId) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/default",
+      { method: "PUT" }
+    ).then(fromWireStorageMedium),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

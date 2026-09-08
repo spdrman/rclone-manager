@@ -102,6 +102,7 @@
           "MEDIUM_NOT_FOUND",
           "ARTIFACT_NOT_FAILED",
           "MEDIUM_IN_USE",
+          "MEDIUM_IS_DEFAULT",
           "MEDIUM_EXISTS",
           "STORAGE_CREDENTIAL_NOT_FOUND",
           "SSH_KEY_CANDIDATE_NOT_FOUND",
@@ -155,6 +156,7 @@
           "MEDIUM_NOT_FOUND": "wire",
           "ARTIFACT_NOT_FAILED": "wire",
           "MEDIUM_IN_USE": "wire",
+          "MEDIUM_IS_DEFAULT": "wire",
           "MEDIUM_EXISTS": "wire",
           "STORAGE_CREDENTIAL_NOT_FOUND": "wire",
           "SSH_KEY_CANDIDATE_NOT_FOUND": "wire",
@@ -192,7 +194,8 @@
             "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
             "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
             "ARTIFACT_NOT_FAILED",
-            "BACKUP_SET_CONNECTION_NOT_PROVEN"
+            "BACKUP_SET_CONNECTION_NOT_PROVEN",
+            "MEDIUM_IS_DEFAULT"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -2737,8 +2740,10 @@
           "type": {
             "type": "string",
             "enum": [
-              "s3"
-            ]
+              "s3",
+              "local"
+            ],
+            "description": "What kind of place this is. `s3` is a bucket an operator declared in storage_mediums. `local` is the drive this deployment's backups land on, which is not declared anywhere: it is synthesised from the configuration, it is what every retention tier that names no destination means, and it is always in this list (#622). Branch on is_local rather than on this word: the set grows by architecture decision, and a second local-ish backend added here one day must not silently make an entry undeletable."
           },
           "bucket": {
             "type": "string"
@@ -2772,6 +2777,19 @@
               "attested"
             ],
             "description": "How an upload is proven before the local copy is deleted, already resolved, so a client never has to know what an unset value defaults to. readback re-downloads and re-hashes; attested asks the endpoint for its own whole-object digest, which no s3 backend can currently serve."
+          },
+          "path": {
+            "type": "string",
+            "description": "The drive the LOCAL destination writes to, resolved exactly as the capacity section resolves its backup root so one deployment cannot report two mounts. Empty for a declared medium, because a bucket has no path on the manager's host, and empty for a local entry this configuration cannot place yet (no backup set configured, or sets on genuinely different volumes), which a surface renders as \"not known yet\" rather than as a blank path.",
+            "x-go-omitempty": true
+          },
+          "is_local": {
+            "type": "boolean",
+            "description": "True for the one entry that is the drive this deployment's backups land on (#622). It is not declared in the configuration and cannot be edited or removed, so a surface reads this rather than comparing an id against a reserved string it would have to hold its own copy of."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "True for the destination a NEWLY CREATED retention tier starts on. Exactly one entry in a list carries it. It says nothing about where anything currently is: moving it moves no backup and rewrites no tier, which is why it is one click and carries no disclosure (#622)."
           }
         },
         "required": [
@@ -2780,7 +2798,9 @@
           "bucket",
           "storage_class",
           "upload_verification",
-          "reads_require_restore"
+          "reads_require_restore",
+          "is_local",
+          "is_default"
         ]
       },
       "VerificationClassInfo": {
@@ -2985,6 +3005,7 @@
               "credentials",
               "reach",
               "deliverable",
+              "space",
               "write",
               "read_back",
               "storage_class",
@@ -9138,7 +9159,7 @@
             ]
           },
           "409": {
-            "description": "Refused: MEDIUM_IN_USE. Copies still name this medium. Removing the declaration would not delete them, it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so they would read as unreachable and no prune could ever run against them. GET /storage-mediums/{id}/usage lists what is there.",
+            "description": "Refused: MEDIUM_IN_USE or MEDIUM_IS_DEFAULT. MEDIUM_IN_USE means copies still name this medium: removing the declaration would not delete them, it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so they would read as unreachable and no prune could ever run against them, and GET /storage-mediums/{id}/usage lists what is there. MEDIUM_IS_DEFAULT means this is the destination a newly created retention tier starts on, or is the drive this deployment's backups land on, which is not declared and cannot be un-declared (#622); nothing is necessarily stored on it, so the fix is to move the default rather than to look for affected backup sets.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9147,7 +9168,118 @@
               }
             },
             "x-error-codes": [
-              "MEDIUM_IN_USE"
+              "MEDIUM_IN_USE",
+              "MEDIUM_IS_DEFAULT"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/default": {
+      "put": {
+        "operationId": "setDefaultStorageMedium",
+        "summary": "Make this the destination a newly created retention tier starts on (#622). It moves that and nothing else: no existing tier is rewritten and no backup is relocated, so this is deliberately a write with no disclosure in front of it. The consent gate stands in front of the settings save that actually sends a tier's backups off this machine, and a second acknowledgment here would train an operator to click through the one that matters. The local hard drive is a legal target and is what a deployment that has chosen nothing already has.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The destination to make the default: a declared storage medium id, or `local` for the drive this deployment's backups land on."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The destination that is now the default.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The whole configuration is validated as a hand-edited file would be, so a value is refused here for exactly the reason the same value in the file would be.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This deployment has no destination with that id, so nothing would start on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
             ]
           },
           "401": {

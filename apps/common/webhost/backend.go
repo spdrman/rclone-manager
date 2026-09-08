@@ -361,7 +361,16 @@ type BackupServiceClient interface {
 	//
 	// RemoveStorageMedium is the FR-30 refusal: it declines while any
 	// copy names the medium, because un-declaring a destination leaves
-	// this deployment with no way to confirm the copies on it.
+	// this deployment with no way to confirm the copies on it. Since
+	// H2.2 (#622) it declines in two more cases, and both are invariants
+	// rather than data safety: the drive this deployment's backups land
+	// on is not declared and cannot be un-declared, and the destination a
+	// newly created tier starts on has to be moved before it can go.
+	//
+	// SetDefaultStorageMedium moves that destination (#622). It moves
+	// nothing else: no existing tier is rewritten and no backup is
+	// relocated, which is why it carries CSRF and not the destructive
+	// gate and why there is no disclosure in front of it.
 	ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error)
 	ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error)
 	GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
@@ -370,6 +379,7 @@ type BackupServiceClient interface {
 	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	RemoveStorageMedium(ctx context.Context, id string) error
+	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
 
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.

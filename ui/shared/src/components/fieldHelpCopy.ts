@@ -206,7 +206,7 @@ export const FIELD_HELP = {
   },
 
   tierMedium: {
-    what: "Where this tier's backups live: the local backup root, or a storage medium the configuration declares.",
+    what: "Where this tier's backups live: the hard drive on this machine, or a storage destination the configuration declares.",
     example: "offsite_s3 (STANDARD_IA)",
     effect:
       "A backup that only this tier keeps is uploaded to that medium, verified there, and then its copy on this machine is deleted. That deletion is what the setting is for. A medium on an archive storage class cannot be read on demand at all: getting a backup back from one means asking for a restore and waiting hours, and the provider reports no progress while it waits. Reading anything back off a medium is billed by your provider, and Backup Manager holds no price list, so it will not show you a figure."

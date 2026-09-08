@@ -45,7 +45,9 @@ const OFFSITE: StorageMedium = {
   prefix: "monthly",
   storageClass: "STANDARD_IA",
   uploadVerification: "readback",
-  readsRequireRestore: false
+  readsRequireRestore: false,
+  isLocal: false,
+  isDefault: false
 };
 
 function report(ok: boolean, failAt?: MediumPreflight["checks"][number]["step"]): MediumPreflight {
@@ -139,7 +141,7 @@ describe("the S3 destination wizard", () => {
     await describeDestinationThroughStepOne();
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: verify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
 
     await waitFor(() => expect(preflight).toHaveBeenCalled());
     // The load-bearing assertion: the candidate was checked and NOTHING was
@@ -174,7 +176,7 @@ describe("the S3 destination wizard", () => {
     await describeDestinationThroughStepOne();
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: verify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
     await waitFor(() => expect(preflight).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
     fireEvent.click(await screen.findByRole("button", { name: "Save destination" }));
@@ -205,7 +207,7 @@ describe("the S3 destination wizard", () => {
     await describeDestinationThroughStepOne();
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: verify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
 
     const next = await screen.findByRole("button", { name: "Next: save" });
     await waitFor(() => expect(next).toBeDisabled());
@@ -235,7 +237,7 @@ describe("the S3 destination wizard", () => {
     await describeDestinationThroughStepOne();
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: verify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
     fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
 
     const group = await screen.findByRole("group", { name: "Add a destination" });
@@ -259,7 +261,7 @@ describe("the S3 destination wizard", () => {
 
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: verify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
     fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
 
     const group = await screen.findByRole("group", { name: "Add a destination" });
@@ -271,7 +273,7 @@ describe("the S3 destination wizard", () => {
   });
 });
 
-describe("re-verifying a destination backups already live on (FR-30)", () => {
+describe("re-testing a destination backups already live on (FR-30)", () => {
   beforeEach(() => resetGraphForTests());
   afterEach(() => {
     cleanup();
@@ -285,7 +287,9 @@ describe("re-verifying a destination backups already live on (FR-30)", () => {
       getStorageMediumUsage: vi.fn(() => Promise.resolve(USAGE))
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Verify" }));
+    // "Test connection", not "Verify": the same idea had three names in
+    // this product and this surface carried the odd one out (#622).
+    fireEvent.click(await screen.findByRole("button", { name: "Test connection" }));
     await screen.findByText(/148 copies are recorded there/);
 
     const shown = document.body.textContent ?? "";
