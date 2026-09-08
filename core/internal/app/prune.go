@@ -106,10 +106,14 @@ type PrunePlan struct {
 // actually wires this package to FR-20's positively-identified,
 // symlink-and-traversal-safe local deletion, via internal/retention/
 // prune.go's PruneDecide/PruneApply (issue #21). cmd/backup-manager's
-// `retention` command still only calls RetentionPreviewAll today, not this
-// method — see that command's own note for the CLI-side gap this leaves,
-// tracked separately from this issue (#96/B3.1), which only needed an
-// API-facing preview/apply, not a CLI one.
+// bare `retention` command still only calls RetentionPreviewAll, which is
+// why a preview taken there and one taken through the API can disagree
+// about a pruned artifact: this one stats the path and reports REFUSE,
+// that one reads classification and goes on reporting DELETE. Its
+// `retention apply` verb (issue #602) goes through core/service's
+// envelope rather than through either of these methods directly, so the
+// CLI-side gap #96/B3.1 left is closed without a second authorisation
+// path being opened beside the plan_id one.
 func (s *Service) PrunePreview(ctx context.Context, set model.BackupSetID) (PrunePlan, error) {
 	return s.PrunePreviewAt(ctx, set, s.now())
 }

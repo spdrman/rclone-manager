@@ -1431,6 +1431,15 @@ policies without editing config; and
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 
+And one way to make it happen from a terminal: `backup-manager retention apply
+<source/backup-set> --acknowledge` (issue #602). It prints the plan it is about to apply,
+applies exactly that plan through the same preview/apply pair the API uses, and refuses
+with nothing deleted if the set's inventory, configuration or civil date moved in between.
+`--acknowledge` is required; the refusal without it says what it consents to rather than
+only naming the flag. FR-19's last known good is never in the delete set, and since #602 a
+last known good whose own copy cannot be confirmed stops the whole pass rather than
+authorising it.
+
 Since #430 a preview carries the moves it would make and the medium each deletion happens
 on, both surfaces alike. The medium is spelled by ABSENCE when it is local, which is what
 keeps a deployment that declares no medium seeing exactly the response it saw before the
