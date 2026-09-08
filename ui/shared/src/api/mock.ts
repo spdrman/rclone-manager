@@ -1953,7 +1953,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // says so at the same step the engine does rather than reporting a
       // uniform green: a form built against an always-passing fixture
       // never renders the one answer an operator has to act on.
-      return delay(mockPreflightFor(medium, !medium.readsRequireRestore), 700);
+      return delay(mockPreflightFor(medium), 700);
     },
 
     // G2.2 (#594). The fixture keeps the mediums it was given and lets
@@ -2009,34 +2009,32 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // skips the five after it, which is the refusal pane the mockup draws
     // and the one shape a form built against an always-green fixture
     // never renders.
-    preflightStorageMediumCandidate: (spec) => {
-      const archive = spec.storageClass === "GLACIER" || spec.storageClass === "DEEP_ARCHIVE";
-      return delay(
-        mockPreflightFor(
-          {
-            id: spec.id,
-            type: spec.type,
-            bucket: spec.bucket,
-            region: spec.region,
-            storageClass: spec.storageClass ?? "STANDARD",
-            uploadVerification: spec.uploadVerification ?? "readback",
-            readsRequireRestore: archive,
-            // A candidate is by definition not declared, so it is neither
-            // the local hard drive nor the default. This report is about
-            // whether the place works, and nothing here would read either
-            // field.
-            isLocal: false,
-            isDefault: false,
-            // A candidate carries no mark either. The mark is what a WRITE
-            // records about the check it did not run, and a probe writes
-            // nothing whatever it answers.
-            connectionUnverified: false
-          },
-          archive
-        ),
+    //
+    // The candidate goes through mockMediumOf, the same projection a
+    // create goes through, rather than being assembled here (issue #633).
+    // It used to be assembled here, with its own `archive` expression and
+    // that expression handed to mockPreflightFor a second time as the
+    // deliverable flag, where it needed to be negated and was not. So a
+    // STANDARD candidate came back failed at `deliverable` and a
+    // DEEP_ARCHIVE one came back green: since S3DestinationWizard gates
+    // Save on `report.ok`, dev and every browser case that drove the
+    // wizard could save no ordinary destination at all, and could save
+    // the one class config.Validate refuses a retention tier (#442).
+    // Projecting the spec is what makes that unrepeatable, because the
+    // archive question now has exactly one answer in this file and both
+    // preflights read it off the medium.
+    preflightStorageMediumCandidate: (spec) =>
+      delay(
+        mockPreflightFor({
+          ...mockMediumOf(spec),
+          // A candidate carries no mark. The mark is what a WRITE records
+          // about the check it did not run, and a probe writes nothing
+          // whatever it answers, so the projection's `skipConnectionCheck`
+          // reading is the one field of it that does not apply here.
+          connectionUnverified: false
+        }),
         700
-      );
-    },
+      ),
 
     createStorageMedium: (spec) => {
       if (settings.mediums.some((m) => m.id === spec.id))
@@ -2150,7 +2148,18 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 // take delivery fails at `deliverable` and skips the five steps after it,
 // and a form built against an always-green fixture never renders the one
 // answer an operator has to act on.
-function mockPreflightFor(medium: StorageMedium, deliverable: boolean): MediumPreflight {
+//
+// Whether it can take delivery is READ OFF THE MEDIUM and is not a
+// parameter (issue #633). It was a parameter, and the two callers derived
+// it independently: the by-id check passed `!medium.readsRequireRestore`
+// and the candidate check passed the same fact unnegated, so the fixture
+// answered the archive question one way for a declared medium and the
+// opposite way for a candidate. Two call sites computing one fact is what
+// let them disagree, and a boolean that reads the same either way round
+// is what made the disagreement invisible. There is nothing to pass now,
+// so there is nothing to pass backwards.
+function mockPreflightFor(medium: StorageMedium): MediumPreflight {
+  const deliverable = !medium.readsRequireRestore;
   const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
     ({ step, outcome: "skipped", category: "", detail });
   const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
