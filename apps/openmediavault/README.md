@@ -204,12 +204,12 @@ profile and must not be changed.
 
 ## The image reference
 
-`ghcr.io/spdrman/backup-manager:0.3.2` is the reference every package here
+`ghcr.io/spdrman/backup-manager:0.3.3` is the reference every package here
 carries, and it is not pushed yet. `distribution/packaging/canonical.json`
 records `image.published: false`, and `container/release-manifest.json` carries
 a `registry_digest` of `null` per architecture; those two move together, so
 either both describe a real push or neither does. Until the release workflow
-pushes 0.3.2 and the digests are recorded back, reach it the way the acceptance
+pushes 0.3.3 and the digests are recorded back, reach it the way the acceptance
 procedure's step 0 describes, by pushing to your own registry or side-loading a
 build. The previous release, `ghcr.io/spdrman/backup-manager:0.3.0`, stays
 published and signed if you would rather run that. It is the `IMAGE` variable in the env file, and nothing else.

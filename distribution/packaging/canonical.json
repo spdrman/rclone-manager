@@ -11,11 +11,11 @@
   "image": {
     "registry": "ghcr.io",
     "repository": "spdrman/backup-manager",
-    "tag": "0.3.2",
-    "reference": "ghcr.io/spdrman/backup-manager:0.3.2",
-    "published": true,
+    "tag": "0.3.3",
+    "reference": "ghcr.io/spdrman/backup-manager:0.3.3",
+    "published": false,
     "note": [
-      "published:false. 0.3.2 is cut but not pushed: container/release-manifest.json carries a",
+      "published:false. 0.3.3 is cut but not pushed: container/release-manifest.json carries a",
       "registry_digest of null per architecture and a null index_digest, and this flag says the",
       "same thing from the other side. That file and this flag move together:",
       "TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag refuses a published flag",

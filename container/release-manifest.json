@@ -1,5 +1,5 @@
 {
-  "version": "0.3.2",
+  "version": "0.3.3",
   "commit": "572dffc6326ab0e1c1cb61bc137d3b10768e241b",
   "generated_at": "2026-09-07T19:09:08Z",
   "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; distribution/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
@@ -11,7 +11,7 @@
         "backup-manager-web": "64f03756ad7d62739faf5ea32492ad469d9a8116bba0f13af9633beb1555f87c"
       },
       "local_image_id_sha256": "242463abd3207251a59f2f962f4af48c84577c1727a64d7d864e8b6a8eb460fe",
-      "registry_digest": "sha256:def1dae7649c03081712faba6227350abd614d6be5c0a4d85159299df2df24b0"
+      "registry_digest": null
     },
     {
       "architecture": "arm64",
@@ -20,8 +20,8 @@
         "backup-manager-web": "805ed79ac467be7ef76fff809060e1e224320a41028e6e587a198a0942b7d8e6"
       },
       "local_image_id_sha256": "64524aaacf3c03bf73a1e1e683037e564ca521bfee872ffbade92758f34e177e",
-      "registry_digest": "sha256:b72173e604f53877ae25ec780992a43b9c6a7cf549fdb93118e57b28adc764f3"
+      "registry_digest": null
     }
   ],
-  "index_digest": "sha256:e657370cee581638cf13707826308e44b8e2b800a535155ae1e98e352f8e672b"
+  "index_digest": null
 }
