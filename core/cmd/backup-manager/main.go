@@ -163,6 +163,13 @@ commands:
                                                   MATCHING events, so a filter that narrows still fills it. --json
                                                   emits the wire objects unchanged, so a script parses the contract
                                                   rather than this table
+  activity --follow [--backup-set S] [--severity warn|error] [--limit N] [--json]
+                                                  stream the LIVE feed instead, until interrupted: the serving
+                                                  process's own event stream, which is what the Web UI's docked
+                                                  terminal shows. A different feed from the one above rather than a
+                                                  mode of it, so it needs a route to that process and refuses
+                                                  without one instead of quietly reading the journal. The feed
+                                                  starts again, and says so, if that process restarts (#573, #598)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
                                                   --backup-set takes the source/backup-set id here too, and names
                                                   the source itself when it carries one, so --source is only

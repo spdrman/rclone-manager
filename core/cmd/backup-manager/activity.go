@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
@@ -56,6 +58,7 @@ func cmdActivity(args []string) int {
 	severityFlag := fs.String("severity", "", "only events at this severity or above: warn or error")
 	limitFlag := fs.Int("limit", 0, "print at most this many matching events (default 200, maximum 1000)")
 	jsonFlag := fs.Bool("json", false, "emit the wire objects unchanged, so a script parses the contract rather than this table")
+	followFlag := fs.Bool("follow", false, "stream the LIVE feed instead of the durable log, until interrupted; needs a route to the serving process")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -98,6 +101,25 @@ func cmdActivity(args []string) int {
 	mode, err := enterReadMode(ctx, *cfgPath, cfg, os.Stderr)
 	if err != nil {
 		return fail(err)
+	}
+
+	if *followFlag {
+		// Its own context, and its own signal handling: this is the one
+		// invocation of this verb that does not end on its own. Ctrl-C or
+		// a SIGTERM is how an operator ends it and is not a failure, which
+		// is why followActivity returns nil on cancellation. The same
+		// shape `run` and `daemon` already use.
+		followCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := followActivity(followCtx, mode, followOptions{
+			backupSetID: *setFlag,
+			minSeverity: minSeverity,
+			limit:       *limitFlag,
+			asJSON:      *jsonFlag,
+		}, os.Stdout, os.Stderr); err != nil {
+			return fail(err)
+		}
+		return 0
 	}
 
 	events, err := readActivity(ctx, mode, cfg, journal, activityWindow(*limitFlag, *setFlag != "" || minSeverity > 0))

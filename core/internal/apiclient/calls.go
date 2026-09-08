@@ -255,3 +255,43 @@ func (c *Client) ListActivity(ctx context.Context, limit int) (apicontract.ListA
 	err := c.callQuery(ctx, "listActivity", nil, query, nil, &out)
 	return out, err
 }
+
+// LiveActivity is GET /activity/live: what every configured backup set is
+// doing right now, plus the tail of events behind it.
+//
+// A different feed from ListActivity above and deliberately not a
+// variation on it. That one reads the durable, append-only transition log
+// and survives a restart; this one is a bounded in-memory tail of the
+// SERVING PROCESS's own event stream, so it exists only where that process
+// does. A caller with no route to it has nothing to read, which is why
+// `backup-manager activity --follow` refuses rather than falling back to
+// the journal: the two feeds answer different questions and quietly
+// swapping one for the other would be this repository's own recurring
+// defect, two surfaces telling an operator different things.
+//
+// since is the highest sequence the caller has already seen, and zero
+// means "whatever is still held". It travels in the query rather than a
+// body because this is a GET, and it is what keeps polling cheap.
+//
+// The response's Epoch names the process that answered. A caller MUST drop
+// its cursor and everything it is holding when that changes, or after a
+// restart it goes on showing a dead process's log with a cursor the new
+// one cannot honour (#573).
+func (c *Client) LiveActivity(ctx context.Context, backupSetID string, since int64, limit int) (apicontract.LiveActivityResponse, error) {
+	query := url.Values{}
+	if backupSetID != "" {
+		query.Set("backup_set", backupSetID)
+	}
+	if since > 0 {
+		query.Set("since", strconv.FormatInt(since, 10))
+	}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	if len(query) == 0 {
+		query = nil
+	}
+	var out apicontract.LiveActivityResponse
+	err := c.callQuery(ctx, "getLiveActivity", nil, query, nil, &out)
+	return out, err
+}

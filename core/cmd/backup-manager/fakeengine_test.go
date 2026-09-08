@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +68,12 @@ type fakeEngine struct {
 	sessions map[string]bool
 	csrf     map[string]bool
 	seen     []string
+
+	// The live feed this engine hands out, one reading per request, and
+	// every cursor it was asked with. See liveActivity below for why this
+	// one answer is stated rather than produced.
+	liveReadings []apicontract.LiveActivityResponse
+	liveSince    []int64
 }
 
 // startFakeEngine announces that this process serves the deployment
@@ -278,6 +285,10 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 		e.updateBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/backup-sets/"):
 		e.removeBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
+	case r.Method == http.MethodGet && path == "/activity":
+		e.listActivity(w, r)
+	case r.Method == http.MethodGet && path == "/activity/live":
+		e.liveActivity(w, r)
 	case r.Method == http.MethodGet && path == "/settings":
 		e.getSettings(w, r)
 	case r.Method == http.MethodPatch && path == "/settings":
@@ -669,4 +680,97 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// listActivity and liveActivity are #598's two feeds, served the way this
+// file serves everything else: off the real BackupService behind it, with
+// only the projection to the wire written here.
+//
+// The projection is the part core cannot borrow (it lives in
+// apps/common/webhost, which core may not import), so it is mirrored,
+// deliberately narrowly, and the client's own contract check is what
+// catches a mistake in the mirror.
+func (e *fakeEngine) listActivity(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	events, err := e.svc.ListActivity(r.Context(), limit)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to list activity")
+		return
+	}
+	resp := apicontract.ListActivityResponse{Events: make([]apicontract.ActivityEvent, 0, len(events))}
+	for _, ev := range events {
+		resp.Events = append(resp.Events, apicontract.ActivityEvent{
+			ArtifactID:   ev.ArtifactID,
+			ArtifactName: ev.ArtifactName,
+			BackupSetID:  ev.BackupSetID,
+			SourceName:   ev.SourceName,
+			SetName:      ev.SetName,
+			From:         ev.From,
+			To:           ev.To,
+			OccurredAt:   ev.OccurredAt.Format(time.RFC3339Nano),
+			Detail:       ev.Detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// liveActivity answers from whatever this engine has been told to hold
+// (see holdLiveActivity), rather than from the service's own in-memory
+// tail.
+//
+// That is the one place this file substitutes a fixture for the real
+// thing, and it is deliberate: the questions `activity --follow` has to
+// answer are about the CURSOR and the EPOCH, and driving those off a real
+// engine would mean provoking real work and then restarting a real
+// process inside a unit test. What is under test here is the client's
+// half of that contract, so the engine's half is stated rather than
+// produced.
+func (e *fakeEngine) liveActivity(w http.ResponseWriter, r *http.Request) {
+	since := int64(0)
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			since = parsed
+		}
+	}
+
+	e.mu.Lock()
+	readings := e.liveReadings
+	if len(readings) == 0 {
+		e.mu.Unlock()
+		writeJSON(w, http.StatusOK, apicontract.LiveActivityResponse{
+			Epoch: "epoch-empty", PollAfterMs: 1, Sets: []apicontract.LiveActivitySet{},
+		})
+		return
+	}
+	next := readings[0]
+	if len(readings) > 1 {
+		e.liveReadings = readings[1:]
+	}
+	e.liveSince = append(e.liveSince, since)
+	e.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, next)
+}
+
+// holdLiveActivity queues the readings GET /activity/live will answer
+// with, in order. The last one is repeated once the queue runs down, so a
+// poll loop that keeps asking gets a stable answer rather than an error.
+func (e *fakeEngine) holdLiveActivity(readings ...apicontract.LiveActivityResponse) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.liveReadings = readings
+}
+
+// cursorsSeen is every `since` the client sent, in order. It is the only
+// way to prove the cursor advanced, and the only way to prove it was
+// dropped when the epoch changed.
+func (e *fakeEngine) cursorsSeen() []int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int64(nil), e.liveSince...)
 }
