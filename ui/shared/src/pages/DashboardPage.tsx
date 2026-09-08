@@ -26,6 +26,7 @@ import { useCausl } from "@shared/state/graph";
 import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import type { CycleOutcome, SystemHealth } from "@shared/types/operation";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthSummary } from "@shared/components/HealthSummary";
 import { MetricCard } from "@shared/components/MetricCard";
@@ -264,9 +265,13 @@ export function DashboardPage({
                 {storage.data ? (
                   <StorageGauge storage={storage.data} />
                 ) : storage.error ? (
-                  <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                  <Banner
+                    tone="danger"
+                    style={{ fontSize: "var(--text-sm)" }}
+                    dismissKey={storage.error.message}
+                  >
                     {"Storage capacity is unavailable (" + storage.error.message + ")."}
-                  </div>
+                  </Banner>
                 ) : (
                   <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking storage…</p>
                 )}
@@ -304,9 +309,13 @@ export function DashboardPage({
               should stay visible under the notice rather than being
               replaced by it. */}
           {operations.error ? (
-            <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+            <Banner
+              tone="danger"
+              style={{ fontSize: "var(--text-sm)" }}
+              dismissKey={operations.error.message}
+            >
               Live operation status is unavailable ({operations.error.message}).
-            </div>
+            </Banner>
           ) : null}
           {active === null
             ? (operations.error

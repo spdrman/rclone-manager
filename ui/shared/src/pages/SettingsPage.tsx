@@ -23,6 +23,7 @@ import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
 import { useCausl } from "@shared/state/graph";
 import { configuredNode, versionNode } from "@shared/state/appNodes";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
@@ -95,10 +96,10 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>
             <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {/* Honest capability copy — never present a fallback as native (§22). */}
-              <div className="banner banner--info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+              <Banner tone="info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
                 <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
                 <span>{notificationCopy(bridge.capabilities(), bridge.name)}</span>
-              </div>
+              </Banner>
               {/* Issue #299: this row used to present
                   "https://hooks.internal/bm" as a live webhook delivery
                   target. config.Alerts' own doc comment says where an
@@ -179,9 +180,17 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                 // versionNode's one fetch is owned by App.tsx, not this page,
                 // so there is nothing here to retry (mirrors BackupSetsPage's
                 // operations.error inline notice, same reasoning).
-                <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                <Banner
+                  tone="danger"
+                  style={{ fontSize: "var(--text-sm)" }}
+                  // The sentence names the failure it is reporting, so the
+                  // dismissal is scoped to THAT failure: a different one
+                  // puts the banner back without waiting for a remount
+                  // (#620).
+                  dismissKey={version.error.message}
+                >
                   {"Version information is unavailable (" + version.error.message + ") — details below may be out of date."}
-                </div>
+                </Banner>
               ) : (
                 <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Loading version information…</p>
               )}
@@ -329,9 +338,9 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
             )}
           </HelpField>
           {success ? (
-            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+            <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
               Password changed. Other signed-in sessions have been signed out.
-            </div>
+            </Banner>
           ) : null}
           {failure ? (
             <ErrorState

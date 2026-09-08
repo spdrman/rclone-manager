@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
+import { Banner } from "@shared/components/Banner";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
@@ -543,10 +544,14 @@ export function MediumDisclosure({
     (t) => mediums.find((m) => m.id === t.medium)?.readsRequireRestore
   );
   return (
-    <div
-      className="banner banner--warn"
+    // Not dismissible (#620). The acknowledgement checkbox at the foot of
+    // this banner is what arms Save, so putting the banner away would
+    // leave Save permanently off with nothing on screen saying why.
+    <Banner
+      tone="warn"
       role="group"
-      aria-label="Storage medium disclosure"
+      ariaLabel="Storage medium disclosure"
+      dismissible={false}
       style={{ flexDirection: "column", gap: 10 }}
     >
       <div style={{ fontWeight: 600 }}>Saving this sends backups off this machine.</div>
@@ -588,7 +593,7 @@ export function MediumDisclosure({
           they upload, and that reading them back costs money and, on an archive class, hours.
         </span>
       </label>
-    </div>
+    </Banner>
   );
 }
 

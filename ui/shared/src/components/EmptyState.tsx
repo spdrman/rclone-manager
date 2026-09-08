@@ -16,6 +16,7 @@
  */
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { Banner } from "@shared/components/Banner";
 
 export function EmptyState({
   title,
@@ -117,7 +118,13 @@ export function ErrorState({
   const advanced = lines === "" ? undefined : lines;
 
   return (
-    <div className="banner banner--danger" role="alert" style={{ flexDirection: "column" }}>
+    // Not dismissible (#620). Every caller renders this INSTEAD of the
+    // content it could not load, so it is the surface rather than a
+    // notice over one: putting it away would leave a blank panel and
+    // take Try again, the correlation id and the detail with it. #620's
+    // opt-out is for exactly this, and for a banner an operator must not
+    // be able to mistake for handled.
+    <Banner tone="danger" role="alert" dismissible={false} style={{ flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 12 }}>
         <span aria-hidden="true" style={{ color: "var(--danger)" }}>{"\u2715"}</span>
         <div>
@@ -168,6 +175,6 @@ export function ErrorState({
           ) : null}
         </div>
       </div>
-    </div>
+    </Banner>
   );
 }
