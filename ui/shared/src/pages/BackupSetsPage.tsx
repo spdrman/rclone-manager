@@ -26,6 +26,7 @@ import { useCausl } from "@shared/state/graph";
 import { operationsNode } from "@shared/state/appNodes";
 import { progressPercent } from "@shared/types/operation";
 import type { BackupSet } from "@shared/types/backup";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
 import { RemoveBackupSetDialog } from "@shared/components/RemoveBackupSetDialog";
@@ -209,10 +210,14 @@ export function BackupSetsPage({
           operations is secondary to sets on this page (sets.error owns
           that treatment via the early return above). */}
       {operations.error ? (
-        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+        <Banner
+          tone="danger"
+          style={{ fontSize: "var(--text-sm)" }}
+          dismissKey={operations.error.message}
+        >
           Live operation status is unavailable ({operations.error.message}) — current-operation
           badges below may be stale.
-        </div>
+        </Banner>
       ) : null}
 
       <div

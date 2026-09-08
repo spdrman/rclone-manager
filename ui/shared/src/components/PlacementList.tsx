@@ -1,6 +1,7 @@
 import type { BackupPlacement, PlacementAccess } from "@shared/types/backup";
 import type { StorageSchema } from "@shared/api/contracts";
 import { StatusBadge, type StatusTone } from "@shared/components/StatusBadge";
+import { Banner } from "@shared/components/Banner";
 import { bytes, stamp } from "@shared/utilities/format";
 
 /**
@@ -107,7 +108,7 @@ export function PlacementList({
 
       {placements.length === 0 ? (
         <div style={{ padding: "16px 18px" }}>
-          <div className="banner banner--info">
+          <Banner tone="info">
             <span aria-hidden="true" style={{ color: "var(--text-2)" }}>{"\u25cf"}</span>
             <div>
               <div style={{ fontWeight: 500 }}>No confirmed copy yet</div>
@@ -118,7 +119,7 @@ export function PlacementList({
                 a copy.
               </p>
             </div>
-          </div>
+          </Banner>
         </div>
       ) : (
         <div className="table-scroll">
