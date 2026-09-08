@@ -68,9 +68,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { mergeActivity, useActivityWindow } from "@shared/pages/useActivityFeed";
-import { activityLine, logText } from "@shared/pages/ActivityStrip";
+import { activityLine, logText, UnfinishedActionsNotice } from "@shared/pages/ActivityStrip";
 import type { LineTone } from "@shared/pages/ActivityStrip";
-import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { LiveActivity, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 import { clock } from "@shared/utilities/format";
 
 /** How many lines the dock holds.
@@ -187,6 +187,16 @@ export function foldReading(previous: SetActivity | undefined, next: LiveActivit
   for (const e of next.deployment?.events ?? []) events.push(e);
   events.sort((a, b) => a.sequence - b.sequence);
 
+  // Every bucket's open actions, in the order they started (issue #625).
+  // The deployment's are the ones this dock exists for: a cycle belongs
+  // to no single backup set, so a cycle that announced itself and went
+  // quiet has no strip to be reported on and this is the only surface
+  // that can say so.
+  const unfinishedActions = [
+    ...next.sets.flatMap((s) => s.unfinishedActions ?? []),
+    ...(next.deployment?.unfinishedActions ?? [])
+  ].sort((a, b) => a.sequence - b.sequence);
+
   const dropped = next.sets.some((s) => s.dropped) || (next.deployment?.dropped ?? false);
   // The earliest sequence any bucket is still holding. Zero when nothing
   // is held anywhere, which is the honest answer for a process that has
@@ -213,6 +223,7 @@ export function foldReading(previous: SetActivity | undefined, next: LiveActivit
     startedAt: null,
     finishedAt: null,
     events,
+    unfinishedActions,
     truncated: next.sets.some((s) => s.truncated) || (next.deployment?.truncated ?? false),
     dropped,
     oldestSequence: oldest,
@@ -513,6 +524,7 @@ export function ActivityDock() {
           onResize={setHeight}
           dropped={dropped}
           preamble={preamble}
+          unfinished={held?.unfinishedActions ?? []}
         />
       ) : null}
     </section>
@@ -556,7 +568,8 @@ function DockLog({
   height,
   onResize,
   dropped,
-  preamble
+  preamble,
+  unfinished
 }: {
   entries: DockEntry[];
   viewer: string | null;
@@ -564,6 +577,13 @@ function DockLog({
   onResize(next: number): void;
   dropped: boolean;
   preamble: string;
+  /** The actions that announced themselves and have not said how they
+   *  went (issue #625). Drawn at the foot of the scrollback rather than
+   *  among the lines, because it is a statement about NOW rather than
+   *  something that happened at a moment: it belongs after the last
+   *  thing that did happen, and it goes away by itself when the
+   *  completion it is waiting for arrives. */
+  unfinished: UnfinishedAction[];
 }) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const following = useRef(true);
@@ -639,6 +659,14 @@ function DockLog({
             <DockLine key={entry.event.sequence + "-" + i} event={entry.event} viewer={viewer} />
           )
         )}
+        {/* Inside the scrollback and at the FOOT of it, which is where
+            the log already follows to, so a reader watching the tail is
+            looking straight at it. Below the scroller it would sit
+            outside the height the shell reserves for this panel (see
+            dockReservedHeight) and be clipped by the section's own
+            maxHeight, which for a notice about something that has gone
+            quiet is the worst possible place to put it. */}
+        <UnfinishedActionsNotice actions={unfinished} />
       </div>
     </>
   );

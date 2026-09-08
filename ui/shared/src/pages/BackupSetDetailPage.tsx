@@ -42,6 +42,7 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
+import { Icon } from "@shared/design-system/icons";
 import { SetActivityPanel } from "./SetActivityPanel";
 import { useActivityFeed } from "./useActivityFeed";
 import { emitBrowserNotice } from "@shared/state/browserNotices";
@@ -1037,8 +1038,12 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
                 const on = s.validations.includes(v);
                 return (
                   <li key={v} style={{ display: "flex", gap: 9 }}>
+                    {/* The tick is artwork after #621 and the en dash
+                        beside it is still an en dash: one is a verdict
+                        and the other is "this is off", which is a thing
+                        a dash says and a picture does not. */}
                     <span aria-hidden="true" style={{ color: on ? "var(--ok)" : "var(--text-3)" }}>
-                      {on ? "\u2713" : "\u2013"}
+                      {on ? <Icon name="success" /> : "\u2013"}
                     </span>
                     <span>
                       {v === "transfer" ? "Transfer verification" : v === "checksum" ? "Checksum verification (SHA-256)" : "Application validation"}
@@ -1309,7 +1314,27 @@ function CancelEditDialog({
           {n > 0 ? (
             <LedgerGroup id="cancel-ledger-discarded" title="Discarded, never sent" first>
               {discarded.map((entry) => (
-                <LedgerRow key={entry.key} label={entry.label} value={entry.typed + " \u2192 " + entry.returnsTo} />
+                <LedgerRow
+                  key={entry.key}
+                  label={entry.label}
+                  value={
+                    <>
+                      {entry.typed}
+                      {/* Reads "becomes", and it is the one arrow in this
+                          app that sits inside a value rather than on a
+                          control (#621). Sized under the mono text it is
+                          in, because at a full 1em a solid arrow is the
+                          heaviest thing in the row and the values are
+                          what an operator is here to read. */}
+                      <Icon
+                        name="arrow-right"
+                        size="0.8em"
+                        style={{ margin: "0 6px", color: "var(--text-3)" }}
+                      />
+                      {entry.returnsTo}
+                    </>
+                  }
+                />
               ))}
             </LedgerGroup>
           ) : null}
@@ -1373,10 +1398,13 @@ function LedgerGroup({
   );
 }
 
-/** One box on one side of it. The value is a single string rather than
- *  styled halves on purpose: a known_hosts line is long, and splitting it
- *  into decorated pieces buys nothing an operator can act on. */
-function LedgerRow({ label, value }: { label: string; value: string }) {
+/** One box on one side of it. The value is deliberately plain: a
+ *  known_hosts line is long, and splitting it into decorated pieces buys
+ *  nothing an operator can act on. It takes a node rather than a string
+ *  only because one caller puts a "becomes" arrow between two values, and
+ *  #621 made that arrow a picture; nothing else passes anything but a
+ *  string, and nothing else should. */
+function LedgerRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div
       style={{

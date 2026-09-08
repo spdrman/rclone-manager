@@ -96,7 +96,7 @@ func TestNilLoggerIsSafeNoOp(t *testing.T) {
 	l.CycleStart(context.Background(), "cycle-1")
 	l.CycleEnd(context.Background(), "cycle-1", 0, nil)
 	l.Discovery(context.Background(), "prod/set", 0, 0, 0, 0, 0, 0)
-	l.LifecycleTransition(context.Background(), "prod/set/artifact", "DISCOVERED", "TRANSFERRING", "")
+	l.LifecycleTransition(context.Background(), "prod/set/artifact", "DISCOVERED", "TRANSFERRING", "", false)
 	l.TransferStats(context.Background(), "prod/set/artifact", 0, 0, false)
 	l.Hash(context.Background(), "prod/set/artifact", "sha256", "deadbeef")
 	l.Validation(context.Background(), "prod/set/artifact", true, "")

@@ -3,9 +3,11 @@ import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError, AppSettings, CapacitySettings, UpdateCapacitySettings } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
+import { Banner } from "@shared/components/Banner";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
+import { Icon } from "@shared/design-system/icons";
 import { isNotConfigured } from "@shared/api/failure";
 
 /**
@@ -367,10 +369,12 @@ function CapacityEditor({ loaded, readOnly }: { loaded: CapacitySettings; readOn
       ) : null}
 
       {saved ? (
-        <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"✓"}</span>
+        <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
+          <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+            <Icon name="success" />
+          </span>
           <span>Storage capacity settings saved. They are in effect now, with no restart.</span>
-        </div>
+        </Banner>
       ) : null}
 
       <div>

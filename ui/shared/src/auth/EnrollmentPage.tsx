@@ -22,6 +22,7 @@ import { bootstrapTokenFromLocation } from "@shared/api/client";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
 import { AuthFrame } from "./LoginPage";
+import { Banner } from "@shared/components/Banner";
 import { ErrorState } from "@shared/components/EmptyState";
 import { HelpField } from "@shared/components/FieldHelp";
 import { PasswordInput } from "@shared/components/PasswordInput";
@@ -161,12 +162,12 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
             </>
           )}
         </HelpField>
-        <div className="banner banner--info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+        <Banner tone="info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
           <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
           <span>
             {"Minimum " + MIN_LENGTH + " characters. Credentials are stored on this NAS; nothing is sent off the device."}
           </span>
-        </div>
+        </Banner>
         {failure ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <ErrorState

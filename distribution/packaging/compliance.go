@@ -106,6 +106,13 @@ type ComplianceLicense struct {
 	// not part of PermissiveIDs, and the reasoning is in
 	// AcceptedNonPermissiveLicence's own doc comment.
 	AcceptedNonPermissive []AcceptedNonPermissiveLicence `json:"acceptedNonPermissive"`
+	// VendoredAssets is third-party material this repository carries in
+	// its own source rather than resolving through a package manager,
+	// so neither the module graph nor the frontend lockfile can see it
+	// and the derived inventory has no row for it. Issue #621 put the
+	// first one in the tree. VendoredAsset's own doc says why it is a
+	// register beside the inventory instead of a row inside it.
+	VendoredAssets []VendoredAsset `json:"vendoredAssets"`
 }
 
 // AcceptedNonPermissiveLicence is one licence that is not permissive and

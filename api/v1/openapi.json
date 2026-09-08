@@ -3074,6 +3074,37 @@
           "value"
         ]
       },
+      "LiveActivityAction": {
+        "type": "object",
+        "description": "One action that started and has not reported an outcome. It is what makes \"this announced itself and went quiet\" something a surface can say, rather than something an operator would have to notice by reading every line and remembering which starts they had seen. An action still legitimately running appears here too, and that is correct rather than a false alarm: the honest sentence is \"started four minutes ago and has not reported an outcome\", and whether four minutes is long is a judgement the person reading it is far better placed to make than this service is.",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action's stable name, as its two lines carry it."
+          },
+          "action_id": {
+            "type": "string",
+            "description": "What the start and its missing completion would be paired by."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the start line was emitted, which is the only thing anything can work out how long it has been quiet from."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The start line's own sequence, so a client can find the line this is about in the tail it already holds."
+          }
+        },
+        "required": [
+          "action",
+          "action_id",
+          "started_at",
+          "sequence"
+        ]
+      },
       "LiveActivityDeployment": {
         "type": "object",
         "description": "The log that belongs to no single backup set, served in its own right rather than copied onto every set's feed. A cycle starting covers every set and a capacity check is about a filesystem, so neither belongs on one set's strip; until this bucket existed the only alternatives were dropping those lines (which hides them) or reporting them on every strip, and the second is what shipped, so on a real deployment every set's strip showed the same log and the shared lines crowded out each set's own. It is absent when the caller narrowed the reading to one backup set, because a caller that named a set asked about that set. It is present, and is the whole answer, for a deployment with no configured backup sets at all, which is exactly when a new operator is pressing buttons in a wizard and has nothing else to read.",
@@ -3084,6 +3115,13 @@
             "items": {
               "$ref": "#/components/schemas/LiveActivityEvent"
             }
+          },
+          "unfinished_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityAction"
+            },
+            "description": "Every action belonging to no single backup set whose start is still held with no completion behind it, oldest first. It is deliberately NOT filtered by the cursor: a cursor asks what is new, and an action that has been quiet for ten minutes is not new, so a client polling all along would otherwise be told about it once and never again. It is derived from the tail this process is still holding rather than tracked in a structure of its own, so an action whose start has scrolled out of the bounded buffer is forgotten along with every other line from that far back."
           },
           "truncated": {
             "type": "boolean",
@@ -3106,6 +3144,7 @@
         },
         "required": [
           "events",
+          "unfinished_actions",
           "truncated",
           "dropped",
           "oldest_sequence",
@@ -3135,6 +3174,27 @@
               "error"
             ],
             "description": "The severity the engine emitted this event at, carried through unchanged."
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warn",
+              "error",
+              "info"
+            ],
+            "description": "How the operation this line reports WENT, stated by the engine rather than re-derived by whoever draws the line. It is not a second spelling of level and it is carried for the same reason level is: the emitter said it. There is no success severity and there cannot be one, because a level is an ordering every reader treats as a threshold, so before this field existed a completion that went well arrived at info and was indistinguishable from a note, and every client wanting to draw one as good news re-derived it from event names and lifecycle state values with anything it did not recognise silently staying neutral. It is called result and not outcome on purpose: connection_test carries a field of its own called outcome, and LiveActivitySet.outcome in this same response is a different vocabulary again, so a client reading set.outcome beside set.events[i].result is told those are different questions. Absent is a real answer rather than a default: a start has not gone any way yet, and an ordinary progress note reports no operation at all.",
+            "x-go-omitempty": true
+          },
+          "action": {
+            "type": "string",
+            "description": "The stable name of the operator-visible action this line opens or closes (cycle, connection_test). Absent on every line that is neither half of a pair.",
+            "x-go-omitempty": true
+          },
+          "action_id": {
+            "type": "string",
+            "description": "What an action's start and its completion are paired by, structurally rather than by the habit of spelling one event cycle_start and the other cycle_end. A line carrying this and no outcome is a start; one carrying both is that start's completion. It is what lets a reader notice an action that announced itself and then went quiet, which is the state an operator most needs named and the one nothing could see.",
+            "x-go-omitempty": true
           },
           "event": {
             "type": "string",
@@ -3266,6 +3326,13 @@
             },
             "description": "The tail, oldest first, filtered by whatever cursor the caller sent. Empty is an empty array, never an absent key."
           },
+          "unfinished_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityAction"
+            },
+            "description": "Every action inside this backup set whose start is still held with no completion behind it, oldest first. It is deliberately NOT filtered by the cursor: a cursor asks what is new, and an action that has been quiet for ten minutes is not new, so a client polling all along would otherwise be told about it once and never again. It is derived from the tail this process is still holding rather than tracked in a structure of its own, so an action whose start has scrolled out of the bounded buffer is forgotten along with every other line from that far back."
+          },
           "truncated": {
             "type": "boolean",
             "description": "Whether limit cut this reading short. The events above are the OLDEST held that are newer than the cursor, never the newest, because a cursor a client advances past a gap is a client that never sees the middle of a burst again. True means the rest is still held: ask again with the sequence this reading ends at."
@@ -3291,6 +3358,7 @@
           "progress_basis",
           "failures",
           "events",
+          "unfinished_actions",
           "truncated",
           "dropped",
           "oldest_sequence",

@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "4c7f7bdab02a185a7368608effb3cebc359bee83239f0e43402ee47c5cf3340a"
+const ContractSHA256 = "9774ee54281bac0f91bf9b9b4cdc1dbf2f9477f9afb3942f99ac8782779cb50e"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1404,6 +1404,22 @@ type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
 }
 
+// LiveActivityAction is one action that started and has not reported an outcome. It is
+// what makes "this announced itself and went quiet" something a
+// surface can say, rather than something an operator would have to
+// notice by reading every line and remembering which starts they had
+// seen. An action still legitimately running appears here too, and
+// that is correct rather than a false alarm: the honest sentence is
+// "started four minutes ago and has not reported an outcome", and
+// whether four minutes is long is a judgement the person reading it
+// is far better placed to make than this service is.
+type LiveActivityAction struct {
+	Action    string `json:"action"`
+	ActionID  string `json:"action_id"`
+	Sequence  int64  `json:"sequence"`
+	StartedAt string `json:"started_at"`
+}
+
 // LiveActivityDeployment is the log that belongs to no single backup set, served in its own
 // right rather than copied onto every set's feed. A cycle starting
 // covers every set and a capacity check is about a filesystem, so
@@ -1418,11 +1434,12 @@ type ListValidatorsResponse struct {
 // all, which is exactly when a new operator is pressing buttons in a
 // wizard and has nothing else to read.
 type LiveActivityDeployment struct {
-	Dropped        bool                `json:"dropped"`
-	Events         []LiveActivityEvent `json:"events"`
-	LatestSequence int64               `json:"latest_sequence"`
-	OldestSequence int64               `json:"oldest_sequence"`
-	Truncated      bool                `json:"truncated"`
+	Dropped           bool                 `json:"dropped"`
+	Events            []LiveActivityEvent  `json:"events"`
+	LatestSequence    int64                `json:"latest_sequence"`
+	OldestSequence    int64                `json:"oldest_sequence"`
+	Truncated         bool                 `json:"truncated"`
+	UnfinishedActions []LiveActivityAction `json:"unfinished_actions"`
 }
 
 // LiveActivityEvent is one line of the live feed. It carries the engine's own event name,
@@ -1434,11 +1451,14 @@ type LiveActivityDeployment struct {
 // when it decided a line was a warning rather than a note, so it is
 // carried through rather than re-derived.
 type LiveActivityEvent struct {
+	Action   string              `json:"action,omitempty"`
+	ActionID string              `json:"action_id,omitempty"`
 	At       string              `json:"at"`
 	Event    string              `json:"event"`
 	Fields   []LiveActivityField `json:"fields"`
 	Level    string              `json:"level"`
 	Message  string              `json:"message"`
+	Result   string              `json:"result,omitempty"`
 	Scope    string              `json:"scope"`
 	Sequence int64               `json:"sequence"`
 }
@@ -1475,25 +1495,26 @@ type LiveActivityResponse struct {
 // either nothing is running or nothing is reporting, with no way to
 // tell which.
 type LiveActivitySet struct {
-	Active             bool                `json:"active"`
-	Artifact           string              `json:"artifact,omitempty"`
-	ArtifactsCompleted int                 `json:"artifacts_completed"`
-	ArtifactsTotal     *int                `json:"artifacts_total,omitempty"`
-	BackupSetID        string              `json:"backup_set_id"`
-	BytesPerSecond     *int64              `json:"bytes_per_second,omitempty"`
-	BytesTotal         *int64              `json:"bytes_total,omitempty"`
-	BytesTransferred   *int64              `json:"bytes_transferred,omitempty"`
-	Dropped            bool                `json:"dropped"`
-	Events             []LiveActivityEvent `json:"events"`
-	Failures           int                 `json:"failures"`
-	FinishedAt         string              `json:"finished_at,omitempty"`
-	LatestSequence     int64               `json:"latest_sequence"`
-	OldestSequence     int64               `json:"oldest_sequence"`
-	Outcome            string              `json:"outcome,omitempty"`
-	ProgressBasis      string              `json:"progress_basis"`
-	Stage              string              `json:"stage,omitempty"`
-	StartedAt          string              `json:"started_at,omitempty"`
-	Truncated          bool                `json:"truncated"`
+	Active             bool                 `json:"active"`
+	Artifact           string               `json:"artifact,omitempty"`
+	ArtifactsCompleted int                  `json:"artifacts_completed"`
+	ArtifactsTotal     *int                 `json:"artifacts_total,omitempty"`
+	BackupSetID        string               `json:"backup_set_id"`
+	BytesPerSecond     *int64               `json:"bytes_per_second,omitempty"`
+	BytesTotal         *int64               `json:"bytes_total,omitempty"`
+	BytesTransferred   *int64               `json:"bytes_transferred,omitempty"`
+	Dropped            bool                 `json:"dropped"`
+	Events             []LiveActivityEvent  `json:"events"`
+	Failures           int                  `json:"failures"`
+	FinishedAt         string               `json:"finished_at,omitempty"`
+	LatestSequence     int64                `json:"latest_sequence"`
+	OldestSequence     int64                `json:"oldest_sequence"`
+	Outcome            string               `json:"outcome,omitempty"`
+	ProgressBasis      string               `json:"progress_basis"`
+	Stage              string               `json:"stage,omitempty"`
+	StartedAt          string               `json:"started_at,omitempty"`
+	Truncated          bool                 `json:"truncated"`
+	UnfinishedActions  []LiveActivityAction `json:"unfinished_actions"`
 }
 
 // ManagerStorage is the one manager-wide storage reading: what the backup root's
@@ -2201,6 +2222,7 @@ var SchemaTypes = map[string]any{
 	"ListStorageMediumsResponse":        ListStorageMediumsResponse{},
 	"ListStorageStatusResponse":         ListStorageStatusResponse{},
 	"ListValidatorsResponse":            ListValidatorsResponse{},
+	"LiveActivityAction":                LiveActivityAction{},
 	"LiveActivityDeployment":            LiveActivityDeployment{},
 	"LiveActivityEvent":                 LiveActivityEvent{},
 	"LiveActivityField":                 LiveActivityField{},

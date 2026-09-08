@@ -10,6 +10,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
@@ -235,7 +236,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 			s.logger().Error(ctx, "transfer", err)
 			return
 		}
-		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
+		s.logTransition(ctx, artifact, rec.State, out.Record.State, out.Detail)
 		if out.Record.Transfer != nil {
 			s.logger().TransferStats(ctx, artifact.String(), out.Record.Transfer.BytesTransferred, 0, out.Record.Transfer.Checksummed)
 		}
@@ -269,7 +270,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 			s.logger().Error(ctx, "verify", err)
 			return
 		}
-		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
+		s.logTransition(ctx, artifact, rec.State, out.Record.State, out.Detail)
 		if out.Record.ValidationDetail != "" || out.Record.ValidationPassed != nil {
 			passed := out.Record.ValidationPassed != nil && *out.Record.ValidationPassed
 			s.logger().Validation(ctx, artifact.String(), passed, out.Record.ValidationDetail)
@@ -360,7 +361,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 			s.logger().Error(ctx, "remote-retain", err)
 			return
 		}
-		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State,
+		s.logTransition(ctx, artifact, rec.State, out.Record.State,
 			"read-only backup set: the remote source is retained by policy, never offered for deletion")
 		return
 	}
@@ -377,8 +378,29 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		return
 	}
 	s.logger().RemoteDelete(ctx, artifact.String(), rec.RemotePath, nil)
-	s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
+	s.logTransition(ctx, artifact, rec.State, out.Record.State, out.Detail)
 	return
+}
+
+// logTransition records one artifact moving between FR-10 states, and
+// classifies the state it landed in so the line's severity says whether a
+// backup happened (issue #625).
+//
+// One helper rather than the same classification typed out at each of the
+// four call sites above: it is a closed question with one right answer,
+// and four copies of an answer are three chances to get one of them
+// wrong. It is also the only place in this package that has to know a
+// transition can be a failure at all.
+//
+// internal/lifecycle owns which states mean the attempt produced no
+// backup, and this reads its predicate rather than a set of its own.
+// internal/obs, one layer down, takes the answer as a bool and never sees
+// a state name, which is what keeps it the standalone sink its package
+// doc describes; see LifecycleTransition there for what the answer costs
+// in severity, and why an artifact in FAILED is one of the few things
+// this product logs at error.
+func (s *Service) logTransition(ctx context.Context, artifact model.ArtifactID, from, to, detail string) {
+	s.logger().LifecycleTransition(ctx, artifact.String(), from, to, detail, lifecycle.IsExceptionalState(lifecycle.State(to)))
 }
 
 // processArtifacts drives every one of records forward via processArtifact

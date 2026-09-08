@@ -13,9 +13,11 @@ import type {
   StorageSchema
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
+import { Banner } from "@shared/components/Banner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { ErrorState } from "@shared/components/EmptyState";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { Icon } from "@shared/design-system/icons";
 import { isNotConfigured } from "@shared/api/failure";
 import {
   chainKey,
@@ -242,17 +244,29 @@ function RetentionPanel({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11, fontSize: 13 }}>
-      {/* banner--info on BOTH branches, deliberately. Neither state is a
-          warning and neither is a success, so the two are told apart by
-          what the sentence says rather than by colour, which this UI does
-          not rely on alone anywhere. */}
-      <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
+      {/* One info banner for BOTH branches, deliberately. Neither state
+          is a warning and neither is a success, so the two are told apart
+          by what the sentence says rather than by colour, which this UI
+          does not rely on alone anywhere. */}
+      <Banner
+        tone="info"
+        style={{ fontSize: "var(--text-sm)" }}
+        // The two sentences are opposites sharing one element, so without
+        // this a dismissal of either is inherited by the other (#620).
+        // Nothing rescues it: this panel is keyed on isOverride, which
+        // reads like a remount and is not one, because clearing an
+        // override goes through `apply` and that only moves panel-local
+        // state. `retention.data` is never refetched, so the key never
+        // changes and the words swap in place. They are the one line on
+        // this card saying which policy decides deletions for this set.
+        dismissKey={r.isOverride ? "override" : "deployment"}
+      >
         <span>
           {r.isOverride
             ? "Retained under this backup set's own policy. Editing the deployment's retention policy will not change it."
             : "Retained under the deployment's retention policy. Editing that policy changes this set too."}
         </span>
-      </div>
+      </Banner>
 
       <PolicyChain policy={r.effective} />
 
@@ -275,17 +289,27 @@ function RetentionPanel({
           protection off. A banner there would be a banner about a policy
           that is not in force. */}
       {r.effective.protectLastKnownGood ? (
-        <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+        <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
+          <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+            <Icon name="success" />
+          </span>
           <span>Newest known-good backup is protected from deletion</span>
-        </div>
+        </Banner>
       ) : (
-        <div className="banner banner--warn" style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u26a0"}</span>
+        // Not dismissible (#620). This is FR-19's protection reported as
+        // ABSENT, which is the one sentence on this card that is a
+        // promise about a deletion rather than a description of a
+        // schedule. The doc above says it survived the card's rewrite
+        // only because the browser suite asked for it back; a close
+        // control would put it away again, one operator at a time.
+        <Banner tone="warn" dismissible={false} style={{ fontSize: "var(--text-sm)" }}>
+          <span aria-hidden="true" style={{ color: "var(--warn)", lineHeight: 1.5 }}>
+            <Icon name="warning" />
+          </span>
           <span>
             Newest known-good backup is NOT protected from deletion under this policy
           </span>
-        </div>
+        </Banner>
       )}
 
       {r.isOverride ? (
@@ -300,9 +324,17 @@ function RetentionPanel({
       ) : null}
 
       {error ? (
-        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }} role="alert">
+        <Banner
+          tone="danger"
+          role="alert"
+          style={{ fontSize: "var(--text-sm)" }}
+          // Scoped to the failure it names, so a second, different
+          // refusal is not swallowed by having dismissed the first
+          // (#620).
+          dismissKey={error.message}
+        >
           <span>{error.message}</span>
-        </div>
+        </Banner>
       ) : null}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -628,9 +660,17 @@ function RetentionOverrideEditor({
       ) : null}
 
       {error ? (
-        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }} role="alert">
+        <Banner
+          tone="danger"
+          role="alert"
+          style={{ fontSize: "var(--text-sm)" }}
+          // Scoped to the failure it names, so a second, different
+          // refusal is not swallowed by having dismissed the first
+          // (#620).
+          dismissKey={error.message}
+        >
           <span>{error.message}</span>
-        </div>
+        </Banner>
       ) : null}
 
       <div style={{ display: "flex", gap: 8 }}>

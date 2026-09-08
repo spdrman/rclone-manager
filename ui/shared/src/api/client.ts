@@ -61,6 +61,7 @@ import type {
   WireListActivityResponse,
   WireLiveActivityResponse,
   WireLiveActivitySet,
+  WireLiveActivityAction,
   WireLiveActivityEvent,
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
@@ -133,7 +134,7 @@ import type {
   TransferProgress,
   VersionInfo
 } from "@shared/types/operation";
-import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { LiveActivity, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 
 const BASE = "/api/v1";
 
@@ -1357,11 +1358,28 @@ function fromWireLiveActivityEvent(e: WireLiveActivityEvent): SetActivityEvent {
     sequence: e.sequence,
     at: e.at,
     level: e.level,
+    // Absent stays absent rather than becoming a null or an empty
+    // string. A line that states no result has reported no operation,
+    // which is what a start and every progress note do, and rendering
+    // that as a value would make the field the thing nobody trusts.
+    result: e.result,
+    action: e.action,
+    actionId: e.action_id,
     event: e.event,
     scope: e.scope,
     message: e.message,
     fields
   };
+}
+
+/** The actions a bucket says are still open (issue #625). */
+function fromWireUnfinishedActions(actions: WireLiveActivityAction[]): UnfinishedAction[] {
+  return actions.map((a) => ({
+    action: a.action,
+    actionId: a.action_id,
+    startedAt: a.started_at,
+    sequence: a.sequence
+  }));
 }
 
 function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
@@ -1381,6 +1399,7 @@ function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
     startedAt: s.started_at ?? null,
     finishedAt: s.finished_at ?? null,
     events: s.events.map(fromWireLiveActivityEvent),
+    unfinishedActions: fromWireUnfinishedActions(s.unfinished_actions ?? []),
     truncated: s.truncated,
     dropped: s.dropped,
     oldestSequence: s.oldest_sequence,
@@ -1401,6 +1420,7 @@ function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
     deployment: r.deployment
       ? {
           events: r.deployment.events.map(fromWireLiveActivityEvent),
+          unfinishedActions: fromWireUnfinishedActions(r.deployment.unfinished_actions ?? []),
           truncated: r.deployment.truncated,
           dropped: r.deployment.dropped,
           oldestSequence: r.deployment.oldest_sequence,

@@ -18,9 +18,11 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { Icon } from "@shared/design-system/icons";
 import { useCausl } from "@shared/state/graph";
 import { configuredNode } from "@shared/state/appNodes";
 import type { CatalogScanPreview } from "@shared/api/contracts";
@@ -92,10 +94,12 @@ export function CatalogRecoveryPage({ readOnly }: { readOnly: boolean }) {
               currently present in the Backup Manager catalog. Scanning reads file
               metadata and checksums only.
             </p>
-            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-              <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+            <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
+              <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+                <Icon name="success" />
+              </span>
               <span>No files will be deleted, moved, or modified by a scan or a rebuild.</span>
-            </div>
+            </Banner>
             <div>
               <button className="btn btn--primary" disabled={readOnly || scanning} onClick={scan}>
                 {scanning ? "Scanning backup storage…" : "Scan backup storage"}
@@ -117,10 +121,10 @@ export function CatalogRecoveryPage({ readOnly }: { readOnly: boolean }) {
               <dt style={{ color: "var(--text-2)" }}>Require review</dt>
               <dd className="mono" style={{ margin: 0, color: "var(--warn)" }}>{preview.requiresReview}</dd>
             </dl>
-            <div className="banner banner--info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+            <Banner tone="info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
               <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
               <span>Artifacts requiring review are placed in Quarantine, not deleted.</span>
-            </div>
+            </Banner>
             <div style={{ display: "flex", gap: 9 }}>
               <button className="btn" onClick={() => setPreview(null)}>Cancel</button>
               <button className="btn btn--primary" disabled={readOnly} onClick={() => setConfirming(true)}>

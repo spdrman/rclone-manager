@@ -509,9 +509,27 @@ function liveEvent(
   fields: Record<string, string>,
   level: "info" | "warn" | "error" = "info",
   scope: "set" | "deployment" = "set",
-  message = ""
+  message = "",
+  /** How the engine says the operation this line reports went (issue
+   *  #625). Absent for the lines that state none: a start, and a
+   *  lifecycle transition, which is a state change rather than the
+   *  completion of anything. Set here rather than left off everywhere,
+   *  because a fixture whose completions all read as neutral notes is a
+   *  fixture nobody would notice the fix in. */
+  result?: SetActivityEvent["result"],
+  pair?: { action: string; actionId: string }
 ): SetActivityEvent {
-  return { sequence, at: "2026-08-29T02:01:1" + (sequence % 10) + "+02:00", level, event, scope, message, fields };
+  return {
+    sequence,
+    at: "2026-08-29T02:01:1" + (sequence % 10) + "+02:00",
+    level,
+    event,
+    scope,
+    message,
+    fields,
+    ...(result ? { result } : {}),
+    ...(pair ? { action: pair.action, actionId: pair.actionId } : {})
+  };
 }
 
 const IDLE_ACTIVITY = {
@@ -550,9 +568,9 @@ const LIVE_ACTIVITY: SetActivity[] = [
     bytesPerSecond: 118 * 1024 ** 2,
     startedAt: "2026-08-29T02:00:11+02:00",
     events: [
-      liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete"),
+      liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete", "info"),
       liveEvent(3, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", from: "VERIFYING", to: "VERIFIED" }, "info", "set", "lifecycle transition"),
-      liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete"),
+      liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete", "success"),
       liveEvent(5, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-29.dump.zst", from: "DISCOVERED", to: "TRANSFERRING" }, "info", "set", "lifecycle transition")
     ],
     oldestSequence: 2,
@@ -582,7 +600,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 18,
     progressBasis: "artifacts",
     finishedAt: "2026-08-29T01:04:44+02:00",
-    events: [liveEvent(9, "commit", { artifact: "production/billing-mysql/billing-2026-08-29.sql.zst", local_path: "/data/backups/production/billing/billing-2026-08-29.sql.zst" }, "info", "set", "durable commit complete")],
+    events: [liveEvent(9, "commit", { artifact: "production/billing-mysql/billing-2026-08-29.sql.zst", local_path: "/data/backups/production/billing/billing-2026-08-29.sql.zst" }, "info", "set", "durable commit complete", "success")],
     oldestSequence: 9,
     latestSequence: 9
   },
@@ -594,7 +612,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 51,
     progressBasis: "artifacts",
     finishedAt: "2026-08-29T01:35:40+02:00",
-    events: [liveEvent(10, "retention", { artifact: "media/weekly-archive/week-31.tar", backup_set: "media/weekly-archive", tier: "weekly", decision: "keep" }, "info", "set", "retention decision")],
+    events: [liveEvent(10, "retention", { artifact: "media/weekly-archive/week-31.tar", backup_set: "media/weekly-archive", tier: "weekly", decision: "keep" }, "info", "set", "retention decision", "info")],
     oldestSequence: 10,
     latestSequence: 10
   }
@@ -609,10 +627,15 @@ const LIVE_ACTIVITY: SetActivity[] = [
  * in the browser with the `backup-manager` command each one is equivalent
  * to. */
 const LIVE_DEPLOYMENT: DeploymentActivity = {
+  unfinishedActions: [{ action: "cycle", actionId: "c_1", startedAt: "2026-08-29T02:01:11+02:00", sequence: 1 }],
   events: [
-    liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting"),
-    liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error"),
-    liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error"),
+    // The cycle that is still running in this fixture: a start with no
+    // end behind it, which is what puts the "started and has not
+    // reported an outcome" line under the terminal without a running
+    // engine to produce one.
+    liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting", undefined, { action: "cycle", actionId: "c_1" }),
+    liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error", "error"),
+    liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error", "error", { action: "cycle", actionId: "c_0" }),
     liveEvent(
       11,
       "api_action",
@@ -624,7 +647,8 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
       },
       "info",
       "deployment",
-      "backup set updated"
+      "backup set updated",
+      "success"
     ),
     liveEvent(
       12,
@@ -638,7 +662,8 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
       },
       "info",
       "deployment",
-      "connection test succeeded"
+      "connection test succeeded",
+      "success"
     )
   ],
   truncated: false,

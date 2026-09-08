@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "4c7f7bdab02a185a7368608effb3cebc359bee83239f0e43402ee47c5cf3340a";
+export const CONTRACT_SHA256 = "9774ee54281bac0f91bf9b9b4cdc1dbf2f9477f9afb3942f99ac8782779cb50e";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1788,6 +1788,22 @@ export interface WireListValidatorsResponse {
   validators: WireValidator[];
 }
 
+/** One action that started and has not reported an outcome. It is
+ *  what makes "this announced itself and went quiet" something a
+ *  surface can say, rather than something an operator would have to
+ *  notice by reading every line and remembering which starts they had
+ *  seen. An action still legitimately running appears here too, and
+ *  that is correct rather than a false alarm: the honest sentence is
+ *  "started four minutes ago and has not reported an outcome", and
+ *  whether four minutes is long is a judgement the person reading it
+ *  is far better placed to make than this service is. */
+export interface WireLiveActivityAction {
+  action: string;
+  action_id: string;
+  sequence: number;
+  started_at: string;
+}
+
 /** The log that belongs to no single backup set, served in its own
  *  right rather than copied onto every set's feed. A cycle starting
  *  covers every set and a capacity check is about a filesystem, so
@@ -1807,6 +1823,7 @@ export interface WireLiveActivityDeployment {
   latest_sequence: number;
   oldest_sequence: number;
   truncated: boolean;
+  unfinished_actions: WireLiveActivityAction[];
 }
 
 /** One line of the live feed. It carries the engine's own event name,
@@ -1818,11 +1835,14 @@ export interface WireLiveActivityDeployment {
  *  when it decided a line was a warning rather than a note, so it is
  *  carried through rather than re-derived. */
 export interface WireLiveActivityEvent {
+  action?: string;
+  action_id?: string;
   at: string;
   event: string;
   fields: WireLiveActivityField[];
   level: "debug" | "info" | "warn" | "error";
   message: string;
+  result?: "success" | "warn" | "error" | "info";
   scope: "deployment" | "set";
   sequence: number;
 }
@@ -1878,6 +1898,7 @@ export interface WireLiveActivitySet {
   stage?: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
   started_at?: string;
   truncated: boolean;
+  unfinished_actions: WireLiveActivityAction[];
 }
 
 /** The one manager-wide storage reading: what the backup root's
