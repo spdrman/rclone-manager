@@ -155,7 +155,7 @@ func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read live activity")
+		h.internalError(w, r, "INTERNAL", "failed to read live activity", err)
 		return
 	}
 

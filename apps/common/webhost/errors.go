@@ -42,15 +42,24 @@ type errorResponse struct {
 // and message. code is a stable, machine-readable token (e.g.
 // "CONFIG_REVISION_STALE"); message is human-readable and MAY change
 // without notice.
-func writeError(w http.ResponseWriter, status int, code, message string) {
+//
+// It returns the correlation id it minted, so a caller that also logs the
+// error can quote the SAME id the operator is looking at (#598). A
+// discarded return value is the ordinary case and is fine: every refusal
+// this package can explain to the client needs no second record. The 500s
+// are the ones that do, and they go through internalError (refusal.go)
+// rather than calling this directly.
+func writeError(w http.ResponseWriter, status int, code, message string) string {
 	var resp errorResponse
 	resp.Error.Code = code
 	resp.Error.Message = message
 	// ui/shared/src/api/client.ts reads this off every non-2xx response's
-	// X-Correlation-Id header, falling back to "unavailable" if absent -
-	// which, before this, it always was for every route in this package.
-	w.Header().Set("X-Correlation-Id", correlationID())
+	// X-Correlation-Id header - which, before this package set it, it
+	// never found for any route here.
+	id := correlationID()
+	w.Header().Set("X-Correlation-Id", id)
 	writeJSON(w, status, resp)
+	return id
 }
 
 // correlationID is a short, opaque, per-response identifier an operator

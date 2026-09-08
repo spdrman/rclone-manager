@@ -44,7 +44,7 @@ type catalogReportResponse struct {
 func (h *handlers) scanCatalog(w http.ResponseWriter, r *http.Request) {
 	report, err := h.backend.ScanCatalog(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to scan the backup catalog")
+		h.internalError(w, r, "INTERNAL", "failed to scan the backup catalog", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toCatalogReportResponse(report))
@@ -64,7 +64,7 @@ func (h *handlers) scanCatalog(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) rebuildCatalog(w http.ResponseWriter, r *http.Request) {
 	report, err := h.backend.RebuildCatalog(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to rebuild the backup catalog")
+		h.internalError(w, r, "INTERNAL", "failed to rebuild the backup catalog", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toCatalogReportResponse(report))

@@ -348,7 +348,7 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 			// exactly the case core/service.ErrInvalidRequest's doc warns
 			// about, one that might otherwise carry state-layer/SQLite
 			// text across this boundary.
-			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit operation")
+			h.internalError(w, r, "INTERNAL", "failed to submit operation", err)
 		}
 		return
 	}
@@ -370,7 +370,7 @@ func (h *handlers) getOperation(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "OPERATION_NOT_FOUND", "no such operation")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load operation")
+		h.internalError(w, r, "INTERNAL", "failed to load operation", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toOperationResponse(op))
@@ -395,7 +395,7 @@ type listOperationsResponse struct {
 func (h *handlers) listOperations(w http.ResponseWriter, r *http.Request) {
 	ops, err := h.backend.ListOperations(r.Context(), 0)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list operations")
+		h.internalError(w, r, "INTERNAL", "failed to list operations", err)
 		return
 	}
 	resp := listOperationsResponse{Operations: make([]operationResponse, 0, len(ops))}
@@ -454,7 +454,7 @@ func (h *handlers) submitRestore(w http.ResponseWriter, r *http.Request, idempot
 		Acknowledged:   body.Restore.Acknowledged,
 	})
 	if err != nil {
-		writeRestoreError(w, err, h.backend.ConfigRevision())
+		h.writeRestoreError(w, r, err, h.backend.ConfigRevision())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, toOperationResponse(sub.Operation))
@@ -468,7 +468,7 @@ func (h *handlers) submitRestore(w http.ResponseWriter, r *http.Request, idempot
 // core/internal/archive's own prose, which is the rule
 // service.ErrInvalidRequest's doc sets out: never an unclassified error,
 // which could carry endpoint or SQLite text.
-func writeRestoreError(w http.ResponseWriter, err error, revision string) {
+func (h *handlers) writeRestoreError(w http.ResponseWriter, r *http.Request, err error, revision string) {
 	switch {
 	case errors.Is(err, service.ErrConfigRevisionStale):
 		writeConfigRevisionStale(w, err.Error(), revision)
@@ -492,6 +492,6 @@ func writeRestoreError(w http.ResponseWriter, err error, revision string) {
 	case errors.Is(err, service.ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit the restore")
+		h.internalError(w, r, "INTERNAL", "failed to submit the restore", err)
 	}
 }

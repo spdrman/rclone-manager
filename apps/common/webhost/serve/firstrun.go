@@ -207,6 +207,7 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 		Gate:          cfg.Gate,
 		FirstRun:      cfg.FirstRun,
 		OnConfigured:  onConfigured,
+		Logger:        cfg.Logger,
 		BinaryVersion: cfg.BinaryVersion,
 		Commit:        cfg.Commit,
 	})

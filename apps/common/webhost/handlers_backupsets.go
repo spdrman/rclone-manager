@@ -325,7 +325,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 			// Creation itself never happened — nothing was persisted, so
 			// the ordinary error mapping (400, 409 or 500, per the
 			// failure kind) is the whole story.
-			writeBackupSetError(w, err)
+			h.writeBackupSetError(w, r, err)
 			return
 		}
 		// Mandatory review finding M6 (PR #155): the backup set IS
@@ -380,7 +380,7 @@ func runStartErrorMessage(err error) string {
 func (h *handlers) listBackupSets(w http.ResponseWriter, r *http.Request) {
 	sets, err := h.backend.ListBackupSets(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list backup sets")
+		h.internalError(w, r, "INTERNAL", "failed to list backup sets", err)
 		return
 	}
 	resp := listBackupSetsResponse{BackupSets: make([]backupSetResponse, 0, len(sets))}
@@ -404,7 +404,7 @@ func (h *handlers) getBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load backup set")
+		h.internalError(w, r, "INTERNAL", "failed to load backup set", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(set))
@@ -414,7 +414,7 @@ func (h *handlers) getBackupSet(w http.ResponseWriter, r *http.Request) {
 // any other backupsets.go method) error to the HTTP status/code this
 // package's other handlers already establish the vocabulary for
 // (handlers_operations.go's identical switch is the direct precedent).
-func writeBackupSetError(w http.ResponseWriter, err error) {
+func (h *handlers) writeBackupSetError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidRequest):
 		// Safe to echo: every ErrInvalidRequest this package returns is
@@ -456,7 +456,7 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// rclone internal.
 		writeError(w, http.StatusConflict, "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+		h.internalError(w, r, "INTERNAL", "this deployment has no configuration file to persist to", err)
 	default:
 		// Deliberately not err.Error(): an unclassified error could carry
 		// filesystem or rclone-internal text (see handlers_operations.go's
@@ -466,7 +466,7 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// path too (issue #350), and telling an operator whose edit
 		// failed that a creation failed sends them looking for a set
 		// that was never being created.
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to write backup set")
+		h.internalError(w, r, "INTERNAL", "failed to write backup set", err)
 	}
 }
 
@@ -533,7 +533,7 @@ func (h *handlers) setBackupSetEnabled(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
@@ -577,7 +577,7 @@ func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
@@ -609,7 +609,7 @@ func (h *handlers) removeBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -729,7 +729,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))

@@ -86,7 +86,7 @@ func (h *handlers) getBackupSetEditHold(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	st, err := h.backend.BackupSetEditState(r.Context(), id)
 	if err != nil {
-		writeEditHoldError(w, err)
+		h.writeEditHoldError(w, r, err)
 		return
 	}
 	resp := editHoldStateResponse{
@@ -121,7 +121,7 @@ func (h *handlers) takeBackupSetEditHold(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	hold, err := h.backend.BeginBackupSetEdit(r.Context(), id)
 	if err != nil {
-		writeEditHoldError(w, err)
+		h.writeEditHoldError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, editHoldResponse{
@@ -148,7 +148,7 @@ func (h *handlers) takeBackupSetEditHold(w http.ResponseWriter, r *http.Request)
 func (h *handlers) releaseBackupSetEditHold(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	if err := h.backend.EndBackupSetEdit(r.Context(), id); err != nil {
-		writeEditHoldError(w, err)
+		h.writeEditHoldError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -157,7 +157,7 @@ func (h *handlers) releaseBackupSetEditHold(w http.ResponseWriter, r *http.Reque
 // writeEditHoldError maps the one refusal these three routes can produce
 // to the vocabulary the rest of the backup-set surface already uses, so a
 // client does not learn a second code for the same condition.
-func writeEditHoldError(w http.ResponseWriter, err error) {
+func (h *handlers) writeEditHoldError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, service.ErrBackupSetNotFound) {
 		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 		return
@@ -165,5 +165,5 @@ func writeEditHoldError(w http.ResponseWriter, err error) {
 	// Deliberately not err.Error(): an unclassified error here could
 	// carry filesystem or transport-internal text, the same reason
 	// writeBackupSetError's own default case gives.
-	writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read or change this backup set's edit hold")
+	h.internalError(w, r, "INTERNAL", "failed to read or change this backup set's edit hold", err)
 }

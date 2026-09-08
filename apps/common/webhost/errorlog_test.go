@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -148,15 +147,27 @@ func TestInternalError_NeverEchoesTheUnderlyingErrorToTheClient(t *testing.T) {
 	}
 }
 
-// TestInternalError_ANilLoggerIsSilentAndNotAPanic keeps every existing
-// caller of NewRouter working: a RouterConfig with no Logger is a host
-// that has not wired one, not a crash on the first 500.
-func TestInternalError_ANilLoggerIsSilentAndNotAPanic(t *testing.T) {
+// TestInternalError_AHostThatNamedNoLoggerStillLogs is the direction the
+// default has to fall.
+//
+// A nil Logger could mean "silent", and that is the wrong way round: a
+// provider wiring up NewRouter for the first time would get a route table
+// whose 500s hand out correlation ids matching nothing, which is the
+// defect this issue closes, reintroduced by omission. So nil means the
+// package default (stdout, JSON, the shape core/internal/obs writes) and a
+// host has to opt out on purpose.
+func TestInternalError_AHostThatNamedNoLoggerStillLogs(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 	rt.backend.errOnActivity = errors.New("boom")
 
+	// Answers, does not panic, and carries an id. What it writes goes to
+	// this process's stdout, which is exactly what `docker logs` on the
+	// engine container shows.
 	rec := rt.get(t, "/api/v1/activity")
 	mustStatus(t, rec, http.StatusInternalServerError)
+	if rec.Header().Get("X-Correlation-Id") == "" {
+		t.Error("the refusal carried no correlation id")
+	}
 }
 
 // TestEveryInternalServerErrorGoesThroughTheLoggingHelper is the "all
@@ -186,33 +197,92 @@ func TestEveryInternalServerErrorGoesThroughTheLoggingHelper(t *testing.T) {
 			t.Fatalf("parsing %s: %v", name, err)
 		}
 		scanned++
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
 			}
-			ident, ok := call.Fun.(*ast.Ident)
-			if !ok || ident.Name != "writeError" {
-				return true
-			}
-			if len(call.Args) < 2 {
-				return true
-			}
-			sel, ok := call.Args[1].(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "StatusInternalServerError" {
-				return true
-			}
-			offenders = append(offenders, filepath.Base(name)+":"+
-				fset.Position(call.Pos()).String())
-			return true
-		})
+			offenders = append(offenders, refusalsWithNoRecord(fset, fn)...)
+		}
 	}
 
 	if scanned == 0 {
 		t.Fatal("no source file was scanned, so this test would pass against a package that had reintroduced every bare 500")
 	}
 	if len(offenders) > 0 {
-		t.Errorf("these 500s write a refusal and log nothing, so the correlation id they hand an operator matches no line anywhere:\n  %s\n\nUse h.internalError(w, r, code, message, err) instead: it writes the same body and logs the error under the same id the response carries.",
+		t.Errorf("these 500s write a refusal and record nothing, so the correlation id they hand an operator matches no line anywhere:\n  %s\n\nUse h.internalError(w, r, code, message, err), which writes the same body and logs the error under the same id. A site that has to write its own body keeps the id writeError returns and calls h.logRefusal with it.",
 			strings.Join(offenders, "\n  "))
 	}
+}
+
+// refusalsWithNoRecord finds the 500s in one function that cannot possibly
+// have been logged.
+//
+// Two shapes are legal and the difference between them is the whole rule.
+// A `writeError(w, http.StatusInternalServerError, ...)` written as a bare
+// statement THROWS AWAY the correlation id it just minted, so nothing
+// downstream could quote it even if it wanted to; that is the shape all
+// thirty sites had. A site that keeps the id (`id := writeError(...)`) can
+// hand it to logRefusal, and this asks that the same function does.
+func refusalsWithNoRecord(fset *token.FileSet, fn *ast.FuncDecl) []string {
+	var discarded []string
+	kept := 0
+	records := false
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && calls(call, "logRefusal") {
+			records = true
+		}
+		stmt, ok := n.(*ast.ExprStmt)
+		if !ok {
+			return true
+		}
+		if call, ok := stmt.X.(*ast.CallExpr); ok && isInternalServerErrorWrite(call) {
+			discarded = append(discarded, fset.Position(call.Pos()).String())
+		}
+		return true
+	})
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, rhs := range assign.Rhs {
+			if call, ok := rhs.(*ast.CallExpr); ok && isInternalServerErrorWrite(call) {
+				kept++
+			}
+		}
+		return true
+	})
+
+	if kept > 0 && !records {
+		discarded = append(discarded, fset.Position(fn.Pos()).String()+" (keeps the id and never calls logRefusal with it)")
+	}
+	return discarded
+}
+
+// isInternalServerErrorWrite recognises writeError(w, 500, ...) by the
+// constant, not by the number: http.StatusInternalServerError is how every
+// site in this package spells it, and a literal 500 would be a style break
+// a reviewer catches long before this test would.
+func isInternalServerErrorWrite(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok || ident.Name != "writeError" || len(call.Args) < 2 {
+		return false
+	}
+	sel, ok := call.Args[1].(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "StatusInternalServerError"
+}
+
+// calls reports whether call names `name`, as a bare function or as a
+// method on anything (h.logRefusal).
+func calls(call *ast.CallExpr, name string) bool {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name == name
+	case *ast.SelectorExpr:
+		return fn.Sel.Name == name
+	}
+	return false
 }

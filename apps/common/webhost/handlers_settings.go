@@ -327,7 +327,7 @@ func (h *handlers) getSettings(w http.ResponseWriter, r *http.Request) {
 		// classified vocabulary to map, so an unclassified error could
 		// carry filesystem-internal text (the same default every other
 		// handler in this package applies).
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read settings")
+		h.internalError(w, r, "INTERNAL", "failed to read settings", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
@@ -383,7 +383,7 @@ func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
 
 	settings, err := h.backend.UpdateSettings(r.Context(), req)
 	if err != nil {
-		writeSettingsError(w, err)
+		h.writeSettingsError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
@@ -558,7 +558,7 @@ func writeSettingsDecodeError(w http.ResponseWriter, err error) {
 
 // writeSettingsError maps core/service's settings-write error vocabulary
 // onto this package's one error envelope.
-func writeSettingsError(w http.ResponseWriter, err error) {
+func (h *handlers) writeSettingsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrMediumDisclosureRequired):
 		// Its own code, at the same status as a malformed body, because
@@ -582,8 +582,8 @@ func writeSettingsError(w http.ResponseWriter, err error) {
 		// a state or rclone internal.
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+		h.internalError(w, r, "INTERNAL", "this deployment has no configuration file to persist to", err)
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update settings")
+		h.internalError(w, r, "INTERNAL", "failed to update settings", err)
 	}
 }
