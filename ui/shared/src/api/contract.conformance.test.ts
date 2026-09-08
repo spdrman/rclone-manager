@@ -10,6 +10,7 @@ import {
   UI_ERROR_CODES,
   WIRE_ERROR_CODES
 } from "./generated/contract";
+import type { WireMediumPreflightCheck } from "./generated/contract";
 import type { PlatformCapabilities } from "@shared/types/platform";
 
 /**
@@ -68,6 +69,42 @@ describe("the capability model is the contract's, not a second one", () => {
       wire.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 
     expect(Object.keys(capabilities).sort()).toEqual([...CAPABILITY_FIELDS].map(camel).sort());
+  });
+});
+
+describe("the preflight step list is the contract's, not a second one", () => {
+  it("names every step the contract names and no others", () => {
+    // Found while fixing #633. `MediumPreflightCheck["step"]` used to
+    // restate the list instead of consuming it, and the copy had already
+    // gone stale: #622 gave the local drive a report with a ninth step,
+    // `space`, which the engine emits and the contract carries, and the
+    // hand-written union never got it. So the one report shape every
+    // deployment has could not be typed here, which is what would have
+    // stopped anyone teaching the fixture to produce it.
+    //
+    // A type-level assertion because a TypeScript union has no runtime
+    // form to compare, and mutual assignability because one direction is
+    // not enough: `extends` alone passes a union that quietly LOST a
+    // member as readily as one that gained one, and losing a member is
+    // exactly what happened. `[A] extends [B]` rather than `A extends B`
+    // keeps the check off the distributive path, where a per-member test
+    // answers a different question.
+    type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+    const stepsAgree: SameUnion<
+      contracts.MediumPreflightCheck["step"],
+      WireMediumPreflightCheck["step"]
+    > = true;
+
+    // Both assertions below are trivially true at runtime, and saying so
+    // is the honest version: the check IS the annotation, and the gate
+    // that runs it is `npm run lint`, not `vitest run`. They are here so
+    // the case is a case rather than two dangling declarations, which
+    // `noUnusedLocals` would reject anyway. A green vitest run is not
+    // evidence about this one, and a reader deciding whether the step
+    // list is still one list should look at the tsc step.
+    expect(stepsAgree).toBe(true);
+    const local: contracts.MediumPreflightCheck["step"] = "space";
+    expect(local).toBe("space");
   });
 });
 
