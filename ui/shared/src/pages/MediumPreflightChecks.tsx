@@ -26,7 +26,9 @@
  * column is deciding whose problem it is: theirs, the provider's, or the
  * network's.
  */
+import type { ReactNode } from "react";
 import type { MediumPreflight, MediumPreflightCheck } from "@shared/api/contracts";
+import { Icon } from "@shared/design-system/icons";
 
 export function MediumPreflightChecks({ report }: { report: MediumPreflight }) {
   return (
@@ -55,15 +57,24 @@ function CheckRow({ check }: { check: MediumPreflightCheck }) {
   );
 }
 
-/** Three marks for three outcomes. A skipped step gets a dash and never a
- *  tick: the two must not be able to be mistaken for each other at a
- *  glance, which is the entire reason skipped is reported at all. */
-function mark(outcome: MediumPreflightCheck["outcome"]): string {
+/**
+ * Three marks for three outcomes. A skipped step gets a dash and never a
+ * tick: the two must not be able to be mistaken for each other at a
+ * glance, which is the entire reason skipped is reported at all.
+ *
+ * Two of the three are artwork after #621 and the third deliberately is
+ * not. A pass and a failure are both verdicts, so they get the icons every
+ * other verdict in this app gets; skipped is the ABSENCE of a verdict, and
+ * a dash says "nothing was tried here" in a way no picture does. Giving it
+ * one would have made the column three pictures, which is the arrangement
+ * that lets a skip pass for a soft pass.
+ */
+function mark(outcome: MediumPreflightCheck["outcome"]): ReactNode {
   switch (outcome) {
     case "passed":
-      return "✓";
+      return <Icon name="success" />;
     case "failed":
-      return "×";
+      return <Icon name="failure" />;
     default:
       return "–";
   }

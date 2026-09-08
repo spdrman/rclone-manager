@@ -17,6 +17,7 @@ import { Banner } from "@shared/components/Banner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { ErrorState } from "@shared/components/EmptyState";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { Icon } from "@shared/design-system/icons";
 import { isNotConfigured } from "@shared/api/failure";
 import {
   chainKey,
@@ -289,7 +290,9 @@ function RetentionPanel({
           that is not in force. */}
       {r.effective.protectLastKnownGood ? (
         <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+          <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+            <Icon name="success" />
+          </span>
           <span>Newest known-good backup is protected from deletion</span>
         </Banner>
       ) : (
@@ -300,7 +303,9 @@ function RetentionPanel({
         // only because the browser suite asked for it back; a close
         // control would put it away again, one operator at a time.
         <Banner tone="warn" dismissible={false} style={{ fontSize: "var(--text-sm)" }}>
-          <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u26a0"}</span>
+          <span aria-hidden="true" style={{ color: "var(--warn)", lineHeight: 1.5 }}>
+            <Icon name="warning" />
+          </span>
           <span>
             Newest known-good backup is NOT protected from deletion under this policy
           </span>

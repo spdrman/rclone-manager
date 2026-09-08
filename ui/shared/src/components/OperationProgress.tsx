@@ -19,6 +19,7 @@
  */
 import type { Operation, TransferProgress } from "@shared/types/operation";
 import { TRANSFER_STAGES, progressPercent } from "@shared/types/operation";
+import { Icon } from "@shared/design-system/icons";
 import { bytes, rate } from "@shared/utilities/format";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -176,8 +177,8 @@ function Live({
                   fontWeight: current ? 600 : 400
                 }}
               >
-                <span aria-hidden="true" style={{ color: done ? "var(--ok)" : undefined }}>
-                  {done ? "\u2713" : current ? "\u25cf" : "\u25cb"}
+                <span aria-hidden="true" style={{ color: done ? "var(--ok)" : undefined, display: "inline-flex" }}>
+                  <Icon name={done ? "success" : current ? "status-active" : "status-idle"} />
                 </span>
                 {STAGE_LABEL[stage]}
               </li>

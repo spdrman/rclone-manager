@@ -1,11 +1,16 @@
 Backup Manager
 Copyright 2026 The Backup Manager Authors
 
-This product includes third-party software. The complete inventory, with each
-component's version, the SPDX identifier of its licence and the SHA-256 of the
-licence text as that component ships it, is provenance/third-party-licenses.json.
+This product includes third-party software. Every dependency, with its version,
+the SPDX identifier of its licence and the SHA-256 of the licence text as that
+component ships it, is listed in provenance/third-party-licenses.json.
 It is generated from the module graph and the frontend lockfile on every run
 rather than maintained by hand.
+
+Which is also why that file is not the whole picture. This project carries
+some third-party material inside its own SOURCE, where no package manager can
+see it and nothing can derive it from the tree, and that material is listed
+under "Third-party material this project vendors into its own source" below.
 
 This file is the NOTICE file Apache-2.0 section 4(d) refers to. Redistributing
 this work, or a derivative of it, means carrying this file with it.
@@ -33,6 +38,28 @@ MPL-2.0
     go github.com/hashicorp/go-retryablehttp@v0.7.8
       linked into: backup-manager, backup-manager-web
       source:      https://proxy.golang.org/github.com/hashicorp/go-retryablehttp/@v/v0.7.8.zip
+
+Third-party material this project vendors into its own source
+-------------------------------------------------------------
+
+The components listed further down are derived from a module graph and a
+frontend lockfile. These are not, and cannot be: they are carried inside this
+repository's own source, which no package manager reports. They are declared
+in distribution/packaging/compliance.json and checked against the files they
+name on every run, so upgrading the material and leaving this behind is a
+failed build rather than a notice that quietly describes something else.
+
+Font Awesome Free 6.7.2
+  Creator:        Fonticons, Inc.
+  Copyright:      Copyright 2024 Fonticons, Inc.
+  Licence:        CC-BY-4.0, Creative Commons Attribution 4.0 International
+  Licence text:   https://creativecommons.org/licenses/by/4.0/
+  Modification:   reproduced verbatim and unmodified
+  What ships:     the SVG path data of fourteen icons, compiled into the web bundle
+  Carried in:     ui/shared/src/design-system/icons.tsx
+  Linked into:    backup-manager-web
+  Upstream:       https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz
+  Also stated in: docs/compliance/bundled-icon-artwork.md, ui/shared/index.html
 
 Components by licence
 ---------------------
