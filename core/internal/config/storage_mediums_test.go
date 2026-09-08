@@ -841,3 +841,136 @@ func TestMediumLocalIsTheStoreKindOfTheSameName(t *testing.T) {
 			MediumLocal, artifactstore.KindLocal)
 	}
 }
+
+// TestValidate_DefaultStorageMedium is H2.2's new key (#622): the
+// destination a NEWLY CREATED retention tier starts on.
+//
+// Four refusals and one acceptance, and the four are not variations on a
+// theme. Each one names a configuration that would LOAD and then produce a
+// tier this same Validate rejects, which is a trap laid one write in
+// advance: an operator who added a tier would meet a refusal about
+// something they did not just change.
+func TestValidate_DefaultStorageMedium(t *testing.T) {
+	t.Run("naming a declared destination is accepted", func(t *testing.T) {
+		c := mediumsConfig()
+		c.DefaultStorageMedium = "offsite_s3"
+		mustValidate(t, &c)
+		if got := c.EffectiveDefaultStorageMedium(); got != "offsite_s3" {
+			t.Errorf("EffectiveDefaultStorageMedium() = %q", got)
+		}
+	})
+
+	t.Run("absent means the local hard drive", func(t *testing.T) {
+		c := mediumsConfig()
+		mustValidate(t, &c)
+		if got := c.EffectiveDefaultStorageMedium(); got != MediumLocal {
+			t.Errorf("EffectiveDefaultStorageMedium() = %q, want %q", got, MediumLocal)
+		}
+		// Resolved by an accessor and never written back into the struct,
+		// which is RetentionTier.EffectiveMedium's rule for the same
+		// reason: a value Validate wrote in would be re-marshaled into the
+		// operator's file by the next settings save, putting a key into a
+		// config that never chose a destination (FR-35).
+		if c.DefaultStorageMedium != "" {
+			t.Errorf("Validate wrote %q into a config that named no default", c.DefaultStorageMedium)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		wants []string
+	}{
+		{
+			name:  "the reserved local id, which is spelled by absence",
+			value: MediumLocal,
+			wants: []string{"local", "implicit local medium", "omit the key"},
+		},
+		{
+			name:  "a destination nothing declares",
+			value: "typo_s3",
+			wants: []string{"typo_s3", "not declared by any storage_mediums entry", "no fall-back to local"},
+		},
+		{
+			name:  "an id that is not lower_snake_case",
+			value: "Cold-Offsite",
+			wants: []string{"Cold-Offsite", "lower_snake_case"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := mediumsConfig()
+			c.DefaultStorageMedium = tc.value
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted default_storage_medium %q", tc.value)
+			}
+			for _, want := range tc.wants {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not mention %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+
+	// The one that is about consequences rather than spelling. A tier
+	// bound to an archive class is refused at load, because a copy written
+	// there is archived the instant it lands and the tier can never take
+	// delivery. A default pointing at one would mean every newly added
+	// tier produced a configuration this same function rejects.
+	t.Run("an archive class, which no tier could deliver to", func(t *testing.T) {
+		c := mediumsConfig()
+		c.StorageMediums = append(c.StorageMediums, StorageMedium{
+			ID:           "cold_vault",
+			Type:         StorageMediumTypeS3,
+			Region:       "us-east-1",
+			Bucket:       "nas-archive",
+			StorageClass: StorageClassDeepArchive,
+			Credentials:  MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"},
+		})
+		// The control: declaring it is legal, and stays legal. It is
+		// pointing something at it that is refused.
+		mustValidate(t, &c)
+
+		c.DefaultStorageMedium = "cold_vault"
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("Validate accepted an archive class as the destination a new tier starts on")
+		}
+		for _, want := range []string{"cold_vault", StorageClassDeepArchive, "cannot receive backups"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not mention %q:\n%v", want, err)
+			}
+		}
+	})
+}
+
+// TestValidate_DefaultStorageMediumRoundTripsWithoutInjectingTheKey is
+// FR-35's round-trip rule applied to #622's addition: a config that never
+// chose a destination must come back from a re-marshal without the key,
+// because an older binary refuses an unknown key outright under Load's
+// KnownFields(true).
+func TestValidate_DefaultStorageMediumRoundTripsWithoutInjectingTheKey(t *testing.T) {
+	c := validConfig()
+	mustValidate(t, &c)
+
+	encoded, err := yaml.Marshal(&c)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "default_storage_medium") {
+		t.Errorf("a medium-free config gained default_storage_medium by being validated and re-marshaled:\n%s", encoded)
+	}
+	// The positive control: a config that DID choose one keeps it, so the
+	// absence above is omitempty doing its job rather than the field
+	// never being written at all.
+	chosen := mediumsConfig()
+	chosen.DefaultStorageMedium = "offsite_s3"
+	mustValidate(t, &chosen)
+	encoded, err = yaml.Marshal(&chosen)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), "default_storage_medium: offsite_s3") {
+		t.Errorf("a config that chose a default lost it in a round trip:\n%s", encoded)
+	}
+}
