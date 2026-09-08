@@ -227,12 +227,15 @@ commands:
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]
-                       [--protect-last-known-good=BOOL]
+                       [--protect-last-known-good=BOOL] [--acknowledge-medium-disclosure]
                                                   report which retention policy this backup set is retained under and
                                                   where it came from; with a policy flag, give the set a whole policy of
                                                   its own; with --inherit, remove that policy so it is retained under the
                                                   deployment's again. An override replaces the deployment's whole chain
-                                                  and is never merged with it, so it has to name a whole one
+                                                  and is never merged with it, so it has to name a whole one.
+                                                  --acknowledge-medium-disclosure is needed when the policy sends one of
+                                                  this set's tiers somewhere new, and without it the refusal carries the
+                                                  disclosure. The show form prints each tier's destination
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;

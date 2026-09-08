@@ -232,12 +232,18 @@ func TestSettingsWriteIsVisibleToASubsequentCLIRead(t *testing.T) {
 }
 
 // TestConfigFileEditIsVisibleThroughTheSettingsEndpoint is the same case
-// in the other direction. A config-file edit is what the CLI side of this
-// product actually is for retention: `backup-manager retention`'s own
-// override flags are preview-only and never persisted (that command's own
-// doc), so "an operator changed the policy outside the UI" means they
-// edited the YAML file and restarted, which is FR-5's documented model.
-// service.Open here is that restart.
+// in the other direction: a policy this endpoint did not write, showing up
+// through it anyway.
+//
+// A hand edit is one way that happens and is the one this test drives,
+// because it is the only one that needs a restart to be seen, which is
+// FR-5's documented model and is what service.Open here stands in for.
+// It is no longer the only way. `backup-manager retention`'s override
+// flags are still preview-only and never persisted (that command's own
+// doc), but `settings patch --policy-file` writes the deployment's whole
+// chain and `backup-set retention` writes one set's, both through the
+// same core/service methods this endpoint uses, so neither needs a
+// restart to become visible (#595, #333).
 func TestConfigFileEditIsVisibleThroughTheSettingsEndpoint(t *testing.T) {
 	configPath := writeBoundaryConfig(t)
 

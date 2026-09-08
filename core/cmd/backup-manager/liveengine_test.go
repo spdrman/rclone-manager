@@ -216,6 +216,39 @@ var configMutations = []mutation{
 			return []string{"settings", "--config", configPath, "patch", "--timezone", "America/Toronto"}
 		},
 	},
+	{
+		// Issue #595: the deployment's whole chain, which this command
+		// used to refuse outright. It belongs in this table rather than
+		// only in settingspolicyfile_test.go because it is a
+		// CONFIGURATION WRITE, and the two arms below are what prove it
+		// is treated as one: refused beside a serving process with the
+		// file untouched, and written when nothing is running. A
+		// --policy-file that reached config.yaml behind a live engine
+		// would be #535 again, on a surface that did not exist when #535
+		// was found.
+		name: "settings patch --policy-file",
+		args: func(configPath, _ string) []string {
+			return []string{"settings", "--config", configPath, "patch", "--policy-file", deploymentPolicyFilePath(configPath)}
+		},
+		prepare: func(t *testing.T, configPath string) {
+			t.Helper()
+			// A chain, so it replaces the fixture's legacy scalars and
+			// the file really does change on the arm that expects it. No
+			// medium, because what is under test here is the route
+			// rather than the destination.
+			body := "tiers:\n  - name: daily\n    granularity: day\n    keep: 9\n"
+			if err := os.WriteFile(deploymentPolicyFilePath(configPath), []byte(body), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+		},
+	},
+}
+
+// deploymentPolicyFilePath is where the row above puts its policy file:
+// beside the configuration it patches, so both arms reach the same path
+// from the one argument the table hands them.
+func deploymentPolicyFilePath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "deployment-policy.yaml")
 }
 
 // TestAConfigurationWriteIsRefusedWhileAnEngineHoldsIt is #538's

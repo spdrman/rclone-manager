@@ -177,7 +177,7 @@ func cmdRetention(args []string) int {
 	// plan printed underneath describes this deployment at all, which is
 	// as true with nothing serving as with something.
 	if len(overrides.tiers) > 0 && len(overrides.tierMediums) == 0 && len(replacedMediums) > 0 {
-		fmt.Fprintf(os.Stderr, "note: the chain this command line supplied names no destination, so the placement below is planned against the local backup root, while this deployment's own chain sends %s. Name a destination with --tier-medium NAME=MEDIUM_ID to preview against it.\n", strings.Join(replacedMediums, ", "))
+		fmt.Fprintf(os.Stderr, "note: the chain this command line supplied names no destination, so this preview plans placement on the local backup root, while this deployment's own chain sends %s. Name a destination with --tier-medium NAME=MEDIUM_ID to preview against it.\n", strings.Join(replacedMediums, ", "))
 	}
 
 	reports, err := retentionReports(ctx, svc, only)
