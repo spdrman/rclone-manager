@@ -57,7 +57,7 @@ import { EDIT_FIELDS, readEditFields, visibleEditFields, withCompanions } from "
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
-import { bytes, relativeAge } from "@shared/utilities/format";
+import { bytes, clock, relativeAge } from "@shared/utilities/format";
 
 /**
  * How often an open edit form renews its hold (issue #350).
@@ -161,6 +161,26 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     exitAfter: boolean;
   } | null>(null);
 
+  // ------------------------------------------------------- issue #591
+  //
+  // The way out that DISCARDS, and the one piece of bookkeeping it needs.
+  //
+  // `savedThisSession` is every box a per-box Save actually wrote since
+  // the mode opened. It exists because this page saves per box, so
+  // "cancel" cannot mean "undo everything": those writes are already in
+  // config.yaml and the engine has already hot-reloaded them. Cancel
+  // discards the DRAFT and touches nothing that was written, and the only
+  // way to be honest about that is to name the boxes it is not touching.
+  // Nothing here is ever sent anywhere; it is what the confirmation reads.
+  //
+  // `pendingExit` is which discarding exit is waiting on that
+  // confirmation, and it is a route rather than a boolean because the
+  // header's back link goes through the same dialog. A warning that only
+  // appears on the button an operator chose deliberately is guarding the
+  // wrong door.
+  const [savedThisSession, setSavedThisSession] = useState<SavedField[]>([]);
+  const [pendingExit, setPendingExit] = useState<ExitRoute | null>(null);
+
   // The backup set this page is currently showing. Every piece of edit
   // state above belongs to ONE set, and React Router does not remount
   // this page for a :source/:set change alone (the same property this
@@ -193,6 +213,8 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setWarnAbout(null);
     setEnterError(null);
     setRefusal(null);
+    setSavedThisSession([]);
+    setPendingExit(null);
   }
 
   // The hold's lifetime, tied to `editing` rather than to any one button.
@@ -438,6 +460,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       // Keys nobody saved are untouched, which is what keeps another
       // box's unsaved edit on screen.
       const persisted = readEditFields(updated);
+      // Written down before anything else re-baselines, because after
+      // this the box is clean and indistinguishable from one nobody
+      // touched. This is the record the discarding exit reads to say
+      // which boxes it is NOT taking back (#591).
+      setSavedThisSession((prev) => recordSaved(prev, keys, persisted, draft));
       setBaseline((prev) => applyKeys(prev, persisted, keys));
       setDraft((prev) => applyKeys(prev, persisted, keys));
       setFieldErrors((prev) => clearKeys(prev, keys));
@@ -499,7 +526,52 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setStale(false);
     setStopped(null);
     setRefusal(null);
+    setSavedThisSession([]);
+    setPendingExit(null);
   };
+
+  // ------------------------------------------------------- issue #591
+
+  /** Leaves by the route asked for. `leaveEditMode` above is the state
+   *  half and is shared with the exits that save; this adds the
+   *  navigation half, which only the discarding exits have. */
+  const exitEditMode = (route: ExitRoute) => {
+    leaveEditMode();
+    if (route === "backup-sets") navigate("/sets");
+  };
+
+  /**
+   * Asks first, unless there is genuinely nothing to say.
+   *
+   * Nothing dirty and nothing written this session is "I only came to
+   * look", which is a legitimate reason to have been in edit mode and a
+   * legitimate reason to leave it; a confirmation for that is noise on
+   * the one press that costs nothing. Anything else has something to
+   * report, and the second half of that list is the surprising one: a box
+   * a per-box Save already wrote is staying written, and "I pressed
+   * cancel so nothing happened" is exactly the belief that gets somebody
+   * into trouble.
+   */
+  const requestExit = (route: ExitRoute) => {
+    if (dirtyKeys().length === 0 && savedThisSession.length === 0 && !refusal) exitEditMode(route);
+    else setPendingExit(route);
+  };
+
+  /** Every dirty box, the value typed into it and the value it goes back
+   *  to. The two write-only boxes go back to "unchanged" rather than to
+   *  empty, because their baseline is the absence of an instruction and
+   *  not a value: an empty SSH key box means "keep the key this set
+   *  already uses", which is a different sentence from "empty". */
+  const discardedFields = (): DiscardedField[] =>
+    dirtyKeys().map((key) => {
+      const field = fieldFor(key);
+      return {
+        key,
+        label: field.label,
+        typed: draft?.[key] || "(empty)",
+        returnsTo: field.writeOnly ? "unchanged" : baseline?.[key] || "(empty)"
+      };
+    });
 
   const reloadLatestValues = () => {
     const fresh = captureSetEditSnapshot();
@@ -515,7 +587,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   return (
     <>
       <PageHeader
-        back={{ label: "Backup sets", onClick: () => navigate("/sets") }}
+        back={{ label: "Backup sets", onClick: () => requestExit("backup-sets") }}
         title={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 11 }}>
             {s.name}
@@ -591,6 +663,28 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             ) : (
               <button className="btn" disabled={readOnly} onClick={() => void onEditPressed()}>Edit</button>
             )}
+            {/* Issue #591: the way out that writes nothing. Caution tier
+                rather than primary, beside the exit that saves, and
+                available whenever the mode is open including with nothing
+                dirty.
+
+                Disabled only while a per-box Save is in flight, which is
+                the same guard SAVE ALL carries and is here for a sharper
+                reason. A request already on the wire cannot be recalled,
+                so a cancel taken during one would put a box in the
+                dialog's "discarded, never sent" column while a write
+                carrying it was about to land. The ledger is the whole
+                point of this control, so it waits the moment out rather
+                than printing something false. */}
+            {editing ? (
+              <button
+                className="btn btn--caution"
+                disabled={savingFields.length > 0}
+                onClick={() => requestExit("edit-mode")}
+              >
+                CANCEL &amp; EXIT EDIT MODE
+              </button>
+            ) : null}
             <button className="btn" disabled={readOnly} onClick={() => setPreviewOpen(true)}>Preview retention</button>
           </>
         }
@@ -928,6 +1022,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </p>
       </ConfirmationDialog>
 
+      {/* Issue #591. Rendered only while it is open, rather than handed
+          an `open` prop, so the ledger below is not recomputed on every
+          keystroke of an edit session that may never end this way. */}
+      {pendingExit ? (
+        <CancelEditDialog
+          discarded={discardedFields()}
+          saved={savedThisSession}
+          refusal={refusal?.kind ?? null}
+          onKeepEditing={() => setPendingExit(null)}
+          onDiscard={() => exitEditMode(pendingExit)}
+        />
+      ) : null}
+
       {/* Issue #391. This confirmation used to close and call nothing,
           which meant an operator confirmed a destructive action, watched
           it close, and reasonably believed the set was gone while it kept
@@ -1036,6 +1143,206 @@ function EditRow({
     </div>
   );
 }
+
+/**
+ * The confirmation both discarding exits go through (issue #591).
+ *
+ * It is a ledger rather than a sentence because the honest answer to "are
+ * you sure" on this page is two answers, and only one of them is the one
+ * an operator expects. Every affected box sits on one of two sides: the
+ * ones about to be thrown away, and the ones a per-box Save already wrote,
+ * which are in the configuration the engine is running right now and which
+ * this control is not touching.
+ *
+ * It never offers to undo the second group, and it says so in words. There
+ * is no undo to offer: the save went through api.updateBackupSet, the
+ * service rewrote config.yaml and the engine hot-reloaded it. Putting an
+ * old value back would be a fresh write dressed up as an undo, and on the
+ * two write-only boxes it is not even expressible, because neither reads a
+ * value back for the page to restore.
+ */
+function CancelEditDialog({
+  discarded,
+  saved,
+  refusal,
+  onKeepEditing,
+  onDiscard
+}: {
+  discarded: DiscardedField[];
+  saved: SavedField[];
+  refusal: AcknowledgeableRefusal | null;
+  onKeepEditing(): void;
+  onDiscard(): void;
+}) {
+  const n = discarded.length;
+  // Caution rather than destructive. Nothing here deletes a backup, and
+  // dressing a discarded draft in the same red as "remove this set" is how
+  // an operator stops reading either of them.
+  return (
+    <ConfirmationDialog
+      open
+      eyebrow={n === 0 ? "Nothing left to discard" : n === 1 ? "1 unsaved change" : n + " unsaved changes"}
+      title={n === 0 ? "Leave edit mode?" : "Leave edit mode and discard them?"}
+      confirmLabel={
+        n === 0 ? "Exit edit mode" : "Discard " + n + (n === 1 ? " change" : " changes") + " and exit"
+      }
+      cancelLabel="Keep editing"
+      onCancel={onKeepEditing}
+      onConfirm={onDiscard}
+    >
+      {/* Only when it has a side to show. A refusal answered by typing the
+          box back to what it was leaves a pending refusal with nothing
+          dirty and nothing saved, and an empty bordered box in the middle
+          of the dialog would be a ledger claiming to have listed
+          something. */}
+      {n > 0 || saved.length > 0 ? (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+          {n > 0 ? (
+            <LedgerGroup id="cancel-ledger-discarded" title="Discarded, never sent" first>
+              {discarded.map((entry) => (
+                <LedgerRow key={entry.key} label={entry.label} value={entry.typed + " \u2192 " + entry.returnsTo} />
+              ))}
+            </LedgerGroup>
+          ) : null}
+          {saved.length > 0 ? (
+            <LedgerGroup id="cancel-ledger-saved" title="Already saved, and staying saved" first={n === 0}>
+              {saved.map((entry) => (
+                <LedgerRow
+                  key={entry.key}
+                  label={fieldFor(entry.key).label}
+                  value={(entry.value || "(empty)") + " \u00b7 " + clock(entry.at)}
+                />
+              ))}
+            </LedgerGroup>
+          ) : null}
+        </div>
+      ) : null}
+      {saved.length > 0 ? (
+        <p style={{ margin: 0 }}>
+          Cancel is not an undo. Each of those was saved on its own and is in the
+          configuration this deployment is running right now. To put one back, edit
+          it again.
+        </p>
+      ) : null}
+      {/* Said in a line of its own rather than left to be inferred from a
+          box count. A half-answered trust decision is the one thing on
+          this page an operator will remember having been in the middle
+          of, and the reassuring half of it is true for free: an
+          unacknowledged refusal turns back before the write, so nothing
+          was staged to walk back. */}
+      {refusal ? <p style={{ margin: 0 }}>{REFUSAL_ON_CANCEL[refusal]}</p> : null}
+    </ConfirmationDialog>
+  );
+}
+
+/** One side of the ledger. `role="group"` with a name, so the two sides
+ *  are distinguishable to anything reading this by role rather than by
+ *  position, which is the only thing that makes "which side is this box
+ *  on" answerable without sight. */
+function LedgerGroup({
+  id,
+  title,
+  first,
+  children
+}: {
+  id: string;
+  title: string;
+  first: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div role="group" aria-labelledby={id} style={{ borderTop: first ? undefined : "1px solid var(--border)" }}>
+      <div
+        id={id}
+        className="eyebrow"
+        style={{ padding: "7px 12px", background: "var(--surface-2)", fontSize: 10.5, letterSpacing: "0.06em" }}
+      >
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** One box on one side of it. The value is a single string rather than
+ *  styled halves on purpose: a known_hosts line is long, and splitting it
+ *  into decorated pieces buys nothing an operator can act on. */
+function LedgerRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "baseline", gap: 9, padding: "7px 12px",
+        borderTop: "1px solid var(--border)", fontSize: 12.5
+      }}
+    >
+      <span style={{ color: "var(--text-2)", minWidth: 124 }}>{label}</span>
+      <span className="mono" style={{ fontSize: 11.5, flex: 1, minWidth: 0, wordBreak: "break-all" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** Where a discarding exit is going. A route rather than a boolean because
+ *  the header's back link and the cancel button share one confirmation:
+ *  the back link discards a draft just as silently as anything else, and
+ *  guarding only the deliberate control would be guarding the wrong
+ *  door. */
+type ExitRoute = "edit-mode" | "backup-sets";
+
+/** One box a per-box Save actually wrote during this edit session. */
+interface SavedField {
+  key: EditFieldKey;
+  /** The value now in the configuration, read back from the SERVER's own
+   *  answer rather than from the text that was sent. The two write-only
+   *  boxes answer "" to that and "" is not what was saved, so for those
+   *  this holds the line that went out: it is the only value the page has
+   *  and the one the operator would recognise. */
+  value: string;
+  at: string;
+}
+
+/** One box about to be thrown away, and what it goes back to. */
+interface DiscardedField {
+  key: EditFieldKey;
+  label: string;
+  typed: string;
+  returnsTo: string;
+}
+
+/**
+ * Adds `keys` to the session's written ledger.
+ *
+ * An earlier entry for the same box is replaced rather than appended to:
+ * saving Host twice is one fact about Host, and the one worth showing is
+ * the value that ended up in the configuration.
+ */
+function recordSaved(
+  prev: SavedField[],
+  keys: EditFieldKey[],
+  persisted: Record<EditFieldKey, string>,
+  sent: Record<EditFieldKey, string>
+): SavedField[] {
+  const at = new Date().toISOString();
+  const next = prev.filter((entry) => !keys.includes(entry.key));
+  for (const key of keys) {
+    next.push({ key, value: fieldFor(key).writeOnly ? sent[key] : persisted[key], at });
+  }
+  return next;
+}
+
+/** What cancelling out from under each refusal actually costs, which in
+ *  both cases is nothing beyond the draft. The refusal is refused BEFORE
+ *  anything is written (prepareTrustChange calls
+ *  requireHostKeyChangeAcknowledgement before stageKnownHostsLine), so
+ *  there is no half-applied state to walk back. Cancel needs no new
+ *  machinery to make that true, only to say it. */
+const REFUSAL_ON_CANCEL: Record<AcknowledgeableRefusal, string> = {
+  repoint:
+    "The change you were asked to confirm goes with the draft. No acknowledgement is sent, and this backup set stays pointed at the data it is pointed at now.",
+  hostKey:
+    "The change you were asked to confirm goes with the draft. No acknowledgement is sent, nothing is written to this set's known_hosts, and the key on record stays the key on record."
+};
 
 /** The two refusals a save can come back with that an operator can answer
  *  rather than fix. Each has its own acknowledgement on the retry, which
