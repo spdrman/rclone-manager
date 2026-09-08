@@ -80,7 +80,7 @@ type MediumCredentialRef struct {
 	File string
 }
 
-// mediumCredentialsDirIn is where ImportMediumCredentials persists an
+// mediumCredentialsDirIn is where ImportStorageCredentials persists an
 // imported credentials file. See keysDirIn, which this mirrors: it takes
 // configPath rather than hanging off *BackupService so a surface without
 // one resolves the same directory from the same path.
@@ -144,7 +144,7 @@ func resolveMediumCredentialsFileIn(configPath, id string) (string, error) {
 	return path, nil
 }
 
-// ImportMediumCredentials writes an access key id and a secret access key
+// ImportStorageCredentials writes an access key id and a secret access key
 // into a 0600 AWS shared-credentials file beside config.yaml and returns
 // an opaque id for it.
 //
@@ -161,11 +161,11 @@ func resolveMediumCredentialsFileIn(configPath, id string) (string, error) {
 //
 // Nothing here returns, logs or echoes the material. See this file's
 // package doc.
-func (b *BackupService) ImportMediumCredentials(_ context.Context, accessKeyID, secretAccessKey string) (MediumCredentialRef, error) {
-	return importMediumCredentialsInto(b.configPath, accessKeyID, secretAccessKey, "")
+func (b *BackupService) ImportStorageCredentials(_ context.Context, accessKeyID, secretAccessKey, sessionToken string) (MediumCredentialRef, error) {
+	return importStorageCredentialsInto(b.configPath, accessKeyID, secretAccessKey, sessionToken)
 }
 
-// ImportMediumCredentialsText is ImportMediumCredentials for material
+// ImportStorageCredentialsText is ImportStorageCredentials for material
 // that already IS shared-credentials text, which is what `backup-manager
 // medium import-credentials --stdin` reads.
 //
@@ -176,17 +176,17 @@ func (b *BackupService) ImportMediumCredentials(_ context.Context, accessKeyID, 
 // pair) and then written VERBATIM, so a file an operator already trusts
 // is stored as the thing they trusted rather than as this product's
 // re-rendering of it.
-func (b *BackupService) ImportMediumCredentialsText(_ context.Context, raw []byte) (MediumCredentialRef, error) {
+func (b *BackupService) ImportStorageCredentialsText(_ context.Context, raw []byte) (MediumCredentialRef, error) {
 	if err := rclone.ValidateImportedMediumCredentials(raw); err != nil {
 		return MediumCredentialRef{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	return writeMediumCredentials(b.configPath, raw)
 }
 
-// importMediumCredentialsInto is ImportMediumCredentials' configPath-only
+// importStorageCredentialsInto is ImportStorageCredentials' configPath-only
 // half; see keysDirIn's own doc for why this package splits methods this
 // way.
-func importMediumCredentialsInto(configPath, accessKeyID, secretAccessKey, sessionToken string) (MediumCredentialRef, error) {
+func importStorageCredentialsInto(configPath, accessKeyID, secretAccessKey, sessionToken string) (MediumCredentialRef, error) {
 	raw, err := rclone.RenderImportedMediumCredentials(accessKeyID, secretAccessKey, sessionToken)
 	if err != nil {
 		return MediumCredentialRef{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)

@@ -1065,3 +1065,26 @@ func TestTestConnection_UnknownBackupSetIs404(t *testing.T) {
 		t.Errorf("code = %q, want BACKUP_SET_NOT_FOUND", code)
 	}
 }
+
+// put and delete complete readSurfaceRouter's verb set for the routes
+// G2.2 (#594) added. They carry the same valid CSRF pair post does, so a
+// test that meant to exercise a handler cannot be answered by the CSRF
+// middleware instead.
+func (r readSurfaceRouter) put(t *testing.T, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	attachValidCSRF(req)
+	rec := httptest.NewRecorder()
+	r.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func (r readSurfaceRouter) delete(t *testing.T, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, target, nil)
+	attachValidCSRF(req)
+	rec := httptest.NewRecorder()
+	r.router.ServeHTTP(rec, req)
+	return rec
+}

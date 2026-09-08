@@ -10,7 +10,11 @@ import type {
   FirstRunResult,
   HostKeyProbeResult,
   ManagerStorage,
+  MediumPreflight,
   MediumPreflightCheck,
+  StorageMedium,
+  StorageMediumSpec,
+  StorageMediumUsage,
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
@@ -984,11 +988,13 @@ function defaultSettings(): AppSettings {
     mediums: [
       {
         id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
-        storageClass: "STANDARD_IA", readsRequireRestore: false
+        prefix: "monthly", storageClass: "STANDARD_IA", uploadVerification: "readback",
+        readsRequireRestore: false
       },
       {
         id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
-        storageClass: "DEEP_ARCHIVE", readsRequireRestore: true
+        prefix: "annual", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback",
+        readsRequireRestore: true
       }
     ],
     schema: {
@@ -1175,6 +1181,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
   let configured = scenario !== "first-run";
+  // How many credentials this fixture has been asked to import, purely so
+  // successive imports mint different ids. The MATERIAL is never kept:
+  // there is no read side for it in the real backend either, and a
+  // fixture that stored it would be the one place in this codebase where
+  // an S3 secret sits at rest.
+  let importedCredentialCount = 0;
 
   const api: BackupManagerApi = {
     getVersion: () =>
@@ -1617,38 +1629,120 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // says so at the same step the engine does rather than reporting a
       // uniform green: a form built against an always-passing fixture
       // never renders the one answer an operator has to act on.
-      const deliverable = !medium.readsRequireRestore;
-      const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
-        ({ step, outcome: "skipped", category: "", detail });
-      const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
-        ({ step, outcome: "passed", category: "", detail });
-      const checks: MediumPreflightCheck[] = [
-        passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
-        passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
-        deliverable
-          ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
-          : {
-              step: "deliverable",
-              outcome: "failed",
-              category: "",
-              detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+      return delay(mockPreflightFor(medium, !medium.readsRequireRestore), 700);
+    },
+
+    // G2.2 (#594). The fixture keeps the mediums it was given and lets
+    // them be added to, edited and removed, because the interesting
+    // things about this surface are all about state that changes: a
+    // wizard that saves a destination and does not see it in the list, an
+    // edit that silently clears the credential, a removal that is refused.
+    // A read-only fixture would render every one of those as a pass.
+    importStorageCredentials: (accessKeyId, secretAccessKey) => {
+      if (!accessKeyId || !secretAccessKey)
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "access_key_id and secret_access_key are both required",
+          correlationId: "cid_mockcreds400"
+        }));
+      // The material is deliberately dropped on the floor here rather than
+      // stored anywhere on this fixture. There is no read side for it in
+      // the real backend either, and a fixture that kept it would be the
+      // one place in this codebase where a stored S3 secret is reachable.
+      importedCredentialCount += 1;
+      return delay("mock-credential-" + importedCredentialCount, 400);
+    },
+
+    listStorageMediums: () => delay(structuredClone(settings.mediums), 200),
+
+    getStorageMedium: (mediumId) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      return medium
+        ? delay(structuredClone(medium), 150)
+        : Promise.reject(mediumNotFound());
+    },
+
+    // A count with two sets behind it, so a surface that renders only the
+    // total is visibly missing something in the dev fixture rather than
+    // only against a real deployment.
+    getStorageMediumUsage: (mediumId) =>
+      delay<StorageMediumUsage>(
+        mediumId === "offsite_s3"
+          ? {
+              medium: mediumId,
+              placements: 148,
+              backupSets: [
+                { set: "api-server/var-backups", placements: 96, onlyCopyHere: 96 },
+                { set: "nas-media/photos", placements: 52, onlyCopyHere: 52 }
+              ]
             }
-      ];
-      const rest: [MediumPreflightCheck["step"], string][] = [
-        ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
-        ["read_back", "the object was read back and is byte for byte what was written"],
-        ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
-        ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
-        ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
-      ];
-      for (const [step, detail] of rest) {
-        checks.push(
-          deliverable
-            ? passed(step, detail)
-            : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
-        );
-      }
-      return delay({ medium: medium.id, ok: deliverable, checks }, 700);
+          : { medium: mediumId, placements: 0, backupSets: [] },
+        200
+      ),
+
+    // Verify before save: this writes nothing, whatever it answers. The
+    // fixture fails on an archive class at the `deliverable` step and
+    // skips the five after it, which is the refusal pane the mockup draws
+    // and the one shape a form built against an always-green fixture
+    // never renders.
+    preflightStorageMediumCandidate: (spec) => {
+      const archive = spec.storageClass === "GLACIER" || spec.storageClass === "DEEP_ARCHIVE";
+      return delay(
+        mockPreflightFor(
+          {
+            id: spec.id,
+            type: spec.type,
+            bucket: spec.bucket,
+            region: spec.region,
+            storageClass: spec.storageClass ?? "STANDARD",
+            uploadVerification: spec.uploadVerification ?? "readback",
+            readsRequireRestore: archive
+          },
+          archive
+        ),
+        700
+      );
+    },
+
+    createStorageMedium: (spec) => {
+      if (settings.mediums.some((m) => m.id === spec.id))
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_EXISTS",
+          message: `service: storage medium already declared: ${spec.id}`,
+          correlationId: "cid_mockmedium409"
+        }));
+      const medium = mockMediumOf(spec);
+      settings.mediums.push(medium);
+      return delay(structuredClone(medium), 400);
+    },
+
+    updateStorageMedium: (mediumId, spec) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      const medium = mockMediumOf({ ...spec, id: mediumId });
+      settings.mediums[at] = medium;
+      return delay(structuredClone(medium), 400);
+    },
+
+    // FR-30: refused while any copy names it, with the count and the sets
+    // in the message, because "148 copies affected" with nothing listed is
+    // a number rather than a report.
+    removeStorageMedium: (mediumId) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      if (mediumId === "offsite_s3")
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IN_USE",
+          message:
+            'service: storage medium still holds copies: 148 copies on storage medium "offsite_s3", across ' +
+            "api-server/var-backups (96), nas-media/photos (52). Removing the declaration would not delete them, " +
+            "it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so " +
+            "they would read as unreachable and no prune could ever run against them; 148 of them are the only " +
+            "confirmed copy of their artifact anywhere",
+          correlationId: "cid_mockmedium409inuse"
+        }));
+      settings.mediums.splice(at, 1);
+      return delay(undefined, 300);
     },
 
     scanCatalog: () =>
@@ -1673,4 +1767,72 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   };
 
   return refusingWhileUnconfigured(api, () => configured);
+}
+
+// mockPreflightFor builds the eight-step report both preflight fixtures
+// answer with, so the by-id check and the candidate check cannot drift
+// into two different ideas of what a report looks like.
+//
+// The archive case is not decoration. A destination whose class cannot
+// take delivery fails at `deliverable` and skips the five steps after it,
+// and a form built against an always-green fixture never renders the one
+// answer an operator has to act on.
+function mockPreflightFor(medium: StorageMedium, deliverable: boolean): MediumPreflight {
+  const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+    ({ step, outcome: "skipped", category: "", detail });
+  const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+    ({ step, outcome: "passed", category: "", detail });
+  const checks: MediumPreflightCheck[] = [
+    passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
+    passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
+    deliverable
+      ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
+      : {
+          step: "deliverable",
+          outcome: "failed",
+          category: "configuration",
+          detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+        }
+  ];
+  const rest: [MediumPreflightCheck["step"], string][] = [
+    ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
+    ["read_back", "the object was read back and is byte for byte what was written"],
+    ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
+    ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
+    ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
+  ];
+  for (const [step, detail] of rest) {
+    checks.push(
+      deliverable
+        ? passed(step, detail)
+        : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
+    );
+  }
+  return { medium: medium.id, ok: deliverable, checks };
+}
+
+// mockMediumOf projects a submitted spec onto the summary a read returns,
+// resolving the two defaults the backend resolves and dropping the
+// credential, which the real summary has no field for either.
+function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
+  const storageClass = spec.storageClass ?? "STANDARD";
+  return {
+    id: spec.id,
+    type: spec.type,
+    bucket: spec.bucket,
+    region: spec.region,
+    endpoint: spec.endpoint,
+    prefix: spec.prefix,
+    storageClass,
+    uploadVerification: spec.uploadVerification ?? "readback",
+    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE"
+  };
+}
+
+function mediumNotFound(): BackupManagerError {
+  return new BackupManagerError({
+    code: "MEDIUM_NOT_FOUND",
+    message: "this configuration declares no storage medium with that id",
+    correlationId: "cid_mockmedium404"
+  });
 }

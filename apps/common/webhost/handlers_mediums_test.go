@@ -162,3 +162,240 @@ func TestPreflightStorageMedium_NeverReturnsACredentialOrWhereItCameFrom(t *test
 		}
 	}
 }
+
+// ------------------------------------------- declaring one (G2.2, #594) ---
+
+// storageCredentialCanary is a value that exists nowhere else in this
+// repository, so finding it in a response, in a log line or in an echoed
+// command is proof of where it came from. Same shape as
+// mediumPreflightCanary above, pointed at the one route in this whole API
+// that ever holds S3 credential material.
+const (
+	storageCredentialCanary   = "CANARY-594-web-6d20af31c9b7-DO-NOT-SERVE"
+	storageCredentialCanaryID = "AKIAEXAMPLE594NOTREAL"
+)
+
+// TestImportStorageCredentials_AnswersWithAReferenceAndNeverTheMaterial
+// is the one-way-door assertion. The material really does reach the
+// backend, which the positive control proves, and none of it comes back.
+func TestImportStorageCredentials_AnswersWithAReferenceAndNeverTheMaterial(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/storage-credentials", fmt.Sprintf(
+		`{"access_key_id":%q,"secret_access_key":%q}`, storageCredentialCanaryID, storageCredentialCanary))
+	mustStatus(t, rec, http.StatusCreated)
+
+	// The positive control: without it, an empty response body would pass
+	// the leak assertion below for the wrong reason.
+	if rt.backend.lastImportedSecret != storageCredentialCanary {
+		t.Fatalf("the backend was handed %q, not the canary, so this test proves nothing", rt.backend.lastImportedSecret)
+	}
+	if rt.backend.lastImportedAccessKeyID != storageCredentialCanaryID {
+		t.Fatalf("the backend was handed access key id %q, not the canary", rt.backend.lastImportedAccessKeyID)
+	}
+
+	body := rec.Body.String()
+	for _, forbidden := range []string{storageCredentialCanary, storageCredentialCanaryID, "access_key", "secret"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the import response carries %q:\n%s", forbidden, body)
+		}
+	}
+
+	var got struct {
+		ID string `json:"id"`
+	}
+	decodeInto(t, rec, &got)
+	if got.ID == "" {
+		t.Fatal("the import returned no id, so nothing can reference the credential it wrote")
+	}
+	// The server-side path the id resolves to is not on the wire either.
+	// A path is a fact about this host's filesystem an API caller has no
+	// use for, exactly as importSSHKeyResponse declines to carry KeyFile.
+	if strings.Contains(body, "s3_credentials") || strings.Contains(body, "/srv") {
+		t.Fatalf("the import response carries the server-side path:\n%s", body)
+	}
+}
+
+func TestImportStorageCredentials_RefusesAnEmptyKey(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rec := rt.post(t, "/api/v1/storage-credentials", `{"access_key_id":"","secret_access_key":"x"}`)
+	mustStatus(t, rec, http.StatusBadRequest)
+	if got := responseErrorCode(rec.Body.String()); got != "INVALID_REQUEST" {
+		t.Errorf("error code = %q, want INVALID_REQUEST", got)
+	}
+}
+
+// candidateBody is the wizard's step 3 request: a whole destination
+// described in one go, with a credential REFERENCE and no material.
+const candidateBody = `{"id":"offsite_s3","type":"s3","region":"us-east-1","bucket":"nas-backups",` +
+	`"prefix":"monthly","storage_class":"STANDARD_IA","credentials":{"credentials_id":"9b41c7e2"}}`
+
+// TestPreflightStorageMediumCandidate_ChecksSomethingNotYetDeclared is
+// the route that did not exist and that made a wizard impossible: the
+// by-id preflight can only check a destination already written into the
+// operator's configuration.
+func TestPreflightStorageMediumCandidate_ChecksSomethingNotYetDeclared(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediumPreflight = workingPreflight()
+
+	rec := rt.post(t, "/api/v1/storage-mediums/preflight", candidateBody)
+	mustStatus(t, rec, http.StatusOK)
+
+	// Nothing was declared by checking it. This is the property the whole
+	// verify-before-save ordering rests on.
+	if len(rt.backend.mediums) != 0 {
+		t.Fatalf("a candidate preflight declared %d medium(s)", len(rt.backend.mediums))
+	}
+	if rt.backend.lastCandidate.ID != "offsite_s3" || rt.backend.lastCandidate.Bucket != "nas-backups" {
+		t.Fatalf("the candidate reached the backend as %+v", rt.backend.lastCandidate)
+	}
+	if rt.backend.lastCandidate.Credentials.ID != "9b41c7e2" {
+		t.Errorf("the credentials_id did not cross the boundary: %+v", rt.backend.lastCandidate.Credentials)
+	}
+
+	var got mediumPreflightResponse
+	decodeInto(t, rec, &got)
+	if len(got.Checks) != 8 {
+		t.Fatalf("the candidate report carries %d checks, want all 8; a surface that drops the skipped ones shows a shorter list on a failure than on a success", len(got.Checks))
+	}
+}
+
+// TestPreflightStorageMediumCandidate_RendersEverySkippedStep is the
+// rendering rule this issue asks for in as many words: never a single OK
+// or FAILED, always the eight steps with their categories.
+func TestPreflightStorageMediumCandidate_RendersEverySkippedStep(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	report := workingPreflight()
+	report.OK = false
+	report.Checks[1] = service.MediumPreflightCheck{
+		Step: "reach", Outcome: "failed", Category: "configuration",
+		Detail: "the endpoint answered but does not hold this bucket",
+	}
+	for i := 2; i < len(report.Checks); i++ {
+		report.Checks[i] = service.MediumPreflightCheck{
+			Step: report.Checks[i].Step, Outcome: "skipped", Detail: "this check did not run",
+		}
+	}
+	rt.backend.mediumPreflight = report
+
+	rec := rt.post(t, "/api/v1/storage-mediums/preflight", candidateBody)
+	mustStatus(t, rec, http.StatusOK)
+
+	var got mediumPreflightResponse
+	decodeInto(t, rec, &got)
+	if got.OK {
+		t.Fatal("a failing candidate came back ok")
+	}
+	skipped := 0
+	for _, c := range got.Checks {
+		if c.Outcome == "skipped" {
+			skipped++
+		}
+	}
+	if skipped != 6 {
+		t.Errorf("%d checks came back skipped, want 6; a skipped write rendered as anything but 'never tried' tells an operator their bucket is writable", skipped)
+	}
+	if got.Checks[1].Category != "configuration" {
+		t.Errorf("the failing check lost its category (%q); a client branches on the category and never on the detail", got.Checks[1].Category)
+	}
+}
+
+func TestCreateStorageMedium_DeclaresItAndCarriesNoCredentialBack(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/storage-mediums", candidateBody)
+	mustStatus(t, rec, http.StatusCreated)
+
+	if rt.backend.lastMediumSpec.Credentials.ID != "9b41c7e2" {
+		t.Fatalf("the credential reference did not reach the backend: %+v", rt.backend.lastMediumSpec.Credentials)
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{"9b41c7e2", "credential"} {
+		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
+			t.Errorf("the create response carries %q:\n%s", forbidden, body)
+		}
+	}
+}
+
+// TestRemoveStorageMedium_RefusesWithAConflictWhileCopiesNameIt is FR-30
+// on the wire. A 409 rather than a 400 because the request was understood
+// perfectly and is being declined on the state of the deployment; a 400
+// would send an operator off to check their JSON.
+func TestRemoveStorageMedium_RefusesWithAConflictWhileCopiesNameIt(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnMediumWrite = fmt.Errorf(
+		"%w: 148 copies on storage medium \"offsite_s3\", across api-server/var-backups (96), nas-media/photos (52)",
+		service.ErrStorageMediumInUse)
+
+	rec := rt.delete(t, "/api/v1/storage-mediums/offsite_s3")
+	mustStatus(t, rec, http.StatusConflict)
+	if got := responseErrorCode(rec.Body.String()); got != "MEDIUM_IN_USE" {
+		t.Fatalf("error code = %q, want MEDIUM_IN_USE", got)
+	}
+	// The refusal is only useful if it names what is affected. "148
+	// copies affected" with nothing listed is a number, not a report.
+	body := rec.Body.String()
+	for _, want := range []string{"148", "api-server/var-backups", "nas-media/photos"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refusal does not carry %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestGetStorageMediumUsage_ListsTheSetsRatherThanOnlyCounting(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediumUsage = service.StorageMediumUsage{
+		Placements: 148,
+		BackupSets: []service.StorageMediumUsageBySet{
+			{Set: "api-server/var-backups", Placements: 96, OnlyCopyHere: 96},
+			{Set: "nas-media/photos", Placements: 52, OnlyCopyHere: 52},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/storage-mediums/offsite_s3/usage")
+	mustStatus(t, rec, http.StatusOK)
+
+	var got storageMediumUsageResponse
+	decodeInto(t, rec, &got)
+	if got.Medium != "offsite_s3" || got.Placements != 148 {
+		t.Fatalf("usage = %+v", got)
+	}
+	if len(got.BackupSets) != 2 || got.BackupSets[0].OnlyCopyHere != 96 {
+		t.Fatalf("the affected sets are not listed: %+v", got.BackupSets)
+	}
+}
+
+// TestUpdateStorageMedium_RefusesTwoIdsRatherThanPreferringOne is
+// testConnection's own rule applied here: a request that says two things
+// about which destination it is editing is ambiguous, and silently
+// preferring either is how a caller is shown a success for a change to
+// something else.
+func TestUpdateStorageMedium_RefusesTwoIdsRatherThanPreferringOne(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rec := rt.put(t, "/api/v1/storage-mediums/offsite_s3",
+		`{"id":"cold_vault","type":"s3","bucket":"nas-archive","credentials":{"credentials_id":"9b41c7e2"}}`)
+	mustStatus(t, rec, http.StatusBadRequest)
+	if rt.backend.lastMediumSpec.ID != "" {
+		t.Errorf("the ambiguous request reached the backend as %q", rt.backend.lastMediumSpec.ID)
+	}
+}
+
+// TestUpdateStorageMedium_MayOmitTheCredentialBlock is the shape an edit
+// form actually sends: this API never reports a medium's credential, so a
+// form cannot resubmit one it never received.
+func TestUpdateStorageMedium_MayOmitTheCredentialBlock(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD", UploadVerification: "readback"},
+	}
+
+	rec := rt.put(t, "/api/v1/storage-mediums/offsite_s3",
+		`{"type":"s3","region":"eu-west-1","bucket":"nas-backups","storage_class":"STANDARD_IA"}`)
+	mustStatus(t, rec, http.StatusOK)
+	if got := rt.backend.lastMediumSpec; got.ID != "offsite_s3" || got.Region != "eu-west-1" {
+		t.Fatalf("the edit reached the backend as %+v", got)
+	}
+	if c := rt.backend.lastMediumSpec.Credentials; c.ID != "" || c.File != "" || c.Env != "" || len(c.Command) != 0 {
+		t.Errorf("an edit that named no credential arrived carrying one: %+v", c)
+	}
+}

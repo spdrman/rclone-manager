@@ -123,8 +123,22 @@ var contractBindings = map[string]contractBinding{
 	// segment, unlike the artifact routes above, because a medium id is a
 	// single segment: config refuses one carrying a separator.
 	"preflightStorageMedium": {nil, mediumPreflightResponse{}, "/api/v1/storage-mediums/offsite_s3/preflight"},
-	"setBackupSetEnabled":    {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":   {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+
+	// G2.2 (#594). importStorageCredentials is the only entry in this
+	// whole table whose request type carries credential material, and its
+	// response is bound to a type with one field, which is the id. A
+	// response shape that grew a second field would have to be written
+	// into the contract to pass this test, which is the point.
+	"importStorageCredentials":        {importStorageCredentialsRequest{}, importStorageCredentialsResponse{}, "/api/v1/storage-credentials"},
+	"listStorageMediums":              {nil, listStorageMediumsResponse{}, "/api/v1/storage-mediums"},
+	"createStorageMedium":             {storageMediumRequest{}, storageMediumBody{}, "/api/v1/storage-mediums"},
+	"preflightStorageMediumCandidate": {storageMediumRequest{}, mediumPreflightResponse{}, "/api/v1/storage-mediums/preflight"},
+	"getStorageMedium":                {nil, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3"},
+	"updateStorageMedium":             {storageMediumRequest{}, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3"},
+	"removeStorageMedium":             {nil, nil, "/api/v1/storage-mediums/offsite_s3"},
+	"getStorageMediumUsage":           {nil, storageMediumUsageResponse{}, "/api/v1/storage-mediums/offsite_s3/usage"},
+	"setBackupSetEnabled":             {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":            {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 
 	// Issue #333. Three operations on one path, which is the point of a
 	// sub-resource: the method is what says whether the policy is being

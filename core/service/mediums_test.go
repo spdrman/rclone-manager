@@ -28,19 +28,19 @@ const (
 	testCanarySecret      = "EXAMPLE-SECRET-NOT-A-REAL-KEY-0000000000"
 )
 
-// TestImportMediumCredentials_ReturnsAReferenceAndNeverTheMaterial is the
+// TestImportStorageCredentials_ReturnsAReferenceAndNeverTheMaterial is the
 // S3 half of ImportSSHKey's own contract: the material is submitted once,
 // an opaque id comes back, and nothing about the secret survives on the
 // boundary.
-func TestImportMediumCredentials_ReturnsAReferenceAndNeverTheMaterial(t *testing.T) {
+func TestImportStorageCredentials_ReturnsAReferenceAndNeverTheMaterial(t *testing.T) {
 	svc, configPath := openTestService(t)
 
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	if ref.ID == "" {
-		t.Fatal("ImportMediumCredentials returned an empty id, so nothing can reference the credential it wrote")
+		t.Fatal("ImportStorageCredentials returned an empty id, so nothing can reference the credential it wrote")
 	}
 	if strings.Contains(ref.ID, testCanarySecret) || strings.Contains(ref.ID, testCanaryAccessKeyID) {
 		t.Fatalf("the returned id carries credential material: %q", ref.ID)
@@ -68,15 +68,15 @@ func TestImportMediumCredentials_ReturnsAReferenceAndNeverTheMaterial(t *testing
 	}
 }
 
-// TestImportMediumCredentials_RefusesMalformedMaterialWithoutEchoingIt
+// TestImportStorageCredentials_RefusesMalformedMaterialWithoutEchoingIt
 // pins the refusal shape keysource.go and mediumcreds.go both hold: the
 // SHAPE of the problem is reported, never the bytes that failed.
-func TestImportMediumCredentials_RefusesMalformedMaterialWithoutEchoingIt(t *testing.T) {
+func TestImportStorageCredentials_RefusesMalformedMaterialWithoutEchoingIt(t *testing.T) {
 	svc, configPath := openTestService(t)
 
-	_, err := svc.ImportMediumCredentials(context.Background(), "", testCanarySecret)
+	_, err := svc.ImportStorageCredentials(context.Background(), "", testCanarySecret, "")
 	if err == nil {
-		t.Fatal("ImportMediumCredentials accepted an empty access key id")
+		t.Fatal("ImportStorageCredentials accepted an empty access key id")
 	}
 	if strings.Contains(err.Error(), testCanarySecret) {
 		t.Fatalf("the refusal echoes the secret it was given: %v", err)
@@ -96,9 +96,9 @@ func TestImportMediumCredentials_RefusesMalformedMaterialWithoutEchoingIt(t *tes
 func TestCreateStorageMedium_WritesTheDeclarationAndNoSecret(t *testing.T) {
 	svc, configPath := openTestService(t)
 
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 
 	spec := StorageMediumSpec{
@@ -146,9 +146,9 @@ func TestCreateStorageMedium_WritesTheDeclarationAndNoSecret(t *testing.T) {
 // already holds.
 func TestCreateStorageMedium_RefusesADuplicateIdAndWritesNothing(t *testing.T) {
 	svc, configPath := openTestService(t)
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	spec := StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",
@@ -179,9 +179,9 @@ func TestCreateStorageMedium_RefusesADuplicateIdAndWritesNothing(t *testing.T) {
 // accident from a settings page.
 func TestRemoveStorageMedium_RefusesWhileAPlacementNamesIt(t *testing.T) {
 	svc, _ := openTestService(t)
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",
@@ -273,9 +273,9 @@ func seedMediumPlacement(t *testing.T, svc *BackupService, medium, name string) 
 // declareTestMedium is the create every FR-30 test starts from.
 func declareTestMedium(t *testing.T, svc *BackupService, id string) {
 	t.Helper()
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: id, Type: "s3", Region: "us-east-1", Bucket: "nas-backups", Prefix: "monthly",
@@ -341,7 +341,7 @@ func TestStorageMediumUsage_CountsOnlyCopiesSeparately(t *testing.T) {
 	declareTestMedium(t, svc, "offsite_s3")
 	seedMediumPlacement(t, svc, "offsite_s3", "only-copy.dump")
 
-	usage, err := svc.StorageMediumUsageOf(context.Background(), "offsite_s3")
+	usage, err := svc.StorageMediumUsage(context.Background(), "offsite_s3")
 	if err != nil {
 		t.Fatalf("StorageMediumUsageOf: %v", err)
 	}
@@ -366,9 +366,9 @@ func TestUpdateStorageMedium_IsAllowedOnAMediumCopiesNameIt(t *testing.T) {
 	declareTestMedium(t, svc, "offsite_s3")
 	seedMediumPlacement(t, svc, "offsite_s3", "one.dump")
 
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	got, err := svc.UpdateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "eu-west-1", Bucket: "nas-backups", Prefix: "monthly",
@@ -421,7 +421,7 @@ func TestUpdateStorageMedium_KeepsTheCredentialWhenTheEditNamesNone(t *testing.T
 	if !strings.Contains(string(after), credentialLine) {
 		t.Errorf("the edit dropped the credential reference it was not asked to change; %q is gone from:\n%s", credentialLine, after)
 	}
-	got, err := svc.StorageMedium(context.Background(), "offsite_s3")
+	got, err := svc.GetStorageMedium(context.Background(), "offsite_s3")
 	if err != nil {
 		t.Fatalf("StorageMedium: %v", err)
 	}
@@ -448,9 +448,9 @@ func TestCreateStorageMedium_StillNeedsACredential(t *testing.T) {
 // cannot report is a field the next save silently clears.
 func TestStorageMediumSummary_CarriesEveryFieldAnEditMustPreserve(t *testing.T) {
 	svc, _ := openTestService(t)
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	spec := StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Endpoint: "https://minio.internal:9000",
@@ -484,9 +484,9 @@ func TestStorageMediumSummary_CarriesEveryFieldAnEditMustPreserve(t *testing.T) 
 // schema holds and not about the id the caller actually sent.
 func TestStorageMediumWrites_RefuseMoreThanOneCredentialSource(t *testing.T) {
 	svc, _ := openTestService(t)
-	ref, err := svc.ImportMediumCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
 	if err != nil {
-		t.Fatalf("ImportMediumCredentials: %v", err)
+		t.Fatalf("ImportStorageCredentials: %v", err)
 	}
 	_, err = svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",

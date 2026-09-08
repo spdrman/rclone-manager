@@ -67,7 +67,11 @@ import type {
   WireListOperationsResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
+  WireImportStorageCredentialsResponse,
+  WireListStorageMediumsResponse,
   WireMediumPreflightResponse,
+  WireStorageMediumSummary,
+  WireStorageMediumUsageResponse,
   WireOperation,
   WirePlacement,
   WireRetentionOverride,
@@ -88,6 +92,8 @@ import type {
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
+  StorageMedium,
+  StorageMediumSpec,
   ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
@@ -632,6 +638,72 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
   };
 }
 
+// The one projection of a declared storage destination onto this UI's
+// shape, shared by GET /settings, the destinations list and every write's
+// own response (G2.2, #594). One function rather than four literals: the
+// field this shape must never grow is a credential, and four copies is
+// four places somebody could add one.
+function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
+  return {
+    id: m.id,
+    type: m.type,
+    bucket: m.bucket,
+    region: m.region,
+    endpoint: m.endpoint,
+    prefix: m.prefix,
+    storageClass: m.storage_class,
+    uploadVerification: m.upload_verification,
+    readsRequireRestore: m.reads_require_restore
+  };
+}
+
+// toWireStorageMedium is the write direction, and the omissions are the
+// interesting part. An absent credentials block is sent as an absent
+// credentials block, never as an empty object: on an edit the backend
+// reads "no credential named" as "keep the one already configured", and
+// an empty object would be indistinguishable from a caller that meant to
+// send one and lost it.
+function toWireStorageMedium(spec: StorageMediumSpec): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    id: spec.id,
+    type: spec.type,
+    bucket: spec.bucket
+  };
+  if (spec.region) body.region = spec.region;
+  if (spec.endpoint) body.endpoint = spec.endpoint;
+  if (spec.prefix) body.prefix = spec.prefix;
+  if (spec.storageClass) body.storage_class = spec.storageClass;
+  if (spec.uploadVerification) body.upload_verification = spec.uploadVerification;
+  const c = spec.credentials;
+  if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
+    body.credentials = {
+      ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
+      ...(c.file ? { file: c.file } : {}),
+      ...(c.env ? { env: c.env } : {}),
+      ...(c.command && c.command.length > 0 ? { command: c.command } : {})
+    };
+  }
+  return body;
+}
+
+// fromWireMediumPreflight is shared by the by-id preflight and the
+// candidate one, so the two cannot render the same report differently.
+// Every check is carried through, skipped ones included: a surface that
+// dropped them would show a shorter list on a failure than on a success,
+// which is the one moment the full list matters most.
+function fromWireMediumPreflight(r: WireMediumPreflightResponse): MediumPreflight {
+  return {
+    medium: r.medium,
+    ok: r.ok,
+    checks: r.checks.map((c) => ({
+      step: c.step as MediumPreflight["checks"][number]["step"],
+      outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
+      category: c.category ?? "",
+      detail: c.detail
+    }))
+  };
+}
+
 function fromWireCapacitySettings(c: WireCapacitySettings): CapacitySettings {
   return {
     capBytes: c.cap_bytes,
@@ -652,14 +724,7 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
       protectLastKnownGood: body.retention.protect_last_known_good
     },
     capacity: fromWireCapacitySettings(body.capacity),
-    mediums: (body.mediums ?? []).map((m) => ({
-      id: m.id,
-      type: m.type,
-      bucket: m.bucket,
-      region: m.region,
-      storageClass: m.storage_class,
-      readsRequireRestore: m.reads_require_restore
-    })),
+    mediums: (body.mediums ?? []).map(fromWireStorageMedium),
     schema: {
       storage: {
         // `class` is a reserved word in the wire shape's own spelling, so
@@ -1693,16 +1758,71 @@ export const httpApi: BackupManagerApi = {
     request<WireMediumPreflightResponse>(
       "/storage-mediums/" + encodeURIComponent(mediumId) + "/preflight",
       { method: "POST" }
+    ).then(fromWireMediumPreflight),
+
+  // G2.2 (issue #594). The import is the one call in this file that ever
+  // carries an S3 secret, and it carries it in one direction: what comes
+  // back is an id, and this method deliberately returns only that, so a
+  // caller cannot accidentally hold on to anything else.
+  importStorageCredentials: (accessKeyId, secretAccessKey, sessionToken) =>
+    request<WireImportStorageCredentialsResponse>("/storage-credentials", {
+      method: "POST",
+      body: JSON.stringify({
+        access_key_id: accessKeyId,
+        secret_access_key: secretAccessKey,
+        ...(sessionToken ? { session_token: sessionToken } : {})
+      })
+    }).then((r) => r.id),
+
+  listStorageMediums: () =>
+    request<WireListStorageMediumsResponse>("/storage-mediums").then((r) =>
+      (r.mediums ?? []).map(fromWireStorageMedium)
+    ),
+
+  getStorageMedium: (mediumId) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId)
+    ).then(fromWireStorageMedium),
+
+  getStorageMediumUsage: (mediumId) =>
+    request<WireStorageMediumUsageResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/usage"
     ).then((r) => ({
       medium: r.medium,
-      ok: r.ok,
-      checks: r.checks.map((c) => ({
-        step: c.step as MediumPreflight["checks"][number]["step"],
-        outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
-        category: c.category ?? "",
-        detail: c.detail
+      placements: r.placements,
+      backupSets: (r.backup_sets ?? []).map((s) => ({
+        set: s.set,
+        placements: s.placements,
+        onlyCopyHere: s.only_copy_here
       }))
     })),
+
+  // Verify before save. It writes nothing whatever the report says, and
+  // it resolves rather than rejects on a destination that does not work,
+  // for the reason preflightStorageMedium does: a bucket that is not
+  // there is what an operator did, not what broke.
+  preflightStorageMediumCandidate: (spec) =>
+    request<WireMediumPreflightResponse>("/storage-mediums/preflight", {
+      method: "POST",
+      body: JSON.stringify(toWireStorageMedium(spec))
+    }).then(fromWireMediumPreflight),
+
+  createStorageMedium: (spec) =>
+    request<WireStorageMediumSummary>("/storage-mediums", {
+      method: "POST",
+      body: JSON.stringify(toWireStorageMedium(spec))
+    }).then(fromWireStorageMedium),
+
+  updateStorageMedium: (mediumId, spec) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId),
+      { method: "PUT", body: JSON.stringify(toWireStorageMedium(spec)) }
+    ).then(fromWireStorageMedium),
+
+  removeStorageMedium: (mediumId) =>
+    request<void>("/storage-mediums/" + encodeURIComponent(mediumId), {
+      method: "DELETE"
+    }).then(() => undefined),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

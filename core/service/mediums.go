@@ -36,7 +36,7 @@ import (
 //
 // That argument is answered on its own terms rather than overruled, and
 // the answer is a FOURTH spelling of a reference:
-// StorageMediumCredentials.ID, minted by ImportMediumCredentials, opaque,
+// StorageMediumCredentials.ID, minted by ImportStorageCredentials, opaque,
 // generated on this host, resolving server-side to a 0600 file this
 // manager wrote beside config.yaml. A candidate carrying one is
 // meaningful without a host path or a variable name ever appearing on a
@@ -60,7 +60,7 @@ import (
 // # What never crosses this boundary
 //
 // Credential MATERIAL, in either direction, on any of these calls. It
-// arrives once, on ImportMediumCredentials (mediumcredentials.go), and
+// arrives once, on ImportStorageCredentials (mediumcredentials.go), and
 // what is stored, echoed, listed or written to config.yaml afterwards is
 // a reference. StorageMediumSummary has no field for a secret and
 // StorageMediumSpec has none either: the absence is structural, the same
@@ -76,7 +76,7 @@ import (
 // pair is a shape in which "file" plus a variable name is representable,
 // and the whole point of the closed set is that it is not.
 type StorageMediumCredentials struct {
-	// ID is a MediumCredentialRef.ID an earlier ImportMediumCredentials
+	// ID is a MediumCredentialRef.ID an earlier ImportStorageCredentials
 	// call returned. It resolves, server-side, to the 0600 file that
 	// import wrote, and what lands in config.yaml is that file's path
 	// under `credentials.file`.
@@ -188,7 +188,7 @@ type StorageMediumUsageBySet struct {
 	OnlyCopyHere int
 }
 
-// StorageMediums reports every declared destination, in declaration
+// ListStorageMediums reports every declared destination, in declaration
 // order, exactly as Settings does.
 //
 // It exists beside Settings.Mediums rather than instead of it because the
@@ -196,12 +196,12 @@ type StorageMediumUsageBySet struct {
 // page reads the whole policy at once, and a destinations page (and
 // `backup-manager medium list`) asks only this. Both project through
 // toStorageMediumSummaries, so they cannot drift.
-func (b *BackupService) StorageMediums(_ context.Context) ([]StorageMediumSummary, error) {
+func (b *BackupService) ListStorageMediums(_ context.Context) ([]StorageMediumSummary, error) {
 	return toStorageMediumSummaries(b.state.Load().inner.Config), nil
 }
 
-// StorageMedium reports one declared destination.
-func (b *BackupService) StorageMedium(_ context.Context, id string) (StorageMediumSummary, error) {
+// GetStorageMedium reports one declared destination.
+func (b *BackupService) GetStorageMedium(_ context.Context, id string) (StorageMediumSummary, error) {
 	for _, m := range toStorageMediumSummaries(b.state.Load().inner.Config) {
 		if m.ID == id {
 			return m, nil
@@ -210,13 +210,13 @@ func (b *BackupService) StorageMedium(_ context.Context, id string) (StorageMedi
 	return StorageMediumSummary{}, fmt.Errorf("%w: %s", ErrMediumNotFound, id)
 }
 
-// StorageMediumUsageOf reports what the journal says is on one medium.
+// StorageMediumUsage reports what the journal says is on one medium.
 //
 // It answers for an id the configuration no longer declares too, and that
 // is not an oversight: a removed medium is precisely the case where an
 // operator needs to know what was left on it, and refusing the question
 // because the declaration is gone would answer the wrong one.
-func (b *BackupService) StorageMediumUsageOf(ctx context.Context, id string) (StorageMediumUsage, error) {
+func (b *BackupService) StorageMediumUsage(ctx context.Context, id string) (StorageMediumUsage, error) {
 	usage, err := b.state.Load().inner.MediumUsageOf(ctx, id)
 	if err != nil {
 		return StorageMediumUsage{}, err
@@ -338,7 +338,7 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 	// Asked BEFORE the file is re-read, encoded or written, so a refused
 	// removal leaves the configuration exactly as it was. This is the
 	// same "refuse, never partially apply" ordering settings.go holds.
-	usage, err := b.StorageMediumUsageOf(ctx, id)
+	usage, err := b.StorageMediumUsage(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -446,7 +446,7 @@ func (b *BackupService) writeStorageMedium(spec StorageMediumSpec, mustExist boo
 	if err := b.persistConfig(cfg); err != nil {
 		return StorageMediumSummary{}, err
 	}
-	return b.StorageMedium(context.Background(), medium.ID)
+	return b.GetStorageMedium(context.Background(), medium.ID)
 }
 
 // persistConfig is the encode / validate / write / hot-reload tail every

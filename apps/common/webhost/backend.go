@@ -314,6 +314,38 @@ type BackupServiceClient interface {
 	// does not declare.
 	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
 
+	// The storage-destination write surface (G2.2, issue #594), which is
+	// what turns a medium from something only a YAML editor can create
+	// into something a wizard can.
+	//
+	// ImportStorageCredentials is POST /api/v1/storage-credentials: the
+	// only call in this interface that ever holds S3 credential
+	// material, and it holds it once, in one direction. What comes back
+	// is an opaque id, exactly as ImportSSHKey answers with a reference
+	// rather than a key.
+	//
+	// PreflightStorageMediumCandidate is POST
+	// /api/v1/storage-mediums/preflight, and it is the reason the import
+	// above exists in this shape. The by-id preflight can only check
+	// something already saved, so without a candidate probe the only way
+	// to find out whether a destination works is to write it into the
+	// operator's configuration first. The candidate carries a
+	// credentials_id, which names nothing about the manager's host, so
+	// the probe is possible without a path or a variable name ever
+	// reaching a request body.
+	//
+	// RemoveStorageMedium is the FR-30 refusal: it declines while any
+	// copy names the medium, because un-declaring a destination leaves
+	// this deployment with no way to confirm the copies on it.
+	ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error)
+	ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error)
+	GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
+	StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error)
+	PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error)
+	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	RemoveStorageMedium(ctx context.Context, id string) error
+
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)

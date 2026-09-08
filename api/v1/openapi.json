@@ -99,7 +99,10 @@
           "RESTORE_UNAVAILABLE",
           "COPY_NOT_FOUND",
           "MEDIUM_NOT_FOUND",
-          "ARTIFACT_NOT_FAILED"
+          "ARTIFACT_NOT_FAILED",
+          "MEDIUM_IN_USE",
+          "MEDIUM_EXISTS",
+          "STORAGE_CREDENTIAL_NOT_FOUND"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -146,7 +149,10 @@
           "RESTORE_UNAVAILABLE": "wire",
           "COPY_NOT_FOUND": "wire",
           "MEDIUM_NOT_FOUND": "wire",
-          "ARTIFACT_NOT_FAILED": "wire"
+          "ARTIFACT_NOT_FAILED": "wire",
+          "MEDIUM_IN_USE": "wire",
+          "MEDIUM_EXISTS": "wire",
+          "STORAGE_CREDENTIAL_NOT_FOUND": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -2620,7 +2626,7 @@
       },
       "StorageMediumSummary": {
         "type": "object",
-        "description": "One configured storage medium, as the settings surface reports it: what it is called, what kind of place it is, which bucket and region, and which storage class artifacts are written with. There is deliberately no field here for key material of any kind, and there never will be (FR-33). A credential reaches this product only as a reference to a file, an environment variable or a command, and none of those three has a spelling on this boundary at all.",
+        "description": "One configured storage medium, as the settings surface reports it: what it is called, what kind of place it is, which bucket and region, and which storage class artifacts are written with. There is deliberately no field here for key material of any kind, and there never will be (FR-33). A credential reaches this product only as a reference to a file, an environment variable or a command, and none of those three has a spelling on this boundary at all. That absence now covers the WRITE direction too (POST/PUT below), and it extends to the credential's KIND: there is no field saying whether a medium reads a file, a variable or a command, because where a credential comes from is a fact about the manager's host that an API caller has no use for. An edit therefore does not have to resupply the credential; omitting it keeps the one already configured.",
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -2647,6 +2653,24 @@
           "reads_require_restore": {
             "type": "boolean",
             "description": "True when this medium's storage class cannot be read on demand: anything already here, and anything a tier sends here, needs an explicit restore taking hours before it can be read at all. Computed from the storage class by the engine rather than restated by a client, so one product decides what archive means."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "The endpoint override, for an S3-compatible service. Empty means the provider's own endpoint for the region.",
+            "x-go-omitempty": true
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The key namespace inside the bucket. Empty puts the key layout at the root.",
+            "x-go-omitempty": true
+          },
+          "upload_verification": {
+            "type": "string",
+            "enum": [
+              "readback",
+              "attested"
+            ],
+            "description": "How an upload is proven before the local copy is deleted, already resolved, so a client never has to know what an unset value defaults to. readback re-downloads and re-hashes; attested asks the endpoint for its own whole-object digest, which no s3 backend can currently serve."
           }
         },
         "required": [
@@ -2654,6 +2678,7 @@
           "type",
           "bucket",
           "storage_class",
+          "upload_verification",
           "reads_require_restore"
         ]
       },
@@ -3162,6 +3187,192 @@
           "epoch",
           "poll_after_ms",
           "sets"
+        ]
+      },
+      "StorageMediumCredentialsReference": {
+        "type": "object",
+        "description": "Where one storage medium's credentials come from. Exactly one of the four must be set, and none of them is credential MATERIAL: this is a reference in all four spellings. credentials_id is the one a browser uses, because it is the only one that names nothing about the manager's host.",
+        "additionalProperties": false,
+        "properties": {
+          "credentials_id": {
+            "type": "string",
+            "description": "An id an earlier POST /storage-credentials returned. It resolves, server-side, to the 0600 file that import wrote beside the configuration, and that file's path is what the configuration ends up naming. This is the spelling to use from a browser: it is opaque, it names no path and no variable on the manager's host, and it is therefore safe on a request body, in an echoed command line and in an exported terminal transcript."
+          },
+          "file": {
+            "type": "string",
+            "description": "A path to an AWS shared-credentials file on the manager's host. The preferred source when an operator already has one, because rclone opens the file itself and the secret never enters the manager's process at all."
+          },
+          "env": {
+            "type": "string",
+            "description": "The NAME of an environment variable the credentials are read from at connection time. Never a value."
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "An argv array whose stdout is the credentials, run directly and never through a shell. This is how a secrets manager is adopted without this product depending on one."
+          }
+        }
+      },
+      "StorageMediumRequest": {
+        "type": "object",
+        "description": "One storage destination as a caller describes it: for POST /storage-mediums (declare it), PUT /storage-mediums/{id} (replace its description) and POST /storage-mediums/preflight (prove it before either). The same shape for all three deliberately, so what is proven and what is saved cannot be different destinations. There is no field here for credential material, and there never will be (FR-33): the credentials block names a reference.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "lower_snake_case, unique, and not `local`, which is reserved. This is the name a retention tier will use."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "s3"
+            ]
+          },
+          "region": {
+            "type": "string",
+            "description": "The provider region, passed to the backend unexamined. This product deliberately holds no list of legal regions: it would be a second, staler copy that refuses a region that works."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "An endpoint override for an S3-compatible service. Empty means the provider's own endpoint for the region. A wizard's provider preset only fills this field in."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "The bucket artifacts are written into. A name carrying a `/` is refused: that is a bucket and a prefix written into one field."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The key namespace inside the bucket, so one bucket can hold more than this product's artifacts. Empty puts the key layout at the root."
+          },
+          "storage_class": {
+            "type": "string",
+            "description": "The S3 storage class objects are written with. Empty means STANDARD. An archive class cannot take delivery of an artifact and is refused when a tier sends one here."
+          },
+          "upload_verification": {
+            "type": "string",
+            "enum": [
+              "readback",
+              "attested"
+            ],
+            "description": "How an upload is proven before the local copy is deleted. Empty means readback, which is the expensive one on purpose: a medium that said nothing must never be the one that gets believed on its own word."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/StorageMediumCredentialsReference",
+            "description": "Where the credentials come from. Required on a create and on a candidate preflight. Optional on PUT, where omitting it keeps the credential already configured, which it has to: this contract never reports a medium's credential, not even its kind, so a caller cannot resubmit what it never received."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "bucket"
+        ]
+      },
+      "ImportStorageCredentialsRequest": {
+        "type": "object",
+        "description": "POST /storage-credentials. Sent once; the caller discards its own copy the moment an id comes back. This is the ONLY place in this contract where S3 credential material appears, in either direction, and it is write-only: no operation anywhere echoes it, returns it or derives anything displayable from it.",
+        "additionalProperties": false,
+        "properties": {
+          "access_key_id": {
+            "type": "string",
+            "description": "The access key id. Write-only. It is treated as secret alongside the secret access key rather than as a public identifier, because FR-33 forbids a credential reaching a log in whole or in part.",
+            "writeOnly": true
+          },
+          "secret_access_key": {
+            "type": "string",
+            "description": "The secret access key. Write-only.",
+            "writeOnly": true
+          },
+          "session_token": {
+            "type": "string",
+            "description": "A session token, for a temporary credential. Optional and empty for the ordinary long-lived key a provider console hands out. Write-only.",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "access_key_id",
+          "secret_access_key"
+        ]
+      },
+      "ImportStorageCredentialsResponse": {
+        "type": "object",
+        "description": "The reference an import returns, and nothing else. There is deliberately no fingerprint, no masked key and no last-four here, unlike ImportSSHKeyResponse's algorithm and fingerprint: an SSH public key's fingerprint is a safe thing to show a person, and nothing derived from an S3 credential is.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The opaque reference to carry as credentials.credentials_id on a later medium create or candidate preflight. It names nothing about the manager's host, so it is safe on a request body, in a URL and in a terminal transcript."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "StorageMediumUsageBySet": {
+        "type": "object",
+        "description": "One backup set's copies on a storage medium.",
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "type": "string",
+            "description": "The source/set id."
+          },
+          "placements": {
+            "type": "integer",
+            "description": "How many of that set's copies are on this medium."
+          },
+          "only_copy_here": {
+            "type": "integer",
+            "description": "How many of those are the only confirmed copy of their artifact anywhere. This is the population FR-30's invariant is about, and it is reported separately because it calls for a different sentence: `52 copies live here` is information, and `52 artifacts have their only confirmed copy here` is the reason nothing may be deleted on the strength of a check that failed."
+          }
+        },
+        "required": [
+          "set",
+          "placements",
+          "only_copy_here"
+        ]
+      },
+      "StorageMediumUsageResponse": {
+        "type": "object",
+        "description": "What the journal says is currently on one storage medium, listed rather than only counted. It asks the medium nothing: this is what the deployment RECORDED, and whether the endpoint answers right now is the preflight's question, asked separately. A count with no list is not something an operator can act on, which is why the backup sets are here.",
+        "additionalProperties": false,
+        "properties": {
+          "medium": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "integer",
+            "description": "How many copies name this medium and have not been recorded as gone. A copy pending deletion is counted with the active ones: it is still a copy on that medium, and removing the declaration under it strands the delete as surely as it strands the read."
+          },
+          "backup_sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageMediumUsageBySet"
+            },
+            "description": "One entry per backup set with copies here, sorted by id."
+          }
+        },
+        "required": [
+          "medium",
+          "placements",
+          "backup_sets"
+        ]
+      },
+      "ListStorageMediumsResponse": {
+        "type": "object",
+        "description": "Every declared storage destination, in declaration order. An object rather than a bare array, matching every other list in this contract: a top-level array has nowhere to grow a field, and the day this needs a count or a cursor it would be a breaking change.",
+        "additionalProperties": false,
+        "properties": {
+          "mediums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageMediumSummary"
+            }
+          }
+        },
+        "required": [
+          "mediums"
         ]
       }
     },
@@ -7659,6 +7870,770 @@
             },
             "x-error-codes": [
               "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/storage-credentials": {
+      "post": {
+        "operationId": "importStorageCredentials",
+        "summary": "Import S3 credentials and get back a reference to them. The one place in this contract credential material appears, and it is one-way.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStorageCredentialsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Imported. The material is written 0600 into a private directory beside the manager's configuration and is never returned by anything.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStorageCredentialsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The refusal reports the SHAPE of the problem (empty, whitespace inside a value, not credentials text at all) and never quotes what was sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums": {
+      "get": {
+        "operationId": "listStorageMediums",
+        "summary": "Every declared storage destination, in declaration order.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStorageMediumsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "createStorageMedium",
+        "summary": "Declare a storage destination, so one can be added without hand-editing the configuration file.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Declared. Declaring a destination moves nothing on its own: artifacts arrive only once a retention tier names it, which is a separate write with a disclosure of its own.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The whole configuration is validated as a hand-edited file would be, so a value is refused here for exactly the reason the same value in the file would be.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: STORAGE_CREDENTIAL_NOT_FOUND. The credentials_id names no credential this deployment issued; import one first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_EXISTS. That id is already declared. Nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_EXISTS"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/preflight": {
+      "post": {
+        "operationId": "preflightStorageMediumCandidate",
+        "summary": "Prove a storage destination that has NOT been saved, before saving it. Writes nothing whatever the report says.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The candidate may or may not have passed: read `ok`. Every one of the eight checks is present, in order, including the ones that were skipped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumPreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The candidate could not be resolved into a destination to check at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: STORAGE_CREDENTIAL_NOT_FOUND. The credentials_id names no credential this deployment issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}": {
+      "get": {
+        "operationId": "getStorageMedium",
+        "summary": "One declared storage destination.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This configuration declares no storage medium with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "put": {
+        "operationId": "updateStorageMedium",
+        "summary": "Replace one storage destination's description. Allowed on a destination artifacts already live on, deliberately: a credential that expired is exactly what an operator needs to be able to fix.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced. A request that names no credentials block keeps the credential already configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND, STORAGE_CREDENTIAL_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND",
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      },
+      "delete": {
+        "operationId": "removeStorageMedium",
+        "summary": "Un-declare a storage destination. Refused while any copy names it (FR-30).",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. Nothing was on it, so there is no resource left to return and no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_IN_USE. Copies still name this medium. Removing the declaration would not delete them, it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so they would read as unreachable and no prune could ever run against them. GET /storage-mediums/{id}/usage lists what is there.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_IN_USE"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/usage": {
+      "get": {
+        "operationId": "getStorageMediumUsage",
+        "summary": "What the journal says is currently on one storage destination, per backup set. This is the FR-30 report a failed re-verification renders beside its checks, and the reason a removal is refused.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Answered for an id the configuration no longer declares too: a removed medium is precisely the case where an operator needs to know what was left on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumUsageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
             ]
           }
         },

@@ -244,6 +244,30 @@ describe("every request the shared client makes is a declared operation", () => 
       ["getSettings", () => httpApi.getSettings()],
       ["updateSettings", () => httpApi.updateSettings({ retention: { timezone: "UTC" } })],
       ["preflightStorageMedium", () => httpApi.preflightStorageMedium("offsite_s3")],
+      // G2.2 (#594). The candidate spec here is the wizard's own step-3
+      // submission: a whole destination with a credential REFERENCE and
+      // no material, which is what makes checking one before it is saved
+      // possible at all.
+      ["importStorageCredentials", () =>
+        httpApi.importStorageCredentials("EXAMPLE-NOT-A-REAL-KEY", "EXAMPLE-NOT-A-REAL-SECRET")],
+      ["listStorageMediums", () => httpApi.listStorageMediums()],
+      ["getStorageMedium", () => httpApi.getStorageMedium("offsite_s3")],
+      ["getStorageMediumUsage", () => httpApi.getStorageMediumUsage("offsite_s3")],
+      ["preflightStorageMediumCandidate", () =>
+        httpApi.preflightStorageMediumCandidate({
+          id: "offsite_s3", type: "s3", bucket: "nas-backups",
+          credentials: { credentialsId: "cred-1" }
+        })],
+      ["createStorageMedium", () =>
+        httpApi.createStorageMedium({
+          id: "offsite_s3", type: "s3", bucket: "nas-backups",
+          credentials: { credentialsId: "cred-1" }
+        })],
+      ["updateStorageMedium", () =>
+        httpApi.updateStorageMedium("offsite_s3", {
+          id: "offsite_s3", type: "s3", bucket: "nas-backups"
+        })],
+      ["removeStorageMedium", () => httpApi.removeStorageMedium("offsite_s3")],
       ["getStorage", () => httpApi.getStorage()],
       ["scanCatalog", () => httpApi.scanCatalog()],
       ["rebuildCatalog", () => httpApi.rebuildCatalog()],
