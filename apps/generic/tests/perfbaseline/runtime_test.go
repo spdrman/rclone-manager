@@ -13,6 +13,19 @@
 // scripts/perf/capture-baseline.sh measures the OCI image size by
 // building it.
 //
+// Image size is now also ENFORCED somewhere none of the above is, and the
+// difference between recording and enforcing is the point (#635).
+// apps/generic/tests/dockercli's TestTheBuiltImageIsInsideTheRecordedSizeBudget
+// compares a built image to the checked-in record on every full
+// scripts/ci-local.sh. It lives there rather than here for two reasons
+// that both come down to this file being a harness: that package already
+// builds container/Dockerfile for its licence and CLI proofs, so the
+// measurement is one `docker image inspect` off an image that exists; and
+// this file is opt-in behind PERF_BASELINE=1 precisely so an ordinary
+// `go test ./...` never pays for it and never goes red on a noisy number,
+// which is the right shape for six timing metrics and the wrong shape for
+// the one metric that has no noise to be red about.
+//
 // This is a harness, not a gate. It is skipped unless PERF_BASELINE=1, so
 // an ordinary `go test ./...` (and every CI job that runs one) never pays
 // for it and never goes red on a noisy number. scripts/perf/capture-baseline.sh

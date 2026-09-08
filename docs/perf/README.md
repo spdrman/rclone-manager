@@ -11,7 +11,9 @@ they mean, and exactly what a later Phase 6 change has to beat.
 On host `darwin-arm64-mac17-2` under workload `phase6-baseline-v1`, a later
 Phase 6 change fails the performance gate if the median of five captures shows
 **`GET /api/v1/backup-sets` p95 above 0.218 ms**, or **transfer throughput below
-672.2 MB/s**. That p95 number carries two conditions and both have to hold, so
+672.2 MB/s** (capture that one on a quiet machine, or it fails for reasons that
+are not the tree; "What moved" below has six measurements of why). That p95
+number carries two conditions and both have to hold, so
 the 0.05 ms absolute floor is what binds rather than the 10% ratio; the section
 below works the arithmetic through. Three more metrics are gated alongside them,
 two are recorded but not gated, and every number below is derived from
@@ -115,6 +117,15 @@ So:
 - **`transfer_mb_per_second`, `idle_rss_bytes`, `image_size_bytes`** are gated
   on a ratio alone. Their noise is 11x, 45x and infinitely below the budget
   respectively, so the ratio is a real gate.
+
+  That holds for two of the three, and **not for `transfer_mb_per_second`**
+  (#635). The 0.93% is real and it is the wrong quantity: both baselines in the
+  table were taken back to back on a quiet machine, so what was measured is
+  repeatability under one condition. Six runs of an unchanged tree on a loaded
+  machine span **1.398x**, which is fourteen times the budget rather than a
+  ninth of it. See "What moved" below for the numbers and for what to do when
+  this metric fails. Nothing about the other two changes: idle RSS is a process
+  property and an image size is a function of the tree.
 - **`api_read_p95_ms`** is gated on a ratio **and** a measured absolute floor
   of 0.05 ms, and **both** must be exceeded before it fails. Two conditions that
   must both hold means the wider one is what is enforced: against the 0.168 ms
@@ -282,13 +293,56 @@ restarting a container that already has its schema pays the warm number, which
 moved 14.4 ms -> 17.1 ms. Anyone reading this metric as "how long the engine
 takes to come up" is reading the wrong thing, and #635 carries the note.
 
-### The other three
+### `transfer_mb_per_second`, 537.702 -> 746.867 (1.39x, and the weakest number here)
 
-`config_write_p95_ms` moved 1.02x and `transfer_mb_per_second` improved 1.39x.
-`api_read_p95_ms` moved 1.292x in ratio terms and passed on its absolute floor,
-delta 0.038 ms against a floor of 0.05 ms, which is the gate working the way the
-section above describes rather than being lenient: that metric's own spread
-within this capture was 64% of its median.
+This one is recorded WITHOUT an attribution, and that is a statement about the
+metric rather than a gap somebody will close later. Read the recorded value as
+"what a quiet machine produced on 2026-09-08", not as "what this tree does".
+
+The account that was available for the image is not available here. The transfer
+harness did not exist at `8ad3100` (`core/tests/perfbaseline` is one of the
+uncommitted files that made that record `working_tree_dirty`), so there is no
+old-code side to run today and no way to separate a code improvement from a
+machine that happened to be faster.
+
+What can be measured is how much of this number is the machine, and the answer is
+most of it. Six runs of the SAME unchanged tree later the same day, while a full
+gate was running and the load average sat between 11.3 and 12.6:
+
+```
+479.584  492.995  619.020  624.583  651.716  670.434   MB/s
+```
+
+That is a **1.398x spread with nothing changed**, and every one of the six is
+below the 672.180 MB/s floor this record now sets. The recorded 746.867 was taken
+at 88.33% idle CPU on a load average of 2.84, and is 1.114x the best of the six.
+
+So the practical consequences, plainly:
+
+- **A candidate captured on a busy machine will fail this metric for reasons that
+  have nothing to do with the tree.** If it fails and nothing touched the
+  transport, re-capture on a quiet host before looking for a regression.
+- **Recording a favourable state raises a floor for everyone.** It is the mirror
+  of a generously recorded regression: that one fails to catch things, this one
+  fails runs that deserve to pass. The old 537.702 had the same property and
+  nobody had measured it.
+- The "0.93% median-to-median movement" in the noise study above is still
+  accurate and still does not cover this. Those two baselines were taken back to
+  back on a quiet machine, so what they measured is repeatability under ONE
+  condition, not sensitivity to condition. A disk-to-disk copy of 256 MiB is the
+  metric here most exposed to what else the machine is doing, and the study could
+  not see that by construction.
+
+Nothing here changes what is gated, because that is a decision about the contract
+rather than a measurement. It is written down so the decision is made with the
+numbers in front of whoever makes it.
+
+### The other two
+
+`config_write_p95_ms` moved 1.02x. `api_read_p95_ms` moved 1.292x in ratio terms
+and passed on its absolute floor, delta 0.038 ms against a floor of 0.05 ms,
+which is the gate working the way the section above describes rather than being
+lenient: that metric's own spread within this capture was 64% of its median.
 
 ## About `working_tree_dirty: true` in the checked-in record
 
@@ -349,11 +403,24 @@ out to be a false constraint: `apps/generic/tests/dockercli` already builds
 exists and applies this file's ratio to the record. One `docker image inspect`,
 no second build, and it runs on every full `scripts/ci-local.sh`.
 
-Two consequences worth knowing. It compares only when the built image's
-architecture matches the one the record names, and skips with that reason
-otherwise, because an image size is a property of the tree AND the target
-architecture. And it does not run on GitHub CI, which does not run that package;
-what CI enforces is still presence plus the self-test.
+It compares only when the built image's architecture matches the one the record
+names, and skips with that reason otherwise, because an image size is a property
+of the tree AND the target architecture.
+
+That one condition is the whole limit on this arm, and it is worth stating
+precisely rather than as "it only runs locally". GitHub CI **does** run this
+package: `.github/workflows/ci.yml`'s `apps/generic build, vet, test` job runs
+`go test -race ./...` in `apps/generic` on `ubuntu-latest`, `tests/dockercli` is
+in that package list, there are no build tags or env guards on it, and Docker is
+present on the runner. So CI builds the image and then takes the skip, because
+`runtime.GOARCH` there is amd64 and the only checked-in record is arm64. CI pays
+for the container build and asserts nothing about its size.
+
+Closing that means an amd64 record, which means a designated amd64 benchmark
+host, because `benchmark_host_id` pins one machine and therefore one
+architecture. Until there is one, every automated statement about this metric
+comes from a run on `darwin-arm64-mac17-2`, and what CI enforces is presence plus
+the self-test.
 
 The reason it exists at all is that this metric drifted to 1.62x with nothing
 going red for eight days and 834 commits, which is what a gate nobody runs looks
