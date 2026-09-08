@@ -287,9 +287,11 @@ func TestToStorageMediumSummaries_DescribeThePlaceAndNeverTheKey(t *testing.T) {
 	got := toStorageMediumSummaries(cfg)
 	want := []StorageMediumSummary{
 		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", Region: "us-east-1",
-			StorageClass: config.StorageClassStandard, ReadsRequireRestore: false},
+			StorageClass: config.StorageClassStandard, UploadVerification: config.UploadVerificationReadback,
+			ReadsRequireRestore: false},
 		{ID: "offsite_cold", Type: "s3", Bucket: "nas-archive",
-			StorageClass: config.StorageClassDeepArchive, ReadsRequireRestore: true},
+			StorageClass: config.StorageClassDeepArchive, UploadVerification: config.UploadVerificationReadback,
+			ReadsRequireRestore: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("mediums projected as\n %+v\nwant\n %+v", got, want)
