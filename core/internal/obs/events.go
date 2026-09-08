@@ -57,8 +57,8 @@ import (
 // alert delivered, and Error, which is the completion of whatever its op
 // names.
 //
-// Four kinds deliberately state nothing, and the absence is the point
-// rather than an oversight.
+// Four kinds state nothing, or state only half, and the absence is the
+// point rather than an oversight.
 //
 // Startup and RcloneVersion are announcements. Nothing was attempted, so
 // there is no way it went.
@@ -75,20 +75,31 @@ import (
 // at a level that says how much attention they want, and that half was
 // never the problem.
 //
-// LifecycleTransition is a state change, not the completion of an
-// action, and this is the one worth saying out loud because it is the
-// event a reader most expects to find an outcome on. An artifact reaching
-// VERIFIED is good news and an artifact reaching FAILED is bad news, but
-// WHICH resting states in the FR-10 machine deserve to read as good news
-// is a decision about a screen: ActivityStrip's own SETTLED_STATES set
-// says so at length, differs from internal/retention's managed-complete
-// set at both ends, and is registered as differing from it in that
-// package's managedcompleteprose_test.go. Putting that judgement in here
-// would move a display decision into the engine's vocabulary, which is
-// the thing service/activity.go correctly refuses to do, and it would put
-// this package in the business of knowing the lifecycle's state names.
-// The transition carries from and to, which is the fact; what a log makes
-// of them is the client's.
+// LifecycleTransition states HALF an outcome, and it is the one worth
+// saying out loud, because it is the event a reader most expects to find
+// a whole one on.
+//
+// It states the failure. An artifact that ended an attempt in one of the
+// three states this machine calls exceptional produced no backup, which
+// is the manager failing at the one thing it is for, and no screen has to
+// be consulted to know it. Its caller passes that in as a bool (see the
+// method), so this package still does not know a state name. Until issue
+// #625 the line arrived at info, which meant `activity --follow
+// --severity error` answered "did a backup fail" with silence while the
+// browser painted the very same line red off a list of state names it was
+// keeping itself.
+//
+// It states nothing about the rest. An artifact reaching VERIFIED is good
+// news, but WHICH resting states in the FR-10 machine deserve to READ as
+// good news is a decision about a screen: ActivityStrip's own
+// SETTLED_STATES set says so at length, differs from
+// internal/retention's managed-complete set at both ends, and is
+// registered as differing from it in that package's
+// managedcompleteprose_test.go. Deciding that here would move a display
+// decision into the engine's vocabulary, which is the thing
+// service/activity.go correctly refuses to do. The transition carries
+// from and to, which is the fact; what a log makes of them is the
+// client's.
 const (
 	// EventStartup marks the process starting: binary version, commit and
 	// the Go toolchain it was built with.
@@ -295,7 +306,30 @@ func (l *Logger) Discovery(ctx context.Context, backupSet string, discovered, al
 // error's raw text if that text might embed a path (see Retry and
 // RemoteDelete below for how those handle an error argument instead of a
 // free-text detail).
-func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, detail string) {
+// failed says the artifact landed in one of the states the machine calls
+// exceptional, which is a backup that did not happen. It is a bool the
+// CALLER computes rather than something this package works out from `to`,
+// and that is the whole of the split the catalog note above describes:
+// which state names mean a failed attempt is internal/lifecycle's to
+// answer (IsExceptionalState), and this package declining to import a
+// domain vocabulary is what keeps it the standalone sink it is. The shape
+// is Validation's, one event over, for the same reason: the caller knows
+// how it went and this decides what that costs in severity.
+//
+// A true logs at LevelError with an error outcome. That is a departure
+// from the convention Alert and RetentionHold state, and a deliberate
+// one: those two reserve LevelError for the manager failing at something
+// rather than for correctly reporting a problem it found, and an artifact
+// that ended its attempt in FAILED or QUARANTINED IS the manager failing
+// at the one thing it exists to do. `activity --follow --severity error`
+// is where an operator goes to ask whether a backup did not happen, and
+// before issue #625 the answer was silence.
+//
+// A false is exactly what it always was, and that is the point. Which of
+// the OTHER states read as good news is a decision about a screen (see
+// the catalog note above), and stating a success here would take that
+// decision away from every client at once.
+func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, detail string, failed bool) {
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
 		slog.String("from", from),
@@ -304,7 +338,11 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 	if detail != "" {
 		attrs = append(attrs, slog.String("detail", detail))
 	}
-	l.emit(ctx, LevelInfo, EventLifecycleTransition, "lifecycle transition", attrs...)
+	if !failed {
+		l.emit(ctx, LevelInfo, EventLifecycleTransition, "lifecycle transition", attrs...)
+		return
+	}
+	l.emitMarked(ctx, OutcomeError.Level(), mark{outcome: OutcomeError}, EventLifecycleTransition, "lifecycle transition", attrs...)
 }
 
 // TransferStats logs EventTransferStats for one completed FR-11 transfer:

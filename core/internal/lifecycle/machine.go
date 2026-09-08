@@ -316,6 +316,41 @@ var quarantineStates = map[State]bool{
 // suspect artifact for a human.
 func IsQuarantineState(s State) bool { return quarantineStates[s] }
 
+// exceptionalStates is the set of states an artifact ends an attempt in
+// when this pipeline could not produce a backup it may trust: the three
+// the package doc marks "(exceptional)" beside their names.
+//
+// It is derived from quarantineStates above rather than typed out again,
+// for the reason validStates is derived from AllStates: a fourth
+// quarantine state would otherwise be exceptional in the doc and ordinary
+// in this map, and nothing would say so.
+//
+// The set exists because two surfaces were each keeping their own copy of
+// it (issue #625). internal/obs had no way to log a transition into one of
+// these at a severity that says a backup did not happen, so it arrived at
+// info; the Web UI carried the three strings as a literal of its own to
+// colour the line red; and `activity --follow --severity error`, which is
+// where an operator goes to find exactly this, showed nothing at all. A
+// closed vocabulary written down twice is one that drifts, which is the
+// argument IsDurableRestorePoint below already makes about its own set.
+var exceptionalStates = func() map[State]bool {
+	m := map[State]bool{Failed: true}
+	for s := range quarantineStates {
+		m[s] = true
+	}
+	return m
+}()
+
+// IsExceptionalState reports whether s is a state an artifact ends an
+// attempt in having produced no backup this pipeline may trust.
+//
+// It is deliberately not the complement of IsDurableRestorePoint. Most
+// states are neither: an artifact part-way through a transfer has not
+// failed and is not yet a restore point, and a predicate that called
+// every non-restore-point a failure would report a routine cycle as a
+// wall of red.
+func IsExceptionalState(s State) bool { return exceptionalStates[s] }
+
 // durableRestorePoints is the set of states in which a durable local final
 // copy exists and the artifact counts as a restore point. It is the same
 // set internal/health's decideState and internal/retention's
