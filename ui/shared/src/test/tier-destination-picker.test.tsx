@@ -69,13 +69,15 @@ const LOCAL: StorageMedium = {
   uploadVerification: "readback",
   readsRequireRestore: false,
   isLocal: true,
-  isDefault: true
+  isDefault: true,
+  connectionUnverified: false
 };
 
 const OFFSITE: StorageMedium = {
   id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
   storageClass: "STANDARD_IA", uploadVerification: "readback",
-  readsRequireRestore: false, isLocal: false, isDefault: false
+  readsRequireRestore: false, isLocal: false, isDefault: false,
+  connectionUnverified: false
 };
 
 function settingsFixture(over: { mediums?: StorageMedium[] } = {}): AppSettings {
@@ -559,5 +561,76 @@ describe("the storage destinations card (#622)", () => {
     await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith("offsite_s3"));
 
     expect(row("offsite_s3").getByText("backup-manager medium test-connection offsite_s3")).toBeTruthy();
+  });
+
+  // Issue #636. A destination declared with --no-verify and one checked
+  // against a real bucket used to be the same row here, forever, which is
+  // what made the flag a hole rather than an escape hatch.
+  it("says out loud that a destination was never proven, and says nothing about one that carries no mark", async () => {
+    await renderSettings({
+      listStorageMediums: () =>
+        Promise.resolve([LOCAL, { ...OFFSITE, connectionUnverified: true }])
+    });
+
+    await waitFor(() => expect(card().getByText("offsite_s3")).toBeTruthy());
+    expect(row("offsite_s3").getByText("never proven")).toBeTruthy();
+    expect(row("offsite_s3").getByText(/declared without a check/i)).toBeTruthy();
+
+    // The control that clears it is the one already on the row, and there
+    // is deliberately no second button for it.
+    expect(row("offsite_s3").getByRole("button", { name: "Test connection" })).toBeTruthy();
+
+    // The local hard drive is out of scope: it is not declared, has no
+    // create to skip and no bucket to prove.
+    expect(row("local").queryByText("never proven")).toBeNull();
+  });
+
+  // The mark is a STATE and not a scar, so the check that earns its
+  // removal has to take it off the screen in the same act. A banner that
+  // survived the check clearing it is the thing an operator would report
+  // as a bug.
+  it("re-reads the destinations after a check that passes, so the mark it just cleared goes away", async () => {
+    let listed = 0;
+    const { preflightStorageMedium, listStorageMediums } = await renderSettings({
+      listStorageMediums: () => {
+        listed += 1;
+        return Promise.resolve([
+          LOCAL,
+          { ...OFFSITE, connectionUnverified: listed === 1 }
+        ]);
+      }
+    });
+
+    await waitFor(() => expect(card().getByText("offsite_s3")).toBeTruthy());
+    expect(row("offsite_s3").getByText("never proven")).toBeTruthy();
+
+    fireEvent.click(row("offsite_s3").getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith("offsite_s3"));
+    await waitFor(() => expect(row("offsite_s3").queryByText("never proven")).toBeNull());
+    expect(listStorageMediums.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // The other half of the asymmetry, and the one that gives the mark its
+  // meaning: a check that FAILS leaves it where it was. Clearing on any
+  // press at all would turn "this destination works" into "somebody
+  // pressed the button".
+  it("leaves the mark alone when the check fails", async () => {
+    const { preflightStorageMedium } = await renderSettings({
+      listStorageMediums: () => Promise.resolve([LOCAL, { ...OFFSITE, connectionUnverified: true }]),
+      preflightStorageMedium: (id: string) =>
+        Promise.resolve({
+          medium: id,
+          ok: false,
+          checks: [
+            { step: "reach", outcome: "failed", category: "transient", detail: "the endpoint could not be reached" }
+          ]
+        } as MediumPreflight)
+    });
+
+    await waitFor(() => expect(card().getByText("offsite_s3")).toBeTruthy());
+    fireEvent.click(row("offsite_s3").getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith("offsite_s3"));
+
+    expect(row("offsite_s3").getByText("never proven")).toBeTruthy();
   });
 });

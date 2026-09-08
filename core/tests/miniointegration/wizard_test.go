@@ -2,6 +2,7 @@ package miniointegration_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -361,4 +362,166 @@ func TestMinioWizard_ABucketThatIsNotThereNamesTheBucket(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatalf("a failing candidate preflight changed config.yaml:\n%s", after)
 	}
+}
+
+// TestMinioDestinationMark_IsWrittenBySkippingAndClearedByAPassingCheck
+// is issue #636's whole shape against a real endpoint, and it is here
+// because the half that matters most cannot be proven anywhere else: a
+// check that PASSES needs a bucket that answers.
+//
+// Four things have to hold together and the case asks all four.
+//
+// A create that skips the check writes the destination and MARKS it, so
+// an operator who declared one offline can tell it apart tomorrow from
+// one checked against a real bucket. A test connection that passes takes
+// the mark off, in the file as well as on the read surface, which is what
+// makes it a state rather than a permanent scar. A second unproven
+// destination beside it KEEPS its own mark, which is the control that
+// stops this passing on a build that clears every mark it can find. And a
+// create that does not skip goes through against the same bucket, which
+// is the proof that #636's check is a gate on unprovable destinations
+// rather than on all of them.
+func TestMinioDestinationMark_IsWrittenBySkippingAndClearedByAPassingCheck(t *testing.T) {
+	fixture := machines.Start(t).Medium(t)
+	medium := fixture.NewBucket(t)
+	svc, configPath := wizardService(t)
+	ctx := context.Background()
+
+	ref, err := svc.ImportStorageCredentials(ctx, fixture.AccessKeyID, fixture.SecretAccessKey, "")
+	if err != nil {
+		t.Fatalf("ImportStorageCredentials: %v", err)
+	}
+
+	// Declared offline, against a bucket that would in fact have answered.
+	// The skip is what does the work here, and the case below is what
+	// shows the check would otherwise have run and passed.
+	skipped := specFor(medium, ref.ID)
+	skipped.SkipConnectionCheck = true
+	unproven, err := svc.CreateStorageMedium(ctx, skipped)
+	if err != nil {
+		t.Fatalf("CreateStorageMedium with the check skipped: %v", err)
+	}
+	if !unproven.ConnectionUnverified {
+		t.Fatal("a destination declared with the check skipped reads back as one that was checked")
+	}
+
+	// A second one, also unproven, pointed at a bucket that is not there.
+	// It is the control: nothing this case does to the first destination
+	// may touch this one's mark.
+	otherSpec := specFor(medium, ref.ID)
+	otherSpec.ID = "cold_vault"
+	otherSpec.Bucket = medium.Bucket + "-does-not-exist"
+	otherSpec.SkipConnectionCheck = true
+	if _, err := svc.CreateStorageMedium(ctx, otherSpec); err != nil {
+		t.Fatalf("CreateStorageMedium for the control destination: %v", err)
+	}
+
+	if raw := mustReadFile(t, configPath); strings.Count(raw, "connection_unverified: true") != 2 {
+		t.Fatalf("two destinations were declared unproven and the file does not say so twice:\n%s", raw)
+	}
+
+	// The check that earns the removal.
+	report, err := svc.PreflightStorageMedium(ctx, "offsite_s3")
+	if err != nil {
+		t.Fatalf("PreflightStorageMedium: %v", err)
+	}
+	if !report.OK {
+		t.Fatalf("a real, working bucket did not pass its own check: %+v", report.Checks)
+	}
+
+	proven, err := svc.GetStorageMedium(ctx, "offsite_s3")
+	if err != nil {
+		t.Fatalf("GetStorageMedium: %v", err)
+	}
+	if proven.ConnectionUnverified {
+		t.Error("a check that passed left the destination marked as never proven")
+	}
+	control, err := svc.GetStorageMedium(ctx, "cold_vault")
+	if err != nil {
+		t.Fatalf("GetStorageMedium(cold_vault): %v", err)
+	}
+	if !control.ConnectionUnverified {
+		t.Error("proving one destination cleared another one's mark, so the mark says 'somebody ran a check somewhere'")
+	}
+	if raw := mustReadFile(t, configPath); strings.Count(raw, "connection_unverified: true") != 1 {
+		t.Errorf("the file does not carry exactly the one mark that is still earned:\n%s", raw)
+	}
+
+	// And the ordinary path: a create that runs its own check against the
+	// same bucket is written, and carries no mark at all.
+	checked := specFor(medium, ref.ID)
+	checked.ID = "second_offsite"
+	written, err := svc.CreateStorageMedium(ctx, checked)
+	if err != nil {
+		t.Fatalf("CreateStorageMedium against a bucket that answers: %v", err)
+	}
+	if written.ConnectionUnverified {
+		t.Error("a destination whose check passed on the way in is marked as never proven")
+	}
+}
+
+// TestMinioDestination_ACreateThatCannotBeProvenIsRefused is #636's
+// refusal against a real endpoint, so the classification is the
+// endpoint's own rather than a double's.
+//
+// The bucket is one MinIO really does not have, which is a reach failure
+// the endpoint decides rather than a transport failure this host decides.
+// A create refused on it must leave the configuration byte for byte as it
+// was: a destination half-declared and then reported as failed is the
+// shape a retry silently folds into.
+func TestMinioDestination_ACreateThatCannotBeProvenIsRefused(t *testing.T) {
+	fixture := machines.Start(t).Medium(t)
+	medium := fixture.NewBucket(t)
+	svc, configPath := wizardService(t)
+	ctx := context.Background()
+
+	ref, err := svc.ImportStorageCredentials(ctx, fixture.AccessKeyID, fixture.SecretAccessKey, "")
+	if err != nil {
+		t.Fatalf("ImportStorageCredentials: %v", err)
+	}
+	before := mustReadFile(t, configPath)
+
+	spec := specFor(medium, ref.ID)
+	spec.Bucket = medium.Bucket + "-does-not-exist"
+	_, err = svc.CreateStorageMedium(ctx, spec)
+	if !errors.Is(err, service.ErrStorageMediumNotProven) {
+		t.Fatalf("CreateStorageMedium against a bucket that is not there returned %v, want ErrStorageMediumNotProven", err)
+	}
+	if !strings.Contains(err.Error(), "reach") {
+		t.Errorf("the refusal does not name the step that failed: %v", err)
+	}
+	// The positive control on the canary search below: the fixture's
+	// secret really is the live credential this create authenticated with,
+	// so its absence is a statement about the refusal rather than about a
+	// value nothing used.
+	if fixture.SecretAccessKey == "" {
+		t.Fatal("the fixture has no secret, so the canary search proves nothing")
+	}
+	for _, forbidden := range []string{fixture.SecretAccessKey, fixture.AccessKeyID} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("the refusal carries credential material: %v", err)
+		}
+	}
+
+	if after := mustReadFile(t, configPath); after != before {
+		t.Errorf("a refused create wrote the configuration:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	settings, err := svc.Settings(ctx)
+	if err != nil {
+		t.Fatalf("Settings: %v", err)
+	}
+	if declared := declaredMediums(settings.Mediums); len(declared) != 0 {
+		t.Fatalf("a refused create declared %+v", declared)
+	}
+}
+
+// mustReadFile is this file's own read helper, so the cases above read as
+// what they assert rather than as error handling.
+func mustReadFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return string(raw)
 }
