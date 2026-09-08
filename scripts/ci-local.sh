@@ -770,6 +770,20 @@ if [ "$FAST" != "1" ]; then
   gate_docker_step "the composed conformance cells can actually fail (mutation self-test, #242)"
   bash scripts/conformance/selftest.sh
 
+  # FR-20's retention apply, shown to fire (#602). The two blocks above are
+  # this repository's answer to "an assertion nobody has watched fail",
+  # applied to the two surfaces that already had one; this is the same
+  # answer applied to the one thing in this product that removes a local
+  # restore point. The cheapest way to pass "every previewed DELETE is
+  # gone and every KEEP survives" is to delete nothing, or to plan
+  # nothing, so each of those is planted here as a real violation in a
+  # real product file and the evidence has to go red naming the promise.
+  # The last control is planted in the test rather than in the product:
+  # the exact-set comparison itself is made vacuous, and its own positive
+  # control is the only thing that can see it. No Docker, a few minutes.
+  gate_step "the retention-apply evidence can actually fail (mutation self-test, #602)"
+  bash scripts/retention/selftest.sh
+
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh
   bash scripts/architecture/verify-core-without-apps.sh
