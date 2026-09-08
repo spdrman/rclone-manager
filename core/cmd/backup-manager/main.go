@@ -261,10 +261,12 @@ a directory resolves to config.yaml inside it, which is what packaging mounts)
 
 a configuration write goes one of three ways, and says which on a "mode:" line. With nothing
 serving this deployment it is written here, and an engine started afterwards reads it when it
-starts. With something serving and a route to it, backup-set create, patch and remove and
-settings patch hand the change to that process over its API, so it takes effect at once and
-there is nothing to restart. With something serving and no route, the write is refused and
-nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
+starts. With something serving and a route to it, backup-set create, patch and remove,
+settings patch and medium import-credentials, add, edit and remove hand the change to that
+process over its API, so it takes effect at once and there is nothing to restart. medium
+preflight --candidate goes the same way, because it is the check medium add runs before it
+writes and has to happen where the write will. With something serving and no route, the
+write is refused and nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
 change left in the file is one the serving process would never read. Two writes have no route
 at all and are refused beside a serving engine either way: a backup-set retention that sets
 or clears a policy, and the first config.yaml a create writes on an instance that has none

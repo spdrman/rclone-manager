@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -225,4 +226,66 @@ func TestMediumFlagsSpec_LeavesUnwrittenFlagsAlone(t *testing.T) {
 	if spec.Bucket != "" || spec.Credentials.ID != "" || spec.Credentials.File != "" {
 		t.Errorf("unwritten flags reached the spec: %+v", spec)
 	}
+}
+
+// TestMediumReadsAreNotRefusedBesideARunningEngine is #538's rule applied
+// to this command's two read verbs, and it is here because getting it
+// wrong is invisible on a developer machine and total on a real one.
+//
+// openConfigWriteRoute refuses when something is serving this deployment
+// and no route was named. That is right for a write, because a change left
+// in the file is one the serving process would never read. It is wrong for
+// a read: the ordinary install has an engine running and no
+// BACKUP_MANAGER_API_URL set, so a routed `medium list` would refuse to
+// show an operator their own destinations on every deployment that has
+// one.
+//
+// This asks the question structurally rather than by standing up an
+// engine: the read verbs must not reach openConfigWriteRoute at all. The
+// positive control is the write verbs, which must.
+func TestMediumReadsAreNotRefusedBesideARunningEngine(t *testing.T) {
+	source, err := os.ReadFile("medium.go")
+	if err != nil {
+		t.Fatalf("reading medium.go: %v", err)
+	}
+	text := string(source)
+
+	// The positive control first. Without it, a file that had stopped
+	// mentioning either helper would pass every assertion below by
+	// finding nothing at all.
+	if !strings.Contains(text, "withMediumRoute(ctx, cfgPath") {
+		t.Fatal("no verb reaches withMediumRoute any more, so this test proves nothing about which ones do")
+	}
+
+	for _, verb := range []string{"mediumList", "mediumShow"} {
+		body := verbBody(t, text, verb)
+		if strings.Contains(body, "withMediumRoute") {
+			t.Errorf("%s goes through withMediumRoute, so it is refused beside a running engine with no route configured, which is every ordinary install. A read answers from this host's configuration file (withMediumRead), the way `settings` already does", verb)
+		}
+		if !strings.Contains(body, "withMediumRead") {
+			t.Errorf("%s does not go through withMediumRead, so nothing here can say which door it opens", verb)
+		}
+	}
+	for _, verb := range []string{"mediumWrite", "mediumRemove", "mediumImportCredentials"} {
+		if body := verbBody(t, text, verb); !strings.Contains(body, "withMediumRoute") {
+			t.Errorf("%s does not go through withMediumRoute: a configuration write left in the file beside a running engine is a change that process would never read (#538, #543)", verb)
+		}
+	}
+}
+
+// verbBody is the source of one function in medium.go, from its signature
+// to the next top-level `func`. Crude on purpose: what it is used for is
+// "does this function mention that helper", and a real parse would be more
+// machinery than the question deserves.
+func verbBody(t *testing.T, text, name string) string {
+	t.Helper()
+	start := strings.Index(text, "\nfunc "+name+"(")
+	if start < 0 {
+		t.Fatalf("medium.go has no func %s, so this test read nothing for it", name)
+	}
+	rest := text[start+1:]
+	if end := strings.Index(rest[1:], "\nfunc "); end >= 0 {
+		return rest[:end+1]
+	}
+	return rest
 }

@@ -240,10 +240,8 @@ func (f mediumFlags) spec(id string) service.StorageMediumSpec {
 // running engine is a change that process would never read: there is still
 // no config watcher and no SIGHUP reload in this build (#538, #543).
 //
-// `list`, `show`, `import-credentials` and `preflight --candidate` are
-// there too, and each for its own reason rather than by association.
-// `list` and `show` answer about what the ENGINE holds, which is the whole
-// point of asking over a route rather than reading the file. The id
+// `import-credentials` and `preflight --candidate` are routed too, and
+// each for its own reason rather than by association. The id
 // `import-credentials` mints names a file on the host that wrote it, so an
 // id minted here and used in a write that goes to the engine would name a
 // file on the wrong machine. And `preflight --candidate` is the check
@@ -251,6 +249,14 @@ func (f mediumFlags) spec(id string) service.StorageMediumSpec {
 // happen: proving this host's route to a bucket and then declaring the
 // destination somewhere else proves nothing about the destination that
 // gets used.
+//
+// `list` and `show` are NOT routed, and that is a correction rather than
+// an omission. They answer from this host's configuration file, exactly as
+// `settings` on its own does, because openConfigWriteRoute refuses when
+// something is serving this deployment and no route was named: routing
+// them would have made looking at your own destinations impossible on the
+// ordinary install, which has an engine running and no route configured.
+// See withMediumRead.
 //
 // It needs a real transport, unlike most commands here, because reaching a
 // bucket is the entire point.
@@ -332,11 +338,38 @@ func withMediumRoute(ctx context.Context, cfgPath string, body func(route config
 	return body(route)
 }
 
+// withMediumRead opens this host's own configuration and journal, and is
+// never refused beside a running engine.
+//
+// The two read verbs go through here rather than through
+// openConfigWriteRoute, and the difference is #538's rule rather than a
+// convenience. openConfigWriteRoute refuses when something is serving this
+// deployment and no route was named, which is right for a WRITE (a change
+// left in the file is one that process would never read) and wrong for a
+// read: an operator on a stock install has an engine running and no
+// BACKUP_MANAGER_API_URL set, so routing `medium list` would have made
+// looking at your own destinations impossible on the ordinary deployment.
+// `settings` on its own already reads this way for the same reason, and
+// #544 routed four reads and deliberately stopped there.
+//
+// So these answer about THIS HOST's configuration file, which can differ
+// from what a serving process loaded. That difference is the one cmdMedium's
+// own doc has always stated for `preflight`, and the way into it is a
+// hand-edited config.yaml rather than anything this binary writes.
+func withMediumRead(ctx context.Context, cfgPath string, body func(svc *service.BackupService) int) int {
+	svc, cleanup, err := openBackupService(ctx, cfgPath, readsConfig)
+	if err != nil {
+		return fail(err)
+	}
+	defer cleanup()
+	return body(svc)
+}
+
 // mediumList is `medium list`: every declared destination, in declaration
 // order.
 func mediumList(ctx context.Context, cfgPath, _ string, f mediumFlags) int {
-	return withMediumRoute(ctx, cfgPath, func(route configWriteRoute) int {
-		mediums, err := route.ListStorageMediums(ctx)
+	return withMediumRead(ctx, cfgPath, func(svc *service.BackupService) int {
+		mediums, err := svc.ListStorageMediums(ctx)
 		if err != nil {
 			return fail(err)
 		}
@@ -361,12 +394,12 @@ func mediumList(ctx context.Context, cfgPath, _ string, f mediumFlags) int {
 // is the fact an operator is actually asking about when they look one of
 // these up: whether anything is there, and whether it is the only copy.
 func mediumShow(ctx context.Context, cfgPath, id string, f mediumFlags) int {
-	return withMediumRoute(ctx, cfgPath, func(route configWriteRoute) int {
-		medium, err := route.GetStorageMedium(ctx, id)
+	return withMediumRead(ctx, cfgPath, func(svc *service.BackupService) int {
+		medium, err := svc.GetStorageMedium(ctx, id)
 		if err != nil {
 			return fail(err)
 		}
-		usage, err := route.StorageMediumUsage(ctx, id)
+		usage, err := svc.StorageMediumUsage(ctx, id)
 		if err != nil {
 			return fail(err)
 		}
