@@ -752,7 +752,7 @@ func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T)
 // at all: it is the one signal this feed is proudest of, and an operator
 // who has learnt to ignore it will ignore the real one too.
 func TestLiveActivity_AFirstReadIsNotToldLinesWereDropped(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
 	record := func() {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
