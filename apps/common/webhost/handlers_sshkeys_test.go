@@ -98,31 +98,87 @@ func TestListSSHKeyCandidates_NamesEveryLocationItSearched(t *testing.T) {
 	}
 }
 
-// TestImportSSHKey_SelectingACandidateNeverTakesAPath is the traversal
-// case for the mode this endpoint grows.
+// TestImportSSHKeyFromCandidate_SelectingACandidateNeverTakesAPath is the
+// traversal case for the second way into a key reference.
 //
 // A candidate id is an opaque handle that resolves only against a fresh
 // scan of the fixed locations. Anything path-shaped is refused by the
 // service, and the point of this case is that the HTTP layer does not
 // invent a second way in.
-func TestImportSSHKey_SelectingACandidateNeverTakesAPath(t *testing.T) {
+func TestImportSSHKeyFromCandidate_SelectingACandidateNeverTakesAPath(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
 
-	rec := postSSHKeyImport(t, tr.router, `{"candidate_id":"abc123"}`, true)
+	rec := postSSHKeyCandidateImport(t, tr.router, `{"candidate_id":"cand_test_1"}`, true)
 	if rec.Code == http.StatusNotFound {
-		t.Fatalf("POST /api/v1/ssh-keys does not accept a candidate_id at all; selecting a discovered key is the mode that makes the wizard's first step work")
+		t.Fatalf("POST /api/v1/ssh-keys/from-candidate is not served at all; selecting a discovered key is what makes the wizard's first step work")
 	}
-	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "private_key_pem is required") {
-		t.Fatalf("a request naming a candidate was refused for having no pasted key: %s", rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	// The same response the paste answers with, so a client that offers
+	// both ways in holds one result type either way.
+	var ref map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &ref); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	for _, required := range []string{"id", "algorithm", "fingerprint"} {
+		if ref[required] == nil || ref[required] == "" {
+			t.Errorf("the 201 is missing %q, which is the whole reference an import hands back", required)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "PRIVATE KEY") || strings.Contains(rec.Body.String(), "key_file") {
+		t.Errorf("the 201 carries key material or a server-side path: %s", rec.Body.String())
 	}
 
-	// The two modes are mutually exclusive, for the reason
-	// test-connection's own two modes are: a request that is both is
-	// ambiguous about what is being imported, and silently preferring
-	// one is how a caller ends up with a key it did not ask for.
-	both := postSSHKeyImport(t, tr.router, `{"candidate_id":"abc123","private_key_pem":"-----BEGIN OPENSSH PRIVATE KEY-----\nX\n-----END OPENSSH PRIVATE KEY-----"}`, true)
-	if both.Code != http.StatusBadRequest {
-		t.Errorf("a request carrying both a pasted key and a candidate id returned %d, want %d", both.Code, http.StatusBadRequest)
+	// Anything path-shaped is simply not in the scan, and it fails the
+	// same way an id for a file the scan never saw does: this route has
+	// no branch that treats a value as a location.
+	for _, notAHandle := range []string{"../../etc/ssh/ssh_host_ed25519_key", "/root/.ssh/id_ed25519", "cand_no_such"} {
+		body, err := json.Marshal(map[string]string{"candidate_id": notAHandle})
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+		miss := postSSHKeyCandidateImport(t, tr.router, string(body), true)
+		if miss.Code != http.StatusBadRequest {
+			t.Errorf("candidate_id %q returned %d, want %d", notAHandle, miss.Code, http.StatusBadRequest)
+		}
+		if code := errorCodeOf(t, miss); code != "SSH_KEY_CANDIDATE_NOT_FOUND" {
+			t.Errorf("candidate_id %q refused with %q, want SSH_KEY_CANDIDATE_NOT_FOUND; a path and an unknown id have to be indistinguishable here, or this route answers questions about the filesystem", notAHandle, code)
+		}
+	}
+
+	// A body with no handle in it is the only other refusal this route
+	// has, and it says so in words rather than naming the paste route's
+	// field.
+	empty := postSSHKeyCandidateImport(t, tr.router, `{}`, true)
+	if empty.Code != http.StatusBadRequest {
+		t.Errorf("a request naming no candidate returned %d, want %d", empty.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(empty.Body.String(), "candidate_id is required") {
+		t.Errorf("the refusal does not name candidate_id: %s", empty.Body.String())
+	}
+}
+
+// TestImportSSHKey_StillRequiresAPastedKey is the promise the split
+// exists to keep.
+//
+// POST /ssh-keys requires private_key_pem, exactly as it did before a
+// candidate mode existed, and core/tests/compat pins that requirement as
+// a promise this contract may not withdraw. The candidate handle has its
+// own route, so this one never had to relax: a body carrying only a
+// candidate_id is an empty paste, and it is refused in the same words it
+// was refused in before #592.
+func TestImportSSHKey_StillRequiresAPastedKey(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+
+	for _, body := range []string{`{}`, `{"candidate_id":"abc123"}`} {
+		rec := postSSHKeyImport(t, tr.router, body, true)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST /api/v1/ssh-keys with %s returned %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+		if !strings.Contains(rec.Body.String(), "private_key_pem is required") {
+			t.Errorf("POST /api/v1/ssh-keys with %s refused in other words: %s", body, rec.Body.String())
+		}
 	}
 }
 

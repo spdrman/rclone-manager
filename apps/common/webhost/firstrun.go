@@ -378,6 +378,7 @@ func newUnconfiguredRouter(h *handlers, platform capabilities.PlatformAdapter) h
 		// The setup flow itself.
 		r.With(requireCSRF).Post("/system/first-run", h.completeFirstRun)
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		r.With(requireCSRF).Post("/ssh-keys/from-candidate", h.importSSHKeyFromCandidate)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 		r.With(requireCSRF).Post("/backup-sets/test-connection", h.testConnection)
 

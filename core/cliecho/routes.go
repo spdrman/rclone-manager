@@ -504,14 +504,15 @@ var routes = map[string]entry{
 		// `backup-set create --ssh-key-file`. There is no import verb, so
 		// there is nothing to print, and what is printed instead names
 		// the flag and never the material.
-		//
-		// #592 gave this route a second mode, selecting a listed
-		// candidate by its opaque id, and that half has no CLI either.
-		// Both halves are named, because they are different gaps: a
-		// pasted key has nowhere to go on a command line, and a selected
-		// one has an id that would sit on one perfectly well if a verb
-		// took it.
-		why: "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line. Selecting a key already on this machine has no verb either: `backup-manager ssh-key import --candidate ID` would be it",
+		why: "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line",
+	},
+	// The other import (#592), and a DIFFERENT gap from the one above,
+	// which is why it is a separate sentence rather than a clause on that
+	// one. A pasted key has nowhere to go on a command line at all. A
+	// selected candidate has an opaque id that would sit on one
+	// perfectly well, and the only thing missing is a verb that takes it.
+	key("POST", "/ssh-keys/from-candidate"): {
+		why: "there is no verb that imports a key this machine already holds; the id is an opaque handle that would sit on a command line perfectly well, and `backup-manager ssh-key import --candidate ID` would be it",
 	},
 	key("POST", "/ssh/host-key-probe"): {
 		why: "there is no verb that probes a host key on its own; a terminal settles it with --trust-host-key or --known-hosts-line while creating or patching a set",

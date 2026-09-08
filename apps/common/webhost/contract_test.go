@@ -87,6 +87,10 @@ var contractBindings = map[string]contractBinding{
 	"getBackupSet":            {nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
 	"listValidators":          {nil, listValidatorsResponse{}, "/api/v1/validators"},
 	"importSSHKey":            {importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
+	// The candidate half of the same job, on its own operation (#592).
+	// It binds the SAME response type as the paste above, which is the
+	// point: two ways in, one result a client has to understand.
+	"importSSHKeyFromCandidate": {importSSHKeyFromCandidateRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys/from-candidate"},
 	// Issue #592's two reads. They are the first GETs under /ssh, and
 	// they are the reason the three writes above stopped being the whole
 	// surface: a key store nothing could list is a key store whose ids

@@ -112,6 +112,7 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/backup-sets":                 true,
 	"POST /api/v1/backup-sets/test-connection": true,
 	"POST /api/v1/ssh-keys":                    true,
+	"POST /api/v1/ssh-keys/from-candidate":     true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 
 	// Issue #419: the operator route out of FAILED. Same tier as the

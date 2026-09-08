@@ -134,9 +134,14 @@ var firstRunSafeRoutes = map[string]bool{
 
 	// The setup flow itself. Each is either read-only in effect
 	// (host-key-probe, test-connection) or the setup write it exists for
-	// (ssh-keys, first-run), and none of them touches, moves or deletes a
-	// byte of backup data, because there is none yet.
+	// (both imports, first-run), and none of them touches, moves or
+	// deletes a byte of backup data, because there is none yet. The two
+	// imports are one tier and one decision: pasting a key and choosing
+	// one this machine already holds both end with a reference in the
+	// store, and splitting them into two routes did not change what
+	// either is allowed to do before configuration exists.
 	"POST /api/v1/ssh-keys":                    true,
+	"POST /api/v1/ssh-keys/from-candidate":     true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 	"POST /api/v1/backup-sets/test-connection": true,
 	"POST /api/v1/system/first-run":            true,

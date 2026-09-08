@@ -507,6 +507,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/validators", h.listValidators)
 
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		// The other way to end up holding a key reference (#592):
+		// selecting one this machine already holds, by the opaque handle
+		// the candidate scan gave it. Its own route rather than a second
+		// mode of the one above, because pasting material this host has
+		// never seen and choosing a key it already found are different
+		// acts, and because a shared body would have had to stop
+		// requiring private_key_pem, which is a promise POST /ssh-keys
+		// has already made. Same tier, so the same CSRF and the same
+		// absence of a destructive gate.
+		r.With(requireCSRF).Post("/ssh-keys/from-candidate", h.importSSHKeyFromCandidate)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 
 		// Issue #592: the two reads this surface never had. Everything

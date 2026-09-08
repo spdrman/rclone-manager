@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "b8c2234e37bf0244cae6a2b943f3f61337f12373990c30b7832b1c111655c96c"
+const ContractSHA256 = "7f7839d75e0eb6cf1b907826f54785c9fce694eec4d7259aca092f832916d296"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -675,6 +675,17 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "ImportSSHKeyRequest", ResponseSchema: "ImportSSHKeyResponse", SuccessStatus: 201,
 		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "importSSHKeyFromCandidate", Method: "POST", Path: "/ssh-keys/from-candidate",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "ImportSSHKeyFromCandidateRequest", ResponseSchema: "ImportSSHKeyResponse", SuccessStatus: 201,
+		ErrorCodes: map[int][]ErrorCode{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyCandidateNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
@@ -1279,12 +1290,22 @@ type HostKeyProbeResponse struct {
 	KnownHostsLine string `json:"known_hosts_line"`
 }
 
-// ImportSSHKeyRequest is POST /ssh-keys. Exactly one of private_key_pem (paste a key) or
-// candidate_id (select a listed one) is required. private_key_pem
-// was the only mode before candidate_id existed, so every request
-// written against the older contract is still a valid one.
+// ImportSSHKeyFromCandidateRequest is POST /ssh-keys/from-candidate. Selecting a key this host already
+// found is a different act from pasting one this host has never
+// seen, and it carries a different body: an opaque handle and no key
+// material at all. It is a separate operation rather than a second
+// mode of POST /ssh-keys because a shared body with two optional
+// halves would have had to stop requiring private_key_pem, and this
+// contract does not withdraw a requirement it has already made.
+type ImportSSHKeyFromCandidateRequest struct {
+	CandidateID string `json:"candidate_id"`
+}
+
+// ImportSSHKeyRequest is POST /ssh-keys. Sent once; the caller discards its own copy
+// immediately. Pasted material only: selecting a key this host
+// already holds is POST /ssh-keys/from-candidate, which takes a
+// handle instead.
 type ImportSSHKeyRequest struct {
-	CandidateID   string `json:"candidate_id"`
 	Passphrase    string `json:"passphrase"`
 	PrivateKeyPEM string `json:"private_key_pem"`
 }
@@ -2160,6 +2181,7 @@ var SchemaTypes = map[string]any{
 	"HealthResponse":                    HealthResponse{},
 	"HostKeyProbeRequest":               HostKeyProbeRequest{},
 	"HostKeyProbeResponse":              HostKeyProbeResponse{},
+	"ImportSSHKeyFromCandidateRequest":  ImportSSHKeyFromCandidateRequest{},
 	"ImportSSHKeyRequest":               ImportSSHKeyRequest{},
 	"ImportSSHKeyResponse":              ImportSSHKeyResponse{},
 	"ImportStorageCredentialsRequest":   ImportStorageCredentialsRequest{},

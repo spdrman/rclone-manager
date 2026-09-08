@@ -1425,7 +1425,11 @@ export interface BackupManagerApi {
   listSSHKeyCandidates(): Promise<SSHKeyDiscovery>;
   /** Issue #592: import a key this machine already holds, by the opaque
    *  id `listSSHKeyCandidates` gave it. No key material crosses the
-   *  network in either direction, and the original file is left alone. */
+   *  network in either direction, and the original file is left alone.
+   *  Its own operation rather than a mode of `importSSHKey`, because
+   *  pasting material this host has never seen and choosing a key it
+   *  already found are different acts; both answer with the same
+   *  `SSHKeyImportResult`. */
   importSSHKeyCandidate(candidateId: string): Promise<SSHKeyImportResult>;
   /** The wizard's "Verify server" step (#98 step 3): fetches a real
    *  fingerprint for host:port, trusting nothing yet. */

@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "b8c2234e37bf0244cae6a2b943f3f61337f12373990c30b7832b1c111655c96c";
+export const CONTRACT_SHA256 = "7f7839d75e0eb6cf1b907826f54785c9fce694eec4d7259aca092f832916d296";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -921,6 +921,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "ImportSSHKeyResponse",
     successStatus: 201,
     errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "importSSHKeyFromCandidate",
+    method: "POST",
+    path: "/ssh-keys/from-candidate",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "ImportSSHKeyFromCandidateRequest",
+    responseSchema: "ImportSSHKeyResponse",
+    successStatus: 201,
+    errorCodes: {
       400: ["INVALID_REQUEST", "SSH_KEY_CANDIDATE_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
@@ -1656,14 +1675,24 @@ export interface WireHostKeyProbeResponse {
   known_hosts_line: string;
 }
 
-/** POST /ssh-keys. Exactly one of private_key_pem (paste a key) or
- *  candidate_id (select a listed one) is required. private_key_pem
- *  was the only mode before candidate_id existed, so every request
- *  written against the older contract is still a valid one. */
+/** POST /ssh-keys/from-candidate. Selecting a key this host already
+ *  found is a different act from pasting one this host has never
+ *  seen, and it carries a different body: an opaque handle and no key
+ *  material at all. It is a separate operation rather than a second
+ *  mode of POST /ssh-keys because a shared body with two optional
+ *  halves would have had to stop requiring private_key_pem, and this
+ *  contract does not withdraw a requirement it has already made. */
+export interface WireImportSSHKeyFromCandidateRequest {
+  candidate_id: string;
+}
+
+/** POST /ssh-keys. Sent once; the caller discards its own copy
+ *  immediately. Pasted material only: selecting a key this host
+ *  already holds is POST /ssh-keys/from-candidate, which takes a
+ *  handle instead. */
 export interface WireImportSSHKeyRequest {
-  candidate_id?: string;
   passphrase?: string;
-  private_key_pem?: string;
+  private_key_pem: string;
 }
 
 /** The reference a later create-backup-set call carries instead of

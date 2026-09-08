@@ -1876,12 +1876,13 @@ export const httpApi: BackupManagerApi = {
         ...(c.reason ? { reason: c.reason } : {})
       }))
     })),
-  // The candidate mode of the same import route. It sends an id and
-  // nothing else: the key material stays on the machine that already
-  // holds it, and the server reads it once through the same validation a
-  // pasted key goes through.
+  // The other import, on its own route. It sends an id and nothing else:
+  // the key material stays on the machine that already holds it, and the
+  // server reads it once through the same validation a pasted key goes
+  // through. Same result type as importSSHKey above, so a caller that
+  // offers both ways in has one success path rather than two.
   importSSHKeyCandidate: (candidateId) =>
-    request<SSHKeyImportResult>("/ssh-keys", {
+    request<SSHKeyImportResult>("/ssh-keys/from-candidate", {
       method: "POST",
       body: JSON.stringify({ candidate_id: candidateId })
     }),

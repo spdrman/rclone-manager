@@ -1151,9 +1151,23 @@
           "backup_sets"
         ]
       },
+      "ImportSSHKeyFromCandidateRequest": {
+        "type": "object",
+        "description": "POST /ssh-keys/from-candidate. Selecting a key this host already found is a different act from pasting one this host has never seen, and it carries a different body: an opaque handle and no key material at all. It is a separate operation rather than a second mode of POST /ssh-keys because a shared body with two optional halves would have had to stop requiring private_key_pem, and this contract does not withdraw a requirement it has already made.",
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "description": "Select a key GET /ssh/key-candidates already listed. This is the mode a brand new operator uses, because a default install already put a key on the machine and there is nothing for them to paste. The private half is read once, server-side, through the same validation a paste goes through, and the original is left where it is. It is an opaque handle, never a path, and it resolves only against a fresh scan of the same closed set of locations, so a path, a traversal and an id for a file outside those locations all fail the same way."
+          }
+        },
+        "required": [
+          "candidate_id"
+        ]
+      },
       "ImportSSHKeyRequest": {
         "type": "object",
-        "description": "POST /ssh-keys. Exactly one of private_key_pem (paste a key) or candidate_id (select a listed one) is required. private_key_pem was the only mode before candidate_id existed, so every request written against the older contract is still a valid one.",
+        "description": "POST /ssh-keys. Sent once; the caller discards its own copy immediately. Pasted material only: selecting a key this host already holds is POST /ssh-keys/from-candidate, which takes a handle instead.",
         "additionalProperties": false,
         "properties": {
           "private_key_pem": {
@@ -1165,13 +1179,11 @@
             "type": "string",
             "description": "The passphrase that decrypts private_key_pem, when it is passphrase-protected. Optional: omit it, or send an empty string, for a key that is not encrypted, which is every request this field predates. Checked against private_key_pem at import time, so a wrong passphrase is refused here rather than discovered the first time a cycle tries to connect. Write-only, for the same reason private_key_pem is.",
             "writeOnly": true
-          },
-          "candidate_id": {
-            "type": "string",
-            "description": "Select a key GET /ssh/key-candidates already listed, instead of pasting one. This is the mode a brand new operator uses, because a default install already put a key on the machine and there is nothing for them to paste. The private half is read once, server-side, through the same validation a paste goes through, and the original is left where it is. Mutually exclusive with private_key_pem: a request carrying both is refused rather than resolved by precedence."
           }
         },
-        "required": []
+        "required": [
+          "private_key_pem"
+        ]
       },
       "ImportSSHKeyResponse": {
         "type": "object",
@@ -3381,7 +3393,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The opaque handle ImportSSHKeyRequest.candidate_id takes. Derived from the path, so it needs no server-side state, and not a path, so no request can name a file for this process to read."
+            "description": "The opaque handle ImportSSHKeyFromCandidateRequest.candidate_id takes. Derived from the path, so it needs no server-side state, and not a path, so no request can name a file for this process to read."
           },
           "path": {
             "type": "string",
@@ -4830,6 +4842,102 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ImportSSHKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSSHKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/ssh-keys/from-candidate": {
+      "post": {
+        "operationId": "importSSHKeyFromCandidate",
+        "summary": "Import a key this host already holds, named by the handle the candidate scan gave it, and get back the same reference a paste does.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportSSHKeyFromCandidateRequest"
               }
             }
           }

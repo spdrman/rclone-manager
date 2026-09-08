@@ -26,7 +26,19 @@ import (
 
 func postSSHKeyImport(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-keys", strings.NewReader(body))
+	return postSSHKeyImportTo(t, router, "/api/v1/ssh-keys", body, csrf)
+}
+
+// postSSHKeyCandidateImport drives the OTHER import route (#592), the one
+// that takes an opaque handle instead of key material.
+func postSSHKeyCandidateImport(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
+	t.Helper()
+	return postSSHKeyImportTo(t, router, "/api/v1/ssh-keys/from-candidate", body, csrf)
+}
+
+func postSSHKeyImportTo(t *testing.T, router http.Handler, path, body string, csrf bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if csrf {
 		attachValidCSRF(req)
