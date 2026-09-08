@@ -69,7 +69,6 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,47 +120,101 @@ const (
 // on, and removes the image this run built once every test has finished
 // with it.
 //
-// The platform line is issue #635. Nothing here passed --platform, so the
-// target came from DOCKER_DEFAULT_PLATFORM in whatever environment ran
-// `go test`, and on the designated benchmark host that variable is set to
-// linux/amd64 while the daemon is aarch64. So this suite has been
-// building and running an emulated amd64 image, slower and not the
-// artifact this machine ships, while dockercli_test.go's own comment
-// claimed "a single amd64/arm64-native load" and imagelicences_test.go's
-// header claimed "this builds one architecture, natively". Neither was
-// true, and nothing said so, because every docker call agreed with every
-// other about the wrong answer.
-//
-// Setting it here rather than adding a flag to each call is the point.
-// There are more than forty `docker` invocations across this package -
-// build, run, create, cp, inspect, compose - and they have to agree:
-// build one architecture and `docker run` another and the run fails with
-// "pull access denied", because a reference the daemon holds for the
-// other platform looks to it like an image it does not have. One
-// variable in this process's environment reaches all of them, including
-// the ones `docker compose` makes on its own behalf, because
-// exec.Command inherits os.Environ() and every site here either does
-// that or appends to it.
-//
-// runtime.GOARCH is the test binary's own architecture, which is the
-// daemon's too for the local daemon requireDocker probes.
-//
 // os.Exit skips deferred functions, so the removal is written out
 // straight-line before it rather than deferred, and the code from m.Run
 // is carried across it: cleanup must not be able to turn a failing run
 // green or a green run red.
 func TestMain(m *testing.M) {
-	if err := os.Setenv("DOCKER_DEFAULT_PLATFORM", "linux/"+runtime.GOARCH); err != nil {
+	pinDockerPlatform()
+	code := m.Run()
+	removeBuiltImage()
+	os.Exit(code)
+}
+
+// pinDockerPlatform points every docker call in this package at the
+// daemon's OWN architecture, and says out loud which one that is.
+//
+// Issue #635. Nothing here passed --platform, so the target came from
+// DOCKER_DEFAULT_PLATFORM in whatever environment ran `go test`, and on
+// the designated benchmark host that variable is set to linux/amd64 while
+// the daemon is aarch64. So this suite has been building and running an
+// emulated amd64 image, slower and not the artifact this machine ships,
+// while dockercli_test.go's own comment claimed "a single amd64/arm64-native
+// load" and imagelicences_test.go's header claimed "this builds one
+// architecture, natively". Neither was true, and nothing said so, because
+// every docker call agreed with every other about the wrong answer.
+//
+// Setting an environment variable rather than adding a flag to each call
+// is the point. There are more than forty `docker` invocations across this
+// package - build, run, create, cp, inspect, compose - and they have to
+// agree: build one architecture and `docker run` another and the run fails
+// with "pull access denied", because a reference the daemon holds for the
+// other platform looks to it like an image it does not have. One variable
+// in this process's environment reaches all of them, including the ones
+// `docker compose` makes on its own behalf, because exec.Command inherits
+// os.Environ() and every site here either does that or appends to it.
+//
+// The architecture comes from the DAEMON and not from runtime.GOARCH, and
+// that distinction is the whole reason this is a function rather than one
+// line. GOARCH is this test binary's architecture, which is the client's;
+// the thing that builds and runs the image is the server, and the two are
+// only the same while the daemon is local. `docker info` succeeds just as
+// happily against a remote DOCKER_HOST, a Colima or Lima x86 VM, or Docker
+// Desktop pointed elsewhere, and requireDocker is LookPath plus `docker
+// info`, so nothing in this package establishes locality. On such a host,
+// pinning GOARCH would override a correct ambient setting to force a target
+// the daemon has to emulate, which is the bug this function exists to
+// remove, reintroduced from the other side.
+//
+// scripts/e2e/run-machine-tier.sh already reached that conclusion on this
+// same machine ("On this Mac the build picked amd64 unprompted and every
+// compile inside it ran under emulation, which turns 'measure the cost'
+// into measuring qemu") and reads it off the daemon. This takes it from
+// `docker version --format {{.Server.Arch}}` rather than that script's
+// `docker info --format {{.Architecture}}`, because Server.Arch prints
+// Go's vocabulary (arm64, amd64) and needs no mapping table, and it is the
+// same vocabulary imagesize_test.go already parses out of an image's own
+// {{.Architecture}}. That makes the architecture check in the size test a
+// real comparison, image against record, rather than a restatement of
+// GOARCH.
+//
+// Deliberately overriding rather than honouring an explicit setting, and
+// saying so when it does. The reason is that this suite's whole subject is
+// the artifact this machine ships, and there is no reading of
+// "DOCKER_DEFAULT_PLATFORM=linux/amd64 on an aarch64 daemon" under which
+// an emulated image is what these tests should be proving. What an
+// operator loses is the ability to point this one package at a foreign
+// architecture, which no test here asks for; what the line of output
+// preserves is that nobody has to guess which architecture was proved.
+//
+// Not fatal when there is no daemon to ask. requireDocker then skips
+// every test that needs one, and a platform invented without a daemon to
+// ask would be exactly the guess this function removes.
+func pinDockerPlatform() {
+	const key = "DOCKER_DEFAULT_PLATFORM"
+
+	// runDocker, not the dockerRun variable: the sweep tests replace that
+	// one with a stub, and a stubbed sweep must not be able to reroute the
+	// question that decides what every other test builds.
+	out, err := runDocker("version", "--format", "{{.Server.Arch}}")
+	arch := strings.TrimSpace(out)
+	if err != nil || arch == "" {
+		return
+	}
+
+	want := "linux/" + arch
+	if prev, ok := os.LookupEnv(key); ok && prev != want {
+		fmt.Fprintf(os.Stderr, "dockercli: %s was %s; overriding to %s, because the daemon is %s and this suite proves the artifact it builds\n", key, prev, want, arch)
+	}
+	if err := os.Setenv(key, want); err != nil {
 		// Not best-effort. Every test below would still run, against
 		// whatever platform the ambient environment named, and
 		// imagesize_test.go would compare a size to a baseline captured
 		// for a different architecture or skip without saying why.
-		fmt.Fprintf(os.Stderr, "cannot pin DOCKER_DEFAULT_PLATFORM: %v\n", err)
+		fmt.Fprintf(os.Stderr, "dockercli: cannot pin %s: %v\n", key, err)
 		os.Exit(1)
 	}
-	code := m.Run()
-	removeBuiltImage()
-	os.Exit(code)
+	fmt.Fprintf(os.Stderr, "dockercli: building and running for %s (the daemon's own architecture)\n", want)
 }
 
 // removeBuiltImage removes this run's own image, if this run got as far
