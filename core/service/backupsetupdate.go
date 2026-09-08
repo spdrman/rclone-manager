@@ -378,14 +378,32 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	//
 	// It runs with configMu still held, which means a slow check delays
 	// other configuration writes for up to connectionTestTimeout. That is
-	// the right trade rather than an oversight. Dropping the lock to check
-	// and taking it again would prove a configuration that may not be the
-	// one that then gets written, which is a check that reads like
-	// protection and is not.
+	// a trade made on purpose rather than an oversight. Dropping the lock
+	// to check and taking it again would prove a configuration that may
+	// not be the one that then gets written, unless the write re-read the
+	// set under the lock and refused if anything the check depended on had
+	// moved. That compare-and-swap is the right next shape for this path,
+	// and it is not in this change because it re-orders the trust staging
+	// and both acknowledgements around the check, which is most of what
+	// this method is careful about.
+	//
+	// What IS in this change is making the bound real, because it was not
+	// (PR #628 review). The ten seconds below went onto a context the SSH
+	// key exchange never saw: ssh.NewClientConn takes no context and reads
+	// no timeout, so against a host that accepted the connection and then
+	// sent nothing it blocked forever, holding this lock, and every other
+	// configuration writer in the process (UpdateSettings, CreateBackupSet,
+	// SetBackupSetEnabled, RemoveStorageMedium, clearConnectionUnverified)
+	// parked behind it until a restart. internal/sourcecheck now turns this
+	// context's deadline into a deadline on the socket itself, which is the
+	// one thing that interrupts that exchange, and
+	// TestUpdateBackupSet_ASilentHostCannotHoldTheConfigurationLock holds
+	// this call to coming back against exactly that host.
 	if proveConnection {
 		// The same ten seconds the button gets. A check that can hang
 		// indefinitely is an edit an operator cannot cancel, and here it
-		// would be an edit holding configMu while it hung.
+		// would be an edit holding configMu while it hung; see above for
+		// how this deadline reaches the handshake.
 		testCtx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
 		result := b.runConnectionTest(testCtx, id, &edited, connectionSourceFor(edited, cfg.KeyEncryption))
 		cancel()

@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
@@ -318,5 +322,132 @@ func TestCreateBackupSet_MarksASetItWasNotAskedToProve(t *testing.T) {
 	}
 	if strings.Count(string(after), "connection_unverified") != 1 {
 		t.Errorf("an ordinary create wrote the key too; absence has to keep meaning what it meant in every file written before this field existed:\n%s", after)
+	}
+}
+
+// The two cases below are PR #628's review findings against the check
+// UpdateBackupSet runs in front of a connection-changing edit: one about
+// what it can cost the rest of the process, one about what it can fail to
+// notice.
+
+// silentTCPListener accepts every connection and sends nothing on any of
+// them, holding each socket open until the test ends.
+//
+// Not a hostile host, and that is the point of using it. A load balancer
+// in front of a dead backend, an appliance that answers on 22 with
+// something that is not sshd, and a firewall that accepts and then drops
+// all look exactly like this from outside: the TCP connect succeeds and no
+// SSH identification string ever arrives. sourcecheck's own silentpeer
+// cases drive the check directly against the same shape; this one is what
+// it does to the service that called it.
+func silentTCPListener(t *testing.T) (host string, port int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var mu sync.Mutex
+	var held []net.Conn
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return // closed by cleanup
+			}
+			// No t.* calls: this goroutine outlives the test body.
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+		}
+	}()
+	return "127.0.0.1", ln.Addr().(*net.TCPAddr).Port
+}
+
+// TestUpdateBackupSet_ASilentHostCannotHoldTheConfigurationLock is the
+// regression case for a deadlock, and it is written against the lock
+// rather than against the check because the lock is what made it one.
+//
+// UpdateBackupSet runs #624's check with configMu held, and the comment
+// beside the call defends that as a delay bounded by connectionTestTimeout.
+// The bound was not real. The ten seconds went onto a context that
+// sourcecheck never handed to the handshake, and the handshake's own
+// ClientConfig.Timeout is a field ssh.NewClientConn does not read (only
+// Dial does, for the TCP connect it makes itself), so against a host that
+// accepted the connection and then said nothing the key exchange blocked
+// forever, with the lock held. Every other configuration writer in the
+// process (UpdateSettings, CreateBackupSet, SetBackupSetEnabled,
+// RemoveStorageMedium, clearConnectionUnverified) then parked a goroutine
+// and a connection behind it, and only a restart recovered.
+//
+// A background context on purpose: that is what the API handler passes,
+// so the bound has to come from UpdateBackupSet and the check themselves.
+// The call runs on a goroutine and is waited for with a select, because
+// the failure under test is a call that never returns and a test that
+// hangs reports nothing. The bound on the wait is generous over
+// connectionTestTimeout because this host runs other suites at the same
+// time; a build with the bug does not come back at all.
+func TestUpdateBackupSet_ASilentHostCannotHoldTheConfigurationLock(t *testing.T) {
+	svc, configPath := openTestService(t)
+	id, _, _, _ := createSFTPSet(t, svc, "silent-host")
+	host, port := silentTCPListener(t)
+
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+			Host: strPtr(host),
+			Port: &port,
+		})
+		done <- err
+	}()
+
+	bound := 3 * connectionTestTimeout
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(bound):
+		t.Fatalf("UpdateBackupSet has not returned %s after pointing the set at a host that accepts and says nothing. It is holding configMu while it waits, so every other configuration write in this process is parked behind it", bound)
+	}
+	took := time.Since(started)
+
+	if !errors.Is(err, ErrConnectionNotProven) {
+		t.Fatalf("UpdateBackupSet returned %v, want ErrConnectionNotProven: a host that never offers a key is a connection that could not be proven", err)
+	}
+	if took > connectionTestTimeout+5*time.Second {
+		t.Errorf("the refusal took %s; the comment beside the check promises other configuration writes wait at most connectionTestTimeout (%s)", took.Round(time.Millisecond), connectionTestTimeout)
+	}
+
+	// A refusal leaves the file alone, the same promise every other
+	// refusal on this path makes.
+	source, set, _ := splitBackupSetID(id)
+	if onDisk := readBackupSetFromDisk(t, configPath, source, set); onDisk.Remote.Host != "example.internal" {
+		t.Errorf("a refused edit reached the file: remote.host = %q on disk", onDisk.Remote.Host)
+	}
+
+	// And the lock is free again: a second edit of the same set, one that
+	// changes nothing about the connection and so runs no check, goes
+	// through promptly. This is the literal claim in the test's name.
+	next := make(chan error, 1)
+	go func() {
+		_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+			LocalPath: strPtr(filepath.Join(t.TempDir(), "moved")),
+		})
+		next <- err
+	}()
+	select {
+	case err := <-next:
+		if err != nil {
+			t.Fatalf("the edit after the refused one failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("an edit that runs no check has not returned after 10s; the refused check is still holding configMu")
 	}
 }
