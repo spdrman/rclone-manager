@@ -129,9 +129,10 @@ function pairs(fields: Record<string, string>): string {
  * (issue #625).
  *
  * This is the whole of the fix. The engine states how the operation a line
- * reports WENT, so the tone is read off that; the level is the fallback
- * for a line that states no outcome, which is a start or an ordinary
- * progress note. What it replaces was a reconstruction: about eight rules
+ * reports WENT, so the tone is read off that, and the level decides only
+ * for a line that states no outcome (a start, or an ordinary progress
+ * note) or where it is the louder of the two. What it replaces was a
+ * reconstruction: about eight rules
  * keyed on event names, on which lifecycle state a transition landed in
  * and on `outcome` fields, every one of them shaped "if the tone is still
  * info, make it ok". That reads fine for the fifteen event names somebody
@@ -143,9 +144,9 @@ function pairs(fields: Record<string, string>): string {
  * this build has never heard of, reporting a success, is green, and one
  * reporting an error is red, with nobody writing a case for it.
  *
- * The two are allowed to differ, and where they do the LOUDER of them
- * wins. Both are the engine's own words, so this is combining two stated
- * facts rather than inventing a third.
+ * The outcome and the level are allowed to differ, and where they do the
+ * LOUDER of them wins. Both are the engine's own words, so this is
+ * combining two stated facts rather than inventing a third.
  *
  * It matters in both directions. A connection test that correctly reports
  * a host as unreachable is logged as a warning, because the engine
