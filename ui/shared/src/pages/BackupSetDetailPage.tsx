@@ -1113,26 +1113,33 @@ function CancelEditDialog({
       onCancel={onKeepEditing}
       onConfirm={onDiscard}
     >
-      <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-        {n > 0 ? (
-          <LedgerGroup id="cancel-ledger-discarded" title="Discarded, never sent" first>
-            {discarded.map((entry) => (
-              <LedgerRow key={entry.key} label={entry.label} value={entry.typed + " \u2192 " + entry.returnsTo} />
-            ))}
-          </LedgerGroup>
-        ) : null}
-        {saved.length > 0 ? (
-          <LedgerGroup id="cancel-ledger-saved" title="Already saved, and staying saved" first={n === 0}>
-            {saved.map((entry) => (
-              <LedgerRow
-                key={entry.key}
-                label={fieldFor(entry.key).label}
-                value={(entry.value || "(empty)") + " \u00b7 " + clock(entry.at)}
-              />
-            ))}
-          </LedgerGroup>
-        ) : null}
-      </div>
+      {/* Only when it has a side to show. A refusal answered by typing the
+          box back to what it was leaves a pending refusal with nothing
+          dirty and nothing saved, and an empty bordered box in the middle
+          of the dialog would be a ledger claiming to have listed
+          something. */}
+      {n > 0 || saved.length > 0 ? (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+          {n > 0 ? (
+            <LedgerGroup id="cancel-ledger-discarded" title="Discarded, never sent" first>
+              {discarded.map((entry) => (
+                <LedgerRow key={entry.key} label={entry.label} value={entry.typed + " \u2192 " + entry.returnsTo} />
+              ))}
+            </LedgerGroup>
+          ) : null}
+          {saved.length > 0 ? (
+            <LedgerGroup id="cancel-ledger-saved" title="Already saved, and staying saved" first={n === 0}>
+              {saved.map((entry) => (
+                <LedgerRow
+                  key={entry.key}
+                  label={fieldFor(entry.key).label}
+                  value={(entry.value || "(empty)") + " \u00b7 " + clock(entry.at)}
+                />
+              ))}
+            </LedgerGroup>
+          ) : null}
+        </div>
+      ) : null}
       {saved.length > 0 ? (
         <p style={{ margin: 0 }}>
           Cancel is not an undo. Each of those was saved on its own and is in the
