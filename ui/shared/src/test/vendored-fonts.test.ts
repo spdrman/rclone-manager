@@ -259,7 +259,11 @@ describe("the weight set is a decision and not an inheritance", () => {
       found.set(weight, [...(found.get(weight) ?? []), where]);
     };
     for (const path of SHIPPED_PATHS) {
-      const source = SHIPPED[path];
+      // The @font-face blocks are stripped before the sweep. They carry a
+      // font-weight each, and counting those would make the second case
+      // below circular: every shipped face would prove itself asked for by
+      // its own declaration, and a face nothing draws with would pass.
+      const source = SHIPPED[path].replace(/@font-face\s*\{[^}]*\}/g, "");
       for (const m of source.matchAll(/font-weight\s*:([^;{}]*)/g)) {
         for (const n of m[1].matchAll(/\d{3}/g)) note(Number(n[0]), path);
       }

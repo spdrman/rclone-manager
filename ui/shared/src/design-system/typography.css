@@ -1,3 +1,127 @@
+/* The typeface, and the reason it is in this repository rather than at a URL
+   (#631).
+
+   This file used to name IBM Plex and leave index.html to go and fetch it from
+   fonts.googleapis.com. That is the defect #621 is about one layer up, and it
+   is the quieter one: a missing icon is an empty box somebody reports, while a
+   missing typeface is a page that renders in Helvetica and looks fine. This
+   product runs on a NAS that may have no route off its own LAN, deliberately,
+   so on the deployment it is FOR the request fails, nothing errors, and every
+   measurement the design makes against Plex is off by whatever the browser
+   picked instead. It also meant a page load reached a third party every time,
+   for operators who run this on private networks precisely so it does not.
+
+   Three decisions are behind the block below, and each one has a real cost on
+   the other side of it.
+
+   WHICH FILES. These are IBM's own woff2, byte for byte out of the
+   @ibm/plex-sans and @ibm/plex-mono packages IBM publishes, and not the
+   subsets Google Fonts serves. The difference is licensing rather than
+   quality. IBM Plex is OFL-1.1 with the Reserved Font Name "Plex", and OFL §3
+   says a Modified Version may not carry the reserved name. Google's copies are
+   Google's own re-subsetting, so redistributing those from this repository
+   would be redistributing a modified font under the name the licence reserves.
+   Taking the copyright holder's own artifacts unmodified is squarely §2 and
+   needs no argument. distribution/packaging/compliance.json records each
+   file's SHA-256 and a test re-derives them, so "unmodified" is checked rather
+   than claimed, and docs/compliance/bundled-webfonts.md is the full record.
+
+   WHICH WEIGHTS. Seven, which is exactly what the retired link asked for, and
+   that is a decision rather than a copy. The image carries this payload six
+   times over, once compiled into the binary and once per bundle under
+   /ui/bundles, so a face costs six times its own size against a gated image
+   budget. I went looking for the ones to drop and there are none: 400 is body
+   text, 500 is every field label and table header and badge, 600 is every
+   heading and every emphasised value, mono 500 is the eyebrow, mono 600 is the
+   wordmark and the health figures. Sans 700 is the one that looks free to drop
+   from a grep for fontWeight and is not, because every <strong> in the product
+   renders at bolder, which computes to 700 from body text at 400. Dropping any
+   of them does not remove a face, it silently redraws text at whichever weight
+   the CSS font matching algorithm picks instead.
+
+   WHICH CHARACTERS. The Latin1 subsets, which is where the size actually came
+   out: the complete faces are about 414 KB and six copies of those would be
+   over the image ceiling on their own. These are about 136 KB. The subset is
+   not a compromise on what renders either, because the glyphs this UI uses
+   outside Latin1 (the box-drawing rule in the activity dock, the tick, the
+   cross) were outside Google's latin subset too and have always come from a
+   fallback font. unicode-range is declared so the browser knows that rather
+   than downloading a face that cannot help.
+
+   font-display: swap on every face, which is what the old link's &display=swap
+   asked for. A face that never arrives must not hold the first paint: the
+   fallback stack below is a real answer and waiting is not.
+
+   IBM's own stylesheet puts a local("IBM Plex Sans") ahead of the url() and
+   this one does not, which is the one place these declarations differ from
+   theirs. A local lookup would draw with whatever version of Plex happens to
+   be installed on the machine looking at the page, and the operator's machine
+   is not something this deployment gets to know anything about. The file in
+   the image is the one that renders. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Regular-Latin1.woff2") format("woff2");
+  unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Medium-Latin1.woff2") format("woff2");
+  unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-SemiBold-Latin1.woff2") format("woff2");
+  unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-Bold-Latin1.woff2") format("woff2");
+  unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2");
+  unicode-range: U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/IBMPlexMono-Medium-Latin1.woff2") format("woff2");
+  unicode-range: U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/IBMPlexMono-SemiBold-Latin1.woff2") format("woff2");
+  unicode-range: U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
+}
+
 :root {
   --font-sans: "IBM Plex Sans", Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
