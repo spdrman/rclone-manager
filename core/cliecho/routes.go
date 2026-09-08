@@ -191,6 +191,19 @@ var routes = map[string]entry{
 		examples: []Action{
 			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
 				Body: []byte(`{"stale_after_seconds":172800}`)},
+			// The duration shapes, and they are examples rather than a
+			// unit test's table because this is the corpus the dispatcher
+			// is driven with in core/cmd/backup-manager: a shape no
+			// example carries is a shape nothing parses end to end. These
+			// three are the ones the old renderer got wrong (a bare
+			// seconds value, a value whose last unit ends in a zero, and
+			// an hour whose minutes component is empty), and they were
+			// missing for the reason such gaps usually are: the two
+			// values above are the two it happened to render correctly.
+			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
+				Body: []byte(`{"stale_after_seconds":30,"stable_for_seconds":600}`)},
+			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
+				Body: []byte(`{"stale_after_seconds":3610,"stable_for_seconds":90}`)},
 			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
 				Body: []byte(`{"host":"10.0.0.15","port":2222,"user":"backups","remote_path":"/var/backups","local_path":"/data/backups","include":["*.gz","*.sql"],"completion_strategy":"stable","stable_for_seconds":300,"validator_id":"gzip","ssh_key_id":"key_2","known_hosts_line":"10.0.0.15 ssh-ed25519 AAAAC3Nz","acknowledge_repoint":true,"acknowledge_host_key_change":true}`)},
 		},
