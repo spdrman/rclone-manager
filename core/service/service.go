@@ -269,18 +269,8 @@ type configState struct {
 // move it out of that state otherwise.
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
-	activity := newLiveActivity()
-	// The tap goes on before anything is built from this logger, so the
-	// feed and the log line come from one Logger rather than two: the
-	// inner app.Service below derives its own from this value, and so
-	// does every hot reload (configreload.go). Attaching it later, or
-	// only to b.logger, would leave the cycle's own events invisible to
-	// the one thing built to follow them.
-	logger = logger.WithSink(activity)
 	b := &BackupService{
 		journal:        journal,
-		logger:         logger,
-		activity:       activity,
 		pollInterval:   cfg.PollInterval.Duration(),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -289,6 +279,24 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 		holds:          newEditHolds(),
 		cycleWatch:     newCycleWatch(),
 	}
+	// The feed is given this service's own view of what is configured
+	// rather than a copy of the config it was built with, so a hot reload
+	// moves it too: it is how the feed refuses to open a bucket for a
+	// backup set nobody configured (liveactivity.go's setLocked), and a
+	// stale answer there would either hide a real set's strip or reopen
+	// the hole. It is safe to hand out a method on a half-built b,
+	// because the only thing behind it is b.state, which is stored below
+	// before this feed can be reached: app.New emits nothing.
+	activity := newLiveActivity(b.configuresBackupSetID)
+	// The tap goes on before anything is built from this logger, so the
+	// feed and the log line come from one Logger rather than two: the
+	// inner app.Service below derives its own from this value, and so
+	// does every hot reload (configreload.go). Attaching it later, or
+	// only to b.logger, would leave the cycle's own events invisible to
+	// the one thing built to follow them.
+	logger = logger.WithSink(activity)
+	b.logger = logger
+	b.activity = activity
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
 	// The sweep skips actions whose work does not happen in this process.

@@ -161,7 +161,7 @@ func TestLiveActivityRing_APartlyFilledRingDiscardsNothing(t *testing.T) {
 // silently, so it is asserted here against real concurrent writers
 // rather than trusted.
 func TestLiveActivity_SequencesWithinABucketIncreaseStrictly(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
 
 	var writers sync.WaitGroup
 	for w := 0; w < 8; w++ {
@@ -201,7 +201,7 @@ func TestLiveActivity_ReadDoesNotPayForWhatItDoesNotReturn(t *testing.T) {
 	for i := 0; i < sets; i++ {
 		ids = append(ids, "alpha/set"+string(rune('a'+i)))
 	}
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets(ids...))
 	for i := 0; i < liveActivityBufferSize; i++ {
 		for _, id := range ids {
 			recordSetEvent(rec, id, obs.EventLifecycleTransition)
@@ -227,7 +227,7 @@ func TestLiveActivity_ReadDoesNotPayForWhatItDoesNotReturn(t *testing.T) {
 // on the cycle's own goroutine for every event the engine emits, and
 // since the API action log (issue #599) on every non-GET request too.
 func BenchmarkRecordEventFullRing(b *testing.B) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
 	for i := 0; i < liveActivityBufferSize; i++ {
 		recordSetEvent(rec, "alpha/nightly", obs.EventLifecycleTransition)
 	}
@@ -253,7 +253,7 @@ func BenchmarkLiveActivityRead(b *testing.B) {
 	for i := 0; i < sets; i++ {
 		ids = append(ids, "alpha/set"+string(rune('a'+i)))
 	}
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets(ids...))
 	for i := 0; i < liveActivityBufferSize; i++ {
 		for _, id := range ids {
 			recordSetEvent(rec, id, obs.EventLifecycleTransition)

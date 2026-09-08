@@ -207,6 +207,29 @@ func configuresBackupSet(inner *app.Service, sourceName, setName string) bool {
 	return false
 }
 
+// configuresBackupSetID is configuresBackupSet against an id spelled the
+// way the wire spells one, source/set.
+//
+// It is what the live feed asks before opening a bucket (liveactivity.go),
+// so it reads the same atomic snapshot every other reader does and moves
+// with a hot reload rather than with whatever configuration this process
+// started on. A syntactically impossible id names nothing, exactly as it
+// does for a run.
+func (b *BackupService) configuresBackupSetID(id string) bool {
+	if b == nil {
+		return false
+	}
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return false
+	}
+	st := b.state.Load()
+	if st == nil {
+		return false
+	}
+	return configuresBackupSet(st.inner, sourceName, setName)
+}
+
 // executeRunBackupSet is the asynchronous half, and it is deliberately
 // shaped like executeRunCycle rather than merely similar to it: the same
 // deferred guarantees registered in the same order, so they unwind in the

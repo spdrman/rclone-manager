@@ -237,7 +237,7 @@ func TestLiveActivity_ListsEverySetIncludingOnesWithNothingToSay(t *testing.T) {
 // a client that has fallen behind can tell it missed something instead
 // of reading a gap as continuity.
 func TestLiveActivity_KeepsABoundedTailAndSaysWhereItStarts(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	total := liveActivityBufferSize + 50
 	for i := 0; i < total; i++ {
 		rec.RecordEvent(obs.Record{
@@ -269,7 +269,7 @@ func TestLiveActivity_KeepsABoundedTailAndSaysWhereItStarts(t *testing.T) {
 // pollable without re-sending the whole tail on every tick, and it is
 // also the shape a CLI following the feed would use.
 func TestLiveActivity_SinceReturnsOnlyWhatIsNewer(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	for i := 0; i < 5; i++ {
 		rec.RecordEvent(obs.Record{
 			At:      time.Now(),
@@ -312,7 +312,7 @@ func TestLiveActivity_SinceReturnsOnlyWhatIsNewer(t *testing.T) {
 // where the third bucket is READ, which is the half the assertions below
 // had to follow.
 func TestLiveActivity_AttributesAnEventByWhateverNamesItsSet(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 
 	rec.RecordEvent(obs.Record{
 		At: time.Now(), Level: obs.LevelInfo, Event: obs.EventDiscovery, Message: "discovery pass complete",
@@ -370,7 +370,7 @@ func TestLiveActivity_AttributesAnEventByWhateverNamesItsSet(t *testing.T) {
 // field, and a client renders the fraction from two numbers rather than
 // being handed one it cannot check.
 func TestLiveActivity_CountsArtifactsAndSaysSo(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	planned := 41
 	rec.ObserveProgress(app.Progress{
 		Stage:                 app.StageTransferring,
@@ -413,7 +413,7 @@ func TestLiveActivity_CountsArtifactsAndSaysSo(t *testing.T) {
 // headline. It is per set and per pass: last week's failure is not this
 // pass's, and another set's is not this one's.
 func TestLiveActivity_CountsThisPassesFailuresPerSet(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	fail := func(setID, artifact, to string) {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventLifecycleTransition, Message: "lifecycle transition",
@@ -525,7 +525,7 @@ func eventField(e LiveActivityEvent, key string) (string, bool) {
 // with the response saying nothing about it. Oldest first is what makes
 // a cursor mean "carry on from here" rather than "jump to the end".
 func TestLiveActivity_ACursoredReadHandsBackTheOldestFirst(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	const burst = 120
 	const limit = 10
 	for i := 0; i < burst; i++ {
@@ -637,7 +637,7 @@ func TestLiveActivity_ReadsEverySetAsOfOneMoment(t *testing.T) {
 // there are has to be able to tell that from having caught up, or it
 // waits out an idle interval while the process is holding lines for it.
 func TestLiveActivity_SaysWhenALimitCutTheReadingShort(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	for i := 0; i < 30; i++ {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
@@ -668,7 +668,7 @@ func TestLiveActivity_SaysWhenALimitCutTheReadingShort(t *testing.T) {
 // holds, and a panel that draws that hole as a continuous log is lying
 // about the very thing it exists to show.
 func TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	record := func() {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
@@ -708,7 +708,7 @@ func TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer(t *testing.T) {
 // headline from those two paints it exactly the way it paints a set with
 // nothing to do. The pass's own verdict is the fact that separates them.
 func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/nightly"})
 	rec.ObserveSetOutcome("alpha/nightly", app.SetOutcomeFailed)
 

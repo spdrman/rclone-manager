@@ -466,6 +466,19 @@ type liveActivity struct {
 	// with it.
 	epoch string
 
+	// configures reports whether the RUNNING configuration names a
+	// backup set id, and it is what keeps the bucket map bounded: see
+	// setLocked for the hole it closes and why the recorder's own check
+	// is not enough on its own.
+	//
+	// It is a function rather than a list because the configuration is
+	// hot-reloadable, so the answer has to be asked at the moment the
+	// question comes up rather than copied at construction. It reads the
+	// service's own atomic snapshot and takes no lock of this package's,
+	// and it is written once, before this feed is reachable by anything,
+	// so it needs none of ours either.
+	configures func(id string) bool
+
 	mu  sync.Mutex
 	seq int64
 
@@ -499,12 +512,31 @@ type liveActivitySetState struct {
 	finishedAt         *time.Time
 }
 
-func newLiveActivity() *liveActivity {
+// newLiveActivity builds the feed.
+//
+// configures is not optional and there is deliberately no constructor
+// without it: a feed that cannot tell a configured set from an invented
+// one is the bug this parameter exists to prevent, and a nil predicate
+// names nothing rather than everything.
+func newLiveActivity(configures func(id string) bool) *liveActivity {
 	return &liveActivity{
 		epoch:      newLiveActivityEpoch(),
+		configures: configures,
 		deployment: newLiveActivityRing(liveActivityBufferSize),
 		sets:       make(map[string]*liveActivitySetState),
 	}
+}
+
+// configuredSet reports whether the running configuration names id.
+//
+// Nil-safe in both directions, and a feed with no predicate names no
+// sets: the fail-closed answer is the one that cannot be turned into a
+// way to make this process hold memory.
+func (l *liveActivity) configuredSet(id string) bool {
+	if l == nil || l.configures == nil || id == "" {
+		return false
+	}
+	return l.configures(id)
 }
 
 // newLiveActivityEpoch mints the name one process's feed goes by.
@@ -549,6 +581,20 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		return
 	}
 	setID, scope := attributeRecord(r)
+	// A line naming a set this deployment does not have is a line about
+	// the deployment, not a line about a set: there is no strip for it
+	// to land on, because LiveActivity builds its list of strips from
+	// the configuration. It is re-scoped rather than dropped so the
+	// global terminal still shows it, which is the whole point of having
+	// a bucket for the lines that belong to no set. See setLocked for
+	// what minting one anyway used to cost.
+	//
+	// Asked before the lock, because the answer comes from the service's
+	// own atomic configuration snapshot and there is no reason to walk
+	// it while holding the feed's mutex.
+	if scope == LiveActivityScopeSet && !l.configuredSet(setID) {
+		setID, scope = "", LiveActivityScopeDeployment
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -572,6 +618,15 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		return
 	}
 	st := l.setLocked(setID)
+	if st == nil {
+		// Unreachable through the re-scope above, and handled anyway:
+		// setLocked is the guard, and a caller that reaches it without
+		// checking first gets the deployment's bucket rather than a
+		// panic or a silent drop.
+		e.Scope = LiveActivityScopeDeployment
+		l.deployment.add(e)
+		return
+	}
 	st.ring.add(e)
 	if isTerminalFailureTransition(r) {
 		st.failures++
@@ -593,14 +648,18 @@ func (l *liveActivity) ObserveProgress(p app.Progress) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	st := l.setLocked(p.BackupSetID)
+	if st == nil {
+		// Nothing this process is configured to back up, so there is no
+		// strip these numbers could be drawn on. See setLocked.
+		return
+	}
 	if l.current != p.BackupSetID {
 		l.finishCurrentLocked()
 		l.current = p.BackupSetID
-		st := l.setLocked(p.BackupSetID)
 		st.beginPass(now())
 	}
 
-	st := l.setLocked(p.BackupSetID)
 	st.stage = p.Stage
 	st.artifact = p.Artifact
 	st.artifactsCompleted = p.SetArtifactsCompleted
@@ -626,7 +685,9 @@ func (l *liveActivity) ObserveSetOutcome(backupSetID, outcome string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.setLocked(backupSetID).outcome = outcome
+	if st := l.setLocked(backupSetID); st != nil {
+		st.outcome = outcome
+	}
 }
 
 // beginCycle and endCycle bracket one run of the engine.
@@ -674,14 +735,46 @@ func (l *liveActivity) finishCurrentLocked() {
 	l.current = ""
 }
 
-// setLocked returns the state for id, creating it on first sight. The
-// caller holds l.mu.
+// setLocked returns the state for id, creating it on first sight, or nil
+// when the running configuration does not name id. The caller holds l.mu.
+//
+// # Why it refuses
+//
+// A bucket is 200 slots, and this map used to mint one for whatever id
+// it was handed. The ids stopped being the engine's the moment the API
+// action log landed (issue #599): the middleware records every non-GET
+// request and builds the set id straight out of the chi route
+// parameters, so `PATCH /api/v1/backup-sets/ghost-src/ghost-set` minted
+// a bucket whatever the request answered. 404, or 403 with no CSRF token
+// presented at all, made no difference, because the line is recorded
+// after the handler and a refusal is exactly what an operator most needs
+// to see.
+//
+// None of those buckets was ever readable: LiveActivity builds its list
+// of strips from the configuration, so an invented id has no strip. And
+// nothing removed them. So it was retained garbage at request rate,
+// reachable by any authenticated session without a CSRF token: 50,000
+// such requests left 50,000 buckets and 22.2 MB.
+//
+// RecordAPIAction checks the id too, and that is not this check being
+// duplicated. That one keeps a line about a set that does not exist
+// honest (it is a deployment-scoped line, and it says so); this one is
+// what makes the map bounded no matter who is feeding it, so the next
+// recorder wired in beside that one inherits the guarantee instead of
+// having to remember it.
+//
+// A bucket already open is returned whatever the configuration now says,
+// which is what keeps a set's own strip readable across the moment it is
+// renamed or removed rather than blanking it mid-reading.
 func (l *liveActivity) setLocked(id string) *liveActivitySetState {
-	st, ok := l.sets[id]
-	if !ok {
-		st = &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
-		l.sets[id] = st
+	if st, ok := l.sets[id]; ok {
+		return st
 	}
+	if !l.configuredSet(id) {
+		return nil
+	}
+	st := &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
+	l.sets[id] = st
 	return st
 }
 

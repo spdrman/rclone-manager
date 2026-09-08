@@ -60,7 +60,7 @@ func recordDeploymentEvent(rec *liveActivity, event string) {
 // and nothing of the deployment's, and weekly's carries nothing of
 // nightly's.
 func TestLiveActivity_ASetsFeedCarriesOnlyThatSetsOwnLines(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 
 	recordDeploymentEvent(rec, obs.EventCycleStart)
 	recordSetEvent(rec, "alpha/nightly", obs.EventDiscovery)
