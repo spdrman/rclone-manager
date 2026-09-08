@@ -174,6 +174,102 @@ func TestBeginPairsAnyActionWithItsOwnCompletion(t *testing.T) {
 	}
 }
 
+// TestAnActionsCompletionInheritsWhatItsStartWasGiven is the bug three
+// reviewers of #627 found independently, and it is about where a line
+// LANDS rather than about what it says.
+//
+// service/liveactivity.go routes each record into a bucket by reading
+// backup_set off it, and it looks for an unfinished action per bucket. So
+// a start carrying a backup set whose completion does not is a start in
+// one ring and a completion in another, and the start is reported as an
+// action that announced itself and went quiet for as long as the buffer
+// holds it. Nothing about that is visible from the call site: it is two
+// correct-looking calls, and the second one is Succeeded, which takes no
+// attributes at all and is the one this package's own doc calls the case
+// worth having a name for.
+//
+// So the handle carries what Begin was given and the completion inherits
+// it. A caller that wants to say something else still can, and what it
+// passes wins, which is the same rule emit already applies to what With
+// bound.
+func TestAnActionsCompletionInheritsWhatItsStartWasGiven(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+	ctx := context.Background()
+
+	l.Begin(ctx, "connection_test", "connection_test", "connection test starting",
+		slog.String("backup_set", "alpha/nightly")).
+		Succeeded(ctx, "connection test finished")
+
+	got := sink.all()
+	if len(got) != 2 {
+		t.Fatalf("the sink saw %d records and one action was begun and ended", len(got))
+	}
+	for i, r := range got {
+		v, ok := fieldValue(r, "backup_set")
+		if !ok || v != "alpha/nightly" {
+			t.Errorf("record %d carries backup_set=%q (present=%v); a start and a completion that disagree about their set land in two different rings, and the start is then unfinished forever", i, v, ok)
+		}
+	}
+}
+
+// TestACompletionsOwnAttributeWinsOverTheStarts is the other half of that
+// rule. The inherited attributes are a default, not a floor: a completion
+// that has something newer to say about a key says it, and there is one
+// value under that key rather than two, for the reason emit's own
+// duplicate-key note gives.
+func TestACompletionsOwnAttributeWinsOverTheStarts(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+	ctx := context.Background()
+
+	l.Begin(ctx, "medium_verify", "medium_verify", "verifying", slog.String("medium", "offsite_s3"), slog.String("phase", "start")).
+		End(ctx, OutcomeSuccess, "verified", slog.String("phase", "end"))
+
+	end := sink.all()[1]
+	seen := 0
+	for _, f := range end.Fields {
+		if f.Key == "phase" {
+			seen++
+			if f.Value != "end" {
+				t.Errorf("the completion carries phase=%q, and it passed \"end\" itself", f.Value)
+			}
+		}
+	}
+	if seen != 1 {
+		t.Errorf("the completion carries %d phase fields; a duplicate key is worse than either answer", seen)
+	}
+	if v, ok := fieldValue(end, "medium"); !ok || v != "offsite_s3" {
+		t.Errorf("the completion carries medium=%q (present=%v); a key the completion said nothing about is inherited", v, ok)
+	}
+}
+
+// TestAnActionClosesOnce is about the adoption pattern that reads best
+// and breaks today. `defer action.Failed(ctx, err, ...)` beside an
+// explicit Succeeded on the happy path is the obvious way to write a
+// function that can leave several ways, and it writes two completions for
+// one action: the feed then holds a success and an error for one id, and
+// an operator reading a terminal sees the action fail after it succeeded.
+func TestAnActionClosesOnce(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+	ctx := context.Background()
+
+	func() {
+		action := l.Begin(ctx, "cycle", ActionCycle, "cycle starting")
+		defer action.Failed(ctx, errors.New("left without finishing"), "cycle did not finish")
+		action.Succeeded(ctx, "cycle finished")
+	}()
+
+	got := sink.all()
+	if len(got) != 2 {
+		t.Fatalf("the sink saw %d records; one action begun and ended is two lines, and a second completion is a feed holding two verdicts for one id", len(got))
+	}
+	if got[1].Outcome != OutcomeSuccess {
+		t.Errorf("the completion states outcome %q; the first close is the one that happened", got[1].Outcome)
+	}
+}
+
 // TestFailedStatesTheErrorAndTheOutcomeTogether is the shorthand every
 // call site would otherwise write by hand, and getting it wrong in one
 // place is how an error ends up logged at info.

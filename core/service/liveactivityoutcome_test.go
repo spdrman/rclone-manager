@@ -17,6 +17,8 @@
 package service
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -157,6 +159,41 @@ func TestLiveActivity_ReportsOneRowPerActionEvenIfAnIdIsRepeated(t *testing.T) {
 
 	if open := deploymentBucket(t, rec).Unfinished; len(open) != 1 {
 		t.Errorf("the deployment bucket reports %d unfinished actions and one action id started twice", len(open))
+	}
+}
+
+// TestLiveActivity_AnActionEndedThroughItsHandleLeavesNoPhantomRow is the
+// bucket-routing half of the pairing, driven through a real obs.Logger
+// with this feed as its sink rather than through scripted records.
+//
+// The scripted version cannot see the defect at all. attributeRecord
+// routes a record into a per-set ring or the deployment ring by reading
+// backup_set off it, and unfinishedIn runs per bucket, so a start naming
+// a set and a completion naming none are a start in one ring and a
+// completion in another. The completion clears nothing, and the set's
+// strip reports an action that announced itself and went quiet, forever,
+// for an action that finished cleanly. Only a test that lets obs build
+// both records can catch it.
+func TestLiveActivity_AnActionEndedThroughItsHandleLeavesNoPhantomRow(t *testing.T) {
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
+	logger := obs.New(nil, obs.LevelDebug).WithSink(rec)
+	ctx := context.Background()
+
+	// Succeeded, with no attributes, which is the shape the API invites
+	// and the one that used to break this.
+	logger.Begin(ctx, "connection_test", "connection_test", "connection test starting",
+		slog.String("backup_set", "alpha/nightly")).
+		Succeeded(ctx, "connection test finished")
+
+	set := rec.snapshot("alpha/nightly", 0, 100)
+	if len(set.Events) != 2 {
+		t.Fatalf("the set's ring holds %d events; a start and a completion that land in two different rings is the defect this is about", len(set.Events))
+	}
+	if len(set.Unfinished) != 0 {
+		t.Errorf("the set reports %d unfinished actions after one that finished cleanly: %+v", len(set.Unfinished), set.Unfinished)
+	}
+	if open := deploymentBucket(t, rec).Unfinished; len(open) != 0 {
+		t.Errorf("the deployment bucket reports %d unfinished actions for an action that named a set and finished: %+v", len(open), open)
 	}
 }
 
