@@ -161,7 +161,11 @@ var routes = map[string]entry{
 				return newCmd().refuse(gapRunCycle)
 			}
 		},
-		why:               gapRunCycle,
+		// A body that will not decode names no action at all, so the
+		// route-level sentence is the one every other builder here gives
+		// for that case rather than one of the two below, which are
+		// answers about a specific act.
+		why:               "there is no verb that submits an operation from a request body",
 		refusals:          []string{gapRunCycle, gapRunBackupSet},
 		namesShippedVerbs: []string{"run", "fetch"},
 		examples: []Action{

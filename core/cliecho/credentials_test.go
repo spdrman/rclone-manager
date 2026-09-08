@@ -55,6 +55,7 @@ func TestNoRequestFieldReachesTheArgvUnlessItIsEchoedOnPurpose(t *testing.T) {
 
 	usedFlag := map[string]bool{}
 	usedOperand := map[string]bool{}
+	builtFor := map[string]bool{}
 	built := 0
 	for _, route := range Routes() {
 		method, path, _ := strings.Cut(route, " ")
@@ -62,6 +63,7 @@ func TestNoRequestFieldReachesTheArgvUnlessItIsEchoedOnPurpose(t *testing.T) {
 			line := Echo(Action{Method: method, Route: path, Params: params, Body: body.body})
 			if len(line.Command) > 0 {
 				built++
+				builtFor[route] = true
 			}
 			for i, arg := range line.Command {
 				if !strings.Contains(arg, marker) {
@@ -91,6 +93,19 @@ func TestNoRequestFieldReachesTheArgvUnlessItIsEchoedOnPurpose(t *testing.T) {
 	}
 	if built == 0 {
 		t.Fatal("no route built a command from any canary body, so this test proves nothing")
+	}
+
+	// Per route, not just in total. A builder the corpus stops reaching
+	// is a builder this test stops checking, and it says nothing when it
+	// happens: the count above stays large because every other route is
+	// still building. That is not hypothetical, it is how filling every
+	// slice with a canary switched the retention SCALAR branch off
+	// everywhere at once.
+	for route, e := range routes {
+		if e.build == nil || builtFor[route] {
+			continue
+		}
+		t.Errorf("%s has a builder and not one canary body made it print a command, so nothing here checks what that builder puts on a line. Give the corpus a body it accepts (canary_test.go's bodyVariants) rather than leaving the route unchecked.", route)
 	}
 
 	// A dead exemption is worse than none: it reads as a reviewed

@@ -282,10 +282,12 @@ type Gap struct {
 func Gaps() []Gap {
 	out := make([]Gap, 0, len(routes))
 	for k, e := range routes {
+		seen := make(map[string]bool, 1+len(e.refusals))
 		for _, why := range append([]string{e.why}, e.refusals...) {
-			if strings.TrimSpace(why) == "" {
+			if strings.TrimSpace(why) == "" || seen[why] {
 				continue
 			}
+			seen[why] = true
 			out = append(out, Gap{Route: k, Why: why, NamesShippedVerbs: e.namesShippedVerbs})
 		}
 	}
