@@ -317,10 +317,12 @@ export function iconForLegacyGlyph(glyph: string): IconName | undefined {
  * lives in StatusBadge: a contract that each caller has to remember is a
  * contract that holds until somebody forgets.
  *
- * focusable="false" is not decoration on that. Internet Explorer and some
- * embedded webviews put an inline SVG in the tab order by default, and a
- * page whose tab order runs through fourteen invisible pictures is a page
- * a keyboard cannot be used on.
+ * focusable="false" is not decoration on that. Some engines put an inline
+ * SVG in the tab order of their own accord, and this product is embedded
+ * in NAS vendors' own webviews rather than only in a browser somebody
+ * chose, so which engines those are is not a thing this can know. One
+ * attribute is cheaper than finding out from a report that a keyboard
+ * stops on every decorative picture on the page.
  *
  * The box is square whatever the artwork's aspect ratio is, and the viewBox
  * scales into it centred (SVG's default preserveAspectRatio), so a 448-wide
@@ -335,14 +337,16 @@ export function iconForLegacyGlyph(glyph: string): IconName | undefined {
 export function Icon({
   name,
   size,
-  className,
   style
 }: {
   name: IconName;
   /** Anything CSS accepts for a length. Defaults to 1em, which is almost
    *  always what a surface wants: the icon tracks its own text. */
   size?: number | string;
-  className?: string;
+  /** For the one thing a wrapper span cannot do from outside, which is
+   *  sit the artwork inside a run of text. Spelled out rather than taking
+   *  arbitrary props, following Banner's rule: this component's surface
+   *  should stay something a reader can enumerate. */
   style?: CSSProperties;
 }) {
   const artwork = ICON_ARTWORK[name];
@@ -360,7 +364,6 @@ export function Icon({
       fill="currentColor"
       aria-hidden="true"
       focusable="false"
-      className={className}
       style={{ display: "inline-block", verticalAlign: "-0.125em", flex: "none", ...style }}
     >
       <path d={artwork.path} />
