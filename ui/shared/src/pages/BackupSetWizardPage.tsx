@@ -579,17 +579,31 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
           : "Import an SSH key on the Authentication step before saving.";
   } else if (!trustedKnownHostsLine) {
     saveHint = "Trust the host's fingerprint on the Verify server step before saving.";
+  } else if (!acknowledged && !readOnlySource && !readOnly) {
+    // The acknowledgement comes before the connection test, and the
+    // condition is now that precondition rather than the catch-all
+    // saveDisabled it used to be. Both matter.
+    //
+    // The order is about what an operator is looking at: the
+    // acknowledgement is a box on this screen with an empty tick in it,
+    // and the connection test is a button they have not pressed yet, so
+    // naming the box first is naming the thing they can see is unfinished.
+    //
+    // The condition had to become explicit the moment there was a fourth
+    // precondition after it. saveDisabled is true for any of them, so a
+    // catch-all here would have gone on saying "acknowledge" to somebody
+    // who had already acknowledged and had not tested, which is the
+    // stated-reason-is-not-the-real-reason shape M7 removed from every
+    // other branch in this chain.
+    saveHint = "Acknowledge remote-source handling to enable saving.";
   } else if (!connectionProven) {
-    // Its own hint rather than falling through to the acknowledgement
-    // one, on the rule M7 established for every other precondition here:
-    // a disabled button whose stated reason is not the reason it is
-    // disabled is worse than one with no reason at all.
+    // Its own hint, on the same rule: a disabled button whose stated
+    // reason is not the reason it is disabled is worse than one with no
+    // reason at all.
     saveHint =
       connectionResult !== null && !connectionResult.ok
         ? "The connection test did not pass. Fix what it reports and test connection again before saving."
         : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use backup-manager backup-set create --no-verify.";
-  } else if (saveDisabled && !readOnly) {
-    saveHint = "Acknowledge remote-source handling to enable saving.";
   } else if (saveError) {
     saveHint = saveError;
   }
