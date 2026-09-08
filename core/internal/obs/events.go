@@ -52,10 +52,12 @@ import (
 // Every event below that reports a COMPLETION states how it went, as an
 // Outcome (action.go) rather than as something a client works out from
 // the absence of an error field. That is most of this list: a cycle end,
-// a transfer, a commit, a validation, a remote delete, a retention
-// verdict, a retry, an alert.
+// a discovery pass, a transfer, a validation, a commit, a remote delete,
+// a reconciliation, a retention verdict, a retention hold, a retry, an
+// alert delivered, and Error, which is the completion of whatever its op
+// names.
 //
-// Three kinds deliberately state nothing, and the absence is the point
+// Four kinds deliberately state nothing, and the absence is the point
 // rather than an oversight.
 //
 // Startup and RcloneVersion are announcements. Nothing was attempted, so
@@ -63,6 +65,15 @@ import (
 //
 // Hash is a measurement. A digest is neither good nor bad news; what is
 // done with it later is.
+//
+// StaleBackup and DiskPressure report a CONDITION rather than an
+// operation. Nothing ran, so nothing went any way: a filesystem crossing
+// a threshold is a fact about the world this process noticed, and calling
+// that a warning outcome would stretch the field from "how the thing I
+// did turned out" to "how I feel about what I saw", which is the second
+// vocabulary this one exists to avoid needing. Both are already emitted
+// at a level that says how much attention they want, and that half was
+// never the problem.
 //
 // LifecycleTransition is a state change, not the completion of an
 // action, and this is the one worth saying out loud because it is the
@@ -467,7 +478,7 @@ func (l *Logger) Retry(ctx context.Context, op string, attempt int, category str
 // stale_after). This always logs at LevelWarn, since by definition it only
 // ever fires once age has already exceeded threshold.
 func (l *Logger) StaleBackup(ctx context.Context, backupSet string, age, threshold time.Duration) {
-	l.emitMarked(ctx, LevelWarn, mark{outcome: OutcomeWarning}, EventStaleBackup, "backup set is stale",
+	l.emit(ctx, LevelWarn, EventStaleBackup, "backup set is stale",
 		slog.String("backup_set", backupSet),
 		slog.Duration("age", age),
 		slog.Duration("threshold", threshold),
@@ -512,11 +523,11 @@ func (l *Logger) Alert(ctx context.Context, kind, backupSet, detail string) {
 // test has to catch rather than a reviewer noticing by eye. See
 // TestDiskPressureEventDoesNotShadowSeverityLevel.
 func (l *Logger) DiskPressure(ctx context.Context, path string, freeBytes, totalBytes int64, threshold string) {
-	outcome := OutcomeWarning
+	sevLevel := LevelWarn
 	if threshold == "critical" {
-		outcome = OutcomeError
+		sevLevel = LevelError
 	}
-	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, EventDiskPressure, "disk pressure threshold crossed",
+	l.emit(ctx, sevLevel, EventDiskPressure, "disk pressure threshold crossed",
 		slog.String("path", path),
 		slog.Int64("free_bytes", freeBytes),
 		slog.Int64("total_bytes", totalBytes),

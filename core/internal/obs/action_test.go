@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // How an operation WENT, and whether it ever finished (issue #625).
@@ -194,6 +195,32 @@ func TestFailedStatesTheErrorAndTheOutcomeTogether(t *testing.T) {
 	}
 	if v, ok := fieldValue(end, "error"); !ok || v != "no credentials for offsite_s3" {
 		t.Errorf("a failed completion carries error=%q (present=%v)", v, ok)
+	}
+}
+
+// TestAConditionStatesNoOutcomeBecauseNothingRan is the boundary of this
+// vocabulary, asserted rather than only written down. A filesystem
+// crossing a threshold is a fact about the world this process noticed,
+// not an operation that went one way or another, and a field that
+// stretched to cover it would be a second vocabulary for severity with
+// the same four values as the first.
+func TestAConditionStatesNoOutcomeBecauseNothingRan(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+	ctx := context.Background()
+
+	l.StaleBackup(ctx, "alpha/nightly", 48*time.Hour, 24*time.Hour)
+	l.DiskPressure(ctx, "/data", 1, 100, "critical")
+
+	for _, got := range sink.all() {
+		if got.Outcome != "" {
+			t.Errorf("%s states outcome %q, and it reports a condition rather than an operation", got.Event, got.Outcome)
+		}
+	}
+	// The level is how these say how much attention they want, and that
+	// half was never the problem.
+	if sink.all()[0].Level != LevelWarn || sink.all()[1].Level != LevelError {
+		t.Errorf("the two conditions were emitted at %v and %v, want warn and error", sink.all()[0].Level, sink.all()[1].Level)
 	}
 }
 
