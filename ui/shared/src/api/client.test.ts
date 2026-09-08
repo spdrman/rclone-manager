@@ -19,7 +19,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi } from "./client";
-import { BackupManagerError, toApiErrorCode } from "./contracts";
+import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
 import type { ApiErrorCode } from "./contracts";
 import { progressPercent } from "@shared/types/operation";
 
@@ -443,6 +443,61 @@ describe("httpApi error envelope handling", () => {
     }
     expect(caught).toBeInstanceOf(BackupManagerError);
     expect((caught as BackupManagerError).api.correlationId).toBe("cid_nojson");
+  });
+
+  /**
+   * Issue #598. A refusal was the only failure this function ever
+   * described. The two that are not refusals — a request that never came
+   * back, and a 2xx whose body could not be read — left as whatever the
+   * browser happened to throw, so every caller above saw an untyped
+   * exception and had nothing to say about it but a fixed sentence.
+   */
+  it("labels a request that never came back, rather than letting the browser's own throw escape", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    let caught: unknown;
+    try {
+      await httpApi.listActivity();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(RequestFailure);
+    const failure = caught as RequestFailure;
+    expect(failure.kind).toBe("no-response");
+    expect(failure.path).toBe("/activity");
+    // No response, so no header, so no id. Never the literal.
+    expect(failure.correlationId).toBeUndefined();
+    expect((failure.cause as Error).message).toBe("Failed to fetch");
+  });
+
+  it("labels a 2xx whose body could not be read, and quotes the id that response carried", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html; charset=utf-8", "x-correlation-id": "cid_ok200" }),
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON");
+        }
+      })
+    );
+
+    let caught: unknown;
+    try {
+      await httpApi.listActivity();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(RequestFailure);
+    const failure = caught as RequestFailure;
+    expect(failure.kind).toBe("unreadable-body");
+    expect(failure.status).toBe(200);
+    expect(failure.contentType).toContain("text/html");
+    // The whole point of reading the header on the success path too: a
+    // body that fails to parse can still name the response it came from
+    // (#598).
+    expect(failure.correlationId).toBe("cid_ok200");
   });
 });
 
