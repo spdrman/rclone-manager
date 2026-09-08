@@ -33,12 +33,27 @@
 // openmediavault proxmox synology`, and the runtime stage copies
 // dist-bundles/ to /ui/bundles. Five, not seven: generic is compiled into
 // the binary and ugos ships in EPIC D's UPK, so those two have a carrier
-// already. Measured out of the built image on 2026-09-08, the five hold
-// 3,503,996 bytes, about 700,799 each, which is twice the 352 KiB above,
-// because #632 put 139,744 bytes of woff2 into every bundle and EPIC F, G
-// and H grew the JS chunk. The conclusion did not move with the numbers:
-// seven is still more than the headroom. docs/perf/ carries what the
-// image measures today, and is the only place worth trusting for it.
+// already and a directory for either would be bytes nobody serves.
+//
+// Note which half of the paragraph above decides that, because the
+// sentence right before it is the trap it describes. "Which image the
+// headroom is measured from is the whole question" was the right
+// observation, and it applies to the answer as much as to the estimate:
+// once the five bundles are INSIDE the recorded baseline, they are not
+// spending the headroom any more, and any sum that charges them to it is
+// counting them twice. The baseline was re-captured at 69,704,266 with
+// them in it on 2026-09-08, so that is now the case.
+//
+// Re-derived there, the old arithmetic contradicts itself, which is the
+// clearest sign it has stopped deciding anything. 5% of 69,704,266 is
+// 3,485,213; the five measure 3,503,996 (about 700,799 each, twice the
+// 352 KiB above, because #632 put 139,744 bytes of woff2 in every one and
+// EPIC F, G and H grew the JS chunk). Charge them and FIVE is over by
+// 18,783. Do not charge them, which is correct, and the two missing
+// bundles want 1,401,598 against 3,485,213, so SEVEN fits with 2,083,615
+// spare. The count is a duplication argument, not a size one. docs/perf/
+// carries what the image measures, and is the only place worth trusting
+// for it.
 import { spawnSync } from "node:child_process";
 import { rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";

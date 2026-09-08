@@ -21,18 +21,26 @@ import (
 // half, and the reason it is a test rather than a line in a README is the
 // budget it lives under.
 //
-// The image size is gated at 1.05x of a recorded baseline, so the image
-// can only carry the bundles that have no other carrier: an adapter that
-// is metadata and nothing else. #180 settled that on seven bundles at
-// roughly 347 KB each being about 2.4 MB against about 2.15 MB of
-// headroom. A bundle is bigger now, measured out of the built image on
-// 2026-09-08 at about 700,799 bytes (#635), and the budget moved with
-// the baseline, so read the shape rather than those byte counts: seven
-// is still more than the headroom, five is still inside it. Both halves of
-// that sentence have to stay true, and each fails differently. Carrying
-// too few silently reinstates #180 for whichever adapter was dropped,
-// because serve-ui then refuses to start rather than serving the wrong
-// bridge. Carrying too many is an image-size regression nobody meant.
+// The image carries a bundle for exactly the adapters that have no other
+// carrier: an adapter that is metadata and nothing else. `generic` is
+// compiled into the binary and `ugos` ships in EPIC D's UPK, so a
+// directory for either would be bytes nobody serves.
+//
+// #180 reached the same count by arithmetic, seven bundles at roughly
+// 347 KB each being about 2.4 MB against about 2.15 MB of headroom, and
+// that sum no longer decides it (#635). It held while the recorded
+// baseline was an image with no bundles in it; the baseline now includes
+// these five, so they cannot be charged to the 5% a second time, and
+// re-derived on today's measurements it contradicts itself: charge the
+// five and five is over, do not charge them and seven would fit. The
+// duplication argument above survives any baseline, which is why it is the
+// one written down. container/Dockerfile carries the full re-derivation.
+//
+// Both halves of "exactly the ones with no other carrier" have to stay
+// true, and each fails differently. Carrying too few silently reinstates
+// #180 for whichever adapter was dropped, because serve-ui then refuses to
+// start rather than serving the wrong bridge. Carrying too many ships
+// bytes nothing serves, and pushes at a gated image size for nothing.
 func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 	root, carried, err := ImageBundleRoot()
 	if err != nil {
@@ -96,15 +104,15 @@ func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 		t.Error("no adapter selects a bundle out of the image at all, so the carriage this test exists to check was never exercised")
 	}
 
-	// And nothing else is in there. A bundle for a provider that has its
-	// own carrier is about 700 KB of image nobody serves (#635 measured
-	// one at 700,799 bytes on 2026-09-08).
+	// And nothing else is in there. A bundle for a provider that already
+	// has a carrier is a copy of something the recipient receives twice,
+	// and #635 measured one at 700,799 bytes on 2026-09-08.
 	for _, provider := range carried {
 		if _, declared := conf.Providers[provider]; !declared {
 			t.Errorf("the image carries a bundle for %q, which is not a provider this matrix declares", provider)
 		}
 		if provider == "generic" {
-			t.Error("the image carries a generic bundle, which is already compiled into the binary; that is about 700 KB of duplicate against a gated image-size budget")
+			t.Error("the image carries a generic bundle, and the generic bundle is already compiled into the binary in the same image; that is about 700 KB every recipient downloads twice and nothing ever serves from here")
 		}
 	}
 }

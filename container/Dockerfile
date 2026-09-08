@@ -164,21 +164,33 @@ COPY apps/ ./apps/
 # then serves the right bridge from the identical binary, which is what
 # section 3.7 requires.
 #
-# Five, not seven. `generic` is compiled into the binary already and
-# duplicating it here would buy nothing; `ugos` is EPIC D's, and its UPK
-# carries its own. The arithmetic that settled that at #180: seven at
-# roughly 347 KB each would have been about 2.4 MB against a gated 5%
-# image budget of about 2.15 MB, so "ship them all" was never available,
-# and the five came to 1,802,482 bytes.
+# Five, not seven, and the reason is duplication rather than a budget.
+# `generic` is compiled into the binary already, so a sixth directory for
+# it would be bytes nobody serves; `ugos` is EPIC D's, and its UPK carries
+# its own. Those two have a carrier, so the image is not theirs to be.
+# That argument holds whatever the image weighs.
 #
-# Those are #180's numbers and a bundle is no longer that size. Copied
-# back out of the built image on 2026-09-08 (#635), the five directories
-# under /ui/bundles hold 3,503,996 bytes, about 700,799 each. Two things
-# moved: the seven IBM Plex woff2 faces #632 added are 139,744 bytes of
-# every one of them, and the JS chunk grew with EPIC F, G and H. The
-# conclusion outlived the numbers (five fits, seven still would not), but
-# read the ratio rather than the byte counts, and read docs/perf/ for
-# what the image measures today.
+# It is written this way round because the argument that used to be here
+# has stopped working, and #635 caught it still being repeated. #180 chose
+# five by arithmetic: seven bundles at roughly 347 KB each was about
+# 2.4 MB against a gated 5% budget of about 2.15 MB, and the five came to
+# 1,802,482. That reasoning was sound while the recorded baseline was an
+# image with NO bundles in it, so a bundle had to be paid for out of the
+# headroom. It is not sound now. The baseline was re-captured at 69,704,266
+# WITH these five inside it, so the 5% is headroom for whatever comes next
+# and the bundles cannot be charged to it twice.
+#
+# Re-derived on today's measurements the old sum points both ways at once,
+# which is how you can tell it has stopped deciding anything. 5% of
+# 69,704,266 is 3,485,213. The five bundles measure 3,503,996 (about
+# 700,799 each, twice #180's figure: #632 put 139,744 bytes of woff2 in
+# every one and EPIC F, G and H grew the JS chunk), so charging them to the
+# budget puts FIVE over it by 18,783 bytes. Not charging them, which is
+# correct, leaves 3,485,213 of headroom against 1,401,598 for the two
+# missing bundles, so SEVEN would fit with 2,083,615 to spare.
+#
+# So take the count from the paragraph above and the size of the image from
+# docs/perf/. Neither of those numbers is an argument for the other.
 RUN cd ui/shared && npm run build:bundles truenas unraid openmediavault proxmox synology
 
 # LAST, and the order is load-bearing. `build:bundles` runs `npm run
