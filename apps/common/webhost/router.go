@@ -73,6 +73,18 @@ type RouterConfig struct {
 	// setup — the configuration is on disk either way.
 	OnConfigured func(context.Context) error
 
+	// Recorder, when non-nil, is where every action taken through this
+	// API is recorded so an operator can read it (issue #599,
+	// actionlog.go). Nil means nothing is recorded, which is what a
+	// handler test wants and what a host that has not wired one gets:
+	// the API still serves, it is just invisible.
+	//
+	// It is its own field rather than a method on Backend because it is
+	// not part of the read/write seam this package talks to core/
+	// through. A recorder is a place lines go, and a host is free to
+	// wire the same BackupService into both or neither.
+	Recorder ActionRecorder
+
 	BinaryVersion string
 	Commit        string
 }
@@ -160,6 +172,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authMiddleware(cfg.Platform))
+		// After authentication, so a recorded line can name the actor,
+		// and over the WHOLE group, so it covers the refusals that never
+		// reach a handler at all: a CSRF failure and a
+		// destructive-operations denial are exactly the refusals an
+		// operator most needs to see, and neither one gets as far as a
+		// handler body. See actionlog.go for why this is middleware
+		// rather than a line in every handler.
+		r.Use(recordActions(cfg.Recorder))
 
 		r.Get("/system/version", h.systemVersion)
 		r.Get("/system/capabilities", h.systemCapabilities)

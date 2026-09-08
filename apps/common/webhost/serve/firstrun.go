@@ -207,6 +207,7 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 		Gate:          cfg.Gate,
 		FirstRun:      cfg.FirstRun,
 		OnConfigured:  onConfigured,
+		Recorder:      recorderFor(cfg, backend),
 		BinaryVersion: cfg.BinaryVersion,
 		Commit:        cfg.Commit,
 	})
@@ -238,4 +239,28 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 	return StripUntrustedIdentity(gatewayOf(cfg.Platform))(
 		SecurityHeaders(
 			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
+}
+
+// recorderFor resolves where API actions are recorded (issue #599).
+//
+// An explicit Recorder wins; otherwise the backend records for itself if
+// it can, which is every real deployment, because
+// core/service.BackupService implements both seams. Resolving it here
+// rather than making every provider's main() pass it is what stops a
+// provider shipping an API that leaves no trace because somebody forgot a
+// field.
+//
+// A first-run engine has no backend at all until setup completes, so it
+// resolves to nothing and the setup surface records nothing. That is a
+// real gap and it is named in this PR rather than papered over: the
+// terminal on a fresh install shows the first-run flow's own lines only
+// once a backend exists behind it.
+func recorderFor(cfg EngineConfig, backend webhost.BackupServiceClient) webhost.ActionRecorder {
+	if cfg.Recorder != nil {
+		return cfg.Recorder
+	}
+	if recorder, ok := backend.(webhost.ActionRecorder); ok {
+		return recorder
+	}
+	return nil
 }

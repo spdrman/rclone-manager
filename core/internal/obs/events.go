@@ -125,6 +125,25 @@ const (
 	// re-stating a still-unresolved condition on every poll.
 	EventAlert = "alert"
 
+	// EventAPIAction records one action somebody took through the
+	// /api/v1 surface: what was asked, by whom, what came back, and the
+	// `backup-manager` command that would have done the same thing
+	// (issue #599).
+	//
+	// It is the one event in this catalog that is not emitted by the
+	// cycle, and that is the gap it closes. Every step a cycle takes has
+	// been on this list since FR-23, and nothing the Web UI did emitted
+	// anything at all: a connection test returned a sentence to one
+	// caller and vanished, a settings patch left no trace, a refusal
+	// reached a dialog that closed. So an operator watching a button do
+	// nothing could not tell "it refused" from "it failed" from "it was
+	// never wired up", and none of those three left a line anywhere.
+	//
+	// One line per action, refusals included, which is the half that
+	// matters: a refusal is the case where an operator has nothing else
+	// to go on.
+	EventAPIAction = "api_action"
+
 	// EventError is the catch-all for an error that does not already have
 	// a more specific event above attached to it (for example, a failure
 	// reading config, or an unexpected panic recovered at the top of a

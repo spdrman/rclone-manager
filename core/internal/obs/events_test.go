@@ -55,6 +55,7 @@ func TestEventNamesAreStable(t *testing.T) {
 		{"EventStaleBackup", EventStaleBackup, "stale_backup"},
 		{"EventDiskPressure", EventDiskPressure, "disk_pressure"},
 		{"EventAlert", EventAlert, "alert"},
+		{"EventAPIAction", EventAPIAction, "api_action"},
 		{"EventError", EventError, "error"},
 	}
 	seen := make(map[string]string, len(cases))

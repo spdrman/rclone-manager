@@ -76,6 +76,14 @@ type EngineConfig struct {
 	// webhost.NewRouter's own NotYetImplementedGate default.
 	Gate webhost.DestructiveGate
 
+	// Recorder is where every action taken through /api/v1 is recorded so
+	// an operator can read it (issue #599). Left nil, newEngineHandler
+	// uses the Backend itself when it can record, which is the case for
+	// every real deployment: core/service.BackupService implements both
+	// seams. A host that wants the API to leave no trace has to build a
+	// Backend that cannot record, rather than get silence by omission.
+	Recorder webhost.ActionRecorder
+
 	// FirstRun is the setup surface of an instance that may have no
 	// configuration yet (issue #176). Set it, leave Backend nil, and
 	// build the engine with NewFirstRunEngine (firstrun.go) rather than

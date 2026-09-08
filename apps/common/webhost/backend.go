@@ -349,3 +349,10 @@ type BackupServiceClient interface {
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)
+
+// The same assertion for the recorder seam (issue #599, actionlog.go).
+// It is a separate interface from the one above because it is a separate
+// concern: a recorder is a place lines go, not a read or a write this
+// package performs, and a host is free to wire the same BackupService
+// into both, one, or neither.
+var _ ActionRecorder = (*service.BackupService)(nil)
