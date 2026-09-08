@@ -89,6 +89,15 @@ export function toDraft(t: RetentionTierSetting): TierDraft {
  *  alongside. */
 export const CUSTOM_PERIOD = "days";
 
+/** The value of the picker's one unselectable, not-built row (#595).
+ *
+ *  A sentinel rather than "" so it can never be confused with the local
+ *  backup root, which is the row that DOES work and is spelled by naming
+ *  no medium at all. It is never submitted: the option is disabled, and
+ *  the id is not one a `storage_mediums` entry could declare anyway, since
+ *  the config layer requires lower_snake_case starting with a letter. */
+export const NOT_BUILT_LOCAL_VOLUME = "__not_built_local_volume";
+
 /** The chain "Restore default chain" fills the form with, taken from the
  *  schema the server already serves alongside the values rather than
  *  written out here.
@@ -285,6 +294,36 @@ export function TierRow({
               onChange={(e) => onChange({ medium: e.target.value })}
             >
               <option value="">Local backup root</option>
+              {/* The third kind of destination #595 asked for, which does
+                  not exist. It is here, named and disabled, rather than
+                  left off the menu, and both halves of that are the
+                  decision.
+
+                  It cannot be built from here. Local means the backup
+                  set's own local_path and nothing else, `local` is a
+                  reserved medium id a tier may not spell, and the config
+                  layer's medium type set is closed to s3 alone.
+                  transport.MediumTypeLocalDir exists and its own doc says
+                  it is NOT configurable, because "'local' as a MEDIUM
+                  would be a second answer to where local artifacts live",
+                  and MediumType's doc says the set "grows only by an FR-4
+                  architecture decision, never by an import line". A form
+                  is not where that decision gets made.
+
+                  And hiding it would answer the operator worse than this
+                  does. Somebody who came to this picker to send monthly
+                  backups to the second disk in the NAS learns nothing
+                  from a menu that never mentions it, and asks again next
+                  month; a row that says the shape is understood and not
+                  built is a real answer. Its value can never be
+                  submitted: the option is disabled, so the select refuses
+                  it, and a medium id nothing declares would be refused at
+                  config load anyway. */}
+              <option value={NOT_BUILT_LOCAL_VOLUME} disabled>
+                A saved local volume, such as a second hard disk (NOT BUILT: a second local
+                destination is a new medium type, which is an architecture decision rather than
+                a setting)
+              </option>
               {mediums.map((m) => (
                 <option key={m.id} value={m.id} disabled={m.readsRequireRestore}>
                   {m.id +
