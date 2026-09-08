@@ -154,8 +154,8 @@ var contractBindings = map[string]contractBinding{
 	// a bespoke "ok" body would be a second description of a destination
 	// for one call to drift from.
 	"setDefaultStorageMedium": {nil, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3/default"},
-	"setBackupSetEnabled":             {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":            {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	"setBackupSetEnabled":     {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":    {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 
 	// Issue #333. Three operations on one path, which is the point of a
 	// sub-resource: the method is what says whether the policy is being
