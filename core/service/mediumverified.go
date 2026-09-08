@@ -225,20 +225,42 @@ func changesTheDestination(before, after config.StorageMedium) bool {
 	return !reflect.DeepEqual(comparableMedium(before), comparableMedium(after))
 }
 
-// comparableMedium is m with the mark cleared and every empty slice made
-// nil, so two records that differ only in how an absent credential
-// command is spelled compare equal.
+// comparableMedium is m as the CHECK would see it: the mark cleared, the
+// two defaulted classes resolved, and an empty credential command made
+// nil, so two records describing one destination compare equal however
+// each was spelled.
 //
-// The empty-slice half is not a corner case, and comparableSource carries
-// the same fix for the same reason one file over. This product's own write
-// path encodes a medium through yaml.Marshal and reads it back, and a
-// credential rebuilt from a credentials_id has a nil Command where one
-// round-tripped through the file can have an empty one. reflect.DeepEqual
-// tells those apart, so without this every re-save of an unchanged
-// destination would run a network check for a command that is there on
-// neither side.
+// None of the three is a corner case, and each was found rather than
+// guessed at.
+//
+// The classes are the one that would have bitten hardest. config.Load
+// leaves storage_class and upload_verification exactly as the operator
+// wrote them, which is usually not at all, and every read surface reports
+// the RESOLVED value (StorageMediumSummary carries
+// EffectiveStorageClass's answer, on that field's own doc). So an edit
+// form pre-fills "STANDARD" and "readback" against a file that says
+// neither, and a raw comparison would call that a moved destination and
+// run a network check for a pure re-save. That is exactly the case the
+// re-save branch exists to allow: pressing Save on a destination that is
+// currently unreachable. Resolving both sides is also the truthful
+// comparison rather than a convenience, because the class the check has
+// an opinion about is the resolved one: internal/mediumcheck asks the
+// endpoint about the class a move would actually write with.
+//
+// The empty slice is comparableSource's fix for comparableSource's
+// reason, one file over. This product's own write path encodes a medium
+// through yaml.Marshal and reads it back, and a credential rebuilt from a
+// credentials_id has a nil Command where one round-tripped through the
+// file can have an empty one; reflect.DeepEqual tells those apart.
+//
+// The mark is excluded because it is this service's own bookkeeping and
+// not part of the destination. A comparison that saw it would run a
+// network check because the previous check's result had been written
+// down.
 func comparableMedium(m config.StorageMedium) config.StorageMedium {
 	m.ConnectionUnverified = false
+	m.StorageClass = m.EffectiveStorageClass()
+	m.UploadVerification = m.EffectiveUploadVerification()
 	if len(m.Credentials.Command) == 0 {
 		m.Credentials.Command = nil
 	}

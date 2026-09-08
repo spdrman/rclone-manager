@@ -255,6 +255,52 @@ func TestUpdateStorageMedium_AnEditThatMovesNothingRunsNoCheck(t *testing.T) {
 	}
 }
 
+// TestUpdateStorageMedium_AResolvedDefaultIsNotAMovedDestination is the
+// re-save case again, in the shape an edit FORM actually produces, and it
+// is the one that catches a comparison written against the raw record.
+//
+// config.Load leaves storage_class and upload_verification exactly as the
+// operator wrote them, which is usually not at all. Every read surface
+// reports the resolved value, so a form pre-fills "STANDARD" and
+// "readback" against a file that says neither and submits both. A
+// comparison that read those as a moved destination would run a network
+// check on every Save from the destinations card, and would make a
+// currently-unreachable destination impossible to edit at all, which is
+// the exact thing the re-save branch exists to allow.
+func TestUpdateStorageMedium_AResolvedDefaultIsNotAMovedDestination(t *testing.T) {
+	svc, configPath := openTestService(t)
+	spec := unprovableSpec(t, svc, "offsite_s3")
+	spec.SkipConnectionCheck = true
+	if _, err := svc.CreateStorageMedium(context.Background(), spec); err != nil {
+		t.Fatalf("CreateStorageMedium with the check skipped: %v", err)
+	}
+	// The declaration really does leave both keys out, so this case is
+	// about resolution and not about a fixture that wrote them.
+	raw := mustRead(t, configPath)
+	if strings.Contains(raw, "storage_class:") || strings.Contains(raw, "upload_verification:") {
+		t.Fatalf("the fixture wrote a class into the file, so nothing here is resolved:\n%s", raw)
+	}
+
+	// What the destinations card reads back, and what its edit dialog
+	// therefore submits.
+	shown, err := svc.GetStorageMedium(context.Background(), "offsite_s3")
+	if err != nil {
+		t.Fatalf("GetStorageMedium: %v", err)
+	}
+	if shown.StorageClass == "" || shown.UploadVerification == "" {
+		t.Fatalf("the read surface reports no resolved class, so this case proves nothing: %+v", shown)
+	}
+
+	resave := spec
+	resave.SkipConnectionCheck = false
+	resave.Credentials = StorageMediumCredentials{}
+	resave.StorageClass = shown.StorageClass
+	resave.UploadVerification = shown.UploadVerification
+	if _, err := svc.UpdateStorageMedium(context.Background(), resave); err != nil {
+		t.Fatalf("re-saving the destination exactly as the read surface reports it was refused, so an edit form cannot press Save on a destination that is currently unreachable: %v", err)
+	}
+}
+
 // TestStorageMediumMark_IsNeverTakenFromTheLocalHardDrive keeps #622's
 // synthesised entry out of #636 entirely.
 //
