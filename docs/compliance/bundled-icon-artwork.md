@@ -16,6 +16,20 @@ change that put them there.
   SVG that release ships, reproduced verbatim and unmodified. Nothing has
   been redrawn, recoloured in the artwork itself, or edited.
 
+## Where the attribution travels
+
+Three places, because the readers are three different people.
+
+This file is the full record, for somebody who has the repository. The
+built page carries a shorter version of the same thing in an HTML comment
+in the web UI's index.html, which is what reaches somebody holding only
+the artifact: CC BY 4.0 section 3(a) is about that reader, and a
+JavaScript comment cannot serve them, because minification removes
+comments and an exported constant nothing imports is dropped by the
+bundler. And Font Awesome's own embedded notice sits beside the path data
+in the icon module, because the licence asks in as many words that those
+comments not be actively removed from files.
+
 Font Awesome Free is three licences at once and only one of them applies
 here. The icons are CC BY 4.0; the webfonts are SIL OFL 1.1 and the code
 is MIT, and neither of those ships in this product, because no Font
@@ -77,8 +91,8 @@ added.
 recipient of a built artifact looks for third-party attribution. This
 artwork is not in it yet.
 
-That is a gap in the generator rather than an oversight.
-`NOTICE` is generated, byte for byte, by `distribution/packaging` from two
+That is a gap in the generator rather than an oversight. `NOTICE` is
+generated, byte for byte, by `distribution/packaging` from two
 inputs: the Go module graph as `go list -deps` reports it, and the
 production entries of `ui/shared/package-lock.json`. Vendored artwork is
 in neither, because it is not a module and not a package: it is source
