@@ -578,10 +578,11 @@ function DockLog({
   dropped: boolean;
   preamble: string;
   /** The actions that announced themselves and have not said how they
-   *  went (issue #625). Drawn under the scrollback rather than in it,
-   *  because it is a statement about NOW rather than a line that
-   *  happened at a moment, and a line inside a following log would
-   *  scroll away from the reader the instant anything else arrived. */
+   *  went (issue #625). Drawn at the foot of the scrollback rather than
+   *  among the lines, because it is a statement about NOW rather than
+   *  something that happened at a moment: it belongs after the last
+   *  thing that did happen, and it goes away by itself when the
+   *  completion it is waiting for arrives. */
   unfinished: UnfinishedAction[];
 }) {
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -658,8 +659,15 @@ function DockLog({
             <DockLine key={entry.event.sequence + "-" + i} event={entry.event} viewer={viewer} />
           )
         )}
+        {/* Inside the scrollback and at the FOOT of it, which is where
+            the log already follows to, so a reader watching the tail is
+            looking straight at it. Below the scroller it would sit
+            outside the height the shell reserves for this panel (see
+            dockReservedHeight) and be clipped by the section's own
+            maxHeight, which for a notice about something that has gone
+            quiet is the worst possible place to put it. */}
+        <UnfinishedActionsNotice actions={unfinished} />
       </div>
-      <UnfinishedActionsNotice actions={unfinished} />
     </>
   );
 }
