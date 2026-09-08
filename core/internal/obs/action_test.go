@@ -195,6 +195,47 @@ func TestFailedStatesTheErrorAndTheOutcomeTogether(t *testing.T) {
 	}
 }
 
+// TestCompletedStatesAnOutcomeWithNoStartToPairItWith is the honest half
+// of a pair, for work that was over before anything could report it. An
+// /api/v1 request is the case: the status IS the outcome, and a start
+// line emitted at the recorder would be announcing something that had
+// already happened.
+func TestCompletedStatesAnOutcomeWithNoStartToPairItWith(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+
+	l.Completed(context.Background(), OutcomeSuccess, "api_action", "post /operations")
+
+	got := sink.all()[0]
+	if got.Outcome != OutcomeSuccess {
+		t.Errorf("the line states outcome %q, want %q", got.Outcome, OutcomeSuccess)
+	}
+	if got.ActionID != "" {
+		t.Errorf("an unpaired completion carries action id %q, which would report as a start nothing will ever close", got.ActionID)
+	}
+}
+
+// TestCompletedAtLetsAnEmitterBeQuieterThanItsOutcome is the exception
+// this package's own convention needs. It reserves LevelError for the
+// manager failing at something, and a check that correctly reports the
+// far side as unreachable is the manager working exactly as designed: an
+// error outcome logged as a warning is two right answers to two
+// questions, not one line contradicting itself.
+func TestCompletedAtLetsAnEmitterBeQuieterThanItsOutcome(t *testing.T) {
+	sink := &recordingSink{}
+	l := New(nil, LevelDebug).WithSink(sink)
+
+	l.CompletedAt(context.Background(), LevelWarn, OutcomeError, "connection_test", "connection test: host_key failed")
+
+	got := sink.all()[0]
+	if got.Level != LevelWarn {
+		t.Errorf("the line was emitted at %v, and its emitter asked for %v", got.Level, LevelWarn)
+	}
+	if got.Outcome != OutcomeError {
+		t.Errorf("the line states outcome %q, want %q; the whole point of the pair is that the two say different things", got.Outcome, OutcomeError)
+	}
+}
+
 // TestAnActionOnASilentLoggerIsSilentRatherThanAPanic holds this package's
 // standing rule at the new surface: a nil *Logger is a safe no-op on
 // every method, so a Deps struct that never got one keeps working. A

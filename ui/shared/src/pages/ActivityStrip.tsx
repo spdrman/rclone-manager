@@ -42,15 +42,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { BackupSet } from "@shared/types/backup";
-import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 import { bytes, clock, rate, relativeAge } from "@shared/utilities/format";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import type { StatusTone } from "@shared/components/StatusBadge";
 
 /** How each line is coloured in the log. It is a display decision made
- *  here on purpose: the service carries the engine's own level and event
- *  name and composes no sentence, so that a second client is free to say
- *  something else about the same moment. */
+ *  here on purpose: the service carries the engine's own level, outcome
+ *  and event name and composes no sentence, so that a second client is
+ *  free to say something else about the same moment. */
 export type LineTone = "info" | "ok" | "warn" | "error";
 
 export interface ActivityLine {
@@ -118,32 +118,78 @@ function pairs(fields: Record<string, string>): string {
 }
 
 /**
+ * The tone a line takes before any event-specific rendering touches it
+ * (issue #625).
+ *
+ * This is the whole of the fix. The engine states how the operation a line
+ * reports WENT, so the tone is read off that; the level is the fallback
+ * for a line that states no outcome, which is a start or an ordinary
+ * progress note. What it replaces was a reconstruction: about eight rules
+ * keyed on event names, on which lifecycle state a transition landed in
+ * and on `outcome` fields, every one of them shaped "if the tone is still
+ * info, make it ok". That reads fine for the fifteen event names somebody
+ * remembered to write a case for and silently draws everything else grey,
+ * so a new feature reporting a success looked exactly like a note about
+ * nothing, and no test anywhere failed when it did.
+ *
+ * The default is now correct rather than merely neutral: an event name
+ * this build has never heard of, reporting a success, is green, and one
+ * reporting an error is red, with nobody writing a case for it.
+ *
+ * An outcome outranks the level when the two differ, and they are allowed
+ * to differ. A connection test that correctly reports a host as
+ * unreachable is logged as a warning, because the engine reserves its
+ * error severity for the manager failing at something rather than for
+ * correctly reporting a problem it found; the OUTCOME of that step is
+ * still a failure, and a failure is what an operator has to see.
+ */
+function toneOf(e: SetActivityEvent): LineTone {
+  switch (e.outcome) {
+    case "success":
+      return "ok";
+    case "warning":
+      return "warn";
+    case "error":
+      return "error";
+    case "info":
+      return "info";
+  }
+  return e.level === "error" ? "error" : e.level === "warn" ? "warn" : "info";
+}
+
+/**
  * One event as an operator reads it.
  *
- * The service deliberately sends the engine's own event name, level and
- * fields and composes nothing, so the composing happens here. An event
- * name this build has no rendering for falls back to its message plus its
- * fields, which is a worse line rather than a broken one, and is what
- * keeps a new event in the engine from needing a UI release to be visible.
+ * The service deliberately sends the engine's own event name, level,
+ * outcome and fields and composes nothing, so the composing happens here.
+ * An event name this build has no rendering for falls back to its message
+ * plus its fields, which is a worse line rather than a broken one, and is
+ * what keeps a new event in the engine from needing a UI release to be
+ * visible. Since #625 it is a worse line with the RIGHT COLOUR, which is
+ * what makes that fallback worth relying on rather than merely surviving.
+ *
+ * The cases below are down to wording and two derivations. Everything
+ * that used to reach in here to fix up a tone is gone, because the engine
+ * says it: a cycle end, a validation, a commit and a connection-test step
+ * all state their own outcome now. What is left is `lifecycle_transition`,
+ * where the fact on the wire is a state name and which resting states
+ * deserve to read as good news is a decision about a screen (see
+ * SETTLED_STATES, and internal/obs's own note on why it declines to make
+ * it), and `browser_notice`, which this browser composed and the engine
+ * never saw.
  */
 export function activityLine(e: SetActivityEvent): ActivityLine {
   const f = e.fields;
   const name = artifactName(f.artifact);
   let text: string;
-  let tone: LineTone = e.level === "error" ? "error" : e.level === "warn" ? "warn" : "info";
+  let tone: LineTone = toneOf(e);
 
   switch (e.event) {
     case "cycle_start":
       text = "cycle started";
       break;
     case "cycle_end":
-      if (f.error) {
-        text = "cycle finished with an error: " + f.error;
-        tone = tone === "info" ? "error" : tone;
-      } else {
-        text = "cycle finished";
-        tone = tone === "info" ? "ok" : tone;
-      }
+      text = f.error ? "cycle finished with an error: " + f.error : "cycle finished";
       break;
     case "discovery":
       text = "discovery complete: " + (f.discovered ?? "?") + " artifacts, " + (f.pending ?? "?") + " pending";
@@ -165,17 +211,13 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       text = (f.alg ?? "hash") + " " + (f.hash ?? "") + " for " + name;
       break;
     case "validation":
-      if (f.passed === "false") {
-        text = "validation failed: " + name + (f.detail ? " (" + f.detail + ")" : "");
-        tone = tone === "info" ? "warn" : tone;
-      } else {
-        text = "verified " + name;
-        if (tone === "info") tone = "ok";
-      }
+      text =
+        f.passed === "false"
+          ? "validation failed: " + name + (f.detail ? " (" + f.detail + ")" : "")
+          : "verified " + name;
       break;
     case "commit":
       text = "committed " + name;
-      if (tone === "info") tone = "ok";
       break;
     case "remote_delete":
       text = f.error ? "remote delete failed: " + name + " (" + f.error + ")" : "remote source deleted: " + name;
@@ -203,11 +245,13 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       // carry its own indented lines (the two fingerprints in a host key
       // mismatch), so it is joined below rather than flattened.
       const step = (f.step ?? "?").padEnd(13);
-      const outcome = f.outcome ?? "?";
-      text = step + outcome + (f.detail ? "  " + f.detail : "");
-      if (outcome === "failed") tone = "error";
-      else if (outcome === "skipped") tone = tone === "info" ? "warn" : tone;
-      else if (outcome === "passed" && tone === "info") tone = "ok";
+      // The step's own finer word (passed, skipped, failed), which is
+      // what an operator reads across the column. The COLOUR comes from
+      // the line's stated outcome like every other line's does, and the
+      // two are the same fact at two grains rather than two answers: the
+      // field is called step_outcome and not outcome precisely so the
+      // engine's own four-value vocabulary keeps that key to itself.
+      text = step + (f.step_outcome ?? "?") + (f.detail ? "  " + f.detail : "");
       break;
     }
     case "browser_notice": {
@@ -227,7 +271,6 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       if (f.correlation_id) parts.push("  correlation id " + f.correlation_id);
       if (f.command) parts.push(f.command);
       text = parts.join("\n");
-      if (f.outcome && f.outcome !== "ok" && tone === "info") tone = "warn";
       break;
     }
     case "api_action": {
@@ -456,6 +499,35 @@ function stepSentence(activity: SetActivity, stale: boolean): { lead: string; su
     };
   }
   return { lead: "Idle", subject: null, trail: "no cycle has run since this service started" };
+}
+
+/**
+ * The line above the log for an action that announced itself and has not
+ * said how it went (issue #625).
+ *
+ * It is drawn where somebody is already looking rather than on a page
+ * they would have to go and find, because the whole failure it addresses
+ * is an operator who pressed something and cannot tell whether anything
+ * is happening. That is also why it says how long it has been quiet
+ * rather than deciding for them: an action four seconds old is a running
+ * one and an action four hours old is a stuck one, both render the same
+ * way here, and the difference is in a number the reader is far better
+ * placed to judge than this panel is.
+ *
+ * A warning tone rather than an error one, on purpose. Nothing has gone
+ * wrong yet; something has failed to say that it has not.
+ */
+export function UnfinishedActionsNotice({ actions }: { actions: UnfinishedAction[] }) {
+  if (actions.length === 0) return null;
+  return (
+    <div style={{ padding: "0 var(--space-5) var(--space-3)", color: "var(--warn)", fontSize: "var(--text-xs)" }}>
+      {actions.map((a) => (
+        <div key={a.actionId}>
+          {a.action} started {relativeAge(a.startedAt)} and has not reported an outcome.
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ActivityLogView({ events }: { events: SetActivityEvent[] }) {
@@ -705,6 +777,8 @@ export function ActivityStrip({
           Earlier lines are not held here any more. The full record is on the Activity page.
         </div>
       ) : null}
+
+      <UnfinishedActionsNotice actions={activity.unfinishedActions ?? []} />
 
       <ActivityToolbar events={activity.events} open={open} onToggle={() => setOpen((v) => !v)} setId={activity.setId} />
       {open ? <ActivityLogView events={activity.events} /> : null}

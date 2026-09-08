@@ -46,6 +46,38 @@ import (
 // rather than inventing parallel names, so a reader who already knows this
 // codebase's domain vocabulary does not have to learn a second one just for
 // the logs.
+//
+// # Which of these state an outcome, and which do not
+//
+// Every event below that reports a COMPLETION states how it went, as an
+// Outcome (action.go) rather than as something a client works out from
+// the absence of an error field. That is most of this list: a cycle end,
+// a transfer, a commit, a validation, a remote delete, a retention
+// verdict, a retry, an alert.
+//
+// Three kinds deliberately state nothing, and the absence is the point
+// rather than an oversight.
+//
+// Startup and RcloneVersion are announcements. Nothing was attempted, so
+// there is no way it went.
+//
+// Hash is a measurement. A digest is neither good nor bad news; what is
+// done with it later is.
+//
+// LifecycleTransition is a state change, not the completion of an
+// action, and this is the one worth saying out loud because it is the
+// event a reader most expects to find an outcome on. An artifact reaching
+// VERIFIED is good news and an artifact reaching FAILED is bad news, but
+// WHICH resting states in the FR-10 machine deserve to read as good news
+// is a decision about a screen: ActivityStrip's own SETTLED_STATES set
+// says so at length, differs from internal/retention's managed-complete
+// set at both ends, and is registered as differing from it in that
+// package's managedcompleteprose_test.go. Putting that judgement in here
+// would move a display decision into the engine's vocabulary, which is
+// the thing service/activity.go correctly refuses to do, and it would put
+// this package in the business of knowing the lifecycle's state names.
+// The transition carries from and to, which is the fact; what a log makes
+// of them is the client's.
 const (
 	// EventStartup marks the process starting: binary version, commit and
 	// the Go toolchain it was built with.
@@ -187,8 +219,16 @@ func (l *Logger) RcloneVersion(ctx context.Context, version string) {
 // id for this pass (for example a timestamp or a counter); this package
 // does not mint one itself, since deciding what identifies a cycle is the
 // caller's business, not this package's.
+// The cycle id is also the ACTION id both lines carry, which is what
+// pairs them by something other than the habit of spelling one event
+// cycle_start and the other cycle_end (issue #625). Nothing else about
+// either line changes, and no caller has to do anything: the two halves
+// were already given the same cycle id, so the pairing was sitting there
+// unused. What it buys is that a reader can now notice a cycle that
+// announced itself and never reported an outcome, which is the state an
+// operator most needs named and the one nothing could see.
 func (l *Logger) CycleStart(ctx context.Context, cycleID string) {
-	l.emit(ctx, LevelInfo, EventCycleStart, "cycle starting",
+	l.emitMarked(ctx, LevelInfo, mark{action: ActionCycle, actionID: cycleID}, EventCycleStart, "cycle starting",
 		slog.String("cycle_id", cycleID),
 	)
 }
@@ -200,18 +240,18 @@ func (l *Logger) CycleStart(ctx context.Context, cycleID string) {
 // an operator's alerting should be able to key off of by level alone,
 // without also having to know to check for an error field's presence.
 func (l *Logger) CycleEnd(ctx context.Context, cycleID string, duration time.Duration, err error) {
-	level := LevelInfo
+	outcome := OutcomeSuccess
 	msg := "cycle finished"
 	attrs := []slog.Attr{
 		slog.String("cycle_id", cycleID),
 		slog.Duration("duration", duration),
 	}
 	if err != nil {
-		level = LevelError
+		outcome = OutcomeError
 		msg = "cycle finished with an error"
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, level, EventCycleEnd, msg, attrs...)
+	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome, action: ActionCycle, actionID: cycleID}, EventCycleEnd, msg, attrs...)
 }
 
 // Discovery logs EventDiscovery: a summary of one discovery pass over
@@ -221,7 +261,11 @@ func (l *Logger) CycleEnd(ctx context.Context, cycleID string, duration time.Dur
 // Result's Discovered, AlreadyKnown, Pending, Rejected, Conflicts and
 // Errors fields respectively).
 func (l *Logger) Discovery(ctx context.Context, backupSet string, discovered, alreadyKnown, pending, rejected, conflicts, errored int) {
-	l.emit(ctx, LevelInfo, EventDiscovery, "discovery pass complete",
+	outcome := OutcomeInfo
+	if errored > 0 {
+		outcome = OutcomeWarning
+	}
+	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, EventDiscovery, "discovery pass complete",
 		slog.String("backup_set", backupSet),
 		slog.Int("discovered", discovered),
 		slog.Int("already_known", alreadyKnown),
@@ -264,7 +308,7 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 // FR-35, and it stays honest because false is exactly what "no copy-time
 // checksum was recorded" should read as.
 func (l *Logger) TransferStats(ctx context.Context, artifact string, bytesTransferred int64, duration time.Duration, checksummed bool) {
-	l.emit(ctx, LevelInfo, EventTransferStats, "transfer complete",
+	l.emitMarked(ctx, LevelInfo, mark{outcome: OutcomeSuccess}, EventTransferStats, "transfer complete",
 		slog.String("artifact", artifact),
 		slog.Int64("bytes_transferred", bytesTransferred),
 		slog.Duration("duration", duration),
@@ -291,9 +335,9 @@ func (l *Logger) Hash(ctx context.Context, artifact, alg, hash string) {
 // validator did its job correctly; it found something wrong with the
 // content, which is a successful check, not a system failure).
 func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, detail string) {
-	level := LevelInfo
+	outcome := OutcomeSuccess
 	if !passed {
-		level = LevelWarn
+		outcome = OutcomeWarning
 	}
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
@@ -302,7 +346,7 @@ func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, d
 	if detail != "" {
 		attrs = append(attrs, slog.String("detail", detail))
 	}
-	l.emit(ctx, level, EventValidation, "validation result", attrs...)
+	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, EventValidation, "validation result", attrs...)
 }
 
 // Commit logs EventCommit for FR-14's durable local commit: localPath is
@@ -311,7 +355,7 @@ func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, d
 // a credential, so it is logged in the clear; it is what durable commit
 // actually IS, from an audit-trail standpoint.
 func (l *Logger) Commit(ctx context.Context, artifact, localPath string) {
-	l.emit(ctx, LevelInfo, EventCommit, "durable commit complete",
+	l.emitMarked(ctx, LevelInfo, mark{outcome: OutcomeSuccess}, EventCommit, "durable commit complete",
 		slog.String("artifact", artifact),
 		slog.String("local_path", localPath),
 	)
@@ -322,18 +366,18 @@ func (l *Logger) Commit(ctx context.Context, artifact, localPath string) {
 // credential); err is the deletion attempt's outcome, nil for success. A
 // non-nil err logs at LevelError.
 func (l *Logger) RemoteDelete(ctx context.Context, artifact, remotePath string, err error) {
-	level := LevelInfo
+	outcome := OutcomeSuccess
 	msg := "remote source deleted"
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
 		slog.String("remote_path", remotePath),
 	}
 	if err != nil {
-		level = LevelError
+		outcome = OutcomeError
 		msg = "remote delete failed"
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, level, EventRemoteDelete, msg, attrs...)
+	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, EventRemoteDelete, msg, attrs...)
 }
 
 // Reconciliation logs EventReconciliation for one FR-17 reconciliation
@@ -343,7 +387,7 @@ func (l *Logger) RemoteDelete(ctx context.Context, artifact, remotePath string, 
 // about it (for example "advance_to_complete", "quarantine_local",
 // "resume_transfer").
 func (l *Logger) Reconciliation(ctx context.Context, artifact, scenario, action string) {
-	l.emit(ctx, LevelInfo, EventReconciliation, "reconciliation decision",
+	l.emitMarked(ctx, LevelInfo, mark{outcome: OutcomeInfo}, EventReconciliation, "reconciliation decision",
 		slog.String("artifact", artifact),
 		slog.String("scenario", scenario),
 		slog.String("action", action),
@@ -355,7 +399,7 @@ func (l *Logger) Reconciliation(ctx context.Context, artifact, scenario, action 
 // "monthly", "protected", or "" for none); decision is the resulting policy
 // action ("keep" or "delete").
 func (l *Logger) Retention(ctx context.Context, artifact, backupSet, tier, decision string) {
-	l.emit(ctx, LevelInfo, EventRetention, "retention decision",
+	l.emitMarked(ctx, LevelInfo, mark{outcome: OutcomeInfo}, EventRetention, "retention decision",
 		slog.String("artifact", artifact),
 		slog.String("backup_set", backupSet),
 		slog.String("tier", tier),
@@ -391,7 +435,7 @@ func (l *Logger) Retention(ctx context.Context, artifact, backupSet, tier, decis
 // write one of these per dashboard poll for as long as the set stayed
 // broken, which is how a real signal gets filtered out.
 func (l *Logger) RetentionHold(ctx context.Context, backupSet, reason string) {
-	l.emit(ctx, LevelWarn, EventRetentionHold, "retention held: no confirmed copy of this backup set's last known good",
+	l.emitMarked(ctx, LevelWarn, mark{outcome: OutcomeWarning}, EventRetentionHold, "retention held: no confirmed copy of this backup set's last known good",
 		slog.String("backup_set", backupSet),
 		slog.String("reason", reason),
 	)
@@ -415,7 +459,7 @@ func (l *Logger) Retry(ctx context.Context, op string, attempt int, category str
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, LevelWarn, EventRetry, "retrying after a transient failure", attrs...)
+	l.emitMarked(ctx, LevelWarn, mark{outcome: OutcomeWarning}, EventRetry, "retrying after a transient failure", attrs...)
 }
 
 // StaleBackup logs EventStaleBackup: backupSet's newest known-good restore
@@ -423,7 +467,7 @@ func (l *Logger) Retry(ctx context.Context, op string, attempt int, category str
 // stale_after). This always logs at LevelWarn, since by definition it only
 // ever fires once age has already exceeded threshold.
 func (l *Logger) StaleBackup(ctx context.Context, backupSet string, age, threshold time.Duration) {
-	l.emit(ctx, LevelWarn, EventStaleBackup, "backup set is stale",
+	l.emitMarked(ctx, LevelWarn, mark{outcome: OutcomeWarning}, EventStaleBackup, "backup set is stale",
 		slog.String("backup_set", backupSet),
 		slog.Duration("age", age),
 		slog.Duration("threshold", threshold),
@@ -443,7 +487,7 @@ func (l *Logger) StaleBackup(ctx context.Context, backupSet string, age, thresho
 // it detected. A delivery that FAILED is logged through Error instead, by
 // internal/alert, since that one is the manager failing.
 func (l *Logger) Alert(ctx context.Context, kind, backupSet, detail string) {
-	l.emit(ctx, LevelWarn, EventAlert, "proactive alert delivered",
+	l.emitMarked(ctx, LevelWarn, mark{outcome: OutcomeWarning}, EventAlert, "proactive alert delivered",
 		slog.String("alert_kind", kind),
 		slog.String("backup_set", backupSet),
 		slog.String("detail", detail),
@@ -468,11 +512,11 @@ func (l *Logger) Alert(ctx context.Context, kind, backupSet, detail string) {
 // test has to catch rather than a reviewer noticing by eye. See
 // TestDiskPressureEventDoesNotShadowSeverityLevel.
 func (l *Logger) DiskPressure(ctx context.Context, path string, freeBytes, totalBytes int64, threshold string) {
-	sevLevel := LevelWarn
+	outcome := OutcomeWarning
 	if threshold == "critical" {
-		sevLevel = LevelError
+		outcome = OutcomeError
 	}
-	l.emit(ctx, sevLevel, EventDiskPressure, "disk pressure threshold crossed",
+	l.emitMarked(ctx, outcome.Level(), mark{outcome: outcome}, EventDiskPressure, "disk pressure threshold crossed",
 		slog.String("path", path),
 		slog.Int64("free_bytes", freeBytes),
 		slog.Int64("total_bytes", totalBytes),
@@ -492,7 +536,7 @@ func (l *Logger) DiskPressure(ctx context.Context, path string, freeBytes, total
 // is too late; a Secret must be wrapped where it is read (see secret.go),
 // not where it is logged.
 func (l *Logger) Error(ctx context.Context, op string, err error) {
-	l.emit(ctx, LevelError, EventError, "error",
+	l.emitMarked(ctx, LevelError, mark{outcome: OutcomeError}, EventError, "error",
 		slog.String("op", op),
 		slog.String("error", err.Error()),
 	)

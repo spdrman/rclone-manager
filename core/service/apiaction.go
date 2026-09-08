@@ -62,7 +62,7 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 		return
 	}
 
-	level, message := apiActionLevelAndMessage(action)
+	outcome, message := apiActionOutcomeAndMessage(action)
 	attrs := []slog.Attr{
 		slog.String("actor", action.Actor),
 		slog.String("route", action.Method+" /api/v1"+action.Route),
@@ -126,28 +126,43 @@ func (b *BackupService) RecordAPIAction(ctx context.Context, action cliecho.APIA
 		}
 	}
 
-	b.logger.Event(ctx, level, obs.EventAPIAction, message, attrs...)
+	// Completed rather than Event, because this line IS a completion: the
+	// request has been served by the time this recorder is reached, and
+	// the status code is how it went (issue #625). It is deliberately
+	// the unpaired half of obs's start-and-completion shape, since a
+	// start line emitted here would be announcing something that had
+	// already happened. Work an action KICKS OFF that takes real time,
+	// a cycle most of all, is bracketed where that work runs.
+	b.logger.Completed(ctx, outcome, obs.EventAPIAction, message, attrs...)
 }
 
-// apiActionLevelAndMessage decides how loudly the line is emitted and what
-// it says.
+// apiActionOutcomeAndMessage decides how the action went and what the line
+// says.
 //
-// The level is the status, because that is what the emitter knows: a
+// The outcome is the status, because that is what the emitter knows: a
 // refusal an operator caused (a 4xx) is a warning, a failure this process
-// caused (a 5xx) is an error, and everything else is a note. Nothing here
-// composes the operator-facing sentence beyond a plain summary; what a
-// moment is worth calling belongs to whichever client is presenting it,
-// which is the same argument liveactivity.go already makes for every other
-// event on this feed.
-func apiActionLevelAndMessage(action cliecho.APIAction) (obs.Level, string) {
+// caused (a 5xx) is an error, and anything that was served is a success.
+// That last one is the value there was no way to say before: every action
+// somebody took in the Web UI and that WORKED arrived on the feed at info
+// and read as a neutral note, indistinguishable from a line about nothing
+// in particular, so the surface that exists to tell an operator their
+// button did something told them only that something had been mentioned.
+//
+// The level follows from the outcome (obs.Outcome.Level) rather than being
+// picked separately here, so the two can never tell different stories
+// about one request. Nothing here composes the operator-facing sentence
+// beyond a plain summary; what a moment is worth CALLING belongs to
+// whichever client is presenting it, which is the same argument
+// liveactivity.go already makes for every other event on this feed.
+func apiActionOutcomeAndMessage(action cliecho.APIAction) (obs.Outcome, string) {
 	verb := strings.ToLower(action.Method)
 	switch {
 	case action.Status >= 500:
-		return obs.LevelError, verb + " " + action.Route + " failed: " + statusWords(action)
+		return obs.OutcomeError, verb + " " + action.Route + " failed: " + statusWords(action)
 	case action.Status >= 400:
-		return obs.LevelWarn, verb + " " + action.Route + " refused: " + statusWords(action)
+		return obs.OutcomeWarning, verb + " " + action.Route + " refused: " + statusWords(action)
 	default:
-		return obs.LevelInfo, verb + " " + action.Route
+		return obs.OutcomeSuccess, verb + " " + action.Route
 	}
 }
 

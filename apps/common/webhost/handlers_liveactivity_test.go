@@ -386,6 +386,12 @@ func TestLiveActivity_ScopesAndBasesAreExactlyTheContractsEnums(t *testing.T) {
 		// drifts, and this feed is the second place it is written down.
 		{"LiveActivitySet", "stage", service.OperationStages},
 		{"LiveActivitySet", "outcome", service.LiveActivityOutcomes},
+		// How an EVENT went, which is a different vocabulary from how a
+		// set's pass ended one row up, and registered here for the same
+		// reason: internal/obs owns it, the contract writes it down a
+		// second time, and a closed vocabulary written down twice is one
+		// that drifts (issue #625).
+		{"LiveActivityEvent", "outcome", service.LiveActivityEventOutcomes},
 	} {
 		declared := doc.Components.Schemas[c.schema].Properties[c.property].Enum
 		if len(declared) == 0 {

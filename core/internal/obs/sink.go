@@ -59,6 +59,22 @@ type Record struct {
 	Event   string
 	Message string
 	Fields  []Field
+
+	// Outcome is how the operation this line reports WENT, stated by the
+	// emitter rather than re-derived by whoever is drawing the line
+	// (issue #625). Empty on an ordinary note and on a start, which is
+	// what makes an absence meaningful rather than a default. See
+	// action.go for why this is not a fifth Level, and for why stating it
+	// does not reverse activity.go's rule about the durable log.
+	Outcome Outcome
+
+	// Action and ActionID pair a start with its completion. Both are
+	// empty on every line that is neither. A line carrying an ActionID
+	// and no Outcome is a start; one carrying both is that start's
+	// completion, and a start still held with no completion behind it is
+	// an action that announced itself and went quiet.
+	Action   string
+	ActionID string
 }
 
 // Sink receives every event a Logger emits.

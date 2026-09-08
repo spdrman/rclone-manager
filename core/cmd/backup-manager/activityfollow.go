@@ -267,16 +267,26 @@ func followSeverityRank(level string) int {
 	return severityInfo
 }
 
-// formatFollowEvent is one line: when, how loudly, what happened, and the
-// fields the emitter attached, in the order it attached them.
+// formatFollowEvent is one line: when, how loudly, how it went, what
+// happened, and the fields the emitter attached, in the order it attached
+// them.
 //
 // The fields are printed rather than summarised because they are the whole
 // content of most events (which artifact, which backup set, how many
 // bytes), and they are already redacted on the way to the wire, so nothing
 // here has to decide what is safe to show.
+//
+// The outcome gets a column of its own rather than being left among the
+// fields, because it is the answer to the question somebody following a
+// terminal is actually asking (issue #625), and because the two surfaces
+// have to tell the same story: the browser's dock colours a line by this
+// value, and a command line that buried it would be a second, worse
+// account of the same moment. A line stating none gets spaces, so the
+// event names still line up in their column and a completion stands out
+// from the notes around it by having something in that space at all.
 func formatFollowEvent(e apicontract.LiveActivityEvent) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %-5s %-28s %s", followClock(e.At), strings.ToUpper(e.Level), e.Event, e.Message)
+	fmt.Fprintf(&b, "%s  %-5s %-7s %-28s %s", followClock(e.At), strings.ToUpper(e.Level), e.Outcome, e.Event, e.Message)
 	for _, f := range e.Fields {
 		fmt.Fprintf(&b, " %s=%s", f.Key, f.Value)
 	}

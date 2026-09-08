@@ -95,11 +95,24 @@ function connectionTestEvents(): SetActivityEvent[] {
   return steps.map(([step, outcome, category, detail], i) => ({
     sequence: 100 + i,
     at: "2026-09-07T09:41:0" + i + "Z",
-    level: outcome === "failed" ? "warn" : "info",
+    level: outcome === "passed" ? "info" : "warn",
     event: "connection_test",
     scope: "set",
+    // The step states how it went in the engine's own four-value
+    // vocabulary and keeps its finer word in step_outcome, which is the
+    // shape recordConnectionTest emits since issue #625. The two field
+    // names are not interchangeable: `outcome` is the reserved key the
+    // record's own mark is written under, and a step supplying a second
+    // value there is the duplicate-key bug that rule exists to stop.
+    outcome: outcome === "passed" ? "success" : outcome === "skipped" ? "warning" : "error",
     message: "connection test: " + step + " " + outcome,
-    fields: { backup_set: "production/postgres-primary", step, outcome, detail, ...(category ? { category } : {}) }
+    fields: {
+      backup_set: "production/postgres-primary",
+      step,
+      step_outcome: outcome,
+      detail,
+      ...(category ? { category } : {})
+    }
   }));
 }
 

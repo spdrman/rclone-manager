@@ -277,7 +277,7 @@ func TestTestBackupSetConnection_PutsEveryStepOnThatSetsFeed(t *testing.T) {
 			switch f.Key {
 			case "step":
 				step = f.Value
-			case "outcome":
+			case "step_outcome":
 				outcome = f.Value
 			}
 		}

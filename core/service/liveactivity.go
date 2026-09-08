@@ -217,6 +217,80 @@ type LiveActivityEvent struct {
 	Scope    string
 	Message  string
 	Fields   []LiveActivityField
+
+	// Outcome is how the operation this line reports WENT, one of the
+	// LiveActivityEventOutcome constants, empty when the line states none
+	// (issue #625).
+	//
+	// It is not a second spelling of Level and it is carried for the
+	// reason Level is: the emitter stated it. There is no "success"
+	// severity and there cannot be one, because a level is an ordering
+	// every reader treats as a threshold, so before this field existed a
+	// completion that went well arrived at info and was indistinguishable
+	// from a note. Every client that wanted to draw one as good news was
+	// re-deriving it from event names and lifecycle state values, and
+	// anything the derivation did not recognise silently stayed neutral.
+	//
+	// Absent is a real answer and not a default. A start has not gone any
+	// way yet, and an ordinary progress note reports no operation at all.
+	Outcome string
+
+	// Action and ActionID pair a start with its completion, structurally
+	// rather than by the habit of spelling one event cycle_start and the
+	// other cycle_end.
+	//
+	// Both are empty on every line that is neither half of a pair. A line
+	// carrying an ActionID and no Outcome is a start; one carrying both
+	// is that start's completion. That is what lets this feed report an
+	// action that announced itself and then went quiet, which is the
+	// state an operator most needs named and the one nothing could see.
+	Action   string
+	ActionID string
+}
+
+// LiveActivityEventOutcomes lists every outcome an event on this feed can
+// state, in the order api/v1/openapi.json declares them.
+//
+// It is internal/obs's own vocabulary rather than a second spelling of
+// it, for the same reason LiveActivityOutcomes is internal/app's: this
+// package serves what the emitter said, and a copy of a closed vocabulary
+// is a copy that drifts.
+var LiveActivityEventOutcomes = outcomeNames(obs.Outcomes)
+
+// outcomeNames renders obs's typed vocabulary as the plain strings this
+// package's wire and its contract test compare.
+func outcomeNames(outcomes []obs.Outcome) []string {
+	out := make([]string, 0, len(outcomes))
+	for _, o := range outcomes {
+		out = append(out, string(o))
+	}
+	return out
+}
+
+// LiveActivityAction is one action that started and has not reported an
+// outcome (issue #625).
+//
+// It is what makes "this announced itself and went quiet" a thing a
+// surface can say, rather than something an operator would have to notice
+// by reading every line and remembering which starts they had seen. An
+// action still legitimately running appears here too, and that is correct
+// rather than a false alarm: the honest sentence is "started four minutes
+// ago and has not reported an outcome", and whether four minutes is long
+// is a judgement the person reading it is far better placed to make than
+// this package is.
+type LiveActivityAction struct {
+	// Action is the action's stable name ("cycle", "connection_test"),
+	// and ActionID is what its two lines are paired by.
+	Action   string
+	ActionID string
+
+	// StartedAt is when the start line was emitted, which is the only
+	// thing anything can work out "and it has been quiet since" from.
+	StartedAt time.Time
+
+	// Sequence is the start line's own sequence, so a client can find the
+	// line this is about in the tail it already holds.
+	Sequence int64
 }
 
 // LiveActivitySet is one backup set's strip.
@@ -276,6 +350,17 @@ type LiveActivitySet struct {
 	// Events is the tail, oldest first, filtered by whatever cursor the
 	// caller sent.
 	Events []LiveActivityEvent
+
+	// Unfinished is every action inside this set whose start is still
+	// held with no completion behind it, oldest first. See
+	// LiveActivityAction, and unfinishedIn for why it is derived from the
+	// tail rather than tracked in a structure of its own.
+	//
+	// It is NOT filtered by the cursor. A cursor asks "what is new", and
+	// an action that has been quiet for ten minutes is not new: it is
+	// exactly the thing a caller that has been polling all along would
+	// otherwise never be told about again.
+	Unfinished []LiveActivityAction
 
 	// Truncated says Limit cut this reading short and the rest is still
 	// held. Events above are the OLDEST held that are newer than the
@@ -343,6 +428,13 @@ type LiveActivityDeployment struct {
 	// Events is the tail, oldest first, filtered by whatever cursor the
 	// caller sent.
 	Events []LiveActivityEvent
+
+	// Unfinished is every deployment-wide action whose start is still
+	// held with no completion behind it, oldest first. A cycle is the one
+	// this matters most for: it belongs to no single set, so this bucket
+	// is the only place a cycle that started and went quiet can be
+	// reported.
+	Unfinished []LiveActivityAction
 
 	// Truncated says Limit cut this reading short and the rest is still
 	// held.
@@ -618,6 +710,14 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		Event:    r.Event,
 		Scope:    scope,
 		Message:  r.Message,
+		// Carried through unchanged, exactly as the level is, and for the
+		// same reason: the emitter stated how the operation went and
+		// which action it opens or closes, and this package's whole
+		// discipline is to serve what it said rather than a verdict
+		// invented on the way to a screen.
+		Outcome:  string(r.Outcome),
+		Action:   r.Action,
+		ActionID: r.ActionID,
 		Fields:   make([]LiveActivityField, 0, len(r.Fields)),
 	}
 	for _, f := range r.Fields {
@@ -836,7 +936,7 @@ func (l *liveActivity) read(ids []string, wantDeployment bool, since int64, limi
 			out = append(out, LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown})
 		}
 		if wantDeployment {
-			return out, &LiveActivityDeployment{Events: []LiveActivityEvent{}}
+			return out, &LiveActivityDeployment{Events: []LiveActivityEvent{}, Unfinished: []LiveActivityAction{}}
 		}
 		return out, nil
 	}
@@ -852,6 +952,7 @@ func (l *liveActivity) read(ids []string, wantDeployment bool, since int64, limi
 	deployment.OldestSequence, deployment.LatestSequence = boundsOf(l.deployment)
 	deployment.Events, deployment.Truncated = tailOf(l.deployment, since, limit)
 	deployment.Dropped = droppedSince(since, l.deployment)
+	deployment.Unfinished = unfinishedIn(l.deployment)
 	return out, deployment
 }
 
@@ -887,6 +988,7 @@ func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveAct
 	out.OldestSequence, out.LatestSequence = boundsOf(own)
 	out.Events, out.Truncated = tailOf(own, since, limit)
 	out.Dropped = droppedSince(since, own)
+	out.Unfinished = unfinishedIn(own)
 	return out
 }
 
@@ -1009,6 +1111,73 @@ func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
 	if n < len(dst) {
 		copy(dst[n:], r.events[:len(dst)-n])
 	}
+}
+
+// unfinishedIn is every action in r whose start is still held and whose
+// completion is not, oldest first (issue #625).
+//
+// # Why it is derived rather than tracked
+//
+// The obvious implementation is a map of open actions kept beside the
+// ring, written on a start and cleared on a completion. It is also a leak
+// with a nice name, and the leak is the exact case this exists to report:
+// a start whose completion never arrives is a key nothing ever removes,
+// and a process that runs for months would accumulate one per unfinished
+// action for ever. Every fix for that is an eviction policy, and every
+// eviction policy has to choose which unfinished action to forget, which
+// is choosing which of them to hide.
+//
+// Deriving it from the ring has no such choice to make. The tail is
+// already bounded, and an action whose start has scrolled out of it is
+// forgotten along with every other line from that far back, which is the
+// same promise the buffer already makes about everything else it holds.
+// The durable record of what happened is the journal.
+//
+// # Why it is not filtered by the cursor
+//
+// A cursor asks what is NEW. An action that has been quiet for ten
+// minutes is not new, and a client that has been polling all along would
+// otherwise be told about it once, at the moment it started, and never
+// again. So this walks everything held rather than the slice a cursor
+// asked for, and it is the reading's answer to "what is currently open"
+// rather than a second copy of the tail.
+//
+// A start and its completion are told apart by the rule action.go states:
+// an action id with no outcome opens the action, and an action id with an
+// outcome closes it. Nothing here needs to know either event's name.
+func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
+	held := r.len()
+	// Ended first, in one pass, so a completion is recognised whether or
+	// not its start is still held: a ring holding the end of an action
+	// whose start has scrolled out must not report the start it cannot
+	// see, and a single forward pass that removed as it went would leave
+	// that case depending on which of the two happened to survive.
+	var ended map[string]bool
+	for i := 0; i < held; i++ {
+		e := r.at(i)
+		if e.ActionID == "" || e.Outcome == "" {
+			continue
+		}
+		if ended == nil {
+			ended = make(map[string]bool)
+		}
+		ended[e.ActionID] = true
+	}
+
+	var out []LiveActivityAction
+	for i := 0; i < held; i++ {
+		e := r.at(i)
+		if e.ActionID == "" || e.Outcome != "" || ended[e.ActionID] {
+			continue
+		}
+		out = append(out, LiveActivityAction{
+			Action:    e.Action,
+			ActionID:  e.ActionID,
+			StartedAt: e.At,
+			Sequence:  e.Sequence,
+		})
+	}
+	return out
 }
 
 // boundsOf reports the lowest and highest sequence still held across the

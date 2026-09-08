@@ -90,6 +90,12 @@ import (
 // way it renders every other event on this feed.
 const connectionTestEventName = "connection_test"
 
+// connectionTestAction is the action name the start and the completion of
+// one whole test are paired under (obs.Action, issue #625). It is the
+// event's own name because the two are the same thing here: this event
+// exists to report this action and nothing else.
+const connectionTestAction = "connection_test"
+
 // runConnectionTest performs the six-step check against one persisted
 // backup set and returns the result the API and the CLI both render.
 //
@@ -136,7 +142,7 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 		// no use for and a reader of an exported response has every use
 		// for. mediumcheck makes the identical trade.
 		Observe: func(step sourcecheck.Step, err error) {
-			b.logger.Event(ctx, obs.LevelWarn, connectionTestEventName,
+			b.logger.CompletedAt(ctx, obs.LevelWarn, obs.OutcomeError, connectionTestEventName,
 				"connection test: "+string(step)+" failed",
 				slog.String("backup_set", id),
 				slog.String("step", string(step)),
@@ -144,6 +150,15 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 			)
 		},
 	}
+
+	// Bracketed, so a test that reaches an SSH server which then never
+	// answers is a start with nothing behind it rather than silence
+	// (issue #625). It is the shape every action that takes real time
+	// owes: this one opens a connection to somebody else's machine, and
+	// "did the button do anything" is exactly the question an operator
+	// is left with when it hangs.
+	action := b.logger.Begin(ctx, connectionTestEventName, connectionTestAction,
+		"connection test starting", slog.String("backup_set", id))
 
 	var report sourcecheck.Report
 	if set.Remote.Type == "sftp" {
@@ -154,7 +169,35 @@ func (b *BackupService) runConnectionTest(ctx context.Context, id string, set *c
 
 	result := resultFromReport(report)
 	b.recordConnectionTest(ctx, id, report)
+	// The level stays a note or a warning whatever the verdict is, and
+	// only the outcome goes to error. obs reserves LevelError for the
+	// manager failing at something (see Alert and RetentionHold), and a
+	// check that correctly reports a source as unreachable is the manager
+	// working exactly as designed.
+	verdict := connectionTestOutcome(report)
+	action.EndAt(ctx, connectionTestLevel(verdict), verdict, "connection test finished",
+		slog.String("backup_set", id))
 	return result
+}
+
+// connectionTestOutcome is how the whole test went, as one value, from
+// the six steps.
+//
+// A skipped step makes the test a warning rather than a success, and that
+// is the same argument runLocalConnectionTest makes one layer down: five
+// green rows for a backup set with no host at all would tell an operator
+// a host key was checked when no host was involved. A verdict that
+// reported it as an unqualified success would put that back, one line up.
+func connectionTestOutcome(report sourcecheck.Report) obs.Outcome {
+	if !report.OK {
+		return obs.OutcomeError
+	}
+	for _, c := range report.Checks {
+		if c.Outcome == sourcecheck.Skipped {
+			return obs.OutcomeWarning
+		}
+	}
+	return obs.OutcomeSuccess
 }
 
 // resultFromReport is how a six-step report becomes the two fields
@@ -309,22 +352,69 @@ func entriesWord(n int) string {
 // own ring and on nobody else's.
 func (b *BackupService) recordConnectionTest(ctx context.Context, id string, report sourcecheck.Report) {
 	for _, c := range report.Checks {
-		level := obs.LevelInfo
-		if c.Outcome == sourcecheck.Failed {
-			level = obs.LevelWarn
-		}
 		attrs := []slog.Attr{
 			slog.String("backup_set", id),
 			slog.String("step", string(c.Step)),
-			slog.String("outcome", string(c.Outcome)),
+			// step_outcome, not outcome. The line states how the step
+			// went in obs's own four-value vocabulary, under the
+			// reserved `outcome` key, and this is sourcecheck's finer
+			// word for the same fact: passed, failed or skipped. Two
+			// values under one key would be a duplicate in the JSON
+			// object, where the tap takes the first and encoding/json
+			// keeps the last, so the terminal and the log would disagree
+			// about how a step went (issue #625; see obs/action.go's
+			// reserved keys, and DiskPressure's own doc for the same
+			// mistake one field along).
+			slog.String("step_outcome", string(c.Outcome)),
 			slog.String("detail", c.Detail),
 		}
 		if c.Category != "" {
 			attrs = append(attrs, slog.String("category", c.Category))
 		}
-		b.logger.Event(ctx, level, connectionTestEventName,
+		outcome := stepOutcome(c.Outcome)
+		b.logger.CompletedAt(ctx, connectionTestLevel(outcome), outcome, connectionTestEventName,
 			"connection test: "+string(c.Step)+" "+string(c.Outcome), attrs...)
 	}
+}
+
+// stepOutcome maps one step's own word onto the vocabulary every line on
+// this feed states its outcome in.
+//
+// Skipped is a warning and not a note, which is the whole of what
+// sourcecheck.Skipped is for: a step that did not run proved nothing, and
+// a client colouring it the way it colours a passing step is the failure
+// runLocalConnectionTest's doc describes. It used to be a note, because
+// the level was the only field there was and "this did not apply" is not
+// a warning about the system; with the two facts apart, the level can
+// stay quiet about it while the outcome refuses to call it a pass.
+func stepOutcome(o sourcecheck.Outcome) obs.Outcome {
+	switch o {
+	case sourcecheck.Failed:
+		return obs.OutcomeError
+	case sourcecheck.Skipped:
+		return obs.OutcomeWarning
+	default:
+		return obs.OutcomeSuccess
+	}
+}
+
+// connectionTestLevel is how loudly a step or a verdict is logged, which
+// is a quieter question than how it went.
+//
+// A failed step is stated as an error outcome and logged as a warning,
+// and the pair is deliberate rather than an inconsistency. obs reserves
+// LevelError for the manager failing at something (Alert and
+// RetentionHold both say so), and a test that reaches a host and is
+// correctly refused has not failed at anything: it has answered. The
+// outcome is what a terminal colours by, so an operator still reads it
+// as the bad news it is, and `activity --follow --severity error` still
+// means "the manager is in trouble" rather than "somebody typed the
+// wrong hostname into a wizard".
+func connectionTestLevel(outcome obs.Outcome) obs.Level {
+	if outcome == obs.OutcomeSuccess {
+		return obs.LevelInfo
+	}
+	return obs.LevelWarn
 }
 
 // keyReferenceOf is how the configuration NAMES this set's key, for the
