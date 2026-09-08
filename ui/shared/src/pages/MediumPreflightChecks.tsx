@@ -1,12 +1,19 @@
 /**
- * The eight preflight steps, rendered (G2.2, issue #594).
+ * A test connection's steps, rendered (G2.2, issue #594).
  *
  * # Every step, always, including the skipped ones
  *
- * Never a single OK or FAILED. A report is eight steps in a fixed order,
- * and the whole value of the check is in WHICH one failed: knowing that a
+ * Never a single OK or FAILED. A report is a fixed order of steps, and
+ * the whole value of the check is in WHICH one failed: knowing that a
  * write failed after credentials and reach both passed is most of the
  * diagnosis, and collapsing that into one word throws it away.
+ *
+ * It used to say eight steps, and it now says however many the engine
+ * sent, because the drive on this machine answers this call too (#622)
+ * and its report has a `space` step a bucket has no answer for. Nothing
+ * here enumerates the steps: the list comes off the report, in the
+ * engine's own order, which is what lets one renderer draw both kinds of
+ * destination and is why there is no second one.
  *
  * Skipped is a first-class outcome and not a quiet pass. The engine's own
  * comment on it is the reason this component exists as its own file
