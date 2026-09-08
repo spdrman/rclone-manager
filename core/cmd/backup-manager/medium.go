@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -178,7 +177,7 @@ func declareMediumFlags(fs *flag.FlagSet) mediumFlags {
 		json:      fs.Bool("json", false, "list/show: print the destinations as JSON instead of as text"),
 		stdin:     fs.Bool("stdin", false, "import-credentials: read AWS shared-credentials text from standard input. This is the only way material ever reaches this command, and it is deliberately not a flag: a secret on a command line is in `ps` output for every user on the box and in shell history"),
 		candidate: fs.Bool("candidate", false, "preflight: prove a destination described by the flags below, which is NOT declared, and write nothing whatever the report says"),
-		noVerify:  fs.Bool("no-verify", false, "add/edit: write the destination without proving it works first. The output says in so many words that nothing was proven; it exists for building configuration offline, against a bucket this host cannot reach"),
+		noVerify:  fs.Bool("no-verify", false, "add/edit: write the destination without proving it works first. The output says in so many words that nothing was proven, and the destination is marked as unverified until a test connection passes. It exists for building configuration offline, against a bucket this host cannot reach"),
 
 		mediumType:         fs.String("type", "s3", "add/edit/preflight --candidate: the backend. `s3` is the only value"),
 		region:             fs.String("region", "", "add/edit/preflight --candidate: the provider region, passed to the backend unexamined"),
@@ -206,7 +205,14 @@ func declareMediumFlags(fs *flag.FlagSet) mediumFlags {
 // configured" and an empty one would mean "this destination reaches
 // nowhere".
 func (f mediumFlags) spec(id string) service.StorageMediumSpec {
-	spec := service.StorageMediumSpec{ID: id}
+	// The skip is read from the flag's VALUE rather than through the
+	// fs.Visit switch below, and that is the one field where the two
+	// differ on purpose. Everything else in this struct is a field of the
+	// destination, where "not passed" and "passed as empty" are different
+	// requests on an edit; --no-verify is an instruction about this one
+	// invocation, and not passing it means exactly what passing it as
+	// false means (issue #636).
+	spec := service.StorageMediumSpec{ID: id, SkipConnectionCheck: *f.noVerify}
 	f.fs.Visit(func(fl *flag.Flag) {
 		switch fl.Name {
 		case "type":
@@ -580,15 +586,23 @@ func mediumWrite(ctx context.Context, cfgPath, id string, f mediumFlags, update 
 		spec := f.spec(id)
 
 		if !*f.noVerify {
-			// An EDIT that names no credential cannot be verified as a
-			// candidate: a candidate carries its own credential reference
-			// by definition, and this deployment does not report the one
-			// already configured, so there is nothing to check with. The
-			// write is still made, and the honest thing is to say what was
-			// and was not proven rather than to skip the check silently.
+			// An EDIT that names no credential cannot be verified FROM
+			// HERE as a candidate: a candidate carries its own credential
+			// reference by definition, and this deployment does not report
+			// the one already configured, so this command has nothing to
+			// check with.
+			//
+			// It is still checked, and that is what changed with #636. The
+			// service resolves the inherited credential out of the
+			// configuration it is about to write and runs the same eight
+			// steps before the edit lands, which is a thing only the
+			// process holding the file can do. So the sentence here says
+			// which half is happening rather than announcing that nothing
+			// is, and the report an operator sees is the refusal's one
+			// failing step instead of all eight.
 			if update && spec.Credentials.ID == "" && spec.Credentials.File == "" && spec.Credentials.Env == "" && len(spec.Credentials.Command) == 0 {
-				fmt.Println("not verified before writing: this edit names no credential, so it keeps the one already configured, and a candidate cannot be proven with a credential this command cannot read")
-				fmt.Printf("  prove it afterwards with: backup-manager medium preflight %s\n", id)
+				fmt.Println("not proven from here: this edit names no credential, so it keeps the one already configured, which this command cannot read")
+				fmt.Println("  the engine proves it before the edit lands and refuses when it cannot, naming the step that failed")
 			} else {
 				report, err := route.PreflightStorageMediumCandidate(ctx, spec)
 				if err != nil {
@@ -604,8 +618,15 @@ func mediumWrite(ctx context.Context, cfgPath, id string, f mediumFlags, update 
 			// Said out loud, every time. A --no-verify write that printed
 			// the same thing a verified one printed would be a green line
 			// standing behind a check nobody ran.
+			//
+			// The second sentence is #636's half. The line above is read
+			// once, by whoever typed the command; the MARK is what is
+			// still there tomorrow for the operator who did not, and
+			// saying so here is what makes the flag an escape hatch that
+			// an operator knows the cost of.
 			fmt.Println("not verified: --no-verify was given, so no credential was obtained, no endpoint was contacted and no object was written or read back")
-			fmt.Printf("  prove it afterwards with: backup-manager medium preflight %s\n", id)
+			fmt.Println("  this destination is marked as unverified until a test connection passes")
+			fmt.Printf("  prove it afterwards with: backup-manager medium test-connection %s\n", id)
 		}
 
 		var (
@@ -646,17 +667,37 @@ func mediumRemove(ctx context.Context, cfgPath, id string, _ mediumFlags) int {
 }
 
 // mediumPreflightVerb is `medium preflight <medium-id>` and `medium
-// preflight --candidate <medium-id> [the add flags]`.
+// preflight --candidate <medium-id> [the add flags]`, and the same two
+// under the name `test-connection`.
 //
 // The two are one verb because they are one question asked about two
-// things, and they go through different doors for the reason cmdMedium's
-// own doc gives: the by-id form is a read of this host's configuration and
-// is never refused beside a running engine, and the candidate form is the
-// check `add` runs before it writes, so it has to happen where the add
-// would.
+// things, and they now go through the SAME door, which is what changed
+// with #636.
+//
+// The candidate form has always gone through openConfigWriteRoute,
+// because it is the check `add` runs before it writes and proving this
+// host's route to a bucket before declaring the destination somewhere else
+// proves nothing about the destination that gets used.
+//
+// The by-id form used to open this host's configuration directly and was
+// never refused beside a running engine, on the grounds that it was a
+// read. It is not one any more: a check that PASSES clears that
+// destination's unverified mark, which is a configuration write, and a
+// mark cleared in the file beside a running engine is a change that
+// process never reads and would put back from its own stale copy on the
+// next write. So it goes where the writes go. `list` and `show` stay on
+// the read door, so looking at your own destinations still works on a
+// stock install with nothing configured (withMediumRead).
+//
+// What that costs is stated rather than buried: on a host with an engine
+// serving this deployment and no BACKUP_MANAGER_API_URL, this verb now
+// refuses where it used to answer, and names what to set. That operator
+// already could not run `medium add`, `edit`, `remove` or `preflight
+// --candidate` for the same reason, and the check they wanted is a button
+// on the deployment's own destinations card.
 func mediumPreflightVerb(ctx context.Context, cfgPath, id string, f mediumFlags) int {
-	if *f.candidate {
-		return withMediumRoute(ctx, cfgPath, func(route configWriteRoute) int {
+	return withMediumRoute(ctx, cfgPath, func(route configWriteRoute) int {
+		if *f.candidate {
 			report, err := route.PreflightStorageMediumCandidate(ctx, f.spec(id))
 			if err != nil {
 				return fail(err)
@@ -667,16 +708,9 @@ func mediumPreflightVerb(ctx context.Context, cfgPath, id string, f mediumFlags)
 				return 1
 			}
 			return 0
-		})
-	}
-
-	svc, _, cleanup, err := openService(ctx, cfgPath, true)
-	if err != nil {
-		return fail(err)
-	}
-	defer cleanup()
-	logStartup(ctx, svc.Logger, app.BuildVersionInfo(version, commit))
-	return mediumPreflight(ctx, svc, id)
+		}
+		return mediumPreflight(ctx, route, id)
+	})
 }
 
 // mediumDefault is `medium default <medium-id>`: move the destination a
@@ -749,6 +783,20 @@ func printMedium(m service.StorageMediumSummary) {
 	if m.ReadsRequireRestore {
 		fmt.Println("  reads need a restore: this class holds objects that cannot be read until an explicit restore has finished")
 	}
+	// Issue #636's mark, printed when it is there and silent when it is
+	// not, which is printBackupSet's own rule for the same field on the
+	// other noun and is the same call the destinations card makes.
+	//
+	// The asymmetry is the field's meaning rather than an omission. True
+	// says a surface deliberately skipped a check it could have run.
+	// False has two readings this build cannot tell apart, a destination
+	// proven when it was declared and one declared before this deployment
+	// recorded the difference at all, and every destination on every
+	// existing deployment is the second, so printing "verified" for it
+	// would be a claim about a bucket nobody ever contacted.
+	if m.ConnectionUnverified {
+		fmt.Println("  connection: not verified (nothing has proven this destination; `backup-manager medium test-connection " + m.ID + "` clears this)")
+	}
 }
 
 // printMediumUsage renders FR-30's report: what is on a destination, per
@@ -803,30 +851,26 @@ func printMediumJSON(v any) int {
 	return 0
 }
 
-// mediumPreflight is the `preflight` verb's half of the command above:
-// everything from the opened service onward, once cmdMedium has decided
+// mediumPreflight is the by-id verb's half of the command above:
+// everything from the opened route onward, once cmdMedium has decided
 // which verb it is.
-func mediumPreflight(ctx context.Context, svc *app.Service, id string) int {
-	// The local hard drive answers this too (H2.2, #622). It is dispatched
-	// on the id here rather than inside app.PreflightMedium because the
-	// two checks share nothing below this line: there is no declared
-	// medium behind the local id, no MediumStore that could reach it, and
-	// the resolver refuses it in so many words. What they share is the
-	// report, which is everything this function does with the answer.
-	//
-	// Without this arm, `medium test-connection local` refused with "this
-	// configuration does not declare that storage medium", which is both
-	// true and useless: local is never declared, and the destination an
-	// operator just picked in a tier would be the one destination they
-	// could not check.
-	report, err := preflightAnyDestination(ctx, svc, id)
+//
+// It takes the ROUTE rather than an internal/app.Service as of #636. The
+// local hard drive is still dispatched on the id, one layer further in:
+// core/service's PreflightStorageMedium carries the same arm this
+// function used to, with the same reasoning about the two checks sharing
+// nothing below the report, and it is now the only copy. Without that arm
+// `medium test-connection local` refused with "this configuration does
+// not declare that storage medium", which is both true and useless.
+func mediumPreflight(ctx context.Context, route mediumRoute, id string) int {
+	report, err := route.PreflightStorageMedium(ctx, id)
 	if err != nil {
 		return fail(err)
 	}
 
 	fmt.Printf("storage medium %s: %s\n", report.Medium, verdictWord(report.OK))
 	for _, c := range report.Checks {
-		fmt.Printf("  %-14s %-8s %s\n", c.Step, outcomeWord(c), c.Detail)
+		fmt.Printf("  %-14s %-8s %s\n", c.Step, outcomeWordOf(c.Outcome, c.Category), c.Detail)
 	}
 	if !report.OK {
 		// A non-zero exit, so `medium preflight` composes into a script
@@ -835,19 +879,6 @@ func mediumPreflight(ctx context.Context, svc *app.Service, id string) int {
 		return 1
 	}
 	return 0
-}
-
-// preflightAnyDestination runs the right check for the destination id it
-// is given: the local hard drive's, or a declared storage medium's.
-//
-// One function so the verb above has one answer to render. Both produce a
-// mediumcheck.Report, which is the whole reason the local check was
-// written into that package rather than beside a surface.
-func preflightAnyDestination(ctx context.Context, svc *app.Service, id string) (mediumcheck.Report, error) {
-	if id == service.StorageMediumLocalID {
-		return svc.PreflightLocalMedium(ctx)
-	}
-	return svc.PreflightMedium(ctx, id)
 }
 
 // verdictWord renders the whole report's answer as something an operator
@@ -859,18 +890,16 @@ func verdictWord(ok bool) string {
 	return "NOT ready; see the failing checks below"
 }
 
-// outcomeWord renders one check's outcome, folding in the transport
+// outcomeWordOf renders one check's outcome, folding in the transport
 // category where there is one. The category is the machine-readable half
 // and belongs beside the word rather than buried in the sentence: an
 // operator scanning this column is deciding whose problem it is.
-func outcomeWord(c mediumcheck.Check) string {
-	return outcomeWordOf(string(c.Outcome), c.Category)
-}
-
-// outcomeWordOf is the same rendering over plain strings, for the reports
-// that come back over a route as core/service's shape rather than as the
-// engine's. Two spellings of this column would be two answers to "did this
-// step pass", which is the one column an operator reads first.
+//
+// It takes plain strings rather than a mediumcheck.Check because every
+// report this command renders now arrives as core/service's shape, over
+// a route (#636 moved the last one, the by-id check, onto that door).
+// Two spellings of this column would be two answers to "did this step
+// pass", which is the one column an operator reads first.
 func outcomeWordOf(outcome, category string) string {
 	if category == "" {
 		return outcome

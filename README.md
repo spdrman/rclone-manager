@@ -1688,6 +1688,18 @@ the probe object confirmed deleted. An archive class is refused at `deliverable`
 nothing written at all, because an object there is billed for a minimum duration measured
 in months and that is not a thing to discover empirically.
 
+`medium add` has verified by default since #443 and the wizard's Save button has been
+gated on the same check, and until #636 that was the whole of it: the check lived in two
+first-party clients, so `POST /api/v1/storage-mediums` accepted a destination nobody had
+verified and answered 201, and nothing afterwards could tell that destination from one
+proven against a real bucket. The engine runs the check itself now, in front of every
+create and every edit that changes what the destination IS, and refuses with
+`MEDIUM_CONNECTION_NOT_PROVEN`. `--no-verify` and `skip_connection_check` are the way past
+it, and a destination written under either is marked `connection_unverified` in
+`config.yaml` until a check passes, so the sentence the command printed is not the only
+thing standing between an unproven destination and an operator who did not type it. That is
+the shape #628 landed on the source side, on the other half of the same invariant.
+
 No report it produces ever carries key material, and that is structural rather than
 careful: every sentence in a report is one of the package's own strings, composed only out
 of facts this manager already publishes about a medium, and there is no field an underlying

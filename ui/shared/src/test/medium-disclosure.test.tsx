@@ -66,13 +66,14 @@ const STORAGE = {
  *  a tier LEAVING it, so it is a fixture value rather than the subject. */
 const LOCAL: StorageMedium = {
   id: "local", type: "local", bucket: "", path: "/data/backups", storageClass: "",
-  uploadVerification: "readback", readsRequireRestore: false, isLocal: true, isDefault: true
+  uploadVerification: "readback", readsRequireRestore: false, isLocal: true, isDefault: true,
+  connectionUnverified: false
 };
 
 const MEDIUMS: StorageMedium[] = [
   LOCAL,
-  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false },
-  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback", readsRequireRestore: true, isLocal: false, isDefault: false }
+  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false, connectionUnverified: false },
+  { id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback", readsRequireRestore: true, isLocal: false, isDefault: false, connectionUnverified: false }
 ];
 
 function settingsFixture(over: {

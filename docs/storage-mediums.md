@@ -269,6 +269,55 @@ this check before it writes and refuses to write when it fails, which is the
 non-interactive equivalent of the wizard's Save button staying disabled;
 `--no-verify` skips it and says in its own output that nothing was proven.
 
+### A destination nobody ever proved says so, until somebody proves it
+
+Until #636 that paragraph described only the first-party clients. The check
+lived in `medium add` and in the wizard, so `POST /storage-mediums` accepted a
+destination nobody had verified and answered 201, and there was no mark either:
+a destination written unproven and one checked against a real bucket were the
+same destination in every list, on every screen and in every command's output,
+forever. That is the state #624 calls a hole rather than an escape hatch, on the
+source side of the same product, and #628 had already closed it there.
+
+So the check is the engine's now. `CreateStorageMedium` and
+`UpdateStorageMedium` run the eight steps themselves and refuse with
+`MEDIUM_CONNECTION_NOT_PROVEN`, whoever the caller is, and an edit is checked
+when it changes anything about the destination: the endpoint, the region, the
+bucket, the prefix, the credential reference, the storage class or the
+verification class. Re-saving a destination unchanged runs no check, so an edit
+form can press Save on a destination that is currently unreachable.
+
+`--no-verify` is still there and still means what it meant, plus one thing:
+
+```
+connection_unverified: true
+```
+
+goes into that destination's entry in `config.yaml`, and stays there until a
+test connection PASSES against it. `medium show` prints a `connection: not
+verified` line for it, the destinations card draws a `never proven` badge and a
+sentence under the row, and `GET /storage-mediums` carries
+`connection_unverified`. A check that FAILS leaves the mark exactly where it
+was, because "somebody pressed the button" is not the same claim as "this
+bucket works".
+
+Absence is not "unverified". Every configuration written before this field
+existed says nothing, so a build that read silence as a mark would declare every
+destination on every deployment unproven at the first upgrade, which is a
+warning nobody can act on and therefore one everybody learns to ignore.
+
+One consequence is worth knowing before you meet it. Clearing the mark is a
+configuration write, so `medium test-connection <id>` now goes through the door
+the other configuration writes go through: beside an engine serving this
+deployment it is carried out there, and it is refused when nothing has said how
+to reach that engine (`BACKUP_MANAGER_API_URL`). It used to answer from this
+host's own file. `medium list` and `medium show` are unchanged and still read
+locally, so looking at your own destinations works on a stock install.
+
+The drive on this machine is out of it entirely. It is not declared, it cannot
+be created, and there is no bucket behind it to prove, so it never carries the
+mark.
+
 ### When a check fails on a medium your backups are already on
 
 A preflight that fails on a medium nothing references yet costs you the next

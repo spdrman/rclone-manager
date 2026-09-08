@@ -193,6 +193,27 @@ type storageMediumRequest struct {
 	StorageClass       string                            `json:"storage_class"`
 	UploadVerification string                            `json:"upload_verification"`
 	Credentials        storageMediumCredentialsReference `json:"credentials"`
+
+	// SkipConnectionCheck writes this destination without proving it
+	// first (issue #636). The service runs the same eight-step check POST
+	// /api/v1/storage-mediums/preflight answers, in front of the write,
+	// and refuses with MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is
+	// the deliberate opt-out, and a destination written under it is marked
+	// connection_unverified until a check passes.
+	//
+	// The mark is the service's own record of the skip, never a field a
+	// caller sets. That is the review finding PR #628 landed on the source
+	// side, applied here before it could happen twice: a body carrying the
+	// mark as a claim about what the caller had done is a claim any other
+	// client could simply omit.
+	//
+	// It is on the one shared shape, so it also arrives on the candidate
+	// probe, where it means nothing because the probe IS the check.
+	// Ignored there rather than refused: a field that is inert on one of
+	// three verbs is a smaller surprise than a 400 for a field a caller
+	// sent to every route it uses this shape for. Omitted or false checks,
+	// which is what every create should do.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
 }
 
 // spec turns the wire shape into the service's, which is the only place
@@ -213,6 +234,7 @@ func (b storageMediumRequest) spec() service.StorageMediumSpec {
 			Env:     b.Credentials.Env,
 			Command: b.Credentials.Command,
 		},
+		SkipConnectionCheck: b.SkipConnectionCheck,
 	}
 }
 
@@ -490,6 +512,21 @@ func (h *handlers) writeStorageMediumWriteError(w http.ResponseWriter, r *http.R
 		// error text can reach it: see core/service's
 		// storageMediumInUseRefusal.
 		writeError(w, http.StatusConflict, "MEDIUM_IN_USE", err.Error())
+	case errors.Is(err, service.ErrStorageMediumNotProven):
+		// 409 and its own code, beside the two refusals above rather than
+		// folded into either: this one is not about a decision the
+		// operator has to confirm, it is about the world not being the way
+		// the write assumes, and what it offers is "fix the destination and
+		// save again" or "declare it unproven" rather than "do it anyway".
+		// A client that read it as INVALID_REQUEST would tell an operator
+		// their form was wrong when their form was right and their bucket
+		// was not there (issue #636).
+		//
+		// Safe to echo: core/service builds this message from
+		// internal/mediumcheck's own sentences and the facts this product
+		// already publishes about a destination, never from a provider's
+		// error text and never from a credential (FR-33).
+		writeError(w, http.StatusConflict, "MEDIUM_CONNECTION_NOT_PROVEN", err.Error())
 	case errors.Is(err, service.ErrStorageMediumExists):
 		writeError(w, http.StatusConflict, "MEDIUM_EXISTS", err.Error())
 	case errors.Is(err, service.ErrMediumCredentialNotFound):

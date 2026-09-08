@@ -541,6 +541,14 @@ func (r *engineRoute) PreflightStorageMediumCandidate(ctx context.Context, spec 
 	return mediumPreflightFromWire(resp), nil
 }
 
+func (r *engineRoute) PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error) {
+	resp, err := r.client.PreflightStorageMedium(ctx, id)
+	if err != nil {
+		return service.MediumPreflight{}, err
+	}
+	return mediumPreflightFromWire(resp), nil
+}
+
 func (r *engineRoute) CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
 	resp, err := r.client.CreateStorageMedium(ctx, storageMediumToWire(spec))
 	if err != nil {
@@ -592,6 +600,11 @@ func storageMediumFromWire(m apicontract.StorageMediumSummary) service.StorageMe
 		Path:      m.Path,
 		IsLocal:   m.IsLocal,
 		IsDefault: m.IsDefault,
+		// #636's mark, carried for the identical reason: `medium show`
+		// beside a serving engine has to say what that engine's own
+		// destinations card says, and a mapping that lost this would
+		// print a destination as though it had been proven.
+		ConnectionUnverified: m.ConnectionUnverified,
 	}
 }
 
@@ -616,6 +629,13 @@ func storageMediumToWire(spec service.StorageMediumSpec) apicontract.StorageMedi
 			Env:           spec.Credentials.Env,
 			Command:       spec.Credentials.Command,
 		},
+		// Issue #636's instruction, carried rather than dropped. A route
+		// that lost it would send `medium add --no-verify` to an engine
+		// as an ordinary create, which either refuses against a bucket
+		// this host cannot reach or writes an unmarked destination: two
+		// ways for one flag to mean nothing in the one mode where an
+		// operator most needs it, which is the fleet.
+		SkipConnectionCheck: spec.SkipConnectionCheck,
 	}
 }
 

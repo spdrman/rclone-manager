@@ -51,7 +51,7 @@ const STORAGE = {
 };
 
 const MEDIUMS: StorageMedium[] = [
-  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false }
+  { id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1", storageClass: "STANDARD_IA", uploadVerification: "readback", readsRequireRestore: false, isLocal: false, isDefault: false, connectionUnverified: false }
 ];
 
 function settingsFixture(): AppSettings {

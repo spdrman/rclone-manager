@@ -201,6 +201,27 @@ type mediumRoute interface {
 	GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
 	StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error)
 	PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error)
+
+	// PreflightStorageMedium is the by-id check, and it is here as of
+	// #636 for the reason TestBackupSetConnection is here as of #624: a
+	// check that passes now clears that destination's unverified mark,
+	// which is a configuration write, so it belongs on the door
+	// configuration writes go through.
+	//
+	// That is a real change for this verb and worth naming rather than
+	// letting somebody discover it. `medium preflight <id>` used to be a
+	// read of THIS host's configuration and was never refused beside a
+	// running engine (cmdMedium's own doc said so). It is now refused
+	// beside a serving engine that this command has not been told how to
+	// reach, exactly as `medium add`, `edit` and `remove` already are.
+	// The alternative was worse in a way that is hard to see and hard to
+	// undo: a mark cleared in the file beside a running engine is a change
+	// that process never reads, and its next configuration write would put
+	// the mark back from a stale copy. `list` and `show` stay on the read
+	// door, so looking at your own destinations still works with nothing
+	// configured.
+	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
+
 	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
 	RemoveStorageMedium(ctx context.Context, id string) error

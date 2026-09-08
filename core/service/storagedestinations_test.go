@@ -52,6 +52,11 @@ func localFixture(t *testing.T) (*BackupService, string) {
 		Region:      "us-east-1",
 		Bucket:      "example-bucket",
 		Credentials: StorageMediumCredentials{File: credentials},
+		// Issue #636: the create proves its destination now, and this
+		// fixture's whole point is that nothing here reaches an
+		// endpoint. The skip is what keeps that true; #636's own cases
+		// turn it back off.
+		SkipConnectionCheck: true,
 	}); err != nil {
 		t.Fatalf("CreateStorageMedium: %v", err)
 	}

@@ -1214,17 +1214,25 @@ function defaultSettings(): AppSettings {
       {
         id: LOCAL_DESTINATION_ID, type: "local", bucket: "", path: "/data/backups",
         storageClass: "", uploadVerification: "readback",
-        readsRequireRestore: false, isLocal: true, isDefault: true
+        readsRequireRestore: false, isLocal: true, isDefault: true,
+        connectionUnverified: false
       },
       {
         id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
         prefix: "monthly", storageClass: "STANDARD_IA", uploadVerification: "readback",
-        readsRequireRestore: false, isLocal: false, isDefault: false
+        readsRequireRestore: false, isLocal: false, isDefault: false,
+        connectionUnverified: false
       },
       {
         id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
         prefix: "annual", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback",
-        readsRequireRestore: true, isLocal: false, isDefault: false
+        readsRequireRestore: true, isLocal: false, isDefault: false,
+        // Declared unproven on purpose, so the destinations card's #636
+        // banner has something to draw in the demo the way the backup-set
+        // one does. It is also the honest fixture: a demo where every
+        // destination reads as checked is a demo of a state an operator
+        // reaches only by running the check.
+        connectionUnverified: true
       }
     ],
     schema: {
@@ -2017,7 +2025,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             // whether the place works, and nothing here would read either
             // field.
             isLocal: false,
-            isDefault: false
+            isDefault: false,
+            // A candidate carries no mark either. The mark is what a WRITE
+            // records about the check it did not run, and a probe writes
+            // nothing whatever it answers.
+            connectionUnverified: false
           },
           archive
         ),
@@ -2192,7 +2204,12 @@ function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
     // separate act, and a create that quietly took it would be the one
     // behaviour #622 says a create must not have.
     isLocal: false,
-    isDefault: false
+    isDefault: false,
+    // The mark tracks the skip and nothing else (issue #636). This UI
+    // never sends the skip, because the wizard cannot save until its own
+    // check has passed, so a destination declared through this fixture is
+    // always a proven one.
+    connectionUnverified: spec.skipConnectionCheck === true
   };
 }
 

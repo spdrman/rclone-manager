@@ -1594,6 +1594,45 @@ type StorageMedium struct {
 	// Credentials names where this medium's credentials come from. Exactly
 	// one of its three sources must be set.
 	Credentials MediumCredentials `yaml:"credentials"`
+
+	// ConnectionUnverified records that this destination was written
+	// without ever having been proven: issue #636's mark, and the durable
+	// half of `medium add --no-verify` on a create or a
+	// destination-changing edit.
+	//
+	// It is BackupSet.ConnectionUnverified's twin, field for field and
+	// word for word, because the two halves of #623's invariant ("neither
+	// connection type should be relied on until it has been proven") are
+	// one rule about two nouns. The source side got the mark first (#624,
+	// #628); the destination side had --no-verify and nothing that
+	// outlived the line it printed, which is what #636 calls a hole rather
+	// than an escape hatch.
+	//
+	// Absent is NOT "unverified", for the reason the backup set's own doc
+	// gives at length: every configuration written before this field
+	// existed says nothing here, and a build that read silence as a mark
+	// would declare every destination on every deployment unproven at the
+	// first upgrade, which is a warning nobody can act on and therefore
+	// one everybody learns to ignore.
+	//
+	// It is only ever written by core/service, from
+	// StorageMediumSpec.SkipConnectionCheck and from nothing else. It is
+	// never taken from a request: a mark a caller could set is a mark a
+	// caller could omit, which is the review finding PR #628 landed on the
+	// source side, applied here before it could happen a second time.
+	//
+	// It is cleared, not merely reported. A `test connection` that PASSES
+	// against this destination removes the key (core/service's
+	// clearStorageMediumUnverified), and one that fails leaves it exactly
+	// where it was, because "somebody pressed the button" is not the same
+	// claim as "this bucket works". That asymmetry is what makes it a
+	// state rather than a scar on a destination that happened to be
+	// declared offline.
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that never uses --no-verify never writes a file an older
+	// build cannot parse (Load's KnownFields(true)).
+	ConnectionUnverified bool `yaml:"connection_unverified,omitempty"`
 }
 
 // EffectiveMaxMovesPerCycle is the per-cycle move bound this deployment

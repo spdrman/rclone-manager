@@ -138,6 +138,36 @@ type StorageMediumSpec struct {
 
 	// Credentials is where this medium's credentials come from.
 	Credentials StorageMediumCredentials
+
+	// SkipConnectionCheck writes this destination without proving it
+	// first (issue #636). It is `medium add --no-verify` and `medium edit
+	// --no-verify`, spelled the same way CreateBackupSetRequest.
+	// SkipConnectionCheck and UpdateBackupSetRequest.SkipConnectionCheck
+	// are, because it is the same decision on every write that declares a
+	// connection.
+	//
+	// CreateStorageMedium and UpdateStorageMedium run the check
+	// themselves, the same eight steps PreflightStorageMediumCandidate
+	// answers for the wizard's button, and refuse with
+	// ErrStorageMediumNotProven when it fails; this is the way past that.
+	// A destination written under it is marked ConnectionUnverified until
+	// a check passes, and the mark is THIS package's own record of what it
+	// did not do rather than anything a caller said. A request field
+	// carrying the mark itself would be a claim the server could not
+	// check: any client that was not this repository's own CLI or wizard
+	// could omit it and write an unproven destination indistinguishable on
+	// every screen from one checked against a real bucket, which is the
+	// exact state the mark exists to end (the same finding PR #628's
+	// review made on the source side).
+	//
+	// It is on the SPEC rather than on a request wrapper because this one
+	// shape describes a create, an edit and a candidate probe, and it
+	// means the same thing on all three: nothing to skip on the probe,
+	// which IS the check, and the same skip on the two writes. Not a
+	// pointer, for the reason the acknowledgements on the backup-set
+	// requests are not: it is a yes/no about this one call, and false, the
+	// value a caller gets by not mentioning it, is the one that checks.
+	SkipConnectionCheck bool
 }
 
 // ErrStorageMediumInUse is the removal refusal FR-30 requires: a
@@ -269,15 +299,33 @@ func (b *BackupService) PreflightStorageMediumCandidate(ctx context.Context, spe
 // no acknowledgment, and adding one would train an operator to click
 // through the acknowledgment that matters.
 //
-// It does not verify. Verification is PreflightStorageMediumCandidate,
-// called before this by the wizard and by `medium add` (which refuses to
-// write when it fails), and keeping the two separate is what lets
-// `--no-verify` exist for an operator building configuration offline
-// against a bucket this host cannot reach. A create that silently ran a
-// probe would also write a probe object into somebody's bucket from a
-// call whose name says nothing about buckets.
-func (b *BackupService) CreateStorageMedium(_ context.Context, spec StorageMediumSpec) (StorageMediumSummary, error) {
-	return b.writeStorageMedium(spec, false)
+// It VERIFIES, and refuses when it cannot (issue #636). That reverses
+// what this doc said until H2.6, and the old paragraph is worth quoting
+// rather than deleting, because the reversal is a decision and not a
+// tidy-up. It said: "It does not verify. Verification is
+// PreflightStorageMediumCandidate, called before this by the wizard and by
+// `medium add` (which refuses to write when it fails) ... A create that
+// silently ran a probe would also write a probe object into somebody's
+// bucket from a call whose name says nothing about buckets."
+//
+// What that arrangement actually produced is the hole #636 names: the
+// check lived in two first-party clients, so a client that was neither
+// wrote an unverified destination and got a 201, and nothing anywhere
+// afterwards could tell that destination from one proven against a real
+// bucket. The probe objection is answered in mediumverified.go's own
+// header, on its own terms: the same probe already ran on every save this
+// product's own surfaces made, so what changes is which process decides
+// it happens, and an operator who does not want it can still say so with
+// SkipConnectionCheck and get a mark instead of a silent success.
+//
+// The CLI and the wizard both go on running their own check before they
+// submit, so a destination declared through either is checked twice on the
+// way in. That is the price of the service never taking a caller's word
+// for it, and #628 concluded it was worth paying on the source side for a
+// reason that holds here too: those two print every step, and this
+// refusal names only the one that failed.
+func (b *BackupService) CreateStorageMedium(ctx context.Context, spec StorageMediumSpec) (StorageMediumSummary, error) {
+	return b.writeStorageMedium(ctx, spec, false)
 }
 
 // UpdateStorageMedium replaces one declared destination's description
@@ -311,8 +359,24 @@ func (b *BackupService) CreateStorageMedium(_ context.Context, spec StorageMediu
 //
 // A spec that DOES name one replaces it, which is credential rotation and
 // is the other thing an operator needs this verb for.
-func (b *BackupService) UpdateStorageMedium(_ context.Context, spec StorageMediumSpec) (StorageMediumSummary, error) {
-	return b.writeStorageMedium(spec, true)
+//
+// # An edit that moves the destination is proven first (issue #636)
+//
+// The same check the create runs, on the same terms, refused the same
+// way. An edit deserves it more than a create does, for the reason
+// UpdateBackupSet gives about the other noun: a create that cannot reach
+// its destination has produced nothing, and an edit that cannot reach its
+// destination has broken one that was working.
+//
+// "Moves the destination" is every field, which is what makes this
+// simpler than the source side's rule rather than more aggressive. See
+// changesTheDestination: a storage medium has no field that is a fact
+// about this deployment rather than about the bucket, so there is nothing
+// a check could have no opinion about. What is left out is the re-save,
+// where a form puts back exactly what it read, and that one runs no check
+// and keeps whatever mark the destination already carried.
+func (b *BackupService) UpdateStorageMedium(ctx context.Context, spec StorageMediumSpec) (StorageMediumSummary, error) {
+	return b.writeStorageMedium(ctx, spec, true)
 }
 
 // RemoveStorageMedium un-declares a destination, and refuses in three
@@ -421,7 +485,7 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 // (resolution, the fold, the encode-before-validate, the write, the
 // reload) has to be identical or a medium could be creatable in a shape
 // it could not be edited into.
-func (b *BackupService) writeStorageMedium(spec StorageMediumSpec, mustExist bool) (StorageMediumSummary, error) {
+func (b *BackupService) writeStorageMedium(ctx context.Context, spec StorageMediumSpec, mustExist bool) (StorageMediumSummary, error) {
 	if b.configPath == "" {
 		return StorageMediumSummary{}, ErrConfigNotFileBacked
 	}
@@ -433,6 +497,30 @@ func (b *BackupService) writeStorageMedium(spec StorageMediumSpec, mustExist boo
 	medium, err := b.mediumFromSpec(spec, inherit)
 	if err != nil {
 		return StorageMediumSummary{}, err
+	}
+
+	// Issue #636: a CREATE proves its destination here, before configMu,
+	// and the edit proves its own further down, under the lock. That split
+	// is CreateBackupSet and UpdateBackupSet's split, for the same reason
+	// each of them gives.
+	//
+	// A create is the one write whose request describes the whole
+	// destination, so nothing about the check depends on the configuration
+	// the lock protects, and holding a process-wide lock across network
+	// I/O is not done where it does not have to be. An edit cannot be
+	// checked out here: a spec that names no credential keeps the one
+	// already configured, and this API deliberately never reports a
+	// destination's credential, not even its kind, so the only place with
+	// everything the check needs is the process holding the configuration,
+	// which is also the process about to write it.
+	//
+	// It runs after mediumFromSpec so a request naming two credential
+	// sources, or a credentials_id this deployment never minted, is
+	// refused as what it is rather than as an unreachable endpoint.
+	if !mustExist && !spec.SkipConnectionCheck {
+		if err := b.proveStorageMedium(ctx, medium); err != nil {
+			return StorageMediumSummary{}, err
+		}
 	}
 
 	b.configMu.Lock()
@@ -468,6 +556,41 @@ func (b *BackupService) writeStorageMedium(spec StorageMediumSpec, mustExist boo
 			// administrator changed by hand since this service started.
 			medium.Credentials = cfg.StorageMediums[at].Credentials
 		}
+		// Issue #636's edit check, and the mark it settles.
+		//
+		// It runs with configMu held, which means a slow check delays
+		// other configuration writes for up to storageMediumCheckTimeout.
+		// That is the trade UpdateBackupSet documents at length and takes
+		// deliberately: dropping the lock to check and taking it again
+		// would prove a destination that may not be the one that then gets
+		// written, unless the write re-read the record under the lock and
+		// refused if anything the check depended on had moved. That
+		// compare-and-swap is the right next shape for this path, on both
+		// nouns at once, and it is not in this change.
+		//
+		// The mark is settled in all three branches rather than left to
+		// whatever mediumFromSpec put there, because "what this write did
+		// about the check" has three answers and only one of them is the
+		// caller's flag: it skipped a check that would have run, it ran
+		// one and it passed, or there was no check to run because nothing
+		// about the destination moved. The last one keeps the mark the
+		// record already carried: a re-save that changed nothing has
+		// proven nothing, and clearing on it would make the mark say
+		// "somebody pressed Save".
+		switch {
+		case !changesTheDestination(cfg.StorageMediums[at], medium):
+			medium.ConnectionUnverified = cfg.StorageMediums[at].ConnectionUnverified
+		case spec.SkipConnectionCheck:
+			medium.ConnectionUnverified = true
+		default:
+			if err := b.proveStorageMedium(ctx, medium); err != nil {
+				return StorageMediumSummary{}, err
+			}
+			// An operator who declared a destination offline and is now
+			// editing it against a bucket that answers has proven exactly
+			// what the mark was waiting for.
+			medium.ConnectionUnverified = false
+		}
 		// In place, so an edit does not reorder the operator's file. The
 		// list is served in declaration order on every surface, and a
 		// save that moved the edited medium to the end would look, to
@@ -481,7 +604,7 @@ func (b *BackupService) writeStorageMedium(spec StorageMediumSpec, mustExist boo
 	if err := b.persistConfig(cfg); err != nil {
 		return StorageMediumSummary{}, err
 	}
-	return b.GetStorageMedium(context.Background(), medium.ID)
+	return b.GetStorageMedium(ctx, medium.ID)
 }
 
 // persistConfig is the encode / validate / write / hot-reload tail every
@@ -552,6 +675,18 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 		StorageClass:       spec.StorageClass,
 		UploadVerification: spec.UploadVerification,
 		Credentials:        creds,
+		// Issue #636's mark, written by this package and not by the
+		// caller: a destination the caller told us not to check says so in
+		// the file, and one declared the ordinary way, which is one whose
+		// check passed before the write got here, leaves the key out
+		// entirely (omitempty). That is what keeps absence meaning what it
+		// meant in every configuration written before this field existed.
+		//
+		// The candidate probe resolves through here too and never writes
+		// anything, so the field is inert on that path; the alternative,
+		// which is a second construction for the write, is the one thing
+		// this function's own doc says must not exist.
+		ConnectionUnverified: spec.SkipConnectionCheck,
 	}, nil
 }
 

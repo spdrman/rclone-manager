@@ -827,7 +827,12 @@ function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
     // would have been.
     path: m.path,
     isLocal: m.is_local ?? false,
-    isDefault: m.is_default ?? false
+    isDefault: m.is_default ?? false,
+    // Issue #636. Omitted on the wire when false, and an engine built
+    // before this field omits it always, so ?? false is the right
+    // default: absence means "nothing here says this destination's check
+    // was skipped", never "this destination was proven".
+    connectionUnverified: m.connection_unverified ?? false
   };
 }
 
@@ -848,6 +853,11 @@ function toWireStorageMedium(spec: StorageMediumSpec): Record<string, unknown> {
   if (spec.prefix) body.prefix = spec.prefix;
   if (spec.storageClass) body.storage_class = spec.storageClass;
   if (spec.uploadVerification) body.upload_verification = spec.uploadVerification;
+  // Sent only when it is asked for, so an ordinary save is byte for byte
+  // the body it was before #636 and an engine older than the field is
+  // never handed one it would reject. This UI never asks for it: the
+  // wizard cannot save until its own check has passed.
+  if (spec.skipConnectionCheck) body.skip_connection_check = true;
   const c = spec.credentials;
   if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
     body.credentials = {

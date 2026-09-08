@@ -742,6 +742,29 @@ export interface StorageMedium {
    *  anything currently is: moving it moves no backup and rewrites no
    *  tier, which is why it needs no confirmation. */
   isDefault: boolean;
+
+  /**
+   * Issue #636: this destination was declared without ever having been
+   * proven.
+   *
+   * True means the engine was told to skip the check it runs in front of
+   * every create and every destination-changing edit (`--no-verify` on
+   * the CLI, `skip_connection_check` on the API), and it is the engine's
+   * own record of that: nothing a client sends sets the mark directly,
+   * and the S3 wizard never skips, because it cannot save until its own
+   * check has passed. A test connection that PASSES against it clears
+   * the mark, and one that fails leaves it alone.
+   *
+   * False is not a claim that the destination works today, only that
+   * nothing here says it was never proven. An engine built before this
+   * field answers false, and so does every destination declared before
+   * the mark existed, which is why a surface says "never proven" for true
+   * and says nothing at all for false rather than drawing a green tick.
+   *
+   * Always false for the local hard drive, which is not declared and has
+   * no bucket to prove.
+   */
+  connectionUnverified: boolean;
 }
 
 /**
@@ -801,6 +824,23 @@ export interface StorageMediumSpec {
   storageClass?: string;
   uploadVerification?: string;
   credentials?: StorageMediumCredentialsReference;
+
+  /**
+   * Declare this destination without proving it first (issue #636).
+   *
+   * The engine runs the same eight-step check `preflightStorageMediumCandidate`
+   * answers, in front of the write, and rejects with
+   * MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is the deliberate
+   * opt-out, and a destination written under it is marked
+   * `connectionUnverified` until a check passes.
+   *
+   * This UI does not send it. The wizard keeps Save disabled until its
+   * own check has come back green, so there is never a moment where it
+   * would have anything to skip; the field is here because the shape it
+   * lives on is the API's shape, and a client that could not express the
+   * flag could not be told what the refusal it might meet is about.
+   */
+  skipConnectionCheck?: boolean;
 }
 
 /**
