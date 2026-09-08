@@ -70,6 +70,7 @@ var commands = map[string]func([]string) int{
 	"status":       cmdStatus,
 	"sources":      cmdSources,
 	"backup-set":   cmdBackupSet,
+	"activity":     cmdActivity,
 	"artifacts":    cmdArtifacts,
 	"fetch":        cmdFetch,
 	"retention":    cmdRetention,
@@ -154,6 +155,14 @@ commands:
                                                   of them (#569)
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
+  activity [--backup-set S] [--severity warn|error] [--limit N] [--json]
+                                                  list recorded lifecycle events, newest first: the same durable
+                                                  transition log the Web UI's Activity page draws. Beside a serving
+                                                  engine this reads GET /api/v1/activity from it; with nothing
+                                                  serving it reads this host's own journal (#598). --limit counts
+                                                  MATCHING events, so a filter that narrows still fills it. --json
+                                                  emits the wire objects unchanged, so a script parses the contract
+                                                  rather than this table
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
                                                   --backup-set takes the source/backup-set id here too, and names
                                                   the source itself when it carries one, so --source is only

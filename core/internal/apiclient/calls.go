@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"net/url"
+	"strconv"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
 )
@@ -224,5 +225,33 @@ func (c *Client) GetArtifact(ctx context.Context, source, set, name string) (api
 func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apicontract.RetentionPlan, error) {
 	var out apicontract.RetentionPlan
 	err := c.call(ctx, "previewRetention", []string{source, set}, nil, &out)
+	return out, err
+}
+
+// ListActivity is GET /activity: the deployment-wide lifecycle feed, newest
+// first.
+//
+// limit is advisory in both directions and matches the route's own
+// handling: zero or less sends no query at all and takes the engine's
+// default, and a number above the engine's maximum is clamped there rather
+// than refused. A caller asking for a feed gets a feed.
+//
+// This is the one read in this package whose answer is RENDERED rather
+// than compared. readmode.go's doc explains why the other four are
+// comparisons: each of those commands prints something the contract cannot
+// express, so re-rendering from the wire would print less than the direct
+// route does. This feed has no such gap. Every column `activity` shows is
+// a field of ActivityEvent, so beside a live engine the honest thing is to
+// print the engine's own answer, and a set comparison would be worse than
+// useless here anyway: the log grows while the two reads happen, so two
+// truthful answers taken a round trip apart legitimately differ at the
+// newest end.
+func (c *Client) ListActivity(ctx context.Context, limit int) (apicontract.ListActivityResponse, error) {
+	var query url.Values
+	if limit > 0 {
+		query = url.Values{"limit": []string{strconv.Itoa(limit)}}
+	}
+	var out apicontract.ListActivityResponse
+	err := c.callQuery(ctx, "listActivity", nil, query, nil, &out)
 	return out, err
 }
