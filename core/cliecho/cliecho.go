@@ -43,11 +43,11 @@
 //     shell, a future TUI) gets the same lines for free, because they are
 //     on the wire rather than in one frontend.
 //
-// # The two tests that make it hold
+// # The three tests that make it hold
 //
-// They are the deliverable as much as the feature is, and neither lives
-// here, because neither can: one needs the router and one needs the flag
-// sets.
+// They are the deliverable as much as the feature is, and none of them
+// lives here, because none of them can: one needs the router, one needs
+// the flag sets and one needs the verb tables.
 //
 //   - apps/common/webhost's TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap
 //     walks the registered route table and requires every route to have
@@ -57,18 +57,38 @@
 //     command this package can emit through the real dispatcher, and
 //     requires it not to be a usage error. A renamed flag, a removed one
 //     or an argument in the wrong position fails there rather than being
-//     printed at an operator who then pastes it and gets exit 2.
+//     printed at an operator who then pastes it and gets exit 2. It is
+//     only ever as good as Examples() is wide: a shape no example carries
+//     is a shape nothing parses, which is how a duration renderer that
+//     ate a digit from half its input space stayed green.
+//   - core/cmd/backup-manager's TestNoGapClaimsAVerbThisBinaryShips reads
+//     every gap sentence and fails if it names a verb the binary
+//     dispatches without saying it means to. A gap is a promise that
+//     there is no verb, and five of them outlived the verbs they
+//     described, telling operators a feature did not exist while the
+//     binary beside them shipped it.
 //
 // # Credentials never appear
 //
 // A command that would carry a key, a password or a token shows the flag
 // with a placeholder in angle brackets and never the value, and the line
-// says it is not runnable as printed. The rule is mechanical rather than a
-// matter of care at each call site: a builder below reads the request
-// fields it names, and no builder names a secret-shaped one.
-// TestNoBuilderEverPrintsACredential drives every builder with a body
-// carrying every secret-shaped field this contract has and fails if any
-// value reaches the argv.
+// says it is not runnable as printed.
+//
+// That used to be stated here as a fact about the contract, that no
+// builder names a secret-shaped field, and it was not true: a secret can
+// arrive in a field that is not credential-shaped at all. An S3 endpoint
+// takes userinfo in a spelling rclone accepts, and a credentials command
+// is a program and its arguments that somebody typed. Both went onto the
+// line in full, past a test that knew eight field names by heart.
+//
+// So the rule is now a property rather than a list.
+// TestNoRequestFieldReachesTheArgvUnlessItIsEchoedOnPurpose drives every
+// builder with a body whose every string field, on every schema in the
+// contract, carries a distinct canary, and fails on any canary reaching
+// an argv behind a flag nobody wrote an exemption for. The exemptions are
+// the review artefact: each one is a written claim that this flag carries
+// something the request said out loud and an operator has to be able to
+// retype.
 package cliecho
 
 import (
@@ -226,6 +246,58 @@ func Echo(a Action) Line {
 	return line
 }
 
+// Gap is one sentence this package can print in place of a command, and
+// the verbs it names deliberately.
+//
+// It is exported for one reader: TestNoGapClaimsAVerbThisBinaryShips in
+// core/cmd/backup-manager, which is the only package that can see both
+// these sentences and the verb tables the binary dispatches on. Five of
+// these entries claimed a verb that this same tree ships (`activity`,
+// `activity --follow`, `retention apply`, `backup-set edit-hold` and a
+// tier-chain replacement through `settings patch --policy-file`), and
+// each of them printed "there is no verb that..." at an operator who
+// could have run one. Nothing could see that, because the promise was in
+// prose here and the verb was in a map there.
+type Gap struct {
+	// Route is the route this sentence belongs to, as a "METHOD /path"
+	// key, so a failure says which entry to edit.
+	Route string
+
+	// Why is the sentence itself.
+	Why string
+
+	// NamesShippedVerbs are the verbs Why names on purpose. See
+	// entry.namesShippedVerbs.
+	NamesShippedVerbs []string
+}
+
+// Gaps reports every sentence this package can print in place of a
+// command: one per route that has no builder, one more for each builder
+// that declines on some requests, and the route-level reason a builder
+// gives when a body will not decode.
+//
+// TestEveryGapSentenceEchoCanPrintIsDeclared holds this against what Echo
+// actually produces, so a refusal a builder invents and does not declare
+// here fails rather than going unchecked.
+func Gaps() []Gap {
+	out := make([]Gap, 0, len(routes))
+	for k, e := range routes {
+		for _, why := range append([]string{e.why}, e.refusals...) {
+			if strings.TrimSpace(why) == "" {
+				continue
+			}
+			out = append(out, Gap{Route: k, Why: why, NamesShippedVerbs: e.namesShippedVerbs})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Route != out[j].Route {
+			return out[i].Route < out[j].Route
+		}
+		return out[i].Why < out[j].Why
+	})
+	return out
+}
+
 // Routes reports every route this package has an answer for, as
 // "METHOD /path" keys. The parity test compares it against the router's
 // own table; nothing else should need it.
@@ -274,9 +346,39 @@ type entry struct {
 	build func(Action) *cmd
 
 	// why is the reason there is no command. It is set for a route with
-	// no builder at all, and also for a builder that declines on some
-	// requests but not others.
+	// no builder at all, and also for a builder that declines because the
+	// BODY will not decode, which is the one refusal that is about the
+	// route rather than about the request.
 	why string
+
+	// refusals are the sentences this entry's builder prints in place of
+	// a command for a request the route has an answer for and this one
+	// does not: a run_cycle and a restore arrive on the same route, and
+	// only one of them has a verb.
+	//
+	// They are declared here as well as being returned by the builder so
+	// that Gaps can report them. A sentence only a builder knows is a
+	// sentence the guard in core/cmd/backup-manager cannot check, and
+	// that guard is the reason five gap entries claiming verbs this tree
+	// ships were only found by somebody reading them.
+	refusals []string
+
+	// namesShippedVerbs are the `backup-manager` verbs this entry's
+	// sentences name ON PURPOSE.
+	//
+	// Most gap sentences name a verb that does not exist, which is the
+	// point of them. Some name one that does, as a counterexample:
+	// "`backup-manager run` starts a cycle in your own shell, not in this
+	// engine" is telling an operator which verb is NOT the answer, and
+	// "`backup-set patch` refuses --disabled" is saying what the existing
+	// verb will not do. Listing the verb here is how that is told apart
+	// from the failure this field exists for, which is a sentence that
+	// says a verb does not exist and is simply out of date.
+	//
+	// TestNoGapClaimsAVerbThisBinaryShips reads it, and a verb listed
+	// here that no sentence names fails there too: a standing exemption
+	// nothing needs is one the next person writes a stale sentence under.
+	namesShippedVerbs []string
 
 	// examples are the requests the parse test drives this builder with.
 	examples []Action
@@ -426,6 +528,38 @@ func seconds(v int) string {
 		b.WriteByte('s')
 	}
 	return b.String()
+}
+
+// endpointWithoutUserinfo drops any credentials spelled into a storage
+// destination's endpoint URL.
+//
+// https://AKIA...:wJalr...@minio.internal:9000 is a spelling rclone
+// accepts, apicontract.StorageMediumRequest.Endpoint is deliberately
+// unvalidated, and the field is not credential-shaped by name, so it went
+// straight onto a copy-to-clipboard panel and past a leak test that knew
+// eight field names. Nothing here is clever about it: the userinfo is
+// whatever sits before the last "@" in the authority, and it is removed
+// rather than starred out, because the destination without it is still
+// the address an operator needs and the credential reaches the binary
+// through one of the four credential flags instead.
+//
+// Textual rather than through net/url on purpose. url.Parse reads the
+// spelling with no scheme ("KEY:SECRET@host:9000") as a path and finds no
+// userinfo in it at all, and that spelling is a credential on a line just
+// as much as the well-formed one is.
+func endpointWithoutUserinfo(raw string) string {
+	scheme, rest := "", raw
+	if i := strings.Index(rest, "://"); i >= 0 {
+		scheme, rest = rest[:i+3], rest[i+3:]
+	}
+	authority, tail := rest, ""
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority, tail = rest[:i], rest[i:]
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority = authority[at+1:]
+	}
+	return scheme + authority + tail
 }
 
 // shellQuote makes one argument safe to paste into a shell, and leaves

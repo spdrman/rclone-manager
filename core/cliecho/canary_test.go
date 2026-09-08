@@ -78,27 +78,67 @@ func canaryBodies(t *testing.T, value func(path string) string) []canaryBody {
 // true and worthless. So this expands that one schema into one body per
 // action the contract actually defines.
 func bodyVariants(schema string, body []byte) [][]byte {
-	if schema != "SubmitOperationRequest" {
-		return [][]byte{body}
+	if schema == "SubmitOperationRequest" {
+		var decoded map[string]any
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			return [][]byte{body}
+		}
+		out := make([][]byte, 0, 3)
+		for _, action := range []string{
+			apicontract.ActionRunCycle,
+			apicontract.ActionRunBackupSet,
+			apicontract.ActionRestorePlacement,
+		} {
+			decoded["action"] = action
+			encoded, err := json.Marshal(decoded)
+			if err != nil {
+				continue
+			}
+			out = append(out, encoded)
+		}
+		return out
 	}
+
+	// The other branch a VALUE selects, and the reason it is here rather
+	// than in a test's own table: a retention body carrying a tier chain
+	// echoes --policy-file and nothing else, because the CLI refuses that
+	// flag beside the scalars the chain's file already holds. Filling
+	// every slice, which is what makes a canary reach a repeated field at
+	// all, therefore switches the scalar branch off everywhere. A corpus
+	// that only ever walks one side of a branch is a corpus that checks
+	// half the builders.
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return [][]byte{body}
 	}
-	out := make([][]byte, 0, 3)
-	for _, action := range []string{
-		apicontract.ActionRunCycle,
-		apicontract.ActionRunBackupSet,
-		apicontract.ActionRestorePlacement,
-	} {
-		decoded["action"] = action
-		encoded, err := json.Marshal(decoded)
-		if err != nil {
-			continue
-		}
-		out = append(out, encoded)
+	if !dropTiers(decoded) {
+		return [][]byte{body}
 	}
-	return out
+	without, err := json.Marshal(decoded)
+	if err != nil {
+		return [][]byte{body}
+	}
+	return [][]byte{body, without}
+}
+
+// dropTiers removes every "tiers" key in a decoded body and reports
+// whether it found one.
+func dropTiers(node any) bool {
+	object, ok := node.(map[string]any)
+	if !ok {
+		return false
+	}
+	found := false
+	if _, ok := object["tiers"]; ok {
+		delete(object, "tiers")
+		found = true
+	}
+	for _, value := range object {
+		if dropTiers(value) {
+			found = true
+		}
+	}
+	return found
 }
 
 // fillCanaries builds a value of typ with every string in it set by value.

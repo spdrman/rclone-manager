@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -61,7 +62,7 @@ import (
 // ActionRunBackupSet is POST /api/v1/operations' second run action: one
 // internal/app.Service.Fetch pass over exactly the backup set the request
 // names, rather than RunCycle's pass over every enabled one.
-const ActionRunBackupSet = "run_backup_set"
+const ActionRunBackupSet = apicontract.ActionRunBackupSet
 
 // ErrBackupSetHeldForEditing is returned by SubmitRunBackupSet when the
 // named set is currently held for editing (edithold.go).

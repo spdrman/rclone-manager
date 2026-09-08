@@ -1,80 +1,11 @@
 package cliecho
 
 import (
-	"encoding/json"
-	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/apicontract"
 )
-
-// TestNoBuilderEverPrintsACredential is the mechanical form of "a command
-// never carries a key, a password or a token".
-//
-// The panel these lines appear in is exportable and copy-to-clipboard by
-// design, so a credential reaching one is a credential in whatever issue
-// tracker the export lands in. Getting that right at each call site is not
-// a rule, it is a habit, so this drives EVERY builder with a request body
-// carrying every secret-shaped field this contract has and fails if any
-// value reaches the argv. A builder added later that reads a new secret
-// field fails here without anybody remembering to check.
-func TestNoBuilderEverPrintsACredential(t *testing.T) {
-	// Distinctive values, so a substring match cannot fire on a
-	// coincidence and cannot miss a value that was mangled on the way.
-	secrets := map[string]string{
-		"private_key_pem": "-----BEGIN OPENSSH PRIVATE KEY----- cliechoSECRETpem",
-		"passphrase":      "cliechoSECRETpassphrase",
-		"password":        "cliechoSECRETpassword",
-		"token":           "cliechoSECRETtoken",
-		"secret":          "cliechoSECRETsecret",
-		"secret_key":      "cliechoSECRETsecretkey",
-		"access_key":      "cliechoSECRETaccesskey",
-		"credentials":     "cliechoSECRETcredentials",
-	}
-	body, err := json.Marshal(secrets)
-	if err != nil {
-		t.Fatalf("marshalling the secret body: %v", err)
-	}
-
-	params := map[string]string{"source": "api-server", "set": "var-backups", "name": "dump.tar", "id": "offsite_s3"}
-	query := url.Values{}
-	for k, v := range secrets {
-		query.Set(k, v)
-	}
-
-	checked := 0
-	for _, route := range Routes() {
-		method, path, _ := strings.Cut(route, " ")
-		line := Echo(Action{Method: method, Route: path, Params: params, Query: query, Body: body})
-		checked++
-		printed := strings.Join(line.Command, " ") + " " + line.Shell()
-		for field, value := range secrets {
-			if strings.Contains(printed, value) {
-				t.Errorf("%s prints the request's %s field:\n  %s\nThis panel is exportable and copy-to-clipboard, so a value that reaches it reaches whatever issue tracker the export lands in. Name the flag with a placeholder instead.",
-					route, field, printed)
-			}
-		}
-	}
-	if checked == 0 {
-		t.Fatal("no routes were checked, so this test proves nothing")
-	}
-}
-
-// TestNoBuilderEverPrintsACredential_WouldCatchOne is that test's control.
-// It is a negative assertion over a table, which is the shape that most
-// easily degrades into checking nothing at all.
-func TestNoBuilderEverPrintsACredential_WouldCatchOne(t *testing.T) {
-	leak := newCmd("backup-set", "create", "a/b").flag("ssh-key-file", "cliechoSECRETpem")
-	if !strings.Contains(strings.Join(leak.argv, " "), "cliechoSECRETpem") {
-		t.Fatal("a command built with a secret as a flag value does not contain it, so the substring search above could never fire")
-	}
-	safe := newCmd("backup-set", "create", "a/b").placeholderFlag("ssh-key-file", "the private key file you chose")
-	if strings.Contains(strings.Join(safe.argv, " "), "cliechoSECRETpem") {
-		t.Fatal("a placeholder still carries the value")
-	}
-	if !safe.placeholder {
-		t.Fatal("a command carrying a placeholder does not say it is not runnable as printed, so an operator would paste it and get a file called <the private key file you chose>")
-	}
-}
 
 // TestEveryRouteAnswersWithACommandOrANamedGap is this package's own half
 // of the parity claim. The other half, that the route TABLE matches the
@@ -187,7 +118,7 @@ func TestCreateSkipsTheFieldsTheRequestDidNotCarry(t *testing.T) {
 // here would print a command that does something different to a different
 // process.
 func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {
-	line := Echo(Action{Method: "POST", Route: "/operations", Body: []byte(`{"action":"run_cycle","config_revision":"r1"}`)})
+	line := Echo(Action{Method: "POST", Route: "/operations", Body: []byte(`{"action":"` + apicontract.ActionRunCycle + `","config_revision":"r1"}`)})
 	if len(line.Command) != 0 {
 		t.Fatalf("run_cycle printed the command %v; `backup-manager run` opens the service in the operator's own process and runs a cycle THERE, so it is a different act against a different process",
 			line.Command)
@@ -203,7 +134,7 @@ func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {
 	// makes the refusal above about the request rather than about the
 	// route.
 	restore := Echo(Action{Method: "POST", Route: "/operations",
-		Body: []byte(`{"action":"restore","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)})
+		Body: []byte(`{"action":"` + apicontract.ActionRestorePlacement + `","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)})
 	if got, want := restore.Shell(), "backup-manager restore api-server/var-backups/dump.tar --medium offsite_s3 --days 7 --acknowledge"; got != want {
 		t.Errorf("a restore prints\n  %s\nwant\n  %s", got, want)
 	}

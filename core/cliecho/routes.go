@@ -23,10 +23,52 @@ import (
 // on its own is not actionable; "there is no verb that does X" says what
 // would have to be built.
 //
+// A `why` is also a claim about this binary, and claims go stale: five of
+// these said a verb did not exist while the same tree shipped it, and one
+// of the five quoted a usage() line that had been replaced by the flag it
+// was denying. core/cmd/backup-manager's TestNoGapClaimsAVerbThisBinaryShips
+// reads every sentence here against the verb tables now. A sentence that
+// names a shipped verb on purpose, as a counterexample ("`backup-manager
+// run` is not this"), says so with namesShippedVerbs, and a sentence that
+// names one by accident fails.
+//
 // The request bodies are core/apicontract's own types rather than a map
 // read by string keys, deliberately. That is what makes a field renamed in
 // the contract a compile error here instead of a builder that quietly
 // stops emitting a flag.
+// The sentences a builder prints in place of a command, as constants
+// because each of them is written in two places: the builder that refuses
+// with it, and the entry that declares it so Gaps can report it. A
+// sentence that could differ between those two would be a sentence the
+// guard in core/cmd/backup-manager checks a copy of.
+const (
+	gapRunCycle = "`backup-manager run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
+
+	gapRunBackupSet = "`backup-manager fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
+
+	gapDeploymentScope = "there is no flag that narrows `activity --follow` to the deployment's own events: --backup-set names one set, and naming none already means every set"
+)
+
+// positiveQuery reads a query parameter that is a count, and reports 0
+// for anything the route itself would treat as absent.
+//
+// The routes that take one (a limit on the journal read and on the live
+// feed) treat an absent, unparseable or non-positive value alike, as the
+// backend's own default. A line printing --limit 0 or --limit banana
+// would name a value the request did not make and, in the second case,
+// one the binary would refuse.
+func positiveQuery(a Action, name string) int {
+	raw := a.Query.Get(name)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 var routes = map[string]entry{
 	// ---------------------------------------------------------- system ---
 	key("GET", "/system/version"): {
@@ -41,7 +83,8 @@ var routes = map[string]entry{
 		why: "capabilities are what the PLATFORM this deployment runs on can do, which is a question about the host rather than about backups; nothing on a terminal asks it",
 	},
 	key("GET", "/system/storage"): {
-		why: "there is no verb that reports FR-21's capacity reading. `settings` prints the thresholds it is compared against, not the free space measured against them",
+		why:               "there is no verb that reports FR-21's capacity reading. `settings` prints the thresholds it is compared against, not the free space measured against them",
+		namesShippedVerbs: []string{"settings"},
 	},
 	key("GET", "/system/first-run"): {
 		why: "there is no verb that asks whether this instance has been configured; on a terminal the answer is whether config.yaml exists",
@@ -63,13 +106,24 @@ var routes = map[string]entry{
 
 	// ------------------------------------------------------ operations ---
 	key("POST", "/operations"): {
+		// Three actions arrive here and they are three different acts, so
+		// this switch is on apicontract's own constants rather than on
+		// string literals. It used to be on "restore", which is not one
+		// of the three and never was: the client sends restore_placement
+		// and run_backup_set, so NO real request matched that arm. Every
+		// restore and every per-set run fell through to a default whose
+		// sentence is about `backup-manager run`, a different verb for a
+		// different act, and the example body said "restore" too, so the
+		// dispatcher-driven parse test certified a branch production
+		// never reaches. A constant spelled in one place cannot be wrong
+		// in one of them.
 		build: func(a Action) *cmd {
 			var req apicontract.SubmitOperationRequest
 			if !decode(a.Body, &req) {
 				return nil
 			}
 			switch req.Action {
-			case "restore":
+			case apicontract.ActionRestorePlacement:
 				if req.Restore == nil {
 					return nil
 				}
@@ -81,6 +135,19 @@ var routes = map[string]entry{
 					c.bare("acknowledge")
 				}
 				return c
+			case apicontract.ActionRunBackupSet:
+				// Its own sentence, because it is its own act. `fetch`
+				// runs one backup set's cycle and is the verb an operator
+				// reaches for, and it is not this for the same reason
+				// `run` is not a run_cycle: usage() puts both among the
+				// commands that are "ordinary beside a running engine",
+				// so it opens the service in the operator's own process
+				// and runs the set THERE, while this asks the serving
+				// engine to run it. Answering with run_cycle's sentence,
+				// which is what happened until #599's review, sends
+				// somebody asking about one set to a verb about all of
+				// them.
+				return newCmd().refuse(gapRunBackupSet)
 			default:
 				// The gap the issue names, and the one a lazier
 				// implementation gets wrong. `backup-manager run`
@@ -91,12 +158,16 @@ var routes = map[string]entry{
 				// to run one. Printing `backup-manager run` would print
 				// a command that does something different to a
 				// different process.
-				return newCmd().refuse("`backup-manager run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process")
+				return newCmd().refuse(gapRunCycle)
 			}
 		},
-		why: "`backup-manager run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process",
+		why:               gapRunCycle,
+		refusals:          []string{gapRunCycle, gapRunBackupSet},
+		namesShippedVerbs: []string{"run", "fetch"},
 		examples: []Action{
-			{Body: []byte(`{"action":"restore","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)},
+			{Body: []byte(`{"action":"` + apicontract.ActionRestorePlacement + `","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)},
+			{Body: []byte(`{"action":"` + apicontract.ActionRunBackupSet + `","config_revision":"r1","backup_set_id":"api-server/var-backups"}`)},
+			{Body: []byte(`{"action":"` + apicontract.ActionRunCycle + `","config_revision":"r1"}`)},
 		},
 	},
 	key("GET", "/operations"): {
@@ -112,7 +183,8 @@ var routes = map[string]entry{
 		examples: []Action{{}},
 	},
 	key("GET", "/backup-sets/*"): {
-		why: "`sources` lists every configured backup set; there is no verb that prints one on its own",
+		why:               "`sources` lists every configured backup set; there is no verb that prints one on its own",
+		namesShippedVerbs: []string{"sources"},
 	},
 	key("POST", "/backup-sets"): {
 		build: func(a Action) *cmd {
@@ -217,10 +289,12 @@ var routes = map[string]entry{
 		// --disabled is in backupSetCreateOnlyFlags, so `backup-set
 		// patch` refuses it: a set can be created disabled from a
 		// terminal and never enabled or disabled again from one.
-		why: "`backup-set patch` refuses --disabled, which is a create-only flag, so there is no verb that enables or disables a set that already exists",
+		why:               "`backup-set patch` refuses --disabled, which is a create-only flag, so there is no verb that enables or disables a set that already exists",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("POST", "/backup-sets/{source}/{set}/read-only"): {
-		why: "`backup-set patch` refuses --read-only, which is a create-only flag, so there is no verb that changes a set's read-only posture after it exists",
+		why:               "`backup-set patch` refuses --read-only, which is a create-only flag, so there is no verb that changes a set's read-only posture after it exists",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("GET", "/backup-sets/{source}/{set}/retention"): {
 		build:    func(a Action) *cmd { return newCmd("backup-set", "retention", setID(a)) },
@@ -233,6 +307,7 @@ var routes = map[string]entry{
 				return nil
 			}
 			c := newCmd("backup-set", "retention", setID(a))
+			wrote := false
 			if len(req.Tiers) > 0 {
 				// A whole tier chain does not fit on a command line and
 				// the CLI does not pretend it does: --policy-file takes
@@ -240,27 +315,46 @@ var routes = map[string]entry{
 				// the flag is named and its value is a placeholder,
 				// which is what makes the line say it is not runnable as
 				// printed rather than quietly wrong.
-				c.placeholderFlag("policy-file", "a file holding these tiers as a retention: block")
+				//
+				// And it is named ALONE. --policy-file carries the whole
+				// retention section, so `backup-set retention` refuses it
+				// beside --timezone and the rest (backupsetretention.go's
+				// second mutual-exclusion rule); a body carrying tiers
+				// and a timezone would otherwise have printed a line the
+				// binary exits 2 on. Those values are in the block, which
+				// is what the placeholder says.
+				c.placeholderFlag("policy-file", "a file holding this whole retention: block")
+				wrote = true
+			} else {
+				if req.Timezone != "" {
+					c.flag("timezone", req.Timezone)
+					wrote = true
+				}
+				if req.WeekStartsOn != "" {
+					c.flag("week-starts-on", req.WeekStartsOn)
+					wrote = true
+				}
+				if req.DailyDays > 0 {
+					c.flag("daily-days", itoa(req.DailyDays))
+					wrote = true
+				}
+				if req.WeeklyMonths > 0 {
+					c.flag("weekly-months", itoa(req.WeeklyMonths))
+					wrote = true
+				}
+				if req.MonthlyMonths > 0 {
+					c.flag("monthly-months", itoa(req.MonthlyMonths))
+					wrote = true
+				}
+				if req.ProtectLastKnownGood != nil {
+					c.assigned("protect-last-known-good", *req.ProtectLastKnownGood)
+					wrote = true
+				}
 			}
-			if req.Timezone != "" {
-				c.flag("timezone", req.Timezone)
-			}
-			if req.WeekStartsOn != "" {
-				c.flag("week-starts-on", req.WeekStartsOn)
-			}
-			if req.DailyDays > 0 {
-				c.flag("daily-days", itoa(req.DailyDays))
-			}
-			if req.WeeklyMonths > 0 {
-				c.flag("weekly-months", itoa(req.WeeklyMonths))
-			}
-			if req.MonthlyMonths > 0 {
-				c.flag("monthly-months", itoa(req.MonthlyMonths))
-			}
-			if req.ProtectLastKnownGood != nil {
-				c.assigned("protect-last-known-good", *req.ProtectLastKnownGood)
-			}
-			if req.AcknowledgeMediumDisclosure {
+			// The acknowledgement consents to a policy write, and the CLI
+			// refuses it on a command line that writes no policy, so it
+			// only goes on beside one.
+			if req.AcknowledgeMediumDisclosure && wrote {
 				c.bare("acknowledge-medium-disclosure")
 			}
 			return c
@@ -271,6 +365,11 @@ var routes = map[string]entry{
 				Body: []byte(`{"daily_days":7,"weekly_months":3,"monthly_months":12,"timezone":"Europe/Berlin","week_starts_on":"monday","protect_last_known_good":false,"acknowledge_medium_disclosure":true}`)},
 			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
 				Body: []byte(`{"tiers":[{"name":"daily","granularity":"day","keep":7}]}`)},
+			// A chain AND the scalars that go in the block with it, which
+			// is the shape that used to print --policy-file beside
+			// --timezone and get exit 2.
+			{Params: map[string]string{"source": "api-server", "set": "var-backups"},
+				Body: []byte(`{"tiers":[{"name":"daily","granularity":"day","keep":7}],"timezone":"Europe/Berlin","week_starts_on":"monday","acknowledge_medium_disclosure":true}`)},
 		},
 	},
 	key("DELETE", "/backup-sets/{source}/{set}/retention"): {
@@ -284,19 +383,49 @@ var routes = map[string]entry{
 		examples: []Action{{Params: map[string]string{"source": "api-server", "set": "var-backups"}}},
 	},
 	key("POST", "/backup-sets/{source}/{set}/retention/apply"): {
-		// usage() is explicit that this is deliberate rather than
-		// missing: "FR-20 deletion runs through the API's retention
-		// preview/apply pair, against a reviewed plan_id".
-		why: "deletion runs through the API's preview/apply pair against a reviewed plan_id on purpose; `retention` on a terminal previews and deletes nothing",
+		// This said `retention` on a terminal previews and deletes
+		// nothing, quoting a usage() line that #602 has since replaced:
+		// `retention apply <source/backup-set> --acknowledge` is in this
+		// tree, in retentionapply.go, and it deletes.
+		//
+		// The plan_id is not on the line and cannot be: over HTTP a plan
+		// is issued, rendered for an administrator and applied against a
+		// fingerprint of exactly what they were shown, while on a
+		// terminal the preview and the apply are one invocation and the
+		// person is the one who typed it. Both go through the same
+		// PreviewRetention/ApplyRetentionPlan pair and both are refused
+		// with RETENTION_PLAN_STALE if anything moved in between, so the
+		// act is the same act. --acknowledge is the terminal's half of
+		// the confirmation and is required, which is why it is on the
+		// line rather than conditional on anything in the body.
+		build: func(a Action) *cmd {
+			return newCmd("retention", "apply", setID(a)).bare("acknowledge")
+		},
+		examples: []Action{{Params: map[string]string{"source": "api-server", "set": "var-backups"},
+			Body: []byte(`{"plan_id":"plan_01HX"}`)}},
 	},
+	// Two of these three are commands now. #600 built `backup-set
+	// edit-hold <source/backup-set> [--release]`, which reports a hold
+	// and gives one back, so the entries saying no verb read or released
+	// one were describing a tree that had one open in the next file.
 	key("GET", "/backup-sets/{source}/{set}/edit-hold"): {
-		why: "there is no verb that reads a backup set's edit hold; a terminal edit takes and releases one for the duration of the command",
+		build:    func(a Action) *cmd { return newCmd("backup-set", "edit-hold", setID(a)) },
+		examples: []Action{{Params: map[string]string{"source": "api-server", "set": "var-backups"}}},
 	},
 	key("POST", "/backup-sets/{source}/{set}/edit-hold"): {
-		why: "there is no verb that takes an edit hold and leaves it held, because a hold outliving the command that took it is exactly what a browser needs and a terminal does not",
+		// The one that is still a gap, and usage() says the same thing in
+		// as many words: "There is no verb that TAKES a hold". A hold
+		// protects an editing session, a browser has one and a terminal
+		// does not, and a CLI edit is one `backup-set patch` that either
+		// runs or does not.
+		why:               "`backup-set edit-hold` reports a hold and releases one, and no verb TAKES one and leaves it held: a hold outliving the command that took it is exactly what a browser needs and a terminal does not",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("POST", "/backup-sets/{source}/{set}/edit-hold/release"): {
-		why: "there is no verb that releases an edit hold, for the same reason there is none that takes one",
+		build: func(a Action) *cmd {
+			return newCmd("backup-set", "edit-hold", setID(a)).bare("release")
+		},
+		examples: []Action{{Params: map[string]string{"source": "api-server", "set": "var-backups"}}},
 	},
 
 	// -------------------------------------------------------- backups ---
@@ -339,7 +468,8 @@ var routes = map[string]entry{
 
 	// ------------------------------------------------------ quarantine ---
 	key("GET", "/quarantine"): {
-		why: "there is no verb that lists quarantined backups; `quarantine` only acts on one, and `artifacts` does not filter by quarantine",
+		why:               "there is no verb that lists quarantined backups; `quarantine` only acts on one, and `artifacts` does not filter by quarantine",
+		namesShippedVerbs: []string{"artifacts", "quarantine"},
 	},
 	key("POST", "/quarantine/{source}/{set}/{name}/revalidate"): {
 		build:    func(a Action) *cmd { return newCmd("quarantine", "revalidate", artifactID(a)) },
@@ -355,11 +485,60 @@ var routes = map[string]entry{
 	},
 
 	// -------------------------------------------------------- activity ---
+	// Both of these said "there is no verb yet" and both verbs are in
+	// this same tree: #598 built `activity` and `activity --follow`, and
+	// main.go has dispatched them since. A gap that outlives the thing it
+	// describes is worse than no gap at all, because it tells an operator
+	// a feature does not exist while the binary beside them ships it, and
+	// TestNoGapClaimsAVerbThisBinaryShips is what stops it happening
+	// again.
 	key("GET", "/activity"): {
-		why: "there is no `activity` verb yet, so the durable journal cannot be read from a terminal at all (issue #598)",
+		build: func(a Action) *cmd {
+			c := newCmd("activity")
+			// The one query parameter this route reads. The handler
+			// treats an absent, unparseable or non-positive value as the
+			// backend's own default, so a line that printed --limit 0
+			// would be naming a value the request did not make.
+			if n := positiveQuery(a, "limit"); n > 0 {
+				c.flag("limit", itoa(n))
+			}
+			return c
+		},
+		examples: []Action{{}, {Query: mustQuery("limit=50")}},
 	},
 	key("GET", "/activity/live"): {
-		why: "there is no `activity --follow` yet, so the live feed this terminal shows cannot be watched from a terminal (issues #598 and #599)",
+		build: func(a Action) *cmd {
+			// scope=deployment narrows the read to the deployment's own
+			// bucket and no set at all, and --backup-set cannot say it:
+			// naming no set already means every set. So this is a real
+			// gap on a route that otherwise has a command, and it is
+			// named as one rather than being answered with the wider
+			// read, which would print a command that shows an operator
+			// more than the panel they are reading does.
+			if a.Query.Get("scope") == "deployment" {
+				return newCmd().refuse(gapDeploymentScope)
+			}
+			c := newCmd("activity").bare("follow")
+			if set := a.Query.Get("backup_set"); set != "" {
+				c.flag("backup-set", set)
+			}
+			if n := positiveQuery(a, "limit"); n > 0 {
+				c.flag("limit", itoa(n))
+			}
+			// `since` is deliberately not echoed. It is the browser's
+			// resume cursor, a sequence number from a feed it was already
+			// reading, and a follow started at a terminal starts from
+			// now; there is no flag for it and there should not be one.
+			return c
+		},
+		refusals:          []string{gapDeploymentScope},
+		namesShippedVerbs: []string{"activity"},
+		examples: []Action{
+			{},
+			{Query: mustQuery("backup_set=api-server%2Fvar-backups&limit=25")},
+			{Query: mustQuery("since=42")},
+			{Query: mustQuery("scope=deployment")},
+		},
 	},
 
 	// --------------------------------------------------------- storage ---
@@ -371,17 +550,23 @@ var routes = map[string]entry{
 	// from a terminal instead of only by hand-editing config.yaml, and it
 	// is why nothing down here has to say "there is no verb that".
 	//
-	// # Not one of these lines can carry an S3 secret
+	// # What these lines can and cannot carry
 	//
-	// That is a property of the CLI rather than of care taken here, which
-	// is the only kind of guarantee worth having on a panel that is
-	// copy-to-clipboard and exportable. `medium` declares no flag that
-	// takes credential material and mediumFlags says so in as many words:
-	// all four credential flags name a REFERENCE (an id this deployment
-	// minted, a path, a variable NAME, a command), and the material itself
-	// reaches the binary only on standard input. So these are the commands
-	// that actually work, byte for byte, with nothing starred out and no
-	// placeholder to apologise for.
+	// `medium` declares no flag that takes credential MATERIAL: the
+	// material reaches the binary only on standard input, and the four
+	// credential flags name an id this deployment minted, a path, a
+	// variable NAME, and a command. Three of those four are references and
+	// go on the line exactly as the request sent them.
+	//
+	// The fourth is not a reference, and neither is the endpoint. A
+	// credentials command is a program and its arguments, written by
+	// whoever made the request, and an endpoint URL takes userinfo in a
+	// spelling rclone accepts and this contract does not validate. Both
+	// were printed in full until #599's review, on a panel that is
+	// copy-to-clipboard and exportable. So a command is named with a
+	// placeholder and never printed, an endpoint has its userinfo removed,
+	// and mediumSpecFlags says which of its flags are which. Everything
+	// else down here is the command that actually works, byte for byte.
 	key("GET", "/storage-mediums"): {
 		build:    func(Action) *cmd { return newCmd("medium", "list") },
 		examples: []Action{{}},
@@ -506,7 +691,8 @@ var routes = map[string]entry{
 
 	// ------------------------------------------------------ validators ---
 	key("GET", "/validators"): {
-		why: "there is no verb that lists the registered validators; on a terminal an id is named on `backup-set create --validator-id` and refused if it is not one",
+		why:               "there is no verb that lists the registered validators; on a terminal an id is named on `backup-set create --validator-id` and refused if it is not one",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 
 	// ------------------------------------------------------------- ssh ---
@@ -517,7 +703,8 @@ var routes = map[string]entry{
 		// `backup-set create --ssh-key-file`. There is no import verb, so
 		// there is nothing to print, and what is printed instead names
 		// the flag and never the material.
-		why: "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line",
+		why:               "a key reaches the CLI as a file on `backup-set create --ssh-key-file <the private key file you chose>`; there is no verb that imports one on its own, and the key itself never goes on a command line",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 	// The other import (#592), and a DIFFERENT gap from the one above,
 	// which is why it is a separate sentence rather than a clause on that
@@ -544,7 +731,8 @@ var routes = map[string]entry{
 	// pastes and gets exit 2 from, which the dispatcher-driven parity
 	// test in core/cmd/backup-manager catches on purpose.
 	key("GET", "/ssh-keys"): {
-		why: "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `backup-manager ssh-key list` would be it",
+		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `backup-manager ssh-key list` would be it",
+		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("GET", "/ssh/key-candidates"): {
 		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `backup-manager ssh-key discover` would be it",
@@ -556,26 +744,41 @@ var routes = map[string]entry{
 		examples: []Action{{}},
 	},
 	key("PATCH", "/settings"): {
+		// This refused a tier-chain replacement outright, and quoted
+		// usage() as its authority: "a full retention tier-chain
+		// replacement is still a config-file edit". usage() now says the
+		// opposite, because #595 put --policy-file on `settings patch`,
+		// so the sentence was quoting a line that no longer existed while
+		// the flag it denied was three files away.
 		build: func(a Action) *cmd {
 			var req apicontract.UpdateSettingsRequest
 			if !decode(a.Body, &req) {
 				return nil
 			}
-			if req.Retention != nil && len(req.Retention.Tiers) > 0 {
-				// usage() says so in as many words: "a full retention
-				// tier-chain replacement is still a config-file edit".
-				return newCmd().refuse("`settings patch` takes the scalar retention and capacity settings; a full tier-chain replacement is still a config-file edit")
-			}
 			c := newCmd("settings", "patch")
+			policy := false
 			if r := req.Retention; r != nil {
-				if r.Timezone != nil {
-					c.flag("timezone", *r.Timezone)
-				}
-				if r.WeekStartsOn != nil {
-					c.flag("week-starts-on", *r.WeekStartsOn)
-				}
-				if r.ProtectLastKnownGood != nil {
-					c.assigned("protect-last-known-good", *r.ProtectLastKnownGood)
+				if len(r.Tiers) > 0 {
+					// The chain, as a file. --policy-file carries the
+					// whole retention section and `settings patch`
+					// refuses it beside --timezone and the rest, so a
+					// request that also carried those scalars has them
+					// inside the block rather than beside it.
+					c.placeholderFlag("policy-file", "a file holding this retention: block")
+					policy = true
+				} else {
+					if r.Timezone != nil {
+						c.flag("timezone", *r.Timezone)
+						policy = true
+					}
+					if r.WeekStartsOn != nil {
+						c.flag("week-starts-on", *r.WeekStartsOn)
+						policy = true
+					}
+					if r.ProtectLastKnownGood != nil {
+						c.assigned("protect-last-known-good", *r.ProtectLastKnownGood)
+						policy = true
+					}
 				}
 			}
 			if cap := req.Capacity; cap != nil {
@@ -592,12 +795,19 @@ var routes = map[string]entry{
 					c.flag("safety-margin-bytes", itoa64(*cap.SafetyMarginBytes))
 				}
 			}
+			// The acknowledgement rides beside a policy write and the CLI
+			// refuses it on a line that writes none.
+			if req.AcknowledgeMediumDisclosure && policy {
+				c.bare("acknowledge-medium-disclosure")
+			}
 			return c
 		},
-		why: "`settings patch` takes the scalar retention and capacity settings; a full tier-chain replacement is still a config-file edit",
+		why: "there is no verb that patches the deployment's settings from a request body",
 		examples: []Action{
 			{Body: []byte(`{"retention":{"timezone":"Europe/Berlin","week_starts_on":"monday","protect_last_known_good":false}}`)},
 			{Body: []byte(`{"capacity":{"cap_bytes":1099511627776,"warning_free_bytes":107374182400,"critical_free_bytes":53687091200,"safety_margin_bytes":1073741824}}`)},
+			{Body: []byte(`{"retention":{"tiers":[{"name":"daily","granularity":"day","keep":7}],"timezone":"Europe/Berlin"},"acknowledge_medium_disclosure":true}`)},
+			{Body: []byte(`{"retention":{"tiers":[{"name":"daily","granularity":"day","keep":7}]},"capacity":{"cap_bytes":1099511627776}}`)},
 		},
 	},
 }
@@ -667,11 +877,26 @@ func backupSetCreateCommand(spec apicontract.BackupSetSpec, runNow, acknowledgeR
 // these routes, on the reasoning that what is proven and what is saved
 // must not be able to be different destinations.
 //
-// No flag here can carry credential material, and that is a fact about
-// apicontract.StorageMediumRequest rather than a rule applied at this call
-// site: FR-33 leaves no field on that type a secret could have arrived in,
-// and the four credential spellings are an id, a path, a variable NAME and
-// a command.
+// Two of these flags are printed differently from what the request
+// carried, and both are corrections to a claim this doc used to make. It
+// said no flag here could carry credential material, as a fact about
+// apicontract.StorageMediumRequest rather than a rule applied here. That
+// was true of the three credential spellings that name a reference (an id
+// this deployment minted, a path, a variable NAME) and false of the other
+// two fields a secret can reach this function in:
+//
+//   - Endpoint is a free string this contract deliberately does not
+//     validate, and https://AKIA...:wJalr...@minio.internal:9000 is a
+//     spelling rclone accepts. endpointWithoutUserinfo takes the
+//     credential out and leaves the address.
+//   - Credentials.Command is a program and its arguments, both the
+//     caller's words. It is named with a placeholder and never printed.
+//
+// What holds that now is not this paragraph. It is
+// TestNoRequestFieldReachesTheArgvUnlessItIsEchoedOnPurpose, which drives
+// every builder with a body whose every string field, on every schema in
+// the contract, carries a distinct canary, and fails on any canary that
+// reaches an argv behind a flag nobody wrote an exemption for.
 //
 // flagIfSet throughout, for backupSetCreateCommand's reason: a field the
 // request did not carry must not echo as a flag with an empty value after
@@ -683,7 +908,11 @@ func backupSetCreateCommand(spec apicontract.BackupSetSpec, runNow, acknowledgeR
 func mediumSpecFlags(c *cmd, req apicontract.StorageMediumRequest) *cmd {
 	c.flagIfSet("type", req.Type)
 	c.flagIfSet("region", req.Region)
-	c.flagIfSet("endpoint", req.Endpoint)
+	// The endpoint with any userinfo taken out of it. See
+	// endpointWithoutUserinfo: a credential can be spelled into this
+	// field, and this is the one flag here whose value is not printed
+	// exactly as the request sent it.
+	c.flagIfSet("endpoint", endpointWithoutUserinfo(req.Endpoint))
 	c.flagIfSet("bucket", req.Bucket)
 	c.flagIfSet("prefix", req.Prefix)
 	c.flagIfSet("storage-class", req.StorageClass)
@@ -692,10 +921,14 @@ func mediumSpecFlags(c *cmd, req apicontract.StorageMediumRequest) *cmd {
 	c.flagIfSet("credentials-file", req.Credentials.File)
 	c.flagIfSet("credentials-env", req.Credentials.Env)
 	if len(req.Credentials.Command) > 0 {
-		// The CLI splits this one on spaces itself and runs it directly,
-		// never through a shell, so joining on spaces here is how the
-		// words go back together the same way they came apart.
-		c.flag("credentials-command", strings.Join(req.Credentials.Command, " "))
+		// Named and never printed, unlike its three siblings. Those name
+		// a reference this deployment already holds; this one is a
+		// program and its arguments, both of them the caller's words, and
+		// `printf %s AKIA...:wJalr...` is a valid credentials command and
+		// a credential on a command line. No test can tell that apart
+		// from an innocent one, so the value does not go on the line at
+		// all and the line says it is not runnable as printed.
+		c.placeholderFlag("credentials-command", "the command that prints these credentials")
 	}
 	return c
 }
