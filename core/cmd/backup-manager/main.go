@@ -261,6 +261,9 @@ commands:
                                                   is what makes it scriptable across a fleet; --no-verify skips
                                                   that and says in its own output that nothing was proven. Every
                                                   credential flag names a REFERENCE and never material
+                                                  a --no-verify destination is MARKED unverified in config.yaml and
+                                                  stays marked until a test connection passes, so an operator who did
+                                                  not type the command can still tell it apart from a proven one (#636)
   medium edit <medium-id> [the same flags]       replace a destination's description. A flag left off keeps what
                                                   the destination already says, and leaving the credential flags
                                                   off keeps the credential already configured, which it has to:
@@ -276,6 +279,11 @@ commands:
                                                   asks whether the medium's declared upload_verification can
                                                   actually be achieved there, and deletes the probe. Exits non-zero
                                                   when any check fails (#443)
+                                                  a check that PASSES clears a --no-verify destination's unverified
+                                                  mark, which is a configuration write, so this verb goes where the
+                                                  writes go: beside a serving engine it is carried out there, and is
+                                                  refused when nothing says how to reach it. A failing check leaves
+                                                  the mark alone (#636)
   medium preflight --candidate <medium-id> [the add flags]
                                                   the same eight checks against a destination that is NOT declared,
                                                   so a setup flow proves one before it is written down. It writes

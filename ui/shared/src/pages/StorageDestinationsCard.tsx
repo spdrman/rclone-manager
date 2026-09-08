@@ -241,6 +241,14 @@ function DestinationRow({
       // act on. Nothing about this fetch changes any state; it reads the
       // journal.
       setUsage(result.ok ? null : await api.getStorageMediumUsage(medium.id));
+      // A check that PASSED against a destination carrying #636's mark has
+      // just cleared it, server-side, so the list is re-read and the banner
+      // below goes away in the same act that earned it. Only on a pass, and
+      // only when there was a mark: a re-read after every button press
+      // would be a request for nothing, and a banner that survived the
+      // check that clears it is the thing an operator would report as a
+      // bug.
+      if (result.ok && medium.connectionUnverified) onChanged();
     } catch (e) {
       setFailure(apiErrorOf(e));
     } finally {
@@ -314,6 +322,15 @@ function DestinationRow({
             reads need a restore
           </span>
         ) : null}
+        {medium.connectionUnverified ? (
+          <span
+            className="badge"
+            style={{ color: "var(--warn)" }}
+            title="This destination was declared without a check. A test connection that passes clears this."
+          >
+            never proven
+          </span>
+        ) : null}
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -349,6 +366,25 @@ function DestinationRow({
           This is not something the configuration declares, so there is nothing here to edit and
           nothing to remove. Every retention tier that names no other destination keeps its backups
           here.
+        </p>
+      ) : null}
+      {/* Issue #636: a destination nobody ever proved, said out loud.
+          This is what stops `--no-verify` being a hole rather than an
+          escape hatch: the sentence the command printed was read once, by
+          whoever typed it, and this is what is still here for the operator
+          who did not. It clears itself the moment the Test connection
+          button above comes back green, so it is a state rather than a
+          permanent scar on a destination that happened to be declared
+          offline.
+
+          There is no button of its own here, deliberately. The control
+          that clears this is already on the row, two lines up, and a
+          second one would be two ways to do one thing. */}
+      {medium.connectionUnverified ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--warn)", maxWidth: "74ch" }}>
+          This destination was declared without a check, so nothing has shown that its credential is
+          accepted, that the bucket is there, or that an object written here can be read back. Test
+          connection clears this when it passes.
         </p>
       ) : null}
 

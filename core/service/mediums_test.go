@@ -109,6 +109,16 @@ func TestCreateStorageMedium_WritesTheDeclarationAndNoSecret(t *testing.T) {
 		Prefix:       "monthly",
 		StorageClass: "STANDARD_IA",
 		Credentials:  StorageMediumCredentials{ID: ref.ID},
+		// Issue #636: every write in this package's suite carries the
+		// skip, and that is a statement about scope rather than a
+		// workaround. CreateStorageMedium and UpdateStorageMedium prove
+		// the destination in front of the write, and this fixture's
+		// endpoint is a bucket nothing here has, so without the skip
+		// every case that needs a destination to exist would drive
+		// #636's refusal, or worse reach a real provider, instead of
+		// testing whatever it is about. The check has its own cases, in
+		// mediumcreatecheck_test.go, and they turn the skip back off.
+		SkipConnectionCheck: true,
 	}
 	got, err := svc.CreateStorageMedium(context.Background(), spec)
 	if err != nil {
@@ -153,7 +163,8 @@ func TestCreateStorageMedium_RefusesADuplicateIdAndWritesNothing(t *testing.T) {
 	}
 	spec := StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",
-		Credentials: StorageMediumCredentials{ID: ref.ID},
+		Credentials:         StorageMediumCredentials{ID: ref.ID},
+		SkipConnectionCheck: true,
 	}
 	if _, err := svc.CreateStorageMedium(context.Background(), spec); err != nil {
 		t.Fatalf("CreateStorageMedium: %v", err)
@@ -186,7 +197,8 @@ func TestRemoveStorageMedium_RefusesWhileAPlacementNamesIt(t *testing.T) {
 	}
 	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",
-		Credentials: StorageMediumCredentials{ID: ref.ID},
+		Credentials:         StorageMediumCredentials{ID: ref.ID},
+		SkipConnectionCheck: true,
 	}); err != nil {
 		t.Fatalf("CreateStorageMedium: %v", err)
 	}
@@ -284,6 +296,16 @@ func declareTestMedium(t *testing.T, svc *BackupService, id string) {
 	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: id, Type: "s3", Region: "us-east-1", Bucket: "nas-backups", Prefix: "monthly",
 		Credentials: StorageMediumCredentials{ID: ref.ID},
+		// Issue #636: every write in this package's suite carries the
+		// skip, and that is a statement about scope rather than a
+		// workaround. CreateStorageMedium and UpdateStorageMedium prove
+		// the destination in front of the write, and this fixture's
+		// endpoint is a bucket nothing here has, so without the skip
+		// every case that needs a destination to exist would drive
+		// #636's refusal, or worse reach a real provider, instead of
+		// testing whatever it is about. The check has its own cases, in
+		// mediumcreatecheck_test.go, and they turn the skip back off.
+		SkipConnectionCheck: true,
 	}); err != nil {
 		t.Fatalf("CreateStorageMedium: %v", err)
 	}
@@ -376,8 +398,9 @@ func TestUpdateStorageMedium_IsAllowedOnAMediumCopiesNameIt(t *testing.T) {
 	}
 	got, err := svc.UpdateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "eu-west-1", Bucket: "nas-backups", Prefix: "monthly",
-		StorageClass: "STANDARD_IA",
-		Credentials:  StorageMediumCredentials{ID: ref.ID},
+		StorageClass:        "STANDARD_IA",
+		Credentials:         StorageMediumCredentials{ID: ref.ID},
+		SkipConnectionCheck: true,
 	})
 	if err != nil {
 		t.Fatalf("UpdateStorageMedium on an in-use medium: %v", err)
@@ -413,7 +436,8 @@ func TestUpdateStorageMedium_KeepsTheCredentialWhenTheEditNamesNone(t *testing.T
 
 	if _, err := svc.UpdateStorageMedium(context.Background(), StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups", Prefix: "monthly",
-		StorageClass: "STANDARD_IA",
+		StorageClass:        "STANDARD_IA",
+		SkipConnectionCheck: true,
 	}); err != nil {
 		t.Fatalf("UpdateStorageMedium with no credential named: %v", err)
 	}
@@ -459,8 +483,9 @@ func TestStorageMediumSummary_CarriesEveryFieldAnEditMustPreserve(t *testing.T) 
 	spec := StorageMediumSpec{
 		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Endpoint: "https://minio.internal:9000",
 		Bucket: "nas-backups", Prefix: "monthly", StorageClass: "STANDARD_IA",
-		UploadVerification: "readback",
-		Credentials:        StorageMediumCredentials{ID: ref.ID},
+		UploadVerification:  "readback",
+		Credentials:         StorageMediumCredentials{ID: ref.ID},
+		SkipConnectionCheck: true,
 	}
 	got, err := svc.CreateStorageMedium(context.Background(), spec)
 	if err != nil {

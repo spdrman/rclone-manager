@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -524,5 +525,146 @@ func TestRemoveStorageMedium_RefusesTheDefaultUnderItsOwnCode(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "default") {
 		t.Errorf("the refusal does not say why it refused:\n%s", rec.Body.String())
+	}
+}
+
+// TestCreateStorageMedium_AnUnprovenDestinationIsRefusedAsDeclared is
+// #636 on this route: the service proves a create's destination itself
+// now, and this handler has to answer a 409 the contract actually
+// declares for the operation. A refusal a client is never told about is
+// one it cannot handle, and this is the one a third-party client that
+// never ran the candidate check will meet first.
+func TestCreateStorageMedium_AnUnprovenDestinationIsRefusedAsDeclared(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnMediumWrite = fmt.Errorf(
+		"%w: the reach check failed. the endpoint answered and does not have bucket \"nas-backups\"",
+		service.ErrStorageMediumNotProven)
+
+	rec := rt.post(t, "/api/v1/storage-mediums", candidateBody)
+	mustStatus(t, rec, http.StatusConflict)
+	code := responseErrorCode(rec.Body.String())
+	if code != "MEDIUM_CONNECTION_NOT_PROVEN" {
+		t.Fatalf("error code = %q, want MEDIUM_CONNECTION_NOT_PROVEN", code)
+	}
+	// The step that failed reaches the caller. A refusal with nothing to
+	// act on is a "no", and the whole point of an eight-step report is
+	// that knowing WHICH step failed is most of the diagnosis.
+	if !strings.Contains(rec.Body.String(), "reach") {
+		t.Errorf("the refusal does not name the step that failed:\n%s", rec.Body.String())
+	}
+	declared := contractEndpoints()["createStorageMedium"].ErrorCodes[http.StatusConflict]
+	found := false
+	for _, c := range declared {
+		if string(c) == code {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the handler returned 409 %q, which api/v1/openapi.json does not declare for createStorageMedium at that status (it declares %v)", code, declared)
+	}
+}
+
+// TestUpdateStorageMedium_AnUnprovenEditIsRefusedAsDeclared is the same
+// thing on the edit route, which had no 409 at all before #636. An edit
+// that cannot reach the destination it would create deserves the check
+// more than a create does: a create that fails has produced nothing, and
+// an edit that fails has broken a destination that was working.
+func TestUpdateStorageMedium_AnUnprovenEditIsRefusedAsDeclared(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD", UploadVerification: "readback"},
+	}
+	rt.backend.errOnMediumWrite = fmt.Errorf(
+		"%w: the reach check failed. the endpoint could not be reached",
+		service.ErrStorageMediumNotProven)
+
+	rec := rt.put(t, "/api/v1/storage-mediums/offsite_s3",
+		`{"type":"s3","region":"eu-west-1","bucket":"nas-backups-2","storage_class":"STANDARD_IA"}`)
+	mustStatus(t, rec, http.StatusConflict)
+	code := responseErrorCode(rec.Body.String())
+	if code != "MEDIUM_CONNECTION_NOT_PROVEN" {
+		t.Fatalf("error code = %q, want MEDIUM_CONNECTION_NOT_PROVEN", code)
+	}
+	declared := contractEndpoints()["updateStorageMedium"].ErrorCodes[http.StatusConflict]
+	found := false
+	for _, c := range declared {
+		if string(c) == code {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the handler returned 409 %q, which api/v1/openapi.json does not declare for updateStorageMedium at that status (it declares %v)", code, declared)
+	}
+}
+
+// TestStorageMediumWrites_CarryTheSkipAndNeverTheMark is the review
+// finding PR #628 made on the source side, asked here before it can
+// happen: `skip_connection_check` is an INSTRUCTION the service acts on,
+// and there is no field on this body that sets the mark directly.
+//
+// The mark half is asserted by decoding into the request shape rather
+// than by reading the struct, because the property is about what a CALLER
+// can send: a body naming connection_unverified must not be able to write
+// one. additionalProperties is false on this schema, so the check that
+// matters here is that the spec the backend receives carries the mark
+// from nowhere.
+func TestStorageMediumWrites_CarryTheSkipAndNeverTheMark(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	skipping := `{"id":"offsite_s3","type":"s3","region":"us-east-1","bucket":"nas-backups",` +
+		`"credentials":{"credentials_id":"9b41c7e2"},"skip_connection_check":true}`
+	mustStatus(t, rt.post(t, "/api/v1/storage-mediums", skipping), http.StatusCreated)
+	if !rt.backend.lastMediumSpec.SkipConnectionCheck {
+		t.Error("skip_connection_check did not reach the backend, so the API has no way to write a destination offline")
+	}
+
+	mustStatus(t, rt.post(t, "/api/v1/storage-mediums", candidateBody), http.StatusCreated)
+	if rt.backend.lastMediumSpec.SkipConnectionCheck {
+		t.Error("a body that said nothing about the check arrived asking to skip it; the default has to be the one that checks")
+	}
+
+	var decoded storageMediumRequest
+	body := `{"id":"offsite_s3","type":"s3","bucket":"nas-backups","connection_unverified":true}`
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.spec().SkipConnectionCheck {
+		t.Error("a caller's own claim about what it had done became an instruction to skip the check")
+	}
+}
+
+// TestStorageMediumBody_ReportsTheMarkAndOmitsItWhenFalse is what makes
+// an unverified destination visible on this API at all.
+//
+// Omitted when false on purpose, and that is not a byte count. An engine
+// built before this field omits it always, so a client that read absence
+// as a claim either way would be reading a version difference as a fact
+// about somebody's bucket. Absence means "nothing here says this was
+// skipped".
+func TestStorageMediumBody_ReportsTheMarkAndOmitsItWhenFalse(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD",
+			UploadVerification: "readback", ConnectionUnverified: true},
+		{ID: "cold_vault", Type: "s3", Bucket: "nas-archive", StorageClass: "STANDARD",
+			UploadVerification: "readback"},
+	}
+
+	rec := rt.get(t, "/api/v1/storage-mediums")
+	mustStatus(t, rec, http.StatusOK)
+
+	var got listStorageMediumsResponse
+	decodeInto(t, rec, &got)
+	if len(got.Mediums) != 2 {
+		t.Fatalf("the list carries %d destinations, want 2", len(got.Mediums))
+	}
+	if !got.Mediums[0].ConnectionUnverified {
+		t.Error("a destination the engine reports as never proven reads back as one that was checked")
+	}
+	if got.Mediums[1].ConnectionUnverified {
+		t.Error("a destination the engine says nothing about reads back as unverified")
+	}
+	if strings.Count(rec.Body.String(), "connection_unverified") != 1 {
+		t.Errorf("the mark is rendered for a destination that does not carry it, so absence stops meaning absence:\n%s", rec.Body.String())
 	}
 }

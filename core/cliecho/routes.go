@@ -629,20 +629,27 @@ var routes = map[string]entry{
 		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
 	},
 	key("POST", "/storage-mediums"): {
-		// `medium add` proves the destination before it writes it, which
-		// this route on its own does not: the wizard preflights first, on
-		// the route below, and then saves here. So the two lines an
-		// operator reads back are a candidate preflight followed by an
-		// add, and the add re-proves what the preflight just proved. That
-		// is a repeated check rather than a wrong command, and the
-		// alternative is worse: --no-verify would echo a save that skips
-		// a check the browser DID perform.
+		// `medium add` proves the destination before it writes it, and so
+		// does this route since #636: the check is the engine's now,
+		// whoever the caller is. The wizard still preflights first, on the
+		// route below, and then saves here, so the two lines an operator
+		// reads back are a candidate preflight followed by an add and the
+		// add re-proves what the preflight just proved. That is a repeated
+		// check rather than a wrong command.
+		//
+		// --no-verify is echoed when, and only when, the request asked to
+		// skip. The browser never does: the wizard cannot save until its
+		// own check has come back green, so there is nothing there to
+		// skip. A request that DID skip and a line that did not would be a
+		// printed command that behaves differently from the action it
+		// claims to be the equivalent of, which is the one thing this
+		// whole surface exists to avoid.
 		build: func(a Action) *cmd {
 			var req apicontract.StorageMediumRequest
 			if !decode(a.Body, &req) {
 				return nil
 			}
-			return mediumSpecFlags(newCmd("medium", "add", req.ID), req)
+			return mediumSkipFlag(mediumSpecFlags(newCmd("medium", "add", req.ID), req), req)
 		},
 		why: "there is no verb that declares a storage destination from a request body",
 		examples: []Action{
@@ -661,7 +668,7 @@ var routes = map[string]entry{
 			// different destination is refused outright, so by the time
 			// anything is written the two agree, and echoing the path id
 			// is echoing the one that was edited.
-			return mediumSpecFlags(newCmd("medium", "edit", a.Params["id"]), req)
+			return mediumSkipFlag(mediumSpecFlags(newCmd("medium", "edit", a.Params["id"]), req), req)
 		},
 		why: "there is no verb that edits a storage destination from a request body",
 		examples: []Action{
@@ -987,6 +994,25 @@ func mediumSpecFlags(c *cmd, req apicontract.StorageMediumRequest) *cmd {
 		// from an innocent one, so the value does not go on the line at
 		// all and the line says it is not runnable as printed.
 		c.placeholderFlag("credentials-command", "the command that prints these credentials")
+	}
+	return c
+}
+
+// mediumSkipFlag echoes issue #636's opt-out when the request carried it.
+//
+// It is separate from mediumSpecFlags because that function is shared with
+// the CANDIDATE preflight, where the field means nothing: that route IS
+// the check, so there is nothing for it to skip, and a `medium
+// test-connection --candidate --no-verify` line would be an instruction
+// nobody can mean.
+//
+// Bare rather than assigned, because the flag's own default is false: an
+// operator retyping this line gets the skip by naming it and gets the
+// check by leaving it off, which is the same shape `--candidate` beside
+// it has.
+func mediumSkipFlag(c *cmd, req apicontract.StorageMediumRequest) *cmd {
+	if req.SkipConnectionCheck {
+		return c.bare("no-verify")
 	}
 	return c
 }

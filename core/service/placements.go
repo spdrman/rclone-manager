@@ -177,6 +177,30 @@ type StorageMediumSummary struct {
 	Path      string
 	IsLocal   bool
 	IsDefault bool
+
+	// ConnectionUnverified reports that this destination was declared
+	// without ever having been proven (issue #636,
+	// config.StorageMedium.ConnectionUnverified).
+	//
+	// True means the caller told the service to skip the check it runs in
+	// front of every create and every destination-changing edit
+	// (SkipConnectionCheck on the spec, `--no-verify` on the CLI,
+	// `skip_connection_check` on the API), and nothing else writes it: the
+	// mark is the service's own record of what it did not do, never a
+	// caller's claim about what it did. False is every other destination,
+	// including every one declared before the mark existed, which is why
+	// absence is not read as "unverified".
+	//
+	// It is reported so a surface can DRAW the difference. A destination
+	// nobody ever proved and one checked against a real bucket used to be
+	// indistinguishable in every list, on every screen and in every
+	// command's output, which is what made --no-verify a hole rather than
+	// an escape hatch.
+	//
+	// Always false for the local hard drive: it is synthesised rather than
+	// declared, it has no create to skip and no bucket to prove, and #636
+	// puts it out of scope in so many words.
+	ConnectionUnverified bool
 }
 
 // VerificationClassInfo is one rung of FR-31's ladder, with the engine's
@@ -405,6 +429,11 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
 			IsDefault:           m.ID == defaultID,
+			// Read straight off the configuration rather than derived from
+			// anything: whether a destination was ever proven is not
+			// something its own history can answer, so it is only ever
+			// what somebody wrote (issue #636).
+			ConnectionUnverified: m.ConnectionUnverified,
 		})
 	}
 	return out

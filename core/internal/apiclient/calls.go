@@ -290,6 +290,26 @@ func (c *Client) GetStorageMedium(ctx context.Context, id string) (apicontract.S
 	return out, err
 }
 
+// PreflightStorageMedium is POST /storage-mediums/{id}/preflight: the
+// check by id, against a destination this deployment already declares.
+//
+// The candidate form beside it has been here since #594 because `medium
+// add` verifies before it writes and the check and the write have to
+// happen in one world. This one is here for a reason of its own, and it
+// arrived with #636: a check that PASSES now clears that destination's
+// unverified mark, which is a configuration write, so it belongs on the
+// door configuration writes go through rather than beside the reads. The
+// process that clears the mark has to be the process whose configuration
+// the mark is in.
+//
+// "local" is a legal id: the engine answers it with the local hard
+// drive's own check (#622), which is why nothing here filters the id.
+func (c *Client) PreflightStorageMedium(ctx context.Context, id string) (apicontract.MediumPreflightResponse, error) {
+	var out apicontract.MediumPreflightResponse
+	err := c.call(ctx, "preflightStorageMedium", []string{id}, nil, &out)
+	return out, err
+}
+
 // StorageMediumUsage is GET /storage-mediums/{id}/usage: FR-30's report of
 // what is actually on a destination, per backup set.
 func (c *Client) StorageMediumUsage(ctx context.Context, id string) (apicontract.StorageMediumUsageResponse, error) {

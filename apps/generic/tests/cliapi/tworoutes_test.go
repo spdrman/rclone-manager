@@ -671,8 +671,19 @@ type surface struct {
 	// because an argv turned out to be inert.
 	writes bool
 
-	// routed says a serving engine can carry this write. False on a write
-	// is a gap, and why is recorded in note rather than left to a reader.
+	// routed says this invocation goes through the write door, so a
+	// serving engine carries it and an unreachable one refuses it. False
+	// on a write is a gap, and why is recorded in note rather than left to
+	// a reader.
+	//
+	// It used to be readable as "a serving engine can carry this WRITE",
+	// because every row that had it was a write. #636 moved `medium
+	// preflight` onto that door without making it one: a check that passes
+	// clears a destination's unverified mark, which is a configuration
+	// write, but the invocation this table drives names a destination
+	// nothing declares and so writes nothing. The field is what it always
+	// checked, which is the door, and the reads test below reads it that
+	// way.
 	routed bool
 
 	// mode is the announcement this invocation makes with nothing serving:
@@ -765,8 +776,12 @@ var surfaces = []surface{
 		}},
 	{verb: "unconfigured", name: "what the journal remembers", mode: "", exit: 0,
 		argv: func(f fixture) []string { return []string{"unconfigured", "--config", f.configPath} }},
-	{verb: "medium", name: "preflight", mode: "", exit: 1,
-		note: "this deployment declares no storage medium, so this refuses for the missing subject",
+	{verb: "medium", name: "preflight", mode: "direct", exit: 1, routed: true,
+		note: "this deployment declares no storage medium, so this refuses for the missing subject. " +
+			"It names a mode as of #636 and did not before: a check that PASSES now clears that destination's " +
+			"unverified mark, which is a configuration write, so the verb moved onto the door the medium writes " +
+			"already go through. It is not a write ITSELF, which is why this row does not carry `writes`: the one " +
+			"thing it can change is a mark, and only on a destination that both exists and passes",
 		argv: func(f fixture) []string {
 			return []string{"medium", "--config", f.configPath, "preflight", "no-such-medium"}
 		}},
@@ -1258,7 +1273,16 @@ func TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWer
 
 	var reads int
 	for _, s := range surfaces {
-		if s.mode == "" || s.writes {
+		// A read is a row that names a mode, writes nothing, and does not
+		// go through the write door. The third clause arrived with #636
+		// and is not a loosening: a command on that door is REFUSED beside
+		// an engine it cannot reach, which is the opposite of what every
+		// assertion in this loop asks for, and `medium preflight` is on it
+		// now because a check that passes clears a mark. Without the
+		// clause it fell in here for the one reason this table cannot see
+		// on its own, which is that the invocation it drives names a
+		// destination nothing declares and therefore writes nothing.
+		if s.mode == "" || s.writes || s.routed {
 			continue
 		}
 		reads++

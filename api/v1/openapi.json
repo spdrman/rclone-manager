@@ -106,7 +106,8 @@
           "MEDIUM_EXISTS",
           "STORAGE_CREDENTIAL_NOT_FOUND",
           "SSH_KEY_CANDIDATE_NOT_FOUND",
-          "BACKUP_SET_CONNECTION_NOT_PROVEN"
+          "BACKUP_SET_CONNECTION_NOT_PROVEN",
+          "MEDIUM_CONNECTION_NOT_PROVEN"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -160,7 +161,8 @@
           "MEDIUM_EXISTS": "wire",
           "STORAGE_CREDENTIAL_NOT_FOUND": "wire",
           "SSH_KEY_CANDIDATE_NOT_FOUND": "wire",
-          "BACKUP_SET_CONNECTION_NOT_PROVEN": "wire"
+          "BACKUP_SET_CONNECTION_NOT_PROVEN": "wire",
+          "MEDIUM_CONNECTION_NOT_PROVEN": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -195,7 +197,8 @@
             "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
             "ARTIFACT_NOT_FAILED",
             "BACKUP_SET_CONNECTION_NOT_PROVEN",
-            "MEDIUM_IS_DEFAULT"
+            "MEDIUM_IS_DEFAULT",
+            "MEDIUM_CONNECTION_NOT_PROVEN"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -2790,6 +2793,11 @@
           "is_default": {
             "type": "boolean",
             "description": "True for the destination a NEWLY CREATED retention tier starts on. Exactly one entry in a list carries it. It says nothing about where anything currently is: moving it moves no backup and rewrites no tier, which is why it is one click and carries no disclosure (#622)."
+          },
+          "connection_unverified": {
+            "type": "boolean",
+            "description": "Whether this storage destination was declared without ever having been proven (issue #636). True means a caller deliberately skipped a check it could have run, which is `medium add --no-verify` and `skip_connection_check` and nothing else; a test connection that PASSES against it clears the mark, and one that fails leaves it alone. ABSENT is not \"unverified\": every configuration written before this field existed says nothing, an engine built before it answers nothing, and a client that read silence as a mark would declare every destination on every deployment unproven on the first upgrade. Read absence as \"nothing here says this was skipped\". Always absent for the local hard drive, which is not declared and has no bucket to prove.",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -3678,6 +3686,10 @@
           "credentials": {
             "$ref": "#/components/schemas/StorageMediumCredentialsReference",
             "description": "Where the credentials come from. Required on a create and on a candidate preflight. Optional on PUT, where omitting it keeps the credential already configured, which it has to: this contract never reports a medium's credential, not even its kind, so a caller cannot resubmit what it never received."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this destination without proving it first (issue #636). The service runs the same eight-step check POST /storage-mediums/preflight answers, in front of the write, and refuses with MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is the deliberate opt-out, and a destination written under it is marked connection_unverified until a check passes. The mark is the service's own record of the skip and is never taken from the request. It means nothing on POST /storage-mediums/preflight, which IS the check. Omitted or false checks, which is what every create should do."
           }
         },
         "required": [
@@ -8736,7 +8748,7 @@
             ]
           },
           "409": {
-            "description": "Refused: MEDIUM_EXISTS. That id is already declared. Nothing was written.",
+            "description": "Refused: MEDIUM_EXISTS, MEDIUM_CONNECTION_NOT_PROVEN. Either that id is already declared, or the destination this request describes could not be proven; the second is re-sent with skip_connection_check once the operator has decided to declare it unproven. Nothing was written either way.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8745,7 +8757,8 @@
               }
             },
             "x-error-codes": [
-              "MEDIUM_EXISTS"
+              "MEDIUM_EXISTS",
+              "MEDIUM_CONNECTION_NOT_PROVEN"
             ]
           },
           "401": {
@@ -9082,6 +9095,19 @@
             "x-error-codes": [
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_CONNECTION_NOT_PROVEN. This edit changes what the destination IS, and the destination it would become could not be proven. Nothing was written; re-send with skip_connection_check once the operator has decided to write it unproven.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {

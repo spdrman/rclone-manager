@@ -136,6 +136,26 @@ func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (
 	case err != nil:
 		return MediumPreflight{}, fmt.Errorf("service: preflighting storage medium %s: %w", id, err)
 	}
+
+	// Issue #636: a check that PASSED against a destination currently
+	// marked unverified takes the mark off, and that is the only thing
+	// here that writes.
+	//
+	// It is the TRANSITION and nothing else, which is the claim worth
+	// making rather than "this call still writes nothing". A destination
+	// that was proven when it was declared carries no mark, so pressing
+	// the button re-reads config.yaml to find that out and then changes
+	// nothing: a stat and a read on a button press rather than a change to
+	// what the button means. A check that FAILED is left alone, because
+	// "somebody pressed the button" is not the claim the mark makes.
+	//
+	// This is also why the CLI's by-id verb now goes through the same door
+	// `medium add` goes through (core/cmd/backup-manager's route.go): the
+	// process that clears the mark has to be the process whose
+	// configuration the mark is in.
+	if report.OK {
+		b.clearStorageMediumUnverified(ctx, id)
+	}
 	return toMediumPreflight(report), nil
 }
 

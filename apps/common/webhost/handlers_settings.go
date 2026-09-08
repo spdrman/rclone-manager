@@ -273,6 +273,18 @@ type storageMediumBody struct {
 	Path      string `json:"path,omitempty"`
 	IsLocal   bool   `json:"is_local"`
 	IsDefault bool   `json:"is_default"`
+
+	// ConnectionUnverified is issue #636's mark: this destination was
+	// declared without ever having been proven. Omitted when false, which
+	// is the ordinary case and is also how an engine built before this
+	// field answers, so a client reads absence as "nothing here says this
+	// was skipped" rather than as a claim either way.
+	//
+	// It is here so a surface can DRAW the difference. A destination
+	// nobody proved and one checked against a real bucket were the same
+	// row on every screen, which is what made --no-verify a hole rather
+	// than an escape hatch.
+	ConnectionUnverified bool `json:"connection_unverified,omitempty"`
 }
 
 // toStorageMediumBody is the one projection of a declared destination
@@ -282,18 +294,19 @@ type storageMediumBody struct {
 // projection is a second place somebody could add one.
 func toStorageMediumBody(m service.StorageMediumSummary) storageMediumBody {
 	return storageMediumBody{
-		ID:                  m.ID,
-		Type:                m.Type,
-		Bucket:              m.Bucket,
-		Region:              m.Region,
-		Endpoint:            m.Endpoint,
-		Prefix:              m.Prefix,
-		StorageClass:        m.StorageClass,
-		UploadVerification:  m.UploadVerification,
-		ReadsRequireRestore: m.ReadsRequireRestore,
-		Path:                m.Path,
-		IsLocal:             m.IsLocal,
-		IsDefault:           m.IsDefault,
+		ID:                   m.ID,
+		Type:                 m.Type,
+		Bucket:               m.Bucket,
+		Region:               m.Region,
+		Endpoint:             m.Endpoint,
+		Prefix:               m.Prefix,
+		StorageClass:         m.StorageClass,
+		UploadVerification:   m.UploadVerification,
+		ReadsRequireRestore:  m.ReadsRequireRestore,
+		Path:                 m.Path,
+		IsLocal:              m.IsLocal,
+		IsDefault:            m.IsDefault,
+		ConnectionUnverified: m.ConnectionUnverified,
 	}
 }
 

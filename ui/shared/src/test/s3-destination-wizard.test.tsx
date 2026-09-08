@@ -47,7 +47,8 @@ const OFFSITE: StorageMedium = {
   uploadVerification: "readback",
   readsRequireRestore: false,
   isLocal: false,
-  isDefault: false
+  isDefault: false,
+  connectionUnverified: false
 };
 
 function report(ok: boolean, failAt?: MediumPreflight["checks"][number]["step"]): MediumPreflight {

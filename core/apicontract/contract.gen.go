@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "04ed9f8c3312872ee2accb9189e0a7443ea97b5bd934877703fe955657e1b515"
+const ContractSHA256 = "f0776bd8ada449c3f72b6f8098a351d9707feab58881b8633dac9887c39a1166"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -99,6 +99,7 @@ const (
 	ErrorCodeStorageCredentialNotFound              ErrorCode = "STORAGE_CREDENTIAL_NOT_FOUND"
 	ErrorCodeSSHKeyCandidateNotFound                ErrorCode = "SSH_KEY_CANDIDATE_NOT_FOUND"
 	ErrorCodeBackupSetConnectionNotProven           ErrorCode = "BACKUP_SET_CONNECTION_NOT_PROVEN"
+	ErrorCodeMediumConnectionNotProven              ErrorCode = "MEDIUM_CONNECTION_NOT_PROVEN"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -145,6 +146,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
 	ErrorCodeBackupSetConnectionNotProven,
+	ErrorCodeMediumConnectionNotProven,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -215,6 +217,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeStorageCredentialNotFound,
 	ErrorCodeSSHKeyCandidateNotFound,
 	ErrorCodeBackupSetConnectionNotProven,
+	ErrorCodeMediumConnectionNotProven,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -222,7 +225,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeBackupSetConnectionNotProven, ErrorCodeMediumIsDefault},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeBackupSetHeldForEditing, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged, ErrorCodeBackupSetHistoryRepointNotAcknowledged, ErrorCodeBackupSetHostKeyChangeNotAcknowledged, ErrorCodeArtifactNotFailed, ErrorCodeBackupSetConnectionNotProven, ErrorCodeMediumIsDefault, ErrorCodeMediumConnectionNotProven},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound, ErrorCodeMediumNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -747,7 +750,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeStorageCredentialNotFound},
-			409: {ErrorCodeMediumExists},
+			409: {ErrorCodeMediumExists, ErrorCodeMediumConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -795,6 +798,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeMediumNotFound, ErrorCodeStorageCredentialNotFound},
+			409: {ErrorCodeMediumConnectionNotProven},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1960,15 +1964,16 @@ type StorageMediumCredentialsReference struct {
 // There is no field here for credential material, and there never
 // will be (FR-33): the credentials block names a reference.
 type StorageMediumRequest struct {
-	Bucket             string                            `json:"bucket"`
-	Credentials        StorageMediumCredentialsReference `json:"credentials"`
-	Endpoint           string                            `json:"endpoint"`
-	ID                 string                            `json:"id"`
-	Prefix             string                            `json:"prefix"`
-	Region             string                            `json:"region"`
-	StorageClass       string                            `json:"storage_class"`
-	Type               string                            `json:"type"`
-	UploadVerification string                            `json:"upload_verification"`
+	Bucket              string                            `json:"bucket"`
+	Credentials         StorageMediumCredentialsReference `json:"credentials"`
+	Endpoint            string                            `json:"endpoint"`
+	ID                  string                            `json:"id"`
+	Prefix              string                            `json:"prefix"`
+	Region              string                            `json:"region"`
+	SkipConnectionCheck bool                              `json:"skip_connection_check"`
+	StorageClass        string                            `json:"storage_class"`
+	Type                string                            `json:"type"`
+	UploadVerification  string                            `json:"upload_verification"`
 }
 
 // StorageMediumSummary is one configured storage medium, as the settings surface reports it:
@@ -1986,18 +1991,19 @@ type StorageMediumRequest struct {
 // therefore does not have to resupply the credential; omitting it
 // keeps the one already configured.
 type StorageMediumSummary struct {
-	Bucket              string `json:"bucket"`
-	Endpoint            string `json:"endpoint,omitempty"`
-	ID                  string `json:"id"`
-	IsDefault           bool   `json:"is_default"`
-	IsLocal             bool   `json:"is_local"`
-	Path                string `json:"path,omitempty"`
-	Prefix              string `json:"prefix,omitempty"`
-	ReadsRequireRestore bool   `json:"reads_require_restore"`
-	Region              string `json:"region,omitempty"`
-	StorageClass        string `json:"storage_class"`
-	Type                string `json:"type"`
-	UploadVerification  string `json:"upload_verification"`
+	Bucket               string `json:"bucket"`
+	ConnectionUnverified bool   `json:"connection_unverified,omitempty"`
+	Endpoint             string `json:"endpoint,omitempty"`
+	ID                   string `json:"id"`
+	IsDefault            bool   `json:"is_default"`
+	IsLocal              bool   `json:"is_local"`
+	Path                 string `json:"path,omitempty"`
+	Prefix               string `json:"prefix,omitempty"`
+	ReadsRequireRestore  bool   `json:"reads_require_restore"`
+	Region               string `json:"region,omitempty"`
+	StorageClass         string `json:"storage_class"`
+	Type                 string `json:"type"`
+	UploadVerification   string `json:"upload_verification"`
 }
 
 // StorageMediumUsageBySet is one backup set's copies on a storage medium.
