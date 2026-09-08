@@ -10,7 +10,7 @@ import {
   UI_ERROR_CODES,
   WIRE_ERROR_CODES
 } from "./generated/contract";
-import type { WireMediumPreflightCheck } from "./generated/contract";
+import type { WireConnectionCheck, WireMediumPreflightCheck } from "./generated/contract";
 import type { PlatformCapabilities } from "@shared/types/platform";
 
 /**
@@ -105,6 +105,59 @@ describe("the preflight step list is the contract's, not a second one", () => {
     expect(stepsAgree).toBe(true);
     const local: contracts.MediumPreflightCheck["step"] = "space";
     expect(local).toBe("space");
+
+    // The third failure, and the one the two assertions above cannot see.
+    // Mutual assignability covers a member GAINED and a member LOST. It
+    // does not cover the union WIDENING: if gen-bindings ever emits
+    // `step: string`, both of them stay green (`string` is mutually
+    // assignable with itself) while every consumer silently loses literal
+    // typing. That is the degradation a code generator is likeliest to
+    // produce, and it was proved against this repo's own tsc under strict
+    // before this line was written.
+    //
+    // This one fails the opposite way round, which is why it works: under
+    // a real union the directive below is satisfied, and under `string`
+    // the error it expects never happens, so tsc reports it as an unused
+    // directive (TS2578) and goes red.
+    //
+    // Written as "the directive below" rather than by name on purpose.
+    // The first draft of this paragraph spelled the marker out, tsc read
+    // the prose as a second directive, and the case went red against a
+    // union that was perfectly fine. A comment that quotes a directive IS
+    // one.
+    // @ts-expect-error a step name the contract does not carry
+    const notAStep: contracts.MediumPreflightCheck["step"] = "not-a-step";
+    expect(notAStep).toBe("not-a-step");
+  });
+
+  it("takes the outcome and the connection-test pair from the contract too", () => {
+    // These three were restated the same way `step` was, and unlike
+    // `step` they had not drifted yet: every one of them still matched
+    // the contract character for character. So this is a guard and not a
+    // regression test, and saying which it is matters. It goes green on
+    // main as readily as here, and what it buys is that the next member
+    // added to any of them cannot arrive as a value this UI's types say
+    // cannot exist.
+    //
+    // `outcome` is the one worth pointing at. It sat five lines under the
+    // union that HAD drifted, in the same interface, restated in the same
+    // style, and the only thing keeping it honest was that nobody had
+    // added an outcome yet.
+    type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+    const outcomesAgree: SameUnion<
+      contracts.MediumPreflightCheck["outcome"],
+      WireMediumPreflightCheck["outcome"]
+    > = true;
+    const connectionStepsAgree: SameUnion<
+      contracts.ConnectionCheck["step"],
+      WireConnectionCheck["step"]
+    > = true;
+    const connectionOutcomesAgree: SameUnion<
+      contracts.ConnectionCheck["outcome"],
+      WireConnectionCheck["outcome"]
+    > = true;
+
+    expect([outcomesAgree, connectionStepsAgree, connectionOutcomesAgree]).toEqual([true, true, true]);
   });
 });
 

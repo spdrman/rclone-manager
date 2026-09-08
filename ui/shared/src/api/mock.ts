@@ -2176,21 +2176,102 @@ function mockPreflightFor(medium: StorageMedium): MediumPreflight {
           detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
         }
   ];
-  const rest: [MediumPreflightCheck["step"], string][] = [
-    ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
-    ["read_back", "the object was read back and is byte for byte what was written"],
-    ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
-    ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
-    ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
+  // The five steps that only mean anything once a probe has been written.
+  // They are built as finished checks rather than as [step, detail] pairs
+  // because one of them is not always a pass: `verification` asks a
+  // question about this medium's own configuration, and on one answer the
+  // engine fails it (see mockVerificationCheck).
+  const written: MediumPreflightCheck[] = [
+    passed("write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`),
+    passed("read_back", "the object was read back and is byte for byte what was written"),
+    passed("storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`),
+    mockVerificationCheck(medium),
+    // The delete runs after a FAILED verification, and passes. It is a
+    // rollback of this preflight's own probe and not a verdict on the
+    // medium's configuration, so the engine runs it whatever the step
+    // above answered (mediumcheck.run.written). That makes it the one
+    // place in this fixture where a pass follows a failure, which is a
+    // report shape a surface has to draw correctly and could not be
+    // handed by an archive refusal.
+    passed("delete", "the probe object was deleted, and the endpoint confirms it is gone")
   ];
-  for (const [step, detail] of rest) {
+  for (const check of written) {
     checks.push(
       deliverable
-        ? passed(step, detail)
-        : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
+        ? check
+        : skipped(check.step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
     );
   }
-  return { medium: medium.id, ok: deliverable, checks };
+  // Read off the checks, exactly as mediumcheck.run.report does it, and
+  // not from `deliverable`. It used to be `ok: deliverable`, which was
+  // true only while the storage class was the sole thing that could fail;
+  // the moment a second step could, that expression would have reported a
+  // green overall verdict over a failed step inside it. One fact, one
+  // expression, which is the lesson of #633 applied to this line.
+  return { medium: medium.id, ok: checks.every((c) => c.outcome !== "failed"), checks };
+}
+
+/**
+ * The `verification` step, which asks whether the class this medium's own
+ * configuration requires can actually be achieved here.
+ *
+ * This step was an unconditional pass with a hardcoded sentence, and that
+ * is #633 a second time on an axis the first fix did not reach (found in
+ * review of the first). `uploadVerification` was not read at all, so
+ * there was no expression to have backwards and no way to find it by
+ * looking for one.
+ *
+ * What it cost is what #633 cost. S3DestinationWizard offers `attested`
+ * in its own dropdown, `config.Validate` refuses an s3 medium that
+ * declares it (validateUploadVerificationIsAchievable), and the engine's
+ * preflight fails it here: measured against the rclone this build embeds,
+ * no s3 endpoint can produce a full-object digest, so the class can never
+ * be achieved and every move would refuse after the upload. An operator
+ * who picked it saw eight green steps and an enabled Save.
+ *
+ * The sentences are the engine's own (mediumcheck.run.verification),
+ * because this is a mock of the SERVER: a fixture that said it differently
+ * would hide the drift the real surface is built to prevent, which is the
+ * argument the storage schema block above already makes.
+ */
+function mockVerificationCheck(medium: StorageMedium): MediumPreflightCheck {
+  // Empty means readback, the same resolution config.EffectiveUploadVerification
+  // does, so a medium that names no class is not treated as naming an
+  // unknown one.
+  const required = medium.uploadVerification || "readback";
+  if (required === "readback")
+    return {
+      step: "verification",
+      outcome: "passed",
+      category: "",
+      detail: "this medium requires the content class, which is reading the bytes back and comparing them, and that is exactly what the read-back step just did"
+    };
+  if (required === "attested")
+    return {
+      step: "verification",
+      outcome: "failed",
+      // A capability the endpoint does not have, not a configuration
+      // mistake, and the distinction is the whole reason `category` is
+      // separate from `detail`: an operator scanning that column is
+      // deciding whose problem this is.
+      category: "unsupported_capability",
+      detail:
+        "this medium declares upload_verification: attested, and this endpoint cannot produce a full-object sha256 digest, " +
+        "so that class can never be achieved here and every move to this medium will refuse rather than fall back to a weaker check. " +
+        "Measured against the rclone this build embeds, no s3 endpoint can: the only digest it serves is not a hash of the whole " +
+        "stored object, so comparing it to the hash recorded at ingestion would prove nothing. Declare readback instead"
+    };
+  // The engine's third answer, and it refuses rather than reporting a
+  // class it did not run: a weaker check wearing a stronger name is what
+  // deletes a local copy against an upload nobody verified. A fixture that
+  // waved an unrecognised class through would be the same defect this
+  // whole function exists to stop.
+  return {
+    step: "verification",
+    outcome: "failed",
+    category: "configuration",
+    detail: `this medium resolves to the "${required}" verification class, which this preflight has no way to prove`
+  };
 }
 
 // mockMediumOf projects a submitted spec onto the summary a read returns,

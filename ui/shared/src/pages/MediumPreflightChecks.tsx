@@ -75,6 +75,21 @@ function CheckRow({ check }: { check: MediumPreflightCheck }) {
  * a dash says "nothing was tried here" in a way no picture does. Giving it
  * one would have made the column three pictures, which is the arrangement
  * that lets a skip pass for a soft pass.
+ *
+ * # Why both switches are exhaustive rather than defaulted
+ *
+ * Both of these used to end in `default:`, which meant "skipped" and
+ * anything the contract might add next rendered identically: a dash and
+ * grey, which an operator reads as "this was never tried". A fourth
+ * outcome on the wire would have arrived as that sentence about a step
+ * that had in fact run, with no compile error anywhere to say so.
+ *
+ * That was survivable only while nothing could add one. Since #633 this
+ * file's outcome type comes from the generated contract, so the day the
+ * engine gains an outcome, tsc names these two functions instead. It is
+ * ActivityStrip.statedTone's argument, applied where the same defect was
+ * still live: a value nobody wrote a case for must not be able to read as
+ * a verdict somebody did.
  */
 function mark(outcome: MediumPreflightCheck["outcome"]): ReactNode {
   switch (outcome) {
@@ -82,9 +97,11 @@ function mark(outcome: MediumPreflightCheck["outcome"]): ReactNode {
       return <Icon name="success" />;
     case "failed":
       return <Icon name="failure" />;
-    default:
+    case "skipped":
       return "–";
   }
+  const unhandled: never = outcome;
+  throw new Error("unhandled preflight outcome: " + String(unhandled));
 }
 
 function markColour(outcome: MediumPreflightCheck["outcome"]): string {
@@ -93,7 +110,9 @@ function markColour(outcome: MediumPreflightCheck["outcome"]): string {
       return "var(--ok)";
     case "failed":
       return "var(--danger)";
-    default:
+    case "skipped":
       return "var(--text-3)";
   }
+  const unhandled: never = outcome;
+  throw new Error("unhandled preflight outcome: " + String(unhandled));
 }
