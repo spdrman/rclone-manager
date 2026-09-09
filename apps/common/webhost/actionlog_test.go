@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spdrman/rclone-manager/core/cliecho"
+	"github.com/spdrman/rclone-manager/core/cliname"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -110,7 +111,7 @@ func TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap(t *testing.T) {
 		method, path, _ := strings.Cut(route, " ")
 		checked++
 		if !answered[method+" "+path] {
-			t.Errorf("%s /api/v1%s has no answer in core/cliecho.\nEvery route this router registers must either build a `backup-manager` command or carry an explicit entry saying there is none and what verb would have to exist. That is what turns EPIC G's CLI parity rule from a promise into something that fails visibly: a UI action with no command to name is a gap that shows up the first time anybody uses the feature, instead of at an audit nobody runs.",
+			t.Errorf("%s /api/v1%s has no answer in core/cliecho.\nEvery route this router registers must either build a `"+cliname.Binary+"` command or carry an explicit entry saying there is none and what verb would have to exist. That is what turns EPIC G's CLI parity rule from a promise into something that fails visibly: a UI action with no command to name is a gap that shows up the first time anybody uses the feature, instead of at an audit nobody runs.",
 				method, path)
 			continue
 		}
@@ -202,7 +203,7 @@ func TestAnAPIActionIsRecordedWithItsActorAndItsCommand(t *testing.T) {
 	// Bare, with no prompt: this is what reaches the journal, and a script
 	// reading it wants a command it can hand to a shell. The "$ " is the
 	// terminal's to draw, the same way it draws "# " in front of a gap.
-	if want := "backup-manager backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
+	if want := cliname.Binary + " backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
 		t.Errorf("the action echoes\n  %s\nwant\n  %s", got.Command, want)
 	}
 	if got.Status != http.StatusOK {

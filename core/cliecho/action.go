@@ -40,7 +40,7 @@ type APIAction struct {
 	// the deployment's.
 	BackupSetID string
 
-	// Command is the `backup-manager` invocation that would have done the
+	// Command is the CLI invocation that would have done the
 	// same thing, as Line.Shell renders it: shell-quoted, with no prompt
 	// in front and no note after, so what lands in the journal is a
 	// command and not a screen. Empty when there is none, and Gap and

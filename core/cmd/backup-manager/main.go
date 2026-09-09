@@ -1,5 +1,8 @@
-// Command backup-manager is the entry point for every execution mode this
-// project supports (FR-1, FR-26). It is deliberately thin: every command
+// Command rbm is the entry point for every execution mode this project
+// supports (FR-1, FR-26). It is `rbm` to an operator and this directory is
+// still cmd/backup-manager, because the image symlinks the old name beside
+// the new one and a Go package path is not something anybody types; see
+// core/cliname for the whole of that argument. It is deliberately thin: every command
 // below does nothing but parse its own flags, reach exactly one use case,
 // and format the result for a terminal. Most reach it by building (or
 // reusing) an internal/app.Service; the configuration writes go through

@@ -1,5 +1,5 @@
-// Package cliecho names the `backup-manager` command that would have done
-// the same thing as an action taken in the Web UI (issue #599).
+// Package cliecho names the command (core/cliname.Binary, `rbm`) that would
+// have done the same thing as an action taken in the Web UI (issue #599).
 //
 // # Why this exists at all
 //

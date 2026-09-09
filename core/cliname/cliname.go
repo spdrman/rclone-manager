@@ -34,9 +34,23 @@
 // What this binary calls itself is a fact about the build, not about how
 // somebody reached it. main() hands os.Args[1:] to run() and dispatches on
 // the first word of that, so the filename an operator happened to type
-// never enters a decision, and taking the printed name from argv[0]
-// instead would make two shells on the same host print two different
-// spellings of the same command.
+// never enters a decision.
+//
+// That is what keeps the old name alive. `backup-manager` is a symlink
+// beside this binary in the image (container/Dockerfile), so an existing
+// script goes on working unchanged, and it works precisely because nothing
+// in Go can tell the two invocations apart. Taking the printed name from
+// argv[0] instead would undo that on reasonable-looking grounds: the two
+// spellings would then print differently in two shells on the same host,
+// which is worse than either one alone.
+//
+// Nothing here can test the symlink, because the Dockerfile builds it. What
+// can be tested is the half that lives in this module, and
+// TestNothingDispatchesOnArgv0 in core/cmd/backup-manager does: it reads
+// every non-test file under core/ and requires os.Args to appear in exactly
+// one shape, os.Args[1:]. TestTheOldNameReachesTheSameBinary beside it
+// builds this binary, symlinks it under the old name and requires both to
+// answer identically, which is the same arrangement the image makes.
 package cliname
 
 const (
@@ -44,7 +58,13 @@ const (
 	// prints when it names itself: the prefix on a diagnostic, the
 	// "usage:" line, and every sentence that says which command to run
 	// next.
-	Binary = "backup-manager"
+	//
+	// It was `backup-manager` until 0.3.3, and `backup-manager` still
+	// runs: the image symlinks it beside this one, so nothing an operator
+	// already automated has to change. It is simply not what the product
+	// prints back any more, because printing two names is how a reference
+	// stops being one.
+	Binary = "rbm"
 
 	// WebBinary is the other command in the image, the one that serves the
 	// Web UI. It is derived rather than spelled so that the two names
