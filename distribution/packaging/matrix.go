@@ -961,12 +961,12 @@ func (m ReleaseManifest) ArchitectureSet() []string {
 // before this existed: an unrecognised binary must fail the lookup and
 // be reported missing, never quietly resolve to one of these two.
 func manifestBinaryKey(binary string) string {
-	switch strings.TrimPrefix(binary, "/") {
-	case "rbm":
-		return "backup-manager"
-	case "rbm-web":
-		return "backup-manager-web"
-	}
+	// The manifest keys each binary by its own name, so this is just the
+	// path with its leading slash removed. It used to translate, because
+	// 0.3.3 renamed the binaries while the release artefact kept the old
+	// keys; the keys moved with the rest of the cut, so there is nothing
+	// left to bridge and nothing here that can pair a hash with the wrong
+	// binary.
 	return strings.TrimPrefix(binary, "/")
 }
 

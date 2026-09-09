@@ -185,7 +185,7 @@ for arch in $ARCHES; do
 
   # /rbm and /rbm-web, never the /rbm and /rbm-web
   # beside them, and this is not cosmetic (the 0.3.3 CLI rename). Those
-  # two are SYMLINKS now, and `docker cp` without -L copies a link as a
+  # `docker cp` without -L would copy a link as a
   # link, so this would write two dead links into $tmp and sha256 would
   # fail on a file that is not there. The local names below stay the old
   # ones on purpose: they are the keys binary_sha256 records, and the
@@ -205,8 +205,8 @@ for arch in $ARCHES; do
     {
       "architecture": "${arch}",
       "binary_sha256": {
-        "backup-manager": "${backup_manager_sha}",
-        "backup-manager-web": "${backup_manager_web_sha}"
+        "rbm": "${backup_manager_sha}",
+        "rbm-web": "${backup_manager_web_sha}"
       },
       "local_image_id_sha256": "${local_image_id}",
       "registry_digest": null

@@ -7,8 +7,8 @@
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "backup-manager": "ad83d59c21a02a3ac1ee94fe9927f7c4264519136f325c87fd020d337c21ec5b",
-        "backup-manager-web": "274a200b28b426ed465b79819fe75fe4a8c5ba6ab204caff00c71da759b8f016"
+        "rbm": "ad83d59c21a02a3ac1ee94fe9927f7c4264519136f325c87fd020d337c21ec5b",
+        "rbm-web": "274a200b28b426ed465b79819fe75fe4a8c5ba6ab204caff00c71da759b8f016"
       },
       "local_image_id_sha256": "47207482e448cd47b262157ddd52f2f03f3a4e4a029c39b0068c2a49ed89754d",
       "registry_digest": null
@@ -16,8 +16,8 @@
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "backup-manager": "30717bb1c8820c14985b1536894179a2ecb3baef5e3ae4f1baca7deda06d943e",
-        "backup-manager-web": "483d8e11fed0b2a60502f97964e8b359ac14cb6618cb28e21cb0e81b54120f5a"
+        "rbm": "30717bb1c8820c14985b1536894179a2ecb3baef5e3ae4f1baca7deda06d943e",
+        "rbm-web": "483d8e11fed0b2a60502f97964e8b359ac14cb6618cb28e21cb0e81b54120f5a"
       },
       "local_image_id_sha256": "8a72cc981d9e5bbb640e9d7634387106ce9303c8638994b8902b6a1e001f0f58",
       "registry_digest": null
