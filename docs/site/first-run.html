@@ -94,7 +94,7 @@
     <div class="note">
       <span class="note-label">Where these pictures came from</span>
       <p>Every screenshot on this page was taken against <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout and every word of copy are the real product's. The <em>data</em> is not: fingerprints, key ids and anything numeric are fixtures.</p>
-      <p>They were deliberately not taken from a real instance. Completing this flow claims the administrator account and writes a configuration file, and the enrolment token that opens it is single use, so a screenshot run against a live deployment would finish somebody's setup for them. <a href="#reshoot">Re-shooting them</a> is one command.</p>
+      <p>They were deliberately not taken from a real instance. Completing this flow claims the administrator account and writes a configuration file, and the enrolment token that opens it is single use, so a screenshot run against a live deployment would finish somebody's setup for them.</p>
     </div>
 
     <div class="note warn">
@@ -681,13 +681,6 @@
       <span class="note-label">This page will move under you</span>
       <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change. Re-shoot rather than hand-editing a caption.</p>
     </div>
-  </section>
-
-  <section>
-    <h2 id="reshoot">Re-shooting these</h2>
-    <p>From a checkout with <code>ui/shared</code>'s dependencies installed:</p>
-    <pre><code>node docs/site/tools/capture-first-run.mjs</code></pre>
-    <p>It starts the development server on a port it proved free, drives the whole flow, and overwrites every PNG in <code>docs/site/screens/</code>, printing one line per screen. It borrows Playwright from the checkout the repository's own e2e gate already maintains rather than adding a dependency back to <code>ui/shared</code>, so if it reports that it has nothing to borrow, run the gate once first. The script's header comment explains the two things that are not obvious: why the flow is driven against the fixture API rather than a real instance, and why one network route has to be stubbed for the application to consider itself signed in.</p>
   </section>
 
 </main>
