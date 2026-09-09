@@ -16,7 +16,7 @@ import (
 // other case the config-file answer already covers". Two things happened
 // to that. A chain stopped being purely a policy about time and started
 // naming where the bytes live, and EPIC G requires every capability to be
-// reachable from `backup-manager`. And the config-file answer is not an
+// reachable from `rbm`. And the config-file answer is not an
 // equal-power route beside a running engine at all: this very command
 // refuses a file write there, because nothing watches config.yaml (#543),
 // so "edit the file" is advice that does not work in the deployment where

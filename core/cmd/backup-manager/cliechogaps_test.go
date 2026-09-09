@@ -99,7 +99,7 @@ var backtickedPhrase = regexp.MustCompile("`([^`]+)`")
 // shippedVerbsNamedIn reports the verbs a gap sentence names that this
 // binary actually dispatches.
 //
-// It reads `backup-manager <verb> [<sub>]` and the bare `<verb> [<sub>]`
+// It reads `rbm <verb> [<sub>]` and the bare `<verb> [<sub>]`
 // this file's prose also uses ("`settings` prints the thresholds"), and it
 // understands one level of subcommand: a sentence naming
 // `rbm backup-set test-connection` is naming a verb this binary

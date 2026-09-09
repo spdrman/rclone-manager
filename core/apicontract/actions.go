@@ -16,7 +16,7 @@ package apicontract
 // They live in this package because it is the one both sides of the wire
 // may import. core/service and core/internal/archive define the action a
 // durable operation row is written with, and core/cliecho has to decide
-// which `backup-manager` command an action is equivalent to; core/service
+// which `rbm` command an action is equivalent to; core/service
 // imports core/cliecho, so cliecho cannot read the constants from there.
 // Before this file it read string literals instead, and one of them was
 // wrong: it switched on "restore", which no client has ever sent, so

@@ -80,7 +80,7 @@ type fakeEngine struct {
 // startFakeEngine announces that this process serves the deployment
 // configPath names, opens a BackupService over it, and serves it.
 //
-// Announce first, then open, which is the order backup-manager-web and
+// Announce first, then open, which is the order rbm-web and
 // `rbm daemon` use and which is now load-bearing rather than
 // tidy: core/service mints a deployment identity in AnnounceServing and
 // nowhere else (#555 as #559 left it), so an engine that opened first

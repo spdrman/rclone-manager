@@ -61,8 +61,8 @@ import (
 // starts nothing expensive; it only has to open a journal.
 const engineStartTimeout = 60 * time.Second
 
-// startEngineHolding re-executes this test binary as `backup-manager
-// daemon --config configPath` and returns once that process has the
+// startEngineHolding re-executes this test binary as `rbm daemon
+// --config configPath` and returns once that process has the
 // journal open, plus a func that stops it and waits for it to be gone.
 //
 // Waiting for the daemon_start line, rather than for a duration, is what

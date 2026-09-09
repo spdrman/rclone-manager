@@ -610,7 +610,7 @@ const (
 	// way to fix it and is not the one taken. It is twenty-one edits,
 	// one per place that returns 2 for whatever fs.Parse or
 	// parseFlagsAroundOperands handed back, and it would leave
-	// `backup-manager -h` at 2 anyway: at the top level there is no flag
+	// `rbm -h` at 2 anyway: at the top level there is no flag
 	// set to parse, so `-h` is a name run() cannot find and it goes out
 	// through the unknown-command branch. Two help requests exiting
 	// differently is a worse contract than one honest row, and this

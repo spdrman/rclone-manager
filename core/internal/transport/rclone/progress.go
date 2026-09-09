@@ -87,7 +87,7 @@ func copyWithProgress(ctx context.Context, size int64, copy func(context.Context
 		return copy(ctx)
 	}
 
-	group := fmt.Sprintf("backup-manager-copy-%d", atomic.AddUint64(&copyGroupCounter, 1))
+	group := fmt.Sprintf("rclone-manager-copy-%d", atomic.AddUint64(&copyGroupCounter, 1))
 	ctx = accounting.WithStatsGroup(ctx, group)
 	stats := accounting.StatsGroup(ctx, group)
 	defer stats.ResetCounters()

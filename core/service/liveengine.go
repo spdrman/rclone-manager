@@ -26,8 +26,8 @@ import (
 //
 // The obvious mechanism is the wrong one, and it was tried first. The
 // `.journal-lock` startup.go already keeps is taken SHARED by every
-// process that has the journal open, which is every `backup-manager
-// status`, every `sources`, and every cron `run` for the length of a
+// process that has the journal open, which is every `rbm status`,
+// every `sources`, and every cron `run` for the length of a
 // whole backup cycle. lock_unix.go says so in as many words: a `status`
 // alongside a live `serve` is ordinary use of this CLI. Reading that lock
 // as "an engine is running" refuses configuration writes on hosts where
@@ -49,8 +49,8 @@ import (
 // routinely. An API probe needs a port, a scheme and a credential to be
 // known before the configuration has been read, and answers about a
 // listener rather than about the deployment, so it would miss an engine
-// whose API is not up yet and find a stale one that is. A `backup-manager
-// daemon` serves no HTTP at all and would be invisible to it. The lock is
+// whose API is not up yet and find a stale one that is. A `rbm daemon`
+// serves no HTTP at all and would be invisible to it. The lock is
 // held by the kernel on behalf of a live process and released by the
 // kernel when that process dies, however it dies.
 //

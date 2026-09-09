@@ -129,8 +129,8 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	}
 
 	// Live progress and the per-set feed, for a caller that installed an
-	// observer (progress.go). Nothing here changes what `backup-manager
-	// fetch` does in its own process: with no observer on ctx, beginCycle
+	// observer (progress.go). Nothing here changes what `rbm fetch` does
+	// in its own process: with no observer on ctx, beginCycle
 	// returns ctx unchanged and every call below is a nil-receiver no-op.
 	//
 	// The denominator is 1 and is known before anything starts, which is

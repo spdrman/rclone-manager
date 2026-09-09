@@ -30,7 +30,7 @@ import (
 // binary's embedded build info.
 const rcloneModulePath = "github.com/rclone/rclone"
 
-// VersionInfo is FR-26's `version` command payload: the backup-manager
+// VersionInfo is FR-26's `version` command payload: the rclone-manager
 // version, the embedded rclone version, the Go version and the build
 // commit.
 type VersionInfo struct {

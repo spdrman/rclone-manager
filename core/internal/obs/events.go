@@ -190,7 +190,7 @@ const (
 
 	// EventAPIAction records one action somebody took through the
 	// /api/v1 surface: what was asked, by whom, what came back, and the
-	// `backup-manager` command that would have done the same thing
+	// `rbm` command that would have done the same thing
 	// (issue #599).
 	//
 	// It is the one event in this catalog that is not emitted by the

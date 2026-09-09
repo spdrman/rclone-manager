@@ -344,8 +344,8 @@ func TestRun_CLIOverrideAndEquivalentConfigFileValueProduceIdenticalOutput(t *te
 // --- issue #156 (B3.8): the -tier chain flag ---
 
 // parseRetentionArgs runs registerRetentionFlags and resolveRetentionFlags
-// over a real argv, so these tests exercise the same path `backup-manager
-// retention` does rather than hand-building a retentionOverrides.
+// over a real argv, so these tests exercise the same path `rbm retention`
+// does rather than hand-building a retentionOverrides.
 func parseRetentionArgs(t *testing.T, args ...string) retentionOverrides {
 	t.Helper()
 	fs := flag.NewFlagSet("retention", flag.ContinueOnError)

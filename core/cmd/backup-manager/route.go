@@ -68,7 +68,7 @@ import (
 //
 // # And why the address and the credentials come from the environment
 //
-// Not from flags. `backup-manager --help` is pinned line for line by
+// Not from flags. `rbm --help` is pinned line for line by
 // core/tests/compat under FR-35's fourth clause, and a password on a
 // command line is in every process listing on the host and in the shell
 // history of whoever typed it. Not from a file either: this binary writes

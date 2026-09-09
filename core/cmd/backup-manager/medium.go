@@ -134,7 +134,7 @@ func quotedMediumVerbs() string {
 // not find one, on purpose, which is config.MediumCredentials' own
 // enforcement applied to a command line. The reason is sharper here than
 // in the config file. EPIC G requires every action taken in the browser to
-// print its `backup-manager` equivalent into the global terminal, and that
+// print its `rbm` equivalent into the global terminal, and that
 // terminal is copy-to-clipboard and exportable, so anything printed there
 // ends up pasted into a chat window eventually. A surface with a flag to
 // redact is a surface that will one day forget to; a surface with no such

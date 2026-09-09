@@ -57,9 +57,15 @@ import (
 // exposition format's own versioning scheme.
 const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 
-// namePrefix roots every metric name this package emits. It is the binary
-// name, backup-manager, with the hyphen replaced by an underscore, since a
-// Prometheus metric name may not contain a hyphen.
+// namePrefix roots every metric name this package emits. It is the name
+// the binary had before the 0.3.3 rename, with the hyphen replaced by an
+// underscore, since a Prometheus metric name may not contain a hyphen.
+//
+// It did not follow the binary to `rbm` and it is not going to. Every
+// dashboard and every alert rule an operator already runs scrapes these
+// names, so moving the prefix breaks all of them for a cosmetic gain.
+// core/cliecho/cliname.go has the rest of what the rename deliberately
+// left where it was.
 const namePrefix = "backup_manager_"
 
 // newestGoodBackupAgeHelp names, in the HELP line a scraping operator

@@ -22,9 +22,10 @@ import (
 // undoes for a good local reason: a usage line that names "the command you
 // actually typed", a diagnostic prefix taken from the executable, a mode
 // selected by invocation name the way busybox does it. Any of those would
-// make the alias behave differently from the real name in a way no test in
-// this tree would notice, and the operator who finds out is one whose
-// script broke after an upgrade.
+// make one binary answer differently depending on the filename it was
+// reached through, in a way no test in this tree would notice, and the
+// person who finds out is whoever copied it somewhere else and got
+// different output back.
 //
 // So this is the check that would have to be deleted first.
 
@@ -124,7 +125,7 @@ func checkArgv0(t *testing.T, path string) {
 			if dispatchSlice[ast.Node(sel)] {
 				return true
 			}
-			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThe old command name is kept alive by a symlink beside this binary, so `rbm status` and `rbm status` are the same binary reached under two filenames and have to behave identically. Anything that can see argv[0] can make them differ, and the operator who finds out is one whose script broke after an upgrade. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
+			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThis binary has to answer the same way however it was reached: the image installs it at /rbm, a developer runs it straight out of `go build` under whatever name they chose, and the e2e harness copies it somewhere else again. Anything that can see argv[0] can make those differ, and the person who finds out is whoever copied it and got different output back. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
 				fset.Position(sel.Pos()).Filename, fset.Position(sel.Pos()).Line)
 		case "Executable":
 			t.Errorf("%s:%d calls os.Executable, which answers the same question os.Args[0] does and has the same problem: see the message above and this file's doc comment.",

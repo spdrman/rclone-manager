@@ -8,7 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
-// cmdQuarantine is `backup-manager quarantine <revalidate|retry|reinstate>
+// cmdQuarantine is `rbm quarantine <revalidate|retry|reinstate>
 // <source/backup-set/artifact>`: the three operator-triggered quarantine
 // actions issue #277's own investigation found had no CLI path at all,
 // unlike `validate` (which only ever re-checks a healthy restore point,

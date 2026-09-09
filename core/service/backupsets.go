@@ -1298,7 +1298,7 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		return ConnectionTestResult{}, err
 	}
 
-	tmp, err := os.CreateTemp("", "backup-manager-test-connection-known-hosts-*")
+	tmp, err := os.CreateTemp("", "rclone-manager-test-connection-known-hosts-*")
 	if err != nil {
 		return ConnectionTestResult{}, fmt.Errorf("service: preparing connection test: %w", err)
 	}

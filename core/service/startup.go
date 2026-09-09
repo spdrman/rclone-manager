@@ -140,8 +140,8 @@ const servingLockSuffix = ".serving-lock"
 // open, which is exactly the process a migration (or a restore) would
 // destroy data underneath. So there is a second lock, taken on every
 // successful start and held by the caller for as long as it keeps the
-// journal: SHARED, so any number of processes coexist (`backup-manager
-// status` alongside a live `serve` stays ordinary use of this CLI), and
+// journal: SHARED, so any number of processes coexist (`rbm status`
+// alongside a live `serve` stays ordinary use of this CLI), and
 // taken EXCLUSIVELY by a process that needs to migrate, which therefore
 // refuses with ErrJournalInUse rather than migrating underneath a live
 // holder.

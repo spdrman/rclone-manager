@@ -71,7 +71,7 @@
 // absolute timestamp, so the corpus is stable whatever day it runs on.
 //
 // The CLI has no clock seam (internal/app.Service has a Now func, but
-// backup-manager exposes no flag that reaches it), so `retention
+// rbm exposes no flag that reaches it), so `retention
 // --dry-run` cannot be pinned from outside the process. Rather than
 // normalize the verdicts away, which would have left a cell that certifies
 // nothing, that one command runs against a second, separately seeded

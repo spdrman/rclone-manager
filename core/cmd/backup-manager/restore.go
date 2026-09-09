@@ -22,7 +22,7 @@ import (
 // working day.
 const defaultRestoreWindowDays = 7
 
-// cmdRestore is `backup-manager restore <source/backup-set/artifact>
+// cmdRestore is `rbm restore <source/backup-set/artifact>
 // --medium M [--days N] --acknowledge`: EPIC E, FR-34's explicit restore,
 // on a terminal.
 //

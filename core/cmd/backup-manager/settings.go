@@ -70,7 +70,7 @@ import (
 // A chain stopped being purely a policy about time. Since EPIC E a tier
 // names a `medium:` (config.RetentionTier.Medium), so a chain says where
 // the bytes live, and EPIC G requires every capability to be reachable
-// from `backup-manager` because a browser-only destination change is one
+// from `rbm` because a browser-only destination change is one
 // nobody can automate across a fleet.
 //
 // And the config-file answer was never an equal-power route here. The

@@ -128,7 +128,7 @@
 // via unix.Statfs_t on Darwin), not the raw free-block count (f_bfree),
 // wherever the two differ. Some filesystems (ext4 with a root-reserved
 // percentage is the common case) hold back a slice of free blocks that only
-// a privileged process can allocate into. Whether backup-manager itself
+// a privileged process can allocate into. Whether rclone-manager itself
 // runs as root is a deployment detail this package has no way to know, so
 // it takes the conservative reading: AvailableBytes is what Admit's
 // arithmetic uses, and it is never larger than FreeBytes.

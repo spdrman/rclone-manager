@@ -166,8 +166,8 @@ func (b *BackupService) ImportStorageCredentials(_ context.Context, accessKeyID,
 }
 
 // ImportStorageCredentialsText is ImportStorageCredentials for material
-// that already IS shared-credentials text, which is what `backup-manager
-// medium import-credentials --stdin` reads.
+// that already IS shared-credentials text, which is what `rbm medium
+// import-credentials --stdin` reads.
 //
 // It exists as its own method rather than as a parse in the CLI for the
 // reason every other pair in this package is a pair: the CLI and the API

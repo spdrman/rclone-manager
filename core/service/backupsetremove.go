@@ -127,7 +127,7 @@
 //
 // That is issue #418, and it now has an answer rather than only a
 // warning. The event below counts what this removal stranded, so the
-// moment it happens says so; `backup-manager unconfigured` lists it
+// moment it happens says so; `rbm unconfigured` lists it
 // afterwards along with everything else this set still holds; and
 // internal/app's ClearStranded (unconfigured.go) is the operator-driven
 // sweep that removes the .partial and ends the row. None of that touches

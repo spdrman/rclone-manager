@@ -12,7 +12,7 @@ import (
 // Every command the Web UI's terminal can print, fed through the real
 // dispatcher (issue #599).
 //
-// The point of echoing a `backup-manager` command into a panel an
+// The point of echoing a `rbm` command into a panel an
 // operator is reading is that they can paste it. A renamed flag, a removed
 // one or an argument in the wrong position has to fail here rather than
 // being printed at somebody who then pastes it and gets exit 2, so this

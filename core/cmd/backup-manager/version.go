@@ -8,7 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdVersion is FR-26's `version` command: it reports the backup-manager
+// cmdVersion is FR-26's `version` command: it reports the rclone-manager
 // version, the embedded rclone version, the Go version and the build
 // commit, in that order, exactly as the EPIC's CLI section lists them.
 // See internal/app.BuildVersionInfo's doc for how the rclone version is

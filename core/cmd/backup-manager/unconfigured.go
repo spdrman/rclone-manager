@@ -11,9 +11,8 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
-// cmdUnconfigured is `backup-manager unconfigured` and `backup-manager
-// unconfigured clear <source/backup-set>`: issue #418's operator-facing
-// half.
+// cmdUnconfigured is `rbm unconfigured` and `rbm unconfigured clear
+// <source/backup-set>`: issue #418's operator-facing half.
 //
 // Removing a backup set (#391) keeps its backups on storage and keeps
 // them listed, which is what the confirmation promises. What it also does
@@ -116,7 +115,7 @@ func printUnconfiguredSet(u app.UnconfiguredSet) {
 	}
 }
 
-// cmdUnconfiguredClear is `backup-manager unconfigured clear
+// cmdUnconfiguredClear is `rbm unconfigured clear
 // <source/backup-set> [--acknowledge]`.
 func cmdUnconfiguredClear(args []string) int {
 	fs, cfgPath := newFlagSet("unconfigured clear")

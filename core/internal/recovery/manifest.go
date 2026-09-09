@@ -46,7 +46,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
-// CurrentFormatVersion is the "backup-manager format version" section
+// CurrentFormatVersion is the "rclone-manager format version" section
 // 19.3 asks every recovery manifest to carry. ReadManifest refuses a
 // manifest whose FormatVersion is newer than this binary knows how to
 // interpret, mirroring internal/state/migrate.go's own "refuse rather than
@@ -63,7 +63,7 @@ const manifestSuffix = ".manifest.json"
 
 // Manifest is one artifact's sidecar recovery manifest.
 type Manifest struct {
-	// FormatVersion is "backup-manager format version" (section 19.3).
+	// FormatVersion is "rclone-manager format version" (section 19.3).
 	FormatVersion int `json:"format_version"`
 
 	// Source and BackupSet together are "backup-set stable ID/name"

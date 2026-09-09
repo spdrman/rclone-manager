@@ -15,8 +15,8 @@ import (
 // The two read-only artifact queries, and the one place a name that does not
 // exist gets refused.
 //
-// ListArtifacts and GetArtifactDetail are the reads underneath `backup-manager
-// artifacts` and the backups screen. Neither writes, neither reaches a
+// ListArtifacts and GetArtifactDetail are the reads underneath
+// `rbm artifacts` and the backups screen. Neither writes, neither reaches a
 // remote, and both are worth reading for what they refuse rather than for
 // what they return.
 //

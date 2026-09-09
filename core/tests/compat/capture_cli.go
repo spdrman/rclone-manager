@@ -17,7 +17,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// FR-35 clause 4, the CLI: build backup-manager from this working tree,
+// FR-35 clause 4, the CLI: build rbm from this working tree,
 // run a fixed table of invocations against the seeded medium-free
 // deployment, and write down exactly what an operator would have seen.
 //
@@ -41,7 +41,7 @@ import (
 // which surfaces it leaves out and why, because a surface nobody mentions
 // cannot be told apart from one nobody thought of.
 
-// buildCLI builds backup-manager from this working tree.
+// buildCLI builds rbm from this working tree.
 //
 // The binary, not run() called in-process: FR-35's CLI clause is about
 // what an operator sees in a terminal after an upgrade, and the only way
@@ -312,7 +312,7 @@ func captureBesideAServingProcess(ctx context.Context, bin, cfgPath, root string
 // daily-only chain.
 //
 // The reason this is not folded into the table above is in the package
-// doc: backup-manager exposes no way to pin its clock, so a multi-tier
+// doc: rbm exposes no way to pin its clock, so a multi-tier
 // chain's attribution genuinely depends on the calendar date the gate
 // runs on. Rather than normalize the verdicts away and keep a cell that
 // certifies nothing, this narrows the chain until the verdicts are the

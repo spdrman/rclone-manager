@@ -14,8 +14,8 @@ import (
 // set, from durable evidence.
 //
 // It is a projection of internal/health rather than a second opinion, and
-// that is the property the whole file exists to hold. `backup-manager
-// status` and the Web UI run the same computation through the same call,
+// that is the property the whole file exists to hold. `rbm status`
+// and the Web UI run the same computation through the same call,
 // because two surfaces that each work health out for themselves will
 // eventually disagree, and the one that disagrees quietly is the one
 // nobody is looking at.

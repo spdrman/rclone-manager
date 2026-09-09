@@ -7,7 +7,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdRetry is `backup-manager retry <source/backup-set/artifact>`: put one
+// cmdRetry is `rbm retry <source/backup-set/artifact>`: put one
 // FAILED artifact back into the pipeline so it is attempted again (issue
 // #419).
 //

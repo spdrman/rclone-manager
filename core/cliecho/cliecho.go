@@ -127,7 +127,7 @@ type Line struct {
 	Route string
 
 	// Command is the argv an operator could have typed, starting with
-	// "backup-manager", unquoted. Nil when there is no equivalent. Shell
+	// "rbm", unquoted. Nil when there is no equivalent. Shell
 	// below is what goes on the wire; this is what a parser is fed.
 	Command []string
 
@@ -365,7 +365,7 @@ type entry struct {
 	// ships were only found by somebody reading them.
 	refusals []string
 
-	// namesShippedVerbs are the `backup-manager` verbs this entry's
+	// namesShippedVerbs are the `rbm` verbs this entry's
 	// sentences name ON PURPOSE.
 	//
 	// Most gap sentences name a verb that does not exist, which is the

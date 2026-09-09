@@ -116,7 +116,7 @@ func TestRecordAPIAction_ARefusalCarriesItsReason(t *testing.T) {
 		Actor: "alice", Method: "POST", Route: "/operations", Status: 403,
 		ErrorCode: "DESTRUCTIVE_OPERATIONS_DISABLED",
 		Message:   "destructive operations are disabled until the gate has been verified",
-		Gap:       "no backup-manager equivalent yet",
+		Gap:       "no rbm equivalent yet",
 		GapDetail: "`rbm run` starts a cycle in your own shell, not in this engine",
 	})
 

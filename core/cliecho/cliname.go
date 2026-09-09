@@ -22,9 +22,9 @@ package cliecho
 //   - filesystem paths (/etc/backup-manager/config, /var/lib/backup-manager)
 //     which packaging mounts and an operator's existing deployment already
 //     has on disk;
-//   - the project, the image and the compose service (ghcr.io/spdrman/
-//     backup-manager, the "backup-manager" service in container/
-//     compose.yaml, "Backup Manager" as the product's name);
+//   - the image reference (ghcr.io/spdrman/backup-manager), which is what
+//     a compose file and a signed digest already point at rather than
+//     anything an operator types;
 //   - wire identity that a log or an audit trail may already be matched
 //     on, which is the User-Agent core/internal/apiclient sends.
 //
@@ -60,32 +60,32 @@ package cliecho
 // the first word of that, so the filename an operator happened to type
 // never enters a decision.
 //
-// That is what keeps the old name alive. `backup-manager` is a symlink
-// beside this binary in the image (container/Dockerfile), so an existing
-// script goes on working unchanged, and it works precisely because nothing
-// in Go can tell the two invocations apart. Taking the printed name from
-// argv[0] instead would undo that on reasonable-looking grounds: the two
-// spellings would then print differently in two shells on the same host,
-// which is worse than either one alone.
+// Taking the printed name from argv[0] instead would undo that on
+// reasonable-looking grounds: the same binary reached under a second
+// filename would print a second name, so two shells on the same host
+// would disagree about which command to tell an operator to run, which is
+// worse than either spelling alone.
 //
-// Nothing here can test the symlink, because the Dockerfile builds it. What
-// can be tested is the half that lives in this module, and
-// TestNothingDispatchesOnArgv0 in core/cmd/backup-manager does: it reads
-// every non-test file under core/ and requires os.Args to appear in exactly
-// one shape, os.Args[1:]. TestTheOldNameReachesTheSameBinary beside it
-// builds this binary, symlinks it under the old name and requires both to
-// answer identically, which is the same arrangement the image makes.
+// 0.3.3 is a clean cut, and container/Dockerfile says so from its own
+// side: the runtime stage carries /rbm and /rbm-web, nothing bridges back
+// to the name before it, and an operator upgrading moves their `docker
+// exec`, their cron entry and their compose file across once.
+//
+// What can be tested from inside this module is the half that lives here,
+// and TestNothingDispatchesOnArgv0 in core/cmd/backup-manager does it: it
+// reads every non-test file under core/ and requires os.Args to appear in
+// exactly one shape, os.Args[1:].
 const (
 	// Binary is the command an operator types, and the name this build
 	// prints when it names itself: the prefix on a diagnostic, the
 	// "usage:" line, and every sentence that says which command to run
 	// next.
 	//
-	// It was `backup-manager` until 0.3.3, and `backup-manager` still
-	// runs: the image symlinks it beside this one, so nothing an operator
-	// already automated has to change. It is simply not what the product
-	// prints back any more, because printing two names is how a reference
-	// stops being one.
+	// It was `backup-manager` until 0.3.3, and 0.3.3 was a clean cut:
+	// an image built from it carries this name and no other, so an
+	// operator upgrading moves their scripts across once and is done.
+	// Shipping both spellings was the alternative, and printing two
+	// names is how a reference stops being one.
 	Binary = "rbm"
 
 	// WebBinary is the other command in the image, the one that serves the

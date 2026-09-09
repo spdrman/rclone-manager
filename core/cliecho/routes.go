@@ -28,8 +28,8 @@ import (
 // of the five quoted a usage() line that had been replaced by the flag it
 // was denying. core/cmd/backup-manager's TestNoGapClaimsAVerbThisBinaryShips
 // reads every sentence here against the verb tables now. A sentence that
-// names a shipped verb on purpose, as a counterexample ("`backup-manager
-// run` is not this"), says so with namesShippedVerbs, and a sentence that
+// names a shipped verb on purpose, as a counterexample ("`rbm run` is
+// not this"), says so with namesShippedVerbs, and a sentence that
 // names one by accident fails.
 //
 // The request bodies are core/apicontract's own types rather than a map

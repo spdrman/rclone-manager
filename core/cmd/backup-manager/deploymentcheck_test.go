@@ -35,8 +35,8 @@ import (
 // That claim used to be false. openConfigWriteRoute calls service.Open
 // before it enters config-write mode, service.Open ran runStartupSequence,
 // and that minted. So on a deployment whose identity file was missing
-// beside an engine still holding the old one, a single `backup-manager
-// status` renamed the deployment, and every routed write afterwards
+// beside an engine still holding the old one, a single `rbm status`
+// renamed the deployment, and every routed write afterwards
 // refused against its own engine while telling the operator to go and
 // check $BACKUP_MANAGER_API_URL. Minting now belongs to core/service's
 // AnnounceServing, so only a process about to serve can name a

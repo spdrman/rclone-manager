@@ -1,9 +1,8 @@
 // Command rbm is the entry point for every execution mode this project
 // supports (FR-1, FR-26). It is `rbm` to an operator and this directory is
-// still cmd/backup-manager, because the image symlinks the old name beside
-// the new one and a Go package path is not something anybody types; the
-// constant that decides what this binary prints itself as, and the whole
-// of that argument, are in core/cliecho/cliname.go.
+// still cmd/backup-manager, because a Go package path is not something
+// anybody types; the constant that decides what this binary prints itself
+// as, and the whole of that argument, are in core/cliecho/cliname.go.
 //
 // It is deliberately thin: every command
 // below does nothing but parse its own flags, reach exactly one use case,
