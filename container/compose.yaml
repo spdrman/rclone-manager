@@ -1,4 +1,4 @@
-# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# Generic Docker deployment shape for rclone-manager (A3.9, extended by
 # issue #82/B4.1). See docs/deployment.md for the reasoning behind every
 # one of these settings and how to build and run it.
 #

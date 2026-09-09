@@ -57,10 +57,10 @@ func repoRoot(t *testing.T) string {
 }
 
 // buildCLI builds core's own executable, the one the container image
-// carries as /backup-manager.
+// carries as /rbm.
 func buildCLI(t *testing.T, root string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "backup-manager")
+	bin := filepath.Join(t.TempDir(), "rbm")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
@@ -68,7 +68,7 @@ func buildCLI(t *testing.T, root string) string {
 	cmd.Dir = filepath.Join(root, "core")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build backup-manager: %v\n%s", err, out)
+		t.Fatalf("build rbm: %v\n%s", err, out)
 	}
 	return bin
 }

@@ -330,7 +330,7 @@ func TestPreviewRetention_VerdictsSayWhichPlacementSelectedEachTier(t *testing.T
 // ------------------------------------------------- EPIC E, issue #430 ---
 //
 // #239 put FR-27's moves and FR-30's per-deletion medium on the
-// preview/apply envelope in core/service and on `backup-manager
+// preview/apply envelope in core/service and on `rbm
 // retention`, and stopped at this boundary. Until these pass, an operator
 // can see a planned move and the medium a deletion happens on from the
 // CLI and not from the API, so the web surface silently under-reports what

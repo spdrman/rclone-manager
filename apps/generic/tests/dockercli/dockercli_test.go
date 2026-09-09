@@ -343,7 +343,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 	t.Helper()
 	// Reclaim anything a previously KILLED run left behind (#150).
 	dockerlease.Sweep()
-	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
+	name := "rclone-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
 
 	args := []string{
 		"run", "-d", "--name", name,
@@ -492,7 +492,7 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 	dir := degradedConfig(t)
 	// Reclaim anything a previously KILLED run left behind (#150).
 	dockerlease.Sweep()
-	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
+	name := "rclone-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
 
 	args := []string{
 		"run", "-d", "--name", name,
@@ -778,7 +778,7 @@ func upComposeFiles(t *testing.T, image, envFile string, files []string) (*compo
 	t.Helper()
 
 	p := &composeProject{
-		name:    "backup-manager-dockercli-" + sanitizeProjectName(t.Name()),
+		name:    "rclone-manager-dockercli-" + sanitizeProjectName(t.Name()),
 		envFile: envFile,
 		files:   files,
 	}

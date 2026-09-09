@@ -21,7 +21,7 @@ import (
 // endpoint.
 //
 // It is a genuine boundary test, not a mock handshake: it builds the real
-// `backup-manager` binary, runs a real cycle so there is a real artifact
+// `rbm` binary, runs a real cycle so there is a real artifact
 // to decide about, drives the real chi router over a real
 // service.BackupService opened from a real config file, and then reads
 // the policy back by executing the real CLI and parsing what an operator
@@ -60,7 +60,7 @@ func backupManagerCLI(t *testing.T) string {
 			cliBuildErr = err
 			return
 		}
-		bin := filepath.Join(dir, "backup-manager")
+		bin := filepath.Join(dir, "rbm")
 		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/rclone-manager/core/cmd/backup-manager")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cliBuildErr = fmtBuildError(err, out)
@@ -69,7 +69,7 @@ func backupManagerCLI(t *testing.T) string {
 		cliBinary = bin
 	})
 	if cliBuildErr != nil {
-		t.Fatalf("building the backup-manager CLI: %v", cliBuildErr)
+		t.Fatalf("building the rbm CLI: %v", cliBuildErr)
 	}
 	return cliBinary
 }
@@ -95,7 +95,7 @@ func runCLI(t *testing.T, args ...string) string {
 	cmd := exec.Command(backupManagerCLI(t), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("backup-manager %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("rbm %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
 }

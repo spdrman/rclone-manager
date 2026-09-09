@@ -37,7 +37,7 @@ import (
 // exactly the refusals an operator most needs to see, and not one of them
 // reaches a handler body.
 //
-// It also settles where the echoed `backup-manager` command comes from.
+// It also settles where the echoed `rbm` command comes from.
 // The command is a function of the route and the request, both of which
 // are right here, so it is built once, in Go, in core/cliecho, and never
 // composed in a browser (see that package for why that matters).

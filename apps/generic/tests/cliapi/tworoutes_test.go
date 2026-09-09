@@ -47,7 +47,7 @@ import (
 // against a stand-in engine for exactly that reason, and both said so.
 //
 // A test can still put the two together, as long as it does not import
-// them both: this package runs the real backup-manager BINARY as a
+// them both: this package runs the real rbm BINARY as a
 // subprocess, and stands up the real apps/common/webhost/serve engine and
 // the real UI host in process. Nothing here is a stand-in. The CSRF cookie
 // is minted by apps/common/csrf, the session by apps/common/auth/local, the
@@ -324,7 +324,7 @@ type invocation struct {
 }
 
 func (r invocation) String() string {
-	return fmt.Sprintf("backup-manager %s\nexit %d\nstdout:\n%s\nstderr:\n%s",
+	return fmt.Sprintf("rbm %s\nexit %d\nstdout:\n%s\nstderr:\n%s",
 		strings.Join(r.argv, " "), r.code, r.stdout, r.stderr)
 }
 
@@ -1468,7 +1468,7 @@ func TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt(t *testing.T) {
 // above: the first-run announcement is main.go's to make.
 func buildWeb(t *testing.T, root string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "backup-manager-web")
+	bin := filepath.Join(t.TempDir(), "rbm-web")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
@@ -1476,7 +1476,7 @@ func buildWeb(t *testing.T, root string) string {
 	cmd.Dir = filepath.Join(root, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build backup-manager-web: %v\n%s", err, out)
+		t.Fatalf("build rbm-web: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -1536,7 +1536,7 @@ func startFirstRunStack(t *testing.T, webBin string) *firstRunStack {
 	)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting backup-manager-web: %v", err)
+		t.Fatalf("starting rbm-web: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cmd.Process.Signal(os.Interrupt); err != nil {

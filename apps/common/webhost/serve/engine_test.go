@@ -353,7 +353,7 @@ func newUIHarness(t *testing.T) *uiHarness {
 	}
 
 	staticFS := fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("<html><body>generic backup-manager UI shell</body></html>")},
+		"index.html": &fstest.MapFile{Data: []byte("<html><body>generic rclone-manager UI shell</body></html>")},
 	}
 
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{Upstream: upstream, StaticFS: staticFS}))
@@ -432,7 +432,7 @@ func TestUI_StaticUIServedForNonAPIRoute(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s status = %d, want %d", path, resp.StatusCode, http.StatusOK)
 		}
-		if !strings.Contains(string(body), "generic backup-manager UI shell") {
+		if !strings.Contains(string(body), "generic rclone-manager UI shell") {
 			t.Errorf("GET %s body = %q, want it to contain the static index.html content (SPA fallback)", path, body)
 		}
 	}

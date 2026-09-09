@@ -50,8 +50,8 @@ manifest in the first place:
 ```sh
 mkdir -p release/amd64
 cid=$(docker create --platform linux/amd64 backup-manager:<version> /rbm version)
-docker cp "${cid}:/rbm"     release/amd64/backup-manager
-docker cp "${cid}:/rbm-web" release/amd64/backup-manager-web
+docker cp "${cid}:/rbm"     release/amd64/rbm
+docker cp "${cid}:/rbm-web" release/amd64/rbm-web
 docker rm "${cid}"
 ```
 
@@ -130,7 +130,7 @@ Package Center catalogue is a separate exercise with its own review.
 
 ## What runs, and where
 
-Two processes, both the same unmodified `backup-manager-web` release
+Two processes, both the same unmodified `rbm-web` release
 binary, differing only in their command - the same "one artifact, vary
 command" split `container/compose.yaml` already ships for the generic
 Docker app:
@@ -141,13 +141,13 @@ Docker app:
 | web UI | `rbm-web serve-ui` | `:8477`, the only LAN-facing port |
 
 The command an operator types on a Docker host is `rbm-web` since 0.3.3,
-and these two lines are deliberately not that. A `.spk` installs native
-binaries under its own package FHS, and this package names them the way
+and these two lines are that same name. A `.spk` installs native binaries
+under its own package FHS, and this package names them the way
 `container/release-manifest.json` records them, so what DSM starts really
-is `${SYNOPKG_PKGDEST}/bin/backup-manager-web`. The release ARTIFACT kept
-its name; only the CLI was renamed. Extracting the binaries out of the
+is `${SYNOPKG_PKGDEST}/bin/rbm-web`. Extracting the binaries out of the
 image above reads them at `/rbm` and `/rbm-web` for that same reason: in
-the image those are the real files and the old names are symlinks.
+the image those are the real files, and the two names now agree end to
+end, from the manifest to `conf/privilege` to `start-stop-status`.
 
 Authentication is the reusable `local-auth` from the generic Web host.
 There is no DSM-specific auth path anywhere in this directory. Native DSM
@@ -167,7 +167,7 @@ here is not attributable to one verified peer.
 | `/var/packages/BackupManager/target` | the two binaries, the DSM UI files, the config seed | replaced | removed |
 | `/var/packages/BackupManager/etc` | `config.yaml`, and the SSH key/known_hosts you put there | kept | kept |
 | `/var/packages/BackupManager/var` | SQLite journal, `local-auth.json`, logs, pid files | kept | kept |
-| `/volume?/rbm` | backup data (a DSM shared folder) | kept | kept |
+| `/volume?/backup-manager` | backup data (a DSM shared folder) | kept | kept |
 
 Both daemons' logs live under `var/log`, on the DSM system volume, and
 `var/` survives every upgrade and reboot. `common.sh` caps each at
