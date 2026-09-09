@@ -91,12 +91,6 @@
     <p>Every screen a freshly installed instance shows, in the order it shows them, with an example for each field and a sentence on what that entry causes the product to do. Not what the label says. What the entry does.</p>
     <p>The worked example throughout is a UGREEN NAS running the canonical Docker Compose deployment, pulling finished backup archives off two VPS over SFTP. The first run configures the first of the two. <a href="#second-vps">The second one</a> is an ordinary backup set added afterwards.</p>
 
-    <div class="note">
-      <span class="note-label">Where these pictures came from</span>
-      <p>Every screenshot on this page was taken against <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout and every word of copy are the real product's. The <em>data</em> is not: fingerprints, key ids and anything numeric are fixtures.</p>
-      <p>They were deliberately not taken from a real instance. Completing this flow claims the administrator account and writes a configuration file, and the enrolment token that opens it is single use, so a screenshot run against a live deployment would finish somebody's setup for them.</p>
-    </div>
-
     <div class="note warn">
       <span class="note-label">Two known defects on this path</span>
       <p>Both are open and both are on screens below. <a href="https://github.com/spdrman/rclone-manager/issues/274">#274</a>: an expired enrolment token reports &ldquo;The administrator account could not be created&rdquo;, which blames your password for a problem with the link. <a href="https://github.com/spdrman/rclone-manager/issues/275">#275</a>: the wizard draws a &ldquo;Cancel and return to backup sets&rdquo; control during first run that cannot do anything. Each is called out where it appears.</p>
@@ -679,7 +673,7 @@
     </ul>
     <div class="note">
       <span class="note-label">This page will move under you</span>
-      <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change. Re-shoot rather than hand-editing a caption.</p>
+      <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change.</p>
     </div>
   </section>
 
