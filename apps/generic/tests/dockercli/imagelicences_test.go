@@ -232,7 +232,7 @@ func createContainer(t *testing.T, image string) string {
 	t.Helper()
 	requireDocker(t)
 	dockerlease.Sweep()
-	name := "backup-manager-licences-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name()) +
+	name := "rclone-manager-licences-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name()) +
 		"-" + time.Now().Format("150405.000000")
 	out, err := exec.Command("docker", "create",
 		"--name", name,

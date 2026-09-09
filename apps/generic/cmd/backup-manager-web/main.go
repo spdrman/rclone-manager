@@ -22,11 +22,11 @@
 // with a LAN-facing published port. Splitting them into two commands of
 // one binary, rather than two separate binaries or images, is the same
 // "one canonical image, vary command" principle already applied to
-// `/rbm` vs. `/rbm-web` themselves. Those two are the real files as of
-// 0.3.3; `/rbm` and `/rbm-web` are still there as
-// symlinks beside them, and the compose files this repo ships name the
-// old paths on purpose, because they are the only ones that also resolve
-// on the releases already on the registry.
+// `/rbm` vs. `/rbm-web` themselves. Those two are the only files as of
+// 0.3.3: the compatibility symlinks that used to carry the old names
+// beside them are gone (#653), and the compose files this repo ships
+// name `/rbm` and `/rbm-web` directly, which is why they need a 0.3.3
+// or later image and say so.
 //
 // Every other execution mode (`run`, `daemon`, `check`, `status`, ...)
 // stays on cmd/backup-manager: this binary is deliberately narrow rather

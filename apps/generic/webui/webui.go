@@ -1,5 +1,5 @@
 // Package webui embeds ui/shared's built static bundle into the
-// backup-manager-web binary via go:embed.
+// rbm-web binary via go:embed.
 //
 // go:embed cannot reach outside its own package's module tree with a
 // `..` path element, so this package cannot embed ui/shared/dist

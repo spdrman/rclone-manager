@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-# backup-manager container image (A3.9, extended by issue #82/B4.1).
+# rclone-manager container image (A3.9, extended by issue #82/B4.1).
 #
-# Five stages:
+# Four stages:
 #   1. `build`          - the provider-neutral core binary (manager logic
 #                          plus the embedded rclone packages, see
 #                          core/internal/transport/rclone). Unchanged by
@@ -25,15 +25,19 @@
 # `/rbm` (stage 1) implements every execution mode FR-1/FR-24
 # call for: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
 # `fetch`, `retention`, `reconcile`, `validate` and `version`.
-# `/rbm-web` (stage 3) adds exactly one more: `serve`, the
-# generic Web host (docs/EPIC-B-multi-nas.md §9.2) - the shared UI, the
-# versioned API, local authentication and the backup scheduler in one
-# process. Two binaries, not one with two names, because apps/generic
-# needs to import apps/common/webhost and apps/common/auth/local, and
-# core/'s own module cannot depend on apps/ in either direction (§7.1) -
-# see apps/generic/cmd/backup-manager-web/main.go's own doc for the module
-# boundary reasoning (that half is unaffected by the rename; the name it
-# gives itself is a separate matter tracked on #651).
+# `/rbm-web` (stage 3) carries a different, much narrower surface of its
+# own: `serve` (the engine - the versioned API, local authentication and
+# the backup scheduler in one process, docs/EPIC-B-multi-nas.md §9.2),
+# `serve-ui` (the shared static UI plus a reverse proxy in front of the
+# engine), `healthcheck` and `auth`. Two binaries, not one with two
+# names, because apps/generic needs to import apps/common/webhost and
+# apps/common/auth/local, and core/'s own module cannot depend on apps/
+# in either direction (§7.1). See apps/generic/cmd/backup-manager-web's
+# own main.go doc for the module boundary reasoning. That directory keeps
+# the old spelling because a Go package path is not operator-visible;
+# every string the binary prints about itself already comes from
+# cliecho.WebBinary, and its own selfname_test.go fails if a literal
+# creeps back in.
 #
 # THE BINARY NAMES (the 0.3.3 CLI rename)
 #
@@ -49,9 +53,16 @@
 # below 0.3.3 rather than write a deployment an older image cannot start.
 #
 # What did NOT change is everything that is not the CLI: the image
-# reference (ghcr.io/spdrman/backup-manager), the compose service names,
-# the config directory at /etc/backup-manager, the Go package paths under
-# cmd/, and the product's own name.
+# reference (ghcr.io/spdrman/backup-manager), the config directory at
+# /etc/backup-manager, and the Go package paths under cmd/. Moving any of
+# those would move an operator's data or break their tooling for nothing.
+#
+# The compose service names are not on that list, and it is worth saying
+# why, because container/compose.yaml already calls its engine service
+# `rclone-manager` and a reader can reasonably wonder whether the rename
+# did that. It did not: those two services have been `rclone-manager` and
+# `web-ui` since B4.1, they were never the CLI's names, and there was
+# nothing here for 0.3.3 to change.
 
 # ---- core builder ---------------------------------------------------------
 # Pinned by digest, not just tag, so this stage resolves to the exact same
@@ -321,14 +332,6 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/rbm /rbm
 COPY --from=build-web /out/rbm-web /rbm-web
 
-# `/rbm` and `/rbm-web`, as links to the two lines
-# above. The directory is copied rather than the two links by name, which
-# is the shape that keeps them links: `COPY --from=<stage> <dir>/ /`
-# reproduces a dangling symlink as a symlink, and execve follows it, so
-# `docker run <image> /rbm status` runs /rbm with argv[0] of
-# /rbm and every compose file written before the rename keeps
-# working unchanged.
-
 # The licence, the notices and the machine-readable inventory the other
 # two point at, at a fixed path a recipient can find without a shell
 # (distroless has none): `docker cp <ctr>:/licenses .` or `docker export
@@ -411,11 +414,10 @@ EXPOSE 8080
 # running: `status` is a fresh, read-only check against the same shared
 # state database file either way.
 #
-# The real binary, not the `/rbm` link beside it, and that is a
-# choice rather than a detail. A HEALTHCHECK is baked into the image and
-# re-read by the daemon on every interval for the life of every container
-# anyone ever starts from it, so it is the one caller here that gains
-# nothing from a name that moves, so it names the binary directly
-# were ever dropped.
+# It names `/rbm` by its full path, and that is a choice rather than a
+# detail. A HEALTHCHECK is baked into the image and re-read by the daemon
+# on every interval for the life of every container anyone ever starts
+# from it, so it is the one caller here that can never be re-pointed
+# after the fact, and it has to name a file this image really carries.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["/rbm", "status"]

@@ -3,7 +3,7 @@
 // contract).
 //
 // Five of the contract's seven metrics are properties of the running
-// process and are measured here, against the real `backup-manager-web
+// process and are measured here, against the real `rbm-web
 // serve` binary over real HTTP, never against an in-process httptest
 // handler: idle RSS, startup-to-healthy time, /api/v1 read latency,
 // configuration write latency, and idle CPU. The remaining two live
@@ -572,12 +572,12 @@ func repoRoot(t *testing.T) string {
 // per-module jobs do.
 func buildEngine(t *testing.T, repoRoot string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "backup-manager-web")
+	bin := filepath.Join(t.TempDir(), "rbm-web")
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
 	cmd.Dir = filepath.Join(repoRoot, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build backup-manager-web: %v\n%s", err, out)
+		t.Fatalf("build rbm-web: %v\n%s", err, out)
 	}
 	return bin
 }

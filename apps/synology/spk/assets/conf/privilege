@@ -4,13 +4,13 @@
     },
     "tool": [
         {
-            "relpath": "bin/backup-manager",
+            "relpath": "bin/rbm",
             "user": "package",
             "group": "package",
             "permission": "0750"
         },
         {
-            "relpath": "bin/backup-manager-web",
+            "relpath": "bin/rbm-web",
             "user": "package",
             "group": "package",
             "permission": "0750"
