@@ -483,7 +483,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 		DocumentNamespace: namespace,
 		CreationInfo: SPDXCreationInfo{
 			Created:  created,
-			Creators: []string{"Tool: backup-manager-provenance", "Organization: The Backup Manager Authors"},
+			Creators: []string{"Tool: rclone-manager-provenance", "Organization: Roman Goldmann"},
 		},
 	}
 	for _, c := range inv.Components {
