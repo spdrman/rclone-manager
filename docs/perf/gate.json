@@ -46,6 +46,15 @@
     "metric's own \"why\" says which condition binds and what the budget therefore",
     "is in practice.",
     "",
+    "A ratio here is not a promise that the metric can resolve 10%. Each one is",
+    "sized from that metric's own measured movement, so they differ by an order",
+    "of magnitude: image_size_bytes carries 1.05 because two builds of one commit",
+    "are byte-identical and precision is the only thing setting it, while",
+    "transfer_mb_per_second carries 0.60 because one unchanged tree spans 1.398x",
+    "across machine conditions (#635). That is one rule producing two very",
+    "different numbers, not an exception. Read each metric's \"why\" for what its",
+    "gate can and cannot catch before treating a pass as evidence.",
+    "",
     "Metrics deliberately NOT gated: startup_to_healthy_ms (12.0% median-to-median",
     "movement between two identical captures, so a 10% gate would fail against an",
     "unchanged tree), idle_cpu_percent and idle_cpu_seconds_total (the process is",
@@ -59,12 +68,12 @@
       "direction": "lower_is_better",
       "max_ratio": 1.10,
       "noise_floor_abs": 0.05,
-      "why": "the API p95 EPIC B #81 names. Measured median-to-median movement between two identical five-capture baselines was 0.019 ms (14.6%), so the ratio alone is inside noise at this magnitude, and the 0.05 ms floor is 2.6x that movement. Both conditions must hold before this metric fails, so what is enforced is the wider of the two, not the 1.10: against the 0.130 ms baseline the ratio allows 0.143 ms and the floor allows 0.180 ms, so the floor always binds and the effective budget is +38.5%. That is wider than the regression this floor was sized against. An added loopback proxy hop was later measured at 0.047 ms at p95 on this host, which is just under the floor, so this gate cannot catch that hop. Closing that needs a quieter measurement before the floor can come down, not a smaller number written over the same noise. docs/perf/README.md carries the arithmetic, and scripts/perf/selftest.sh pins which condition binds with one control either side of the floor."
+      "why": "the API p95 EPIC B #81 names. Measured median-to-median movement between two identical five-capture baselines was 0.019 ms (14.6%), so the ratio alone is inside noise at this magnitude, and the 0.05 ms floor is 2.6x that movement. Both conditions must hold before this metric fails, so what is enforced is the wider of the two, not the 1.10: against the 0.168 ms baseline the ratio allows 0.185 ms and the floor allows 0.218 ms, so the floor always binds and the effective budget is +29.8%. (It was +38.5% against the 0.130 ms baseline this record replaced in #635; the floor is absolute, so a larger baseline narrows the effective budget rather than widening it, and this sentence moves with the record because a threshold's justification that quotes a number the record no longer holds is the same defect the metric below it exists to catch.) That is wider than the regression this floor was sized against. An added loopback proxy hop was later measured at 0.047 ms at p95 on this host, which is just under the floor, so this gate cannot catch that hop. Closing that needs a quieter measurement before the floor can come down, not a smaller number written over the same noise. docs/perf/README.md carries the arithmetic, and scripts/perf/selftest.sh pins which condition binds with one control either side of the floor."
     },
     "transfer_mb_per_second": {
       "direction": "higher_is_better",
-      "min_ratio": 0.90,
-      "why": "the transfer throughput EPIC B #81 names. Measured median-to-median movement was 0.93%, so a 10% budget is roughly eleven times the noise and the ratio alone is a real gate."
+      "min_ratio": 0.60,
+      "why": "the transfer throughput EPIC B #81 names. The 0.93% median-to-median movement this was originally sized on is a real number that measures the wrong quantity, and #635 established that: both of those baselines were taken back to back on a QUIET machine, so what they measured is repeatability under one condition rather than sensitivity to condition, and a 256 MiB disk-to-disk copy is the metric here most exposed to the difference. Six runs of one unchanged tree on 2026-09-08 under a load average of 11 to 12 gave 479.584, 492.995, 619.020, 624.583, 651.716 and 670.434 MB/s: a spread of 1.398x with nothing changed, against a 0.90 ratio that allows 1.11x. All six were below the 672.180 floor a 0.90 ratio sets on the recorded 746.867, and one of the six was below the 483.932 floor the PREVIOUS baseline set, so this is a property of the metric rather than of either capture. A gate that goes red on an unchanged tree teaches everyone to ignore it, which is the same rule that left startup_to_healthy_ms ungated at 12% movement. This metric stays gated because #81 names it, and it takes the treatment api_read_p95_ms already got for the same tension: the threshold is widened from measurement and what it really enforces is written down rather than left implied. 0.60 puts the floor at 448.120 MB/s, 7.0% below the worst of the six, because six samples at one load level do not locate the tail and fitting the threshold to the worst one observed (0.64 leaves 0.3%) would repeat the mistake the 0.93% figure made. What that buys is a gate against the structural regression class and not a marginal one: it still refuses a halving, which is what scripts/perf/selftest.sh mutates, and it will not notice a 20% loss. Read that as the honest capability of this metric on this host, not as a target. No noise_floor_abs, unlike api_read_p95_ms: that floor exists because a sub-millisecond number sits near its own measurement resolution, whereas this quantity is large and varies multiplicatively, so a ratio is the right instrument and a second condition nobody could reason about would only widen an already wide rule. Capture this metric on a quiet machine; docs/perf/README.md carries the measurements and what to do when it fails."
     },
     "idle_rss_bytes": {
       "direction": "lower_is_better",

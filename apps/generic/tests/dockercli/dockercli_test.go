@@ -143,9 +143,15 @@ var builder imageBuilder
 // buildImage builds container/Dockerfile once per test process (subsequent
 // calls are a cheap no-op thanks to Docker's own layer cache, but this
 // still avoids paying even that cost more than once per `go test` run)
-// and returns the reference it built. A single amd64/arm64-native load
-// (not a multi-arch buildx invocation) is enough here: architecture
-// parity is CI's ugreen-cross-compile job's job, not this suite's.
+// and returns the reference it built. A single native load (not a
+// multi-arch buildx invocation) is enough here: architecture parity is
+// CI's ugreen-cross-compile job's job, not this suite's.
+//
+// "Native" is now true rather than assumed, and it was not before #635:
+// see TestMain in imagesweep_test.go, which pins the platform for this
+// build and for every `docker run`, `docker create` and `docker compose`
+// that follows it. They have to agree, and pinning only this one is worse
+// than pinning none.
 //
 // The reference is imageReference(), unique to this test process (#185).
 // It used to be one fixed string shared by every checkout on the machine,

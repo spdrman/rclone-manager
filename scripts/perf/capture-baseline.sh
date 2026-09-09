@@ -33,7 +33,37 @@ cd "$(git rev-parse --show-toplevel)"
 REPEAT=3
 OUT=""
 SKIP_IMAGE=0
-IMAGE_PLATFORM="linux/$(go env GOARCH)"
+
+# The image is built for the DAEMON's architecture, not this shell's, and
+# the two are only the same while the daemon is local (#635).
+#
+# `go env GOARCH` is the client's. `docker info` succeeds just as happily
+# against a remote DOCKER_HOST, a Colima or Lima x86 VM, or Docker Desktop
+# pointed elsewhere, and on any of those this used to record a number for
+# an architecture the daemon had to emulate to produce, under a platform
+# label saying otherwise. The recorded value is also what
+# apps/generic/tests/dockercli now enforces on every gate run, and that
+# test takes its architecture off the daemon, so the recorder and the gate
+# have to answer this question the same way or they are gating one
+# artifact against a measurement of another.
+#
+# Server.Arch prints Go's vocabulary (arm64, amd64), which is the same
+# vocabulary `docker image inspect --format {{.Architecture}}` prints and
+# what lands in the record beside the value, so there is no mapping table
+# here to get wrong. scripts/e2e/run-machine-tier.sh reached the same
+# conclusion on this machine and needs one only because it reads
+# `docker info --format {{.Architecture}}`, which says aarch64.
+#
+# Falls back to the client's architecture when there is no daemon to ask,
+# because --skip-image is a supported way to run this and must not need
+# Docker just to compute a default it will not use. A run that does build
+# an image without a daemon fails at the build, loudly, a few lines below.
+if _daemon_arch=$(docker version --format '{{.Server.Arch}}' 2>/dev/null) && [ -n "$_daemon_arch" ]; then
+  IMAGE_PLATFORM="linux/${_daemon_arch}"
+else
+  IMAGE_PLATFORM="linux/$(go env GOARCH)"
+fi
+unset _daemon_arch
 
 # The flags are documented here and nowhere else, so this text is the
 # reference. Each one says what the number means as well as what it sets,
@@ -55,7 +85,10 @@ usage: scripts/perf/capture-baseline.sh [options]
                     a record with a null image size is incomplete and
                     check-baseline.sh says so)
   --platform PLAT   image platform to build and measure
-                    (default linux/$(go env GOARCH))
+                    (default: the docker daemon's own architecture,
+                    from `docker version --format {{.Server.Arch}}`,
+                    falling back to linux/$(go env GOARCH) when there is
+                    no daemon to ask)
 EOF
 }
 

@@ -26,8 +26,17 @@ import (
 // #167 removed the constraint by making bundle selection a run-time
 // decision (--ui-dir, then --ui-root/<profile>, then embedded, failing
 // closed). It did not ship the packaging, and deliberately: seven bundles
-// at roughly 347 KB each is about 2.4 MB against a gated 5% image budget
+// at roughly 347 KB each was about 2.4 MB against a gated 5% image budget
 // of about 2.15 MB, so "put them all in the image" was never available.
+//
+// That is #167's arithmetic and it is history rather than a live rule
+// (#635). It worked because the recorded baseline was an image carrying no
+// bundles, so each one had to come out of the headroom; the baseline has
+// since been re-captured WITH five of them inside it, and a bundle already
+// counted in the baseline cannot be charged to the 5% as well. What
+// decides the count now is that `generic` is compiled into the binary and
+// `ugos` ships in EPIC D's UPK, so those two have a carrier already, which
+// is an argument about duplication rather than about size.
 //
 // #169 ships it, per adapter, and there are exactly three mechanisms
 // because there are exactly three kinds of carrier:
