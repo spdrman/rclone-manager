@@ -26,16 +26,19 @@ import type { BackupArtifact } from "@shared/types/backup";
  *
  * Two reasons this went unnoticed for so long, both worth keeping:
  *
- * api/mock.ts's artifact ids are slash-free ("art_01J9F4M2QK8Z"), so
- * every fixture-driven test navigates a URL a real id can never produce.
- * These cases therefore build the id shape directly rather than borrowing
- * the mock's, exactly as backup-set-slash-id.test.tsx does for #285.
+ * api/mock.ts's artifact ids WERE slash-free ("art_01J9F4M2QK8Z"), so
+ * every fixture-driven test navigated a URL a real id can never produce.
+ * These cases therefore build the id shape directly rather than
+ * borrowing the mock's, exactly as backup-set-slash-id.test.tsx does for
+ * #285 — and the mock's own ids were corrected with the fix, so that
+ * unreality is gone rather than merely avoided here.
  *
- * And backup-detail-page.test.tsx renders BackupDetailPage under a
- * `<Route path="/backups/:artifactId">` it declares itself, which
- * reproduces the broken route locally and can never disagree with
- * App.tsx. So these cases render the real <App /> and let the real route
- * table decide, which is the only arrangement that can fail.
+ * And backup-detail-page.test.tsx rendered BackupDetailPage under a
+ * `<Route path="/backups/:artifactId">` it declared itself, which
+ * reproduced the broken route locally where it could never disagree with
+ * App.tsx. It declares the real shape now. These cases render the real
+ * <App /> and let the real route table decide, which is the only
+ * arrangement that could have failed while that was not true.
  *
  * Three cases were folded in from a second suite opened for the same
  * issue before either of us saw the other's branch (#696 onto #680): an
