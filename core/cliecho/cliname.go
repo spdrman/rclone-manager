@@ -1,6 +1,9 @@
-// Package cliname holds the one spelling of the command an operator types.
+package cliecho
+
+// The one spelling of the command an operator types, and the one place a
+// rename touches.
 //
-// # Why a package for two strings
+// # Why one place rather than fifty
 //
 // The name was a string literal in about fifty places: every diagnostic
 // that prefixes itself with it, the usage block's first line, every
@@ -29,6 +32,27 @@
 // "everything else called that", drawn once, in a place a reader can see
 // it, so a rename is this file and nothing else.
 //
+// # Why it is in cliecho rather than in a package of its own
+//
+// It started as core/cliname, which is where it belongs and is not where it
+// can live. container/Dockerfile copies core/ one named directory at a time
+// (apicontract, cliecho, cmd, internal, service, migrations) rather than
+// wholesale, deliberately, so that a stray untracked file cannot reach the
+// build context. A new top-level package under core/ is therefore invisible
+// to the image until somebody adds two COPY lines, and until they do the
+// image build dies with "cannot find module providing package" while every
+// `go build` and `go test` from a checkout stays green, because a checkout
+// has the whole module. That is not hypothetical: the same trap caught
+// core/apicontract when #543 gave the CLI an engine to talk to, and the
+// Dockerfile carries a paragraph about it.
+//
+// cliecho is on that list already, in both build stages, and it is not an
+// arbitrary hiding place: naming the command an action corresponds to is
+// the whole of what this package does, and newCmd below prepends this exact
+// constant to every line it builds. So the CLI reading its own name from
+// here means there is one spelling of it in the product, which is the
+// point.
+//
 // # Why a constant and not something read at runtime
 //
 // What this binary calls itself is a fact about the build, not about how
@@ -51,8 +75,6 @@
 // one shape, os.Args[1:]. TestTheOldNameReachesTheSameBinary beside it
 // builds this binary, symlinks it under the old name and requires both to
 // answer identically, which is the same arrangement the image makes.
-package cliname
-
 const (
 	// Binary is the command an operator types, and the name this build
 	// prints when it names itself: the prefix on a diagnostic, the

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/cliecho"
-	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // A gap line is a promise, made to an operator reading a terminal, that
@@ -117,7 +116,7 @@ func shippedVerbsNamedIn(why string) []string {
 	var out []string
 	for _, match := range backtickedPhrase.FindAllStringSubmatch(why, -1) {
 		words := strings.Fields(match[1])
-		if len(words) > 0 && words[0] == cliname.Binary {
+		if len(words) > 0 && words[0] == cliecho.Binary {
 			words = words[1:]
 		}
 		if len(words) == 0 {
@@ -178,7 +177,7 @@ func TestTheGapVerbRuleCatchesTheSentencesThatShipped(t *testing.T) {
 			// A verb that really does not exist stays silent, which is
 			// what makes the cases above about the verb table rather than
 			// about the presence of backticks.
-			why:  "there is no verb that imports a key this machine already holds; `" + cliname.Binary + " ssh-key import --candidate ID` would be it",
+			why:  "there is no verb that imports a key this machine already holds; `" + cliecho.Binary + " ssh-key import --candidate ID` would be it",
 			want: nil,
 		},
 		{
@@ -192,7 +191,7 @@ func TestTheGapVerbRuleCatchesTheSentencesThatShipped(t *testing.T) {
 			// back and check: the rule went red on the sentence the
 			// moment the verb landed, which is exactly the staleness it
 			// was written to catch.
-			why:  "`" + cliname.Binary + " backup-set test-connection <source/backup-set>` is the one this route needs",
+			why:  "`" + cliecho.Binary + " backup-set test-connection <source/backup-set>` is the one this route needs",
 			want: []string{"backup-set"},
 		},
 		{
@@ -200,7 +199,7 @@ func TestTheGapVerbRuleCatchesTheSentencesThatShipped(t *testing.T) {
 			// that does, so the arm above no longer covers on its own
 			// stays covered. `backup-set` is dispatched and `rekey` is
 			// not, which is a true gap rather than a stale sentence.
-			why:  "there is no `" + cliname.Binary + " backup-set rekey <source/backup-set>` that rotates a key on the source host as well as here",
+			why:  "there is no `" + cliecho.Binary + " backup-set rekey <source/backup-set>` that rotates a key on the source host as well as here",
 			want: nil,
 		},
 		{

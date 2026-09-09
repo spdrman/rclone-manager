@@ -1,8 +1,11 @@
 // Command rbm is the entry point for every execution mode this project
 // supports (FR-1, FR-26). It is `rbm` to an operator and this directory is
 // still cmd/backup-manager, because the image symlinks the old name beside
-// the new one and a Go package path is not something anybody types; see
-// core/cliname for the whole of that argument. It is deliberately thin: every command
+// the new one and a Go package path is not something anybody types; the
+// constant that decides what this binary prints itself as, and the whole
+// of that argument, are in core/cliecho/cliname.go.
+//
+// It is deliberately thin: every command
 // below does nothing but parse its own flags, reach exactly one use case,
 // and format the result for a terminal. Most reach it by building (or
 // reusing) an internal/app.Service; the configuration writes go through
@@ -18,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // Set at build time with -ldflags (see container/Dockerfile).
@@ -45,7 +48,7 @@ func run(args []string) int {
 	name, rest := args[0], args[1:]
 	cmd, ok := commands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, cliname.Binary+": unknown command %q\n\n", name)
+		fmt.Fprintf(os.Stderr, cliecho.Binary+": unknown command %q\n\n", name)
 		usage()
 		return exitUsage
 	}
@@ -114,7 +117,7 @@ var commands = map[string]func([]string) int{
 // a status a wrapper script branches on is a contract, and a contract read
 // off setup.go by whoever thought to look is not one.
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: `+cliname.Binary+` <command> [flags]
+	fmt.Fprint(os.Stderr, `usage: `+cliecho.Binary+` <command> [flags]
 
 commands:
   run                                            perform one processing cycle and exit
@@ -427,7 +430,7 @@ to print:
       does not have is only wrong here (#569)
   3   another process is serving this deployment, so nothing was done: a configuration write
       refused because it would never reach that process, or a daemon refused rather than
-      started beside one. `+cliname.WebBinary+` serve answers the same way for the same
+      started beside one. `+cliecho.WebBinary+` serve answers the same way for the same
       reason, which matters because that is the binary this deployment's compose file
       runs, so a supervisor reads one code from either (#557). Read the sentence beside
       it before retrying in a loop. A

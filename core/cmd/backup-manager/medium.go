@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -627,7 +627,7 @@ func mediumWrite(ctx context.Context, cfgPath, id string, f mediumFlags, update 
 			// an operator knows the cost of.
 			fmt.Println("not verified: --no-verify was given, so no credential was obtained, no endpoint was contacted and no object was written or read back")
 			fmt.Println("  this destination is marked as unverified until a test connection passes")
-			fmt.Printf("  prove it afterwards with: "+cliname.Binary+" medium test-connection %s\n", id)
+			fmt.Printf("  prove it afterwards with: "+cliecho.Binary+" medium test-connection %s\n", id)
 		}
 
 		var (
@@ -796,7 +796,7 @@ func printMedium(m service.StorageMediumSummary) {
 	// existing deployment is the second, so printing "verified" for it
 	// would be a claim about a bucket nobody ever contacted.
 	if m.ConnectionUnverified {
-		fmt.Println("  connection: not verified (nothing has proven this destination; `" + cliname.Binary + " medium test-connection " + m.ID + "` clears this)")
+		fmt.Println("  connection: not verified (nothing has proven this destination; `" + cliecho.Binary + " medium test-connection " + m.ID + "` clears this)")
 	}
 }
 

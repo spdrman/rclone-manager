@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
@@ -65,7 +65,7 @@ func cmdStatus(args []string) int {
 		return fail(err)
 	}
 
-	fmt.Printf("process: "+cliname.Binary+" %s (commit %s), go %s, rclone %s\n",
+	fmt.Printf("process: "+cliecho.Binary+" %s (commit %s), go %s, rclone %s\n",
 		report.Process.BinaryVersion, commit, info.GoVersion, report.Process.RcloneVersion)
 
 	healthy := true
@@ -171,7 +171,7 @@ func cmdStatus(args []string) int {
 		for _, u := range unconfigured {
 			fmt.Printf("  %s: %d artifact(s), %d byte(s), under no retention policy\n", u.Set, u.Artifacts, u.Bytes)
 		}
-		fmt.Println("  nothing collects, retains, reconciles or deletes these; `" + cliname.Binary + " unconfigured` says what to do about it.")
+		fmt.Println("  nothing collects, retains, reconciles or deletes these; `" + cliecho.Binary + " unconfigured` says what to do about it.")
 	}
 
 	if !healthy {

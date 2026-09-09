@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -110,13 +110,13 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 	}
 	cleanup := func() {
 		if err := journal.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 		// Only after the journal handle is closed: the shared journal lock
 		// is what keeps another process from migrating this journal while
 		// this command still has it open (see core/service's startup.go).
 		if err := releaseJournal(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": releasing the state database lock: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing the state database lock: %v\n", err)
 		}
 	}
 
@@ -255,7 +255,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	}
 	cleanup := func() {
 		if err := closeFn(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 	}
 	if intent == readsConfig {
@@ -293,7 +293,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 		// turning a successful change into a non-zero exit over a lock
 		// file that could not be closed would be the wrong trade.
 		if err := guard.Release(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
 		}
 	}, nil
 }
@@ -343,7 +343,7 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 	}
 	closeLocal := func() {
 		if err := closeFn(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 	}
 
@@ -356,7 +356,7 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 		// Reported and not fatal, exactly as on the direct path: the
 		// change has already happened by the time this runs.
 		if err := write.guard.Release(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
 		}
 	}
 
@@ -460,7 +460,7 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 			// binary prints: a write to stderr failing cannot change the
 			// verdict that is being reported, and swallowing the verdict
 			// because the terminal went away would be the worse answer.
-			_, _ = fmt.Fprintf(w, cliname.Binary+": %s backed nothing up this cycle: %d walked, %d got through\n",
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": %s backed nothing up this cycle: %d walked, %d got through\n",
 				v.Set, v.Progress.Walked, v.Progress.Durable)
 		}
 	}
@@ -507,14 +507,14 @@ func moveExit(w io.Writer, report app.CycleReport) int {
 	code := 0
 	if report.MovesErr != nil {
 		code = 1
-		_, _ = fmt.Fprintf(w, cliname.Binary+": this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
+		_, _ = fmt.Fprintf(w, cliecho.Binary+": this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
 	}
 	if p := report.MoveProgress(); p.NothingMoved() {
 		code = 1
 		if p.Reason == "" {
-			_, _ = fmt.Fprintf(w, cliname.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
 		} else {
-			_, _ = fmt.Fprintf(w, cliname.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
 				p.Attempted, p.Reason)
 		}
 	}
@@ -650,7 +650,7 @@ const (
 // exit code is what a script is supposed to branch on so that nothing has
 // to parse the prose.
 func fail(err error) int {
-	fmt.Fprintln(os.Stderr, cliname.Binary+":", err)
+	fmt.Fprintln(os.Stderr, cliecho.Binary+":", err)
 	if errors.Is(err, errEngineHoldsDeployment) {
 		return exitEngineHoldsDeployment
 	}
@@ -663,6 +663,6 @@ func fail(err error) int {
 // missing required flag or a wrong argument count) and returns the
 // argument-error exit code.
 func usageError(format string, args ...any) int {
-	fmt.Fprintf(os.Stderr, cliname.Binary+": "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, cliecho.Binary+": "+format+"\n", args...)
 	return exitUsage
 }

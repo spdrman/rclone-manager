@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -113,12 +113,12 @@ func cmdActivity(args []string) int {
 	}
 	defer func() {
 		if err := journal.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 		// Only after the journal handle is closed, for the reason
 		// openService's own cleanup gives.
 		if err := releaseJournal(); err != nil {
-			fmt.Fprintf(os.Stderr, cliname.Binary+": releasing the state database lock: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing the state database lock: %v\n", err)
 		}
 	}()
 

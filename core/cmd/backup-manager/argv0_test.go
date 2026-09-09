@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/cliname"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // The command an operator types is `rbm`, and `backup-manager` goes on
@@ -152,7 +152,7 @@ func isOSArgs(e ast.Expr) bool {
 
 // legacyName is the command this binary answered to before 0.3.3, and goes
 // on answering to. It is spelled out here rather than derived from
-// cliname.Binary because it is a promise about a name that no longer moves:
+// cliecho.Binary because it is a promise about a name that no longer moves:
 // the day the constant changes again, `backup-manager` is still the thing
 // an operator's four-year-old cron line says, and a test that followed the
 // constant would quietly stop making the promise.
@@ -186,18 +186,18 @@ func TestTheOldNameReachesTheSameBinary(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	canonical := filepath.Join(dir, cliname.Binary)
+	canonical := filepath.Join(dir, cliecho.Binary)
 	build := exec.Command("go", "build", "-o", canonical, "./cmd/backup-manager")
 	build.Dir = coreRoot
 	build.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building %s: %v\n%s", cliname.Binary, err, out)
+		t.Fatalf("building %s: %v\n%s", cliecho.Binary, err, out)
 	}
 
 	alias := filepath.Join(dir, legacyName)
 	if alias == canonical {
-		t.Fatalf("%s and %s are the same path, so this test would compare a binary with itself and pass however it behaved. cliname.Binary is %q; if the product really has gone back to the old name, this test has stopped meaning anything and should say so out loud rather than keep passing.",
-			cliname.Binary, legacyName, cliname.Binary)
+		t.Fatalf("%s and %s are the same path, so this test would compare a binary with itself and pass however it behaved. cliecho.Binary is %q; if the product really has gone back to the old name, this test has stopped meaning anything and should say so out loud rather than keep passing.",
+			cliecho.Binary, legacyName, cliecho.Binary)
 	}
 	if err := os.Symlink(canonical, alias); err != nil {
 		t.Fatalf("symlinking %s to %s: %v", alias, canonical, err)
@@ -217,15 +217,15 @@ func TestTheOldNameReachesTheSameBinary(t *testing.T) {
 
 		if gotCode != wantCode {
 			t.Errorf("%s %s exited %d and %s %s exited %d. The old name is a symlink to the same file, so a script that branches on the exit status has to get the same answer from either.",
-				legacyName, label, gotCode, cliname.Binary, label, wantCode)
+				legacyName, label, gotCode, cliecho.Binary, label, wantCode)
 		}
 		if gotOut != wantOut {
 			t.Errorf("%s %s and %s %s printed different things on stdout.\nunder %s:\n%s\nunder %s:\n%s",
-				legacyName, label, cliname.Binary, label, cliname.Binary, wantOut, legacyName, gotOut)
+				legacyName, label, cliecho.Binary, label, cliecho.Binary, wantOut, legacyName, gotOut)
 		}
 		if gotErr != wantErr {
 			t.Errorf("%s %s and %s %s printed different things on stderr.\nunder %s:\n%s\nunder %s:\n%s",
-				legacyName, label, cliname.Binary, label, cliname.Binary, wantErr, legacyName, gotErr)
+				legacyName, label, cliecho.Binary, label, cliecho.Binary, wantErr, legacyName, gotErr)
 		}
 	}
 }

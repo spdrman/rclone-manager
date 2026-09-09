@@ -1,5 +1,5 @@
-// Package cliecho names the command (core/cliname.Binary, `rbm`) that would
-// have done the same thing as an action taken in the Web UI (issue #599).
+// Package cliecho names the command (Binary, `rbm`) that would have done the
+// same thing as an action taken in the Web UI (issue #599).
 //
 // # Why this exists at all
 //
@@ -97,8 +97,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // Action is one API action, as the request that performed it.
@@ -202,7 +200,7 @@ func (l Line) Shell() string {
 
 // gapNoEquivalent is the one wording every gap line uses, so an operator
 // and a grep only ever have one string to know.
-const gapNoEquivalent = "no " + cliname.Binary + " equivalent yet"
+const gapNoEquivalent = "no " + Binary + " equivalent yet"
 
 // Echo names the command for one action, or the gap where there is none.
 //
@@ -407,7 +405,7 @@ type cmd struct {
 }
 
 func newCmd(words ...string) *cmd {
-	return &cmd{argv: append([]string{cliname.Binary}, words...)}
+	return &cmd{argv: append([]string{Binary}, words...)}
 }
 
 // flag appends --name value.
