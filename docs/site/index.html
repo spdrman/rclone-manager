@@ -176,7 +176,7 @@
 
   <section>
     <h2 id="cli">The command line</h2>
-    <p>Everything the web interface does, and several things it does not, are reachable from <code>rbm</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config.yaml</code>.</p>
+    <p>Everything the web interface does, and several things it does not, are reachable from <code>rbm</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config/config.yaml</code>, which is a file inside the config directory rather than a file mounted on its own; pass the directory and it resolves <code>config.yaml</code> inside it.</p>
     <div class="scroll-x">
       <table>
         <thead>
@@ -203,7 +203,7 @@
         </tbody>
       </table>
     </div>
-    <p><a href="cli.html">The commands page</a> has the full table, the rename, and the rule that makes every button in the web interface name the command it is equivalent to. The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copies on this site are transcriptions and are not checked, so if they ever disagree, the README is right.</p>
+    <p><a href="cli.html">The commands page</a> has the full table, the rename, and the rule that makes every button in the web interface name the command it is equivalent to. The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy is checked against the binary's own dispatch table on every run of the repository's gate. This site's copies are checked against the same table for their <em>shape</em>, by <code>docs/site/tools/check-cli-table.mjs</code>, and not for what any command does, so on a disagreement about behaviour the README is right.</p>
   </section>
 
   <section>
@@ -227,7 +227,6 @@
       <li><strong>There is no restore execution.</strong> <code>rbm restore</code> asks a storage provider to make an archived copy readable again, which is a different thing. Getting a backup back onto a server is a documented manual procedure, and that procedure is the whole of it.</li>
       <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>
       <li><strong>Every picture on this site comes from a mock.</strong> Every screenshot and every clip was recorded against the development server's in-memory fixture API, not against a running engine. The layout, the copy, the flow and the interaction are the real ones. The data is not, and each page says so.</li>
-      <li><strong>The clips still say <code>backup-manager</code>.</strong> The rename to <code>rbm</code> landed in the binary before it landed in the strings the web interface echoes, so the command lines visible in the moving pictures are the old name. I would rather say that than edit frames of software to make it claim something it did not say.</li>
     </ul>
   </section>
 

@@ -150,23 +150,21 @@
     <figcaption><span class="clip-tag">clip</span>The same buffer under four filters. Under <em>Commands only</em> what is left is a transcript: the summary of what was done, the equivalent command, and where there is no equivalent command yet, a line saying so and why.</figcaption>
   </figure>
 
-    <div class="note warn">
-      <span class="note-label">Two things I found while recording this</span>
-      <p><strong>The <em>This browser</em> chip always draws an empty log.</strong> Notices this browser writes (a run you started, a refusal that never reached the engine) go into <code>state/browserNotices</code>, and <code>ActivityDock</code> never reads that node; only <code>SetActivityPanel</code> does. So a run started from a button lands in the banner and in that set's own panel, and never in the docked terminal. <code>useRunControls</code>' own doc says that node is "the seam the global terminal and the per-set terminal read", which is half true.</p>
-      <p><strong>The filter row clips below about 1300px.</strong> The chips sit in a wrapping flex row inside a bar with a fixed 32px height, so as soon as they need a second line the second line is cut off and those chips cannot be clicked. Four backup sets and a 1280px window is enough to do it, and a deployment with more sets will do it at any width. The clips above are recorded at 1440px, where the row still fits.</p>
-    </div>
+    <p>The chip row is a strip that scrolls rather than a row that wraps, which is why it slides sideways in the clip when a chip near the end is picked. The bar is a fixed 32px because the content column reserves exactly that much under itself, so letting the bar grow would push the last row of a long table back behind the terminal, which is the defect the pinning fixed arriving again from the other side. A chip out of view is reached by wheel, by trackpad, or by tabbing to it.</p>
+    <p><strong>This browser</strong> is the one worth knowing about. A run you started, or a refusal that never reached the engine at all, is something this tab knows and the NAS may not, so those lines are marked as the browser's and this chip is what leaves only them. Both of those are facts about your session rather than evidence about the machine, and keeping the two apart is the whole reason the mark exists. <a href="#runs">The run clip below</a> shows one arriving.</p>
   </section>
 
   <section>
     <h2 id="runs">Starting a run, and reading the answer</h2>
     <p>Both run buttons are real now. Before <a href="https://github.com/spdrman/rclone-manager/issues/597">#597</a> two of them called the API with no error handler, an empty configuration revision and no idempotency key, and the third had no handler at all, so a refusal from the destructive gate, a stale revision, a malformed request and a dead engine were all pixel-identical to a button that did nothing.</p>
     <p>What comes back is a notice with four parts, and each part is there for a reason. It states an outcome rather than leaving one to be inferred. It says what to do about it when there is something to do. It names the command the press was equivalent to, copy-pasteable exactly as written, which matters most on a <em>refusal</em>, because while the destructive gate is shut that command is the only remaining way to start the backup that was just refused. And it has a close control, which is <a href="https://github.com/spdrman/rclone-manager/issues/620">#620</a>: a banner you have read and cannot put away is a banner that pushes the page down forever.</p>
+    <p>The same line lands in the terminal at the bottom of the window, with a prompt in front of the command and a mark saying this browser wrote it. That is what makes the terminal the one place to look: whatever page you pressed the button on, and whichever of them you are on now, the answer to what just happened is in the same panel.</p>
   <figure class="wide">
-    <img src="screens/ui-run-controls.gif" alt="Pressing Run this backup set, the notice appearing with the equivalent command, then closing it" loading="lazy">
-    <figcaption><span class="clip-tag">clip</span>Run this backup set, the outcome, the command, and the close control. The terminal is collapsed in this clip on purpose: the notice does not reach it, for the reason given above, and leaving it open would suggest otherwise.</figcaption>
+    <img src="screens/ui-run-controls.gif" alt="Pressing Run this backup set, the notice appearing with the equivalent command, the same line arriving in the docked terminal, the This browser filter isolating it, then closing the notice" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Run this backup set, the outcome, the command, the same line arriving in the terminal, the <em>This browser</em> chip isolating it, and the close control.</figcaption>
   </figure>
 
-    <p>The set's own page has its own activity panel, which is where a run you started does show up. It is marked <code>[browser]</code>, always, because "the engine said this" and "your browser asked for this" are different facts and only one of them is evidence about the NAS.</p>
+    <p>The set's own page has its own activity panel, and the same line reaches that too, scoped to the set it is about. It is marked <code>[browser]</code>, always, because &ldquo;the engine said this&rdquo; and &ldquo;your browser asked for this&rdquo; are different facts and only one of them is evidence about the NAS.</p>
   <figure class="wide">
     <img src="screens/ui-set-activity.gif" alt="One backup set's activity panel taking a browser-written line with the equivalent command under it, then the log hiding and reappearing" loading="lazy">
     <figcaption><span class="clip-tag">clip</span>The panel answers what THIS set is doing: a bar, a step sentence, and its own log. Pressing Run puts the browser's own line into it, with the command underneath.</figcaption>
@@ -218,7 +216,7 @@
     <p>That is not the same as pixel-identical, and I would rather name the exception than claim otherwise: a panel the application animates on its own, such as the spinner and progress bar on a running backup set, is caught at whatever phase it happened to be in. Those clips move by a few kilobytes between runs. Everything that was moving for no reason has stopped.</p>
     <div class="note">
       <span class="note-label">What it costs</span>
-      <p>The eight clips on this page come to about 1.4&nbsp;MB between them, and they are loaded lazily. That budget is why the palette is 64 colours and why dithering is off: this is flat interface with hard text edges, and a dither pattern across a solid panel is both uglier and several times larger.</p>
+      <p>The eight clips on this page come to about 1.6&nbsp;MB between them, and they are loaded lazily. That budget is why the palette is 64 colours and why dithering is off: this is flat interface with hard text edges, and a dither pattern across a solid panel is both uglier and several times larger.</p>
     </div>
   </section>
 

@@ -101,7 +101,7 @@
   <section>
     <span class="step-eyebrow">Reference</span>
     <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">The command line</h2>
-    <p>Everything the web interface does, and several things it does not, are reachable from one binary. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backup-manager/config.yaml</code>; pass a directory and it resolves <code>config.yaml</code> inside it. Running it with no arguments prints the whole table.</p>
+    <p>Everything the web interface does, and several things it does not, are reachable from one binary. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backup-manager/config/config.yaml</code>. That default is a file inside the config <em>directory</em> rather than a file mounted on its own, because <a href="https://github.com/spdrman/rclone-manager/issues/196">#196</a> made the directory the writable mount, which is what lets an install that has never been configured write its first <code>config.yaml</code> instead of refusing to start. Pass the directory and it resolves <code>config.yaml</code> inside it. Running <code>rbm</code> with no arguments prints the whole table and exits 2.</p>
 
     <div class="note">
       <span class="note-label">The name changed in 0.3.3</span>
@@ -109,9 +109,9 @@
       <p><code>backup-manager</code> keeps working as an alias, so nothing anybody has already written stops running. Every command on this site is spelled <code>rbm</code>, and if you are reading an older script, a container log or a support thread that says <code>backup-manager</code>, it means the same thing.</p>
     </div>
 
-    <div class="note warn">
-      <span class="note-label">In the moving pictures on this site</span>
-      <p>The clips on <a href="web-ui.html">the web interface page</a> were recorded before the rename reached the interface's own strings, so the command lines the application echoes still read <code>backup-manager</code> in frame. I have left the frames alone rather than editing pictures of software to say something the software did not say. They will be re-recorded once the string lands.</p>
+    <div class="note">
+      <span class="note-label">Where you will still see the old name</span>
+      <p>In your own history, and in anything written before 0.3.3. The interface echoes the new name everywhere, including in the clips on <a href="web-ui.html">the web interface page</a>, and the binary answers to both.</p>
     </div>
   </section>
 
@@ -163,7 +163,7 @@
         </tbody>
       </table>
     </div>
-    <p>The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
+    <p>The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate. The copy above is checked too, though less deeply: <code>docs/site/tools/check-cli-table.mjs</code> reads the same dispatch table and refuses a page that is short a command, carries a command the binary does not have, or writes an invented verb into a code block anywhere on this site. What it cannot check is the right-hand column, because that is prose. So if this table and the README ever disagree about what a command <em>does</em>, the README is right.</p>
   </section>
 
   <section>
@@ -175,8 +175,9 @@
 
   <section>
     <h2 id="exits">Reading an exit code</h2>
-    <p>A refusal is an answer. <code>check -h</code> is a correct command line, an answered request and an exit 0, and so is any other request for help. What the non-zero codes mean is in the usage block the binary prints, and it is a table rather than a convention, so a script can branch on it.</p>
-    <p>The one worth knowing before you write a cron entry: <code>status</code> exits non-zero unless every backup set is healthy, which makes it the thing to call from a monitor, and <code>check</code> exits non-zero on a configuration or state database that will not load, which makes it the thing to call before a deploy.</p>
+    <p>The codes are a published table rather than a convention, so a script can branch on what happened instead of on the sentence it printed. <strong>0</strong> means the command did what it was asked. <strong>1</strong> is an ordinary failure: a configuration that will not load, a cycle that backed nothing up, a set that is not there, a status short of healthy. <strong>2</strong> means nothing ran. <strong>3</strong> means another process is already serving this deployment, so nothing was done.</p>
+    <p>The row worth reading twice is 2, because it catches something people assume is a success. <code>rbm check -h</code> is a correct command line and a request the binary answered, and it still exits 2: 2 says no command was carried out, and asking for the help is one of the two ways to get there. So is <code>rbm</code> with no arguments. A wrapper that treats 2 as &ldquo;fine, it printed the help&rdquo; swallows every real usage error alongside it.</p>
+    <p>The two worth knowing before you write a cron entry: <code>status</code> exits non-zero unless every backup set is healthy, which makes it the thing to call from a monitor, and <code>check</code> exits non-zero on a configuration or state database that will not load, which makes it the thing to call before a deploy.</p>
   </section>
 
 </main>

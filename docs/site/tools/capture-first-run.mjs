@@ -56,7 +56,12 @@ import { EXAMPLE, mb, openApp, optimise, screensTotal, shot, withDevServer } fro
  *  those to the card plus a margin instead. */
 const AUTH_CARD = "#root > div > div";
 
-const VIEWPORT = { width: 1280, height: 1800 };
+/** Deliberately not the harness's standard VIEWPORT, and named so it
+ *  cannot be mistaken for it. The standard one is 900 tall and several
+ *  wizard steps are longer than that, which under a pinned terminal
+ *  forces a full-page stitch and the artefact described above. The width
+ *  is the standard width, so a step's picture is the standard layout. */
+const TALL = { width: 1280, height: 1800 };
 
 /** From the wizard's own heading to the bottom of its card, which has no
  *  wrapper element of its own, so it is asked for as a union. Clipping to
@@ -71,7 +76,7 @@ const MAIN = ["main h1", "main section.card"];
 const WINDOW = { x: 0, y: 0, width: 1280, height: 900 };
 
 await withDevServer(async (app) => {
-  const { page, session } = await openApp(app, { path: null, authenticated: false, viewport: VIEWPORT });
+  const { page, session } = await openApp(app, { path: null, authenticated: false, viewport: TALL });
   const shots = [];
   // 16px of margin rather than the default 28: the union below ends at
   // the bottom of the wizard card and the shell's footer line sits just

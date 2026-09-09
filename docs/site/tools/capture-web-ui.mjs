@@ -21,31 +21,28 @@
 // run control is a claim about what a button does and what it says it
 // did.
 //
-// What is NOT here, and this one is a finding rather than a choice: a
-// clip of a browser action arriving in the GLOBAL terminal. It cannot,
-// because ActivityDock does not read state/browserNotices at all, only
-// SetActivityPanel does. So a run started from a button lands in the
-// banner and in that set's own panel, both of which are below, and never
-// in the docked terminal, whose "This browser" chip therefore draws an
-// empty log every time. The global terminal's own lines are the engine's,
-// including the api_action lines that carry the equivalent command, and
-// that is what the filter clip shows.
+// An earlier version of this file argued at length that a browser action
+// could not be shown reaching the GLOBAL terminal, because ActivityDock
+// did not read state/browserNotices at all. #650 wired it, so the run
+// clip below shows exactly that: the button, the banner, the line landing
+// in the docked terminal with its command, and the "This browser" chip
+// isolating it. The paragraph is gone rather than softened, because a
+// note explaining why something is missing, left standing over a clip
+// that now shows it, is worse than no note.
 //
-// # Why the window is 1440 wide
-//
-// Because at 1120 the terminal's filter row wraps to a second line and
-// the 32px bar clips it, so half the chips are unreachable. That is a
-// real defect and it is reported, but a documentation page should show
-// the control working: a reader who cannot see the chip cannot learn what
-// it does. With enough backup sets that row wraps at any width, so this
-// is a wider window rather than a fix.
+// This file used to override the viewport to 1440 wide, because at 1280
+// the terminal's filter chips wrapped out of a bar with a fixed 32px
+// height and half of them could not be clicked. #650 fixed that too, so
+// the override is gone and these record at the standard viewport, which
+// is the whole point of that constant: a picture here and a failure trace
+// in the browser suite frame the same layout.
 
-import { Clip, mb, openApp, screensTotal, settle, withDevServer } from "./harness.mjs";
+import { Clip, mb, openApp, screensTotal, settle, VIEWPORT, withDevServer } from "./harness.mjs";
 
-/** A browser window, not a desktop. The GIF is written narrower than the
- *  window so a 2x capture downsamples into it, which is what keeps 13px
- *  UI text readable at documentation size. */
-const WINDOW = { width: 1440, height: 860 };
+/** The GIF is written narrower than the window it was captured from, so a
+ *  2x capture downsamples into it. That is what keeps 13px UI text
+ *  readable at documentation size. */
+const WINDOW = VIEWPORT;
 const WIDTH = 1100;
 
 const clips = [];
@@ -139,31 +136,36 @@ await withDevServer(async (app) => {
 
   // -------------------------- run controls, the command, and closing the notice
   //
-  // Four of 0.3.3's rules in one interaction. #597 made the run buttons
+  // Five of 0.3.3's rules in one interaction. #597 made the run buttons
   // real and gave their answers somewhere to go. The standing parity rule
   // means the notice names the command the press was equivalent to,
   // copy-pasteable exactly as shown. #625 means it states an outcome
   // rather than leaving one to be inferred. #620 means the notice has a
-  // way to close it. And the same line lands in the docked terminal, on
-  // the "This browser" scope, which is the whole argument for the
-  // terminal being there: the answer to what just happened is in one
+  // way to close it. And #650 means the same line lands in the docked
+  // terminal, marked as this browser's, which is the whole argument for
+  // the terminal being there: the answer to what just happened is in one
   // place whatever page you are on.
+  //
+  // The terminal stays open for this one, because it is now half of what
+  // the clip is about.
   {
     const { page } = await openApp(app, { path: "/sets/production/postgres-primary", viewport: WINDOW });
     await settle(page, 1200);
-    // Collapsed first, and not to tidy the frame. Leaving the terminal
-    // open under this would put a panel in shot that does NOT receive the
-    // line the banner is about, which is a picture that teaches the wrong
-    // thing about where a run announces itself.
-    await page.getByRole("button", { name: "Hide terminal" }).click();
-    await settle(page, 400);
-    const clip = new Clip(page, "ui-run-controls", { clip: "main", width: WIDTH, pad: 10 });
+    const clip = new Clip(page, "ui-run-controls", { width: WIDTH });
     await clip.frame(1.8);
     await page.getByRole("button", { name: "Run this backup set" }).hover();
     await clip.frame(1.6);
     await page.getByRole("button", { name: "Run this backup set" }).click();
     await page.getByText("Started a run of this backup set.").first().waitFor();
-    await clip.frame(3.4);
+    await settle(page, 500);
+    await clip.frame(3.8);
+    // The same line, alone. "This browser" is the scope for what this tab
+    // asked for as opposed to what the engine reported, and the two are
+    // different facts about a NAS.
+    await page.getByRole("button", { name: "This browser" }).click();
+    await clip.frame(3.2);
+    await page.getByRole("button", { name: "Everything" }).click();
+    await clip.frame(1.2);
     const close = page.getByRole("button", { name: /Dismiss this notice/ }).first();
     await close.hover();
     await clip.frame(1.0);
@@ -191,7 +193,11 @@ await withDevServer(async (app) => {
     const clip = new Clip(page, "ui-set-activity", { clip: "section[aria-label^=\'Activity for\']", width: WIDTH, pad: 14 });
     await clip.frame(3.0);
     await page.getByRole("button", { name: "Run this backup set" }).click();
-    await page.getByText("[browser] Started a run of").waitFor();
+    // Scoped to the panel, because since #650 the same sentence is in
+    // three places at once: this panel, the docked terminal, and the
+    // collapsed terminal's newest-line bar. An unscoped locator is a
+    // strict-mode violation rather than a wait.
+    await panel.getByText("[browser] Started a run of").first().waitFor();
     await settle(page, 400);
     await panel.scrollIntoViewIfNeeded();
     await clip.frame(3.6);

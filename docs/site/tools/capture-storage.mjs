@@ -21,9 +21,14 @@
 // form recomputes as you edit it, and a 240px log panel in shot competes
 // with the thing being shown for no gain.
 
-import { Clip, EXAMPLE, mb, openApp, screensTotal, settle, typeInto, withDevServer } from "./harness.mjs";
+import { Clip, EXAMPLE, mb, openApp, screensTotal, settle, typeInto, VIEWPORT, withDevServer } from "./harness.mjs";
 
-const WINDOW = { width: 1440, height: 900 };
+/** The standard viewport, not a window of this file's own. An earlier
+ *  version of this used 1440 to get around the terminal's filter chips
+ *  clipping out of their bar, which #650 fixed; a capture script picking
+ *  its own window size for a reason that has gone is a picture that no
+ *  longer frames what the browser suite frames. */
+const WINDOW = VIEWPORT;
 const WIDTH = 1100;
 
 /** The card, by its own heading rather than by position, so a reordering

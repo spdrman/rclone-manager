@@ -32,9 +32,11 @@
 // a candidate imports it server side, so key material never crosses the
 // network at all, and there is none here to cross it.
 
-import { Clip, EXAMPLE, mb, openApp, screensTotal, settle, withDevServer } from "./harness.mjs";
+import { Clip, EXAMPLE, mb, openApp, screensTotal, settle, VIEWPORT, withDevServer } from "./harness.mjs";
 
-const WINDOW = { width: 1280, height: 900 };
+/** The standard viewport rather than a copy of its numbers, so this
+ *  cannot drift away from it the way a literal would. */
+const WINDOW = VIEWPORT;
 const WIDTH = 1040;
 
 const clips = [];
