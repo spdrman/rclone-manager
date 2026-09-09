@@ -41,6 +41,63 @@
 # Run directly (`bash scripts/tests/e2e-help.test.sh`); it costs about a
 # second and touches nothing but its own temporary directory. scripts/ci-local.sh
 # runs it with the other static checks, in FAST runs too, for the same reason.
+#
+# PORTED-CHECK HAZARD NOTE
+#
+# EPIC I / I1.6 (#672) moved both drivers to scripts/rcmtools/e2e/*.py behind
+# exec shims at their old scripts/e2e/*.sh paths. A port can silently convert
+# a check into one that cannot fail, so each assertion answers for itself.
+#
+# A  the rendered help is byte for byte the golden
+#   hazard in bash:   somebody rewords operator-visible text without deciding
+#                     to (FR-35 clause 4).
+#   hazard in python: STILL EXISTS, and grew a second half. The block moved
+#                     into a `#` comment block in the .py file rather than
+#                     into the module docstring, precisely so render_help
+#                     keeps ONE rule (strip a leading `# `) instead of
+#                     guessing. A docstring would have forced six heading
+#                     lines in each golden to change for no operator-visible
+#                     reason, and a golden diff nobody can read is a golden
+#                     nobody checks.
+#   held by:          the byte comparison, plus the new shim-parity check:
+#                     the old path must render the same help, because that is
+#                     the path ci-local.sh, ci.yml and operators still name.
+#
+# B  no help is addressed by line number; the markers are unique
+#   hazard in bash:   `sed -n '2,110p' "$0"` -- help as coordinates, silently
+#                     rewritten by any edit above the boundary. This is #514.
+#   hazard in python: STILL EXISTS. The grep runs on the help-owning file
+#                     whatever language it is in, and a Python renderer
+#                     slicing __doc__ by index would be the same defect.
+#   held by:          the same grep, repointed at subject_file.
+#
+# C  a comment inserted above the block does not change the help
+#   hazard in bash:   the boundary moves and the help silently truncates.
+#   hazard in python: STILL EXISTS. A comment between a Python shebang and
+#                     the docstring is legal and leaves the docstring first,
+#                     so the identical one-line mutation is still the honest
+#                     one.
+#   held by:          C, whose teeth are D1.
+#
+# D3 an absent block is refused out loud, not answered with an empty help
+#   hazard in bash:   awk prints nothing and exits 0; the gate, the operator
+#                     and this suite all read it as a short help.
+#   hazard in python: STILL EXISTS AND GREW A NEW WAY TO GO VACUOUS. D3 asks
+#                     only for a non-zero exit, and a ported driver imports
+#                     rcmtools before it parses argv -- so a sandbox missing
+#                     the package exits non-zero on an ImportError and D3
+#                     PASSES having measured nothing. This is why render_help
+#                     reads the FILE rather than __doc__ (a docstring reader
+#                     cannot tell deleted markers from an absent docstring),
+#                     why sandbox_copy copies the package, and why check S
+#                     below exists at all.
+#   held by:          S (the unmutated sandbox must render, identically),
+#                     plus D3's second assertion that the refusal SAYS
+#                     "help block is missing" rather than merely failing.
+#
+# S  is new, and has no bash counterpart: the port created the hazard it
+#    closes. Noted rather than left as an unexplained extra check.
+#
 set -uo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -48,7 +105,49 @@ REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 GOLDEN_DIR="$SCRIPTS_DIR/testdata"
 
 # The two drivers, and the golden each one's help is pinned against.
+#
+# A subject is a NAME, not a path, because EPIC I / I1.6 moved the drivers to
+# scripts/rcmtools/e2e/*.py and left an exec shim at each old scripts/e2e/*.sh
+# path (ci-local.sh, ci.yml and scripts/tests/ci-local-gate.test.sh all still
+# name those). The help lives with the driver, not with the shim, so this
+# suite follows the driver: subject_file says where the help-owning file is
+# and subject_interp says what runs it. Both are python3 today; the table
+# stays a table so a subject that is still bash does not need this file
+# restructured to keep being checked.
 SUBJECTS="two-machine-backup run-machine-tier"
+
+subject_file() { # <subject> -> path, relative to the repository root
+  case "$1" in
+    two-machine-backup) printf '%s\n' "scripts/rcmtools/e2e/two_machine_backup.py" ;;
+    run-machine-tier)   printf '%s\n' "scripts/rcmtools/e2e/run_machine_tier.py" ;;
+    *) return 1 ;;
+  esac
+}
+
+subject_interp() { # <subject> -> the interpreter its help-owning file needs
+  case "$1" in
+    two-machine-backup|run-machine-tier) printf '%s\n' "python3" ;;
+    *) return 1 ;;
+  esac
+}
+
+# subject_shim prints the old scripts/e2e path that must still be a runnable
+# entry point, or nothing where there is no longer any reason for one.
+#
+# Not every ported driver keeps its old path, and which ones do is a fact
+# about who NAMES the path rather than a matter of consistency.
+# two-machine-backup.sh is still exec'd by scripts/ci-local.sh, reached by
+# .github/workflows/ci.yml through two-machine-ci.sh, driven by
+# scripts/tests/two-machine-exit-status.test.sh, and FABRICATED at that
+# literal path by scripts/tests/ci-local-gate.test.sh. run-machine-tier.sh
+# was named by nothing that runs it once its callers were repointed, so it
+# was deleted rather than left as a file whose only purpose is to be found.
+subject_shim() { # <subject> -> path relative to the repository root, or ""
+  case "$1" in
+    two-machine-backup) printf '%s\n' "scripts/e2e/two-machine-backup.sh" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
 
 checks=0
 failures=0
@@ -75,21 +174,35 @@ fail() {
 # repository root: the drivers cd to the repository root before they parse
 # their arguments, so a $0 the shell left relative stops resolving there, and
 # that is not hypothetical either. Before #514 this exact call printed an
-# empty help and still exited 0.
-render() { # <script path> [flag]
-  (cd / && bash "$1" "${2:---help}" 2>&1)
+# empty help and still exited 0. The ported drivers resolve their own root
+# from __file__ for the same reason, and this is what proves it.
+render() { # <interpreter> <script path> [flag]
+  (cd / && "$1" "$2" "${3:---help}" 2>&1)
 }
 
 # sandbox_copy prints the path of a throwaway checkout holding one driver at
-# the path it has here, so the copy's own `dirname "$0"/../..` still lands on
-# a directory it can cd into.
+# the path it has here, so the copy's own root resolution still lands on a
+# directory it can cd into.
+#
+# It copies the rcmtools PACKAGE too, and that is not convenience. A ported
+# driver does `sys.path.insert(...); from rcmtools import harness` before it
+# looks at argv, so a sandbox holding only the driver file fails on an
+# ImportError before render_help is ever called. C and D2 would then fail for
+# a reason that is not what they measure, and D3 -- which only asks for a
+# non-zero exit -- would PASS on the ImportError, pinning nothing at all.
+# That is the same vacuous-green hazard I1.6 exists to keep watch for, so the
+# sandbox is proven to render before anything mutates it (check S below).
 sandbox_copy() { # <subject>
-  local dir
+  local dir file
   dir="$(mktemp -d)"
   tmpdirs+=("$dir")
-  mkdir -p "$dir/scripts/e2e"
-  cp "$REPO_ROOT/scripts/e2e/$1.sh" "$dir/scripts/e2e/$1.sh"
-  printf '%s\n' "$dir/scripts/e2e/$1.sh"
+  file="$(subject_file "$1")"
+  mkdir -p "$dir/$(dirname "$file")" "$dir/scripts/rcmtools"
+  cp "$REPO_ROOT/scripts/rcmtools/__init__.py" "$dir/scripts/rcmtools/__init__.py"
+  cp "$REPO_ROOT/scripts/rcmtools/harness.py" "$dir/scripts/rcmtools/harness.py"
+  cp "$REPO_ROOT/scripts/rcmtools/e2e/__init__.py" "$dir/scripts/rcmtools/e2e/__init__.py"
+  cp "$REPO_ROOT/$file" "$dir/$file"
+  printf '%s\n' "$dir/$file"
 }
 
 echo "==> e2e driver --help (#514)"
@@ -97,11 +210,13 @@ echo "==> e2e driver --help (#514)"
 # ------------------------------------ A: the rendered text is what it was
 
 for subject in $SUBJECTS; do
-  script="$REPO_ROOT/scripts/e2e/$subject.sh"
+  script="$REPO_ROOT/$(subject_file "$subject")"
+  interp="$(subject_interp "$subject")"
+  shim="$(subject_shim "$subject")"
   golden="$GOLDEN_DIR/$subject.help.txt"
 
   if [ ! -f "$script" ]; then
-    fail "A $subject.sh is where this expects it"
+    fail "A $subject's help-owning file is where this expects it" "no file at $script"
     continue
   fi
   if [ ! -f "$golden" ]; then
@@ -109,7 +224,7 @@ for subject in $SUBJECTS; do
     continue
   fi
 
-  actual="$(render "$script")"
+  actual="$(render "$interp" "$script")"
   status=$?
 
   if [ "$status" -eq 0 ]; then
@@ -145,23 +260,43 @@ deliberate, update the golden and say so in the commit:
 
   bash scripts/e2e/$subject.sh --help > scripts/tests/testdata/$subject.help.txt
 
-If it is not deliberate, the help block in scripts/e2e/$subject.sh has moved
+If it is not deliberate, the help block in $(subject_file "$subject") has moved
 underneath somebody, which is the whole of #514."
   fi
 
-  short="$(render "$script" -h)"
+  short="$(render "$interp" "$script" -h)"
   if [ "$short" = "$actual" ]; then
     pass "A $subject -h renders the same help as --help"
   else
     fail "A $subject -h renders the same help as --help" \
       "$(diff <(printf '%s\n' "$actual") <(printf '%s\n' "$short") | head -20)"
   fi
+
+  # The old path is what ci-local.sh, ci.yml and an operator's muscle memory
+  # all still name, and I1.6 kept a real exec shim there rather than moving
+  # it. A shim that forwarded arguments but not the help would be a silent
+  # regression for every one of those callers, so the two are compared
+  # rather than assumed equal.
+  if [ -z "$shim" ]; then
+    pass "A $subject needs no scripts/e2e entry point, and has none to drift"
+  elif [ -f "$REPO_ROOT/$shim" ]; then
+    through_shim="$(render bash "$REPO_ROOT/$shim")"
+    if [ "$through_shim" = "$actual" ]; then
+      pass "A $subject --help renders identically through $shim"
+    else
+      fail "A $subject --help renders identically through $shim" \
+        "$(diff <(printf '%s\n' "$actual") <(printf '%s\n' "$through_shim") | head -20)"
+    fi
+  else
+    fail "A $subject still has an entry point at $shim" \
+      "scripts/ci-local.sh execs that literal path and scripts/tests/ci-local-gate.test.sh fabricates a stand-in at it"
+  fi
 done
 
 # ---------------------------------- B: nothing addresses help by line number
 
 for subject in $SUBJECTS; do
-  script="$REPO_ROOT/scripts/e2e/$subject.sh"
+  script="$REPO_ROOT/$(subject_file "$subject")"
   [ -f "$script" ] || continue
   source_text="$(cat "$script")"
 
@@ -192,10 +327,43 @@ for subject in $SUBJECTS; do
     fi
   done
 
+  # The renderer is rcmtools.harness.render_help now, one copy for every
+  # domain rather than one per script, so the name is what is checked and
+  # not where it is defined.
   case "$source_text" in
     *render_help*) pass "B $subject renders its help through render_help" ;;
     *) fail "B $subject renders its help through render_help" ;;
   esac
+done
+
+# ------------- S: the sandbox itself renders, before anything mutates it
+#
+# C, D2 and D3 all measure a MUTATED sandbox copy against the real thing, so
+# every one of them is only as good as the sandbox. A ported driver imports
+# rcmtools before it looks at argv, and a sandbox missing the package fails
+# on an ImportError: C and D2 would then fail for a reason that is not what
+# they measure, and D3 -- which asks only for a non-zero exit -- would PASS
+# on that ImportError while pinning nothing at all.
+#
+# So the unmutated copy is required to render, and to render EXACTLY what the
+# original does. This check has no counterpart in the bash this file used to
+# drive, where a one-file copy was a complete program; it is here because the
+# port created the hazard.
+for subject in $SUBJECTS; do
+  script="$REPO_ROOT/$(subject_file "$subject")"
+  interp="$(subject_interp "$subject")"
+  [ -f "$script" ] || continue
+
+  copy="$(sandbox_copy "$subject")"
+  sandbox_help="$(render "$interp" "$copy")"
+  sandbox_status=$?
+  if [ "$sandbox_status" -eq 0 ] && [ "$sandbox_help" = "$(render "$interp" "$script")" ]; then
+    pass "S $subject: an unmutated sandbox copy renders the same help, so C/D2/D3 measure what they claim"
+  else
+    fail "S $subject: an unmutated sandbox copy renders the same help, so C/D2/D3 measure what they claim" \
+      "exit $sandbox_status from $copy
+$sandbox_help"
+  fi
 done
 
 # --------------- C: an edit above the block does not rewrite the help
@@ -203,17 +371,21 @@ done
 INSERTED='# An unrelated implementation note, added later, above the help block.'
 
 for subject in $SUBJECTS; do
-  script="$REPO_ROOT/scripts/e2e/$subject.sh"
+  script="$REPO_ROOT/$(subject_file "$subject")"
+  interp="$(subject_interp "$subject")"
   [ -f "$script" ] || continue
-  before="$(render "$script")"
+  before="$(render "$interp" "$script")"
 
   copy="$(sandbox_copy "$subject")"
   # After the shebang, so it lands above the block rather than inside it.
-  # This is the edit that used to silently truncate the help by a line.
+  # This is the edit that used to silently truncate the help by a line. A
+  # comment between a Python shebang and the module docstring is still legal
+  # and still leaves the docstring first, so the same one-line insertion is
+  # the honest mutation on both kinds of subject.
   awk -v note="$INSERTED" 'NR == 1 { print; print note; next } { print }' \
     "$copy" >"$copy.new" && mv "$copy.new" "$copy"
 
-  after="$(render "$copy")"
+  after="$(render "$interp" "$copy")"
   if [ "$after" = "$before" ]; then
     pass "C $subject: a comment added above the help block does not change --help"
   else
@@ -255,9 +427,10 @@ fi
 # constant, so a reword INSIDE the block has to be seen. This is the assertion
 # the issue asked to be proven red by hand, kept here so it stays proven.
 for subject in $SUBJECTS; do
-  script="$REPO_ROOT/scripts/e2e/$subject.sh"
+  script="$REPO_ROOT/$(subject_file "$subject")"
+  interp="$(subject_interp "$subject")"
   [ -f "$script" ] || continue
-  before="$(render "$script")"
+  before="$(render "$interp" "$script")"
 
   copy="$(sandbox_copy "$subject")"
   awk '
@@ -265,7 +438,7 @@ for subject in $SUBJECTS; do
     { print }
   ' "$copy" >"$copy.new" && mv "$copy.new" "$copy"
 
-  after="$(render "$copy")"
+  after="$(render "$interp" "$copy")"
   case "$after" in
     *REWORDED*) reworded=1 ;;
     *) reworded=0 ;;
@@ -283,14 +456,15 @@ done
 # gate, the operator and this suite would all read it as a help that happens
 # to be short. Both drivers refuse instead.
 for subject in $SUBJECTS; do
-  script="$REPO_ROOT/scripts/e2e/$subject.sh"
+  script="$REPO_ROOT/$(subject_file "$subject")"
+  interp="$(subject_interp "$subject")"
   [ -f "$script" ] || continue
 
   copy="$(sandbox_copy "$subject")"
   grep -vxF -e '# HELP-START' -e '# HELP-END' "$copy" >"$copy.new" \
     && mv "$copy.new" "$copy"
 
-  out="$(render "$copy")"
+  out="$(render "$interp" "$copy")"
   status=$?
   if [ "$status" -ne 0 ]; then
     pass "D3 $subject refuses to render a help block whose markers are gone"
