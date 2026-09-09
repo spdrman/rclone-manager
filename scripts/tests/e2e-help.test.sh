@@ -277,8 +277,26 @@ underneath somebody, which is the whole of #514."
   # it. A shim that forwarded arguments but not the help would be a silent
   # regression for every one of those callers, so the two are compared
   # rather than assumed equal.
+  #
+  # The no-shim branch has to ASK. It used to print "and has none to drift"
+  # from the case statement above and nothing else -- a claim about the
+  # filesystem that never looked at it, so no state of the tree could have
+  # failed it. That is the defect this file's own header exists to police
+  # (#662), and a standard that does not apply to itself is not a standard.
+  # Restoring scripts/e2e/run-machine-tier.sh -- the stale 449-line driver
+  # that README, docs/architecture/test-tiers.md and manager-machine.Dockerfile
+  # were all repointed away from -- used to keep this green.
   if [ -z "$shim" ]; then
-    pass "A $subject needs no scripts/e2e entry point, and has none to drift"
+    stale="scripts/e2e/$subject.sh"
+    if [ ! -e "$REPO_ROOT/$stale" ]; then
+      pass "A $subject needs no scripts/e2e entry point, and has none at $stale to drift"
+    else
+      fail "A $subject needs no scripts/e2e entry point, and has none to drift" \
+        "$stale exists. subject_shim names no shim for $subject, so nothing runs that file and nothing
+compares its help against the driver's: it can drift arbitrarily far from
+$(subject_file "$subject") and this suite would never say so. Either delete it, or give $subject a
+shim entry in subject_shim so the branch above compares the two."
+    fi
   elif [ -f "$REPO_ROOT/$shim" ]; then
     through_shim="$(render bash "$REPO_ROOT/$shim")"
     if [ "$through_shim" = "$actual" ]; then
