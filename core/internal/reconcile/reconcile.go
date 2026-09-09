@@ -137,6 +137,41 @@ func noAction(artifact model.ArtifactID, st lifecycle.State, reason string) Find
 	return Finding{Artifact: artifact, From: st, To: st, Reason: reason}
 }
 
+// flagRecordFault sets NeedsInvestigation on f when local is the
+// localValid verdict that settled a self-contradictory row by reading the
+// file rather than trusting either of its own two records (issue #663,
+// defect 1).
+//
+// Every one of that verdict's callers below builds a noAction finding
+// (From == To): the row converged, nothing to advance through
+// lifecycle.Advance, so no journal transition marks it and
+// cmd/backup-manager/reconcile.go's own gate, `f.Changed() ||
+// f.NeedsInvestigation`, would otherwise never print it. A row the
+// product resolved but whose own bookkeeping still disagrees with itself
+// is something a human must look at: the resolution read the file, it did
+// not correct the record, so the same contradiction is re-derived, and
+// re-flagged, on every later pass until an operator or a repair does.
+//
+// I considered repairing the row here instead of reporting it —
+// rewriting the contradicted size record from what settleRecordContradiction
+// just measured, so the fault does not re-fire forever. I left it out.
+// Reconcile only reaches a settled contradiction from a row that has
+// already converged (From == To): every write in this package goes
+// through lifecycle.Advance, and machine.go admits no state's edge back
+// to itself, so there is no transition this function could ask for that
+// Validate would accept for a repair-only write. Making one would mean
+// either inventing a self-edge machine.go does not have, on purpose, or
+// writing straight past lifecycle.Advance the way this whole package
+// exists not to. A repair belongs to whoever owns that edge, not to a
+// read-only reconciliation pass; reporting on every pass is the correct,
+// if lesser, answer until that edge exists.
+func flagRecordFault(f Finding, local localValidity) Finding {
+	if local.recordFault() {
+		f.NeedsInvestigation = true
+	}
+	return f
+}
+
 // leftOnMedium is the Finding for an artifact whose durable copy is on a
 // storage medium rather than on local disk: no action, in every state,
 // with the reason saying where the copy is.
@@ -171,8 +206,8 @@ func reconcileRemoteRetained(ctx context.Context, deps Deps, rec state.Record) (
 	local := checkLocalFinal(rec)
 	switch local.Verdict {
 	case localValid:
-		return noAction(rec.Artifact, lifecycle.RemoteRetained,
-			"local final copy verified valid; the remote source remains retained by policy and was never examined"+local.note()), nil
+		return flagRecordFault(noAction(rec.Artifact, lifecycle.RemoteRetained,
+			"local final copy verified valid; the remote source remains retained by policy and was never examined"+local.note()), local), nil
 	case localOnMedium:
 		return leftOnMedium(rec, lifecycle.RemoteRetained, local), nil
 	}
@@ -209,8 +244,8 @@ func reconcileCommitted(ctx context.Context, deps Deps, rec state.Record) (Findi
 	local := checkLocalFinal(rec)
 	switch local.Verdict {
 	case localValid:
-		return noAction(rec.Artifact, lifecycle.Committed,
-			"local final copy verified valid; remote still untouched, proceeding toward eventual delete"+local.note()), nil
+		return flagRecordFault(noAction(rec.Artifact, lifecycle.Committed,
+			"local final copy verified valid; remote still untouched, proceeding toward eventual delete"+local.note()), local), nil
 	case localOnMedium:
 		return leftOnMedium(rec, lifecycle.Committed, local), nil
 	}
@@ -285,12 +320,12 @@ func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Sou
 		if err != nil {
 			return Finding{}, fmt.Errorf("reconciling %s to COMPLETE: %w", rec.Artifact, err)
 		}
-		return Finding{
+		return flagRecordFault(Finding{
 			Artifact: rec.Artifact,
 			From:     lifecycle.RemoteDeletePending,
 			To:       lifecycle.State(completed.State),
 			Reason:   "remote object confirmed already absent; reconciled to COMPLETE without re-attempting the delete" + local.note(),
-		}, nil
+		}, local), nil
 	}
 
 	discovered, err := discoveredIdentity(rec)
@@ -308,8 +343,8 @@ func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Sou
 		}, nil
 	}
 
-	return noAction(rec.Artifact, lifecycle.RemoteDeletePending,
-		"remote object still present ("+comparison.Reason+"); leaving the pending delete for normal processing to retry"+local.note()), nil
+	return flagRecordFault(noAction(rec.Artifact, lifecycle.RemoteDeletePending,
+		"remote object still present ("+comparison.Reason+"); leaving the pending delete for normal processing to retry"+local.note()), local), nil
 }
 
 // reconcileComplete handles the COMPLETE row (no-op) and COMPLETE's half
@@ -323,8 +358,8 @@ func reconcileComplete(ctx context.Context, deps Deps, rec state.Record) (Findin
 	local := checkLocalFinal(rec)
 	switch local.Verdict {
 	case localValid:
-		return noAction(rec.Artifact, lifecycle.Complete,
-			"remote already confirmed gone and the local copy verified valid; nothing to reconcile"+local.note()), nil
+		return flagRecordFault(noAction(rec.Artifact, lifecycle.Complete,
+			"remote already confirmed gone and the local copy verified valid; nothing to reconcile"+local.note()), local), nil
 	case localOnMedium:
 		// The shape every completed move leaves behind, on the one state
 		// FR-30 lets move. COMPLETE -> QUARANTINED_LOST is for "the

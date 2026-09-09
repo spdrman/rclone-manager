@@ -25,6 +25,21 @@
   have written, and a refusal names the digest it measured. A copy that is
   genuinely wrong is still quarantined.
 
+- **A settled record fault (#662) reached no operator, and its own content
+  check was disabled forever** (#663). Reconciliation's fix for a
+  self-contradictory row (recorded remote size disagreeing with recorded
+  transfer size) rode a `noAction` finding that `rbm reconcile` never
+  printed, and the branch it took stopped at the size question, so the
+  content check FR-17 also runs never ran again on that row, on any later
+  pass. A settled record fault is now flagged `NeedsInvestigation`, so it
+  prints alongside the finding's reason, and `rbm reconcile`'s own summary
+  line no longer says "no unresolved findings" over a run that just printed
+  one. The row's durable local copy is also now hashed against the
+  discovery-time remote digest (when one was recorded, and this build can
+  compute it) rather than only re-checking its size, and the reason says so
+  either way — content-verified, or explicitly not, never silently one or
+  the other. Exit status is unchanged either way.
+
 - **A FAILED backup has a way out** (#662). `retry` on an artifact whose own
   durable local copy occupies its final name used to loop forever against
   FR-12's collision refusal, and no other verb accepted the artifact. `rbm

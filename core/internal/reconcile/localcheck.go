@@ -92,6 +92,16 @@ func (v localValidity) note() string {
 	return "; " + v.Reason
 }
 
+// recordFault reports whether v is the localValid verdict issue #663
+// cares about: the row's own two size records disagreed and the file,
+// not the record, settled it. leftOnMedium also carries a non-empty
+// Reason (where the durable copy is) on localOnMedium, which is not a
+// fault, so this checks Verdict as well as Reason rather than trusting
+// "Reason is non-empty" alone.
+func (v localValidity) recordFault() bool {
+	return v.Verdict == localValid && v.Reason != ""
+}
+
 // checkLocalFinal is FR-17's "is the final local copy still good" check,
 // the reconciliation-time twin of the question
 // internal/lifecycle/remotedelete.go's verifyLocalFinal asks immediately
@@ -175,7 +185,9 @@ func checkLocalFinal(rec state.Record) localValidity {
 
 // settleRecordContradiction answers a row whose own two independent size
 // records contradict each other, by reading the file instead of condemning
-// it (issue #662, defect 2).
+// it (issue #662, defect 2), and then still runs FR-17's content check
+// against that same file rather than stopping at the size question
+// (issue #663, defect 2).
 //
 // # Why this is not a verdict about the artifact
 //
@@ -186,26 +198,50 @@ func checkLocalFinal(rec state.Record) localValidity {
 // only the bytes can answer, and the file has already been stat'ed by the
 // time this runs.
 //
-// # Which record the file is compared against, and why that one
+// # Which records the file is compared against, and why those
 //
 // The remote identity, captured at discovery from the remote object's own
-// stat. It is the operand that cannot have been produced by the local
-// read-back this fault comes out of: #662's row recorded 0 bytes
-// transferred AND the sha256 of the empty string, one answer from one
-// empty read of one file. The transfer size and the recorded local hash
-// are that same answer twice, so neither can be used to check the other's
-// story, and the discovery-time remote size is the only independent
-// measurement in the row.
+// stat: rec.Remote.Size for the size question, rec.Remote.Hash for the
+// content question. Both are operands #662's own fault could not have
+// produced: that row recorded 0 bytes transferred AND the sha256 of the
+// empty string, one answer from one empty read of one file, so the
+// transfer size and the recorded local hash are that same answer twice and
+// neither can be used to check the other's story. That is why the
+// recorded local hash (rec.LocalHash) is never consulted below, on either
+// branch: half of a self-contradictory record is not evidence.
 //
-// That is also why the recorded hash is not consulted on the agreeing
-// branch below: half of a self-contradictory record is not evidence. The
-// row is reported as needing repair, with what was measured, rather than
-// being silently believed.
+// rec.Remote.Size is corrected here from an earlier, broader claim this
+// comment used to make about it: that discovery-time remote size can
+// never come from a local observation. It can. internal/lifecycle
+// commit.go writes a recovery manifest's SizeBytes from a local
+// measurement of the final file, and a `catalog rebuild` over that
+// manifest copies it straight into a fresh row's RemoteIdentity.Size —
+// so a size contradiction is not immune to the exact class of bug this
+// function exists to answer. It remains the right operand for the size
+// question asked here because the path that could poison it (rebuild
+// over a #662 sidecar, then a later re-fetch that adds a Transfer record)
+// is narrow and does not touch rec.Remote.Hash at all: catalog rebuild
+// sets only Size and ModTime, never Hash or HashAlg. That makes
+// rec.Remote.Hash the one operand in this row provably never written by
+// any local read-back, and is why it, not a re-derivation of size
+// agreement, is what the content question below is checked against.
 //
-// A file that matches neither figure IS refused, and the refusal names the
-// digest this function measured. A reason built only out of record fields
-// cannot tell an operator whether the file was inspected or only the
-// bookkeeping was, and in the field it was only the bookkeeping.
+// # What happens when there is nothing to check content against
+//
+// Not every backend reports a hash at discovery (a hardened, shell-less
+// SFTP account is the documented case, internal/discovery/discovery.go's
+// captureRemoteIdentity), and this build can only compute what
+// internal/transport.SHA256 names. Either gap means the content question
+// has no answer, and the row stays valid on the size agreement alone —
+// but the Reason says so. A content check that silently degrades to no
+// content check is the whole subject of this defect: the degradation has
+// to be in the sentence an operator reads, not only in the code path that
+// produced it.
+//
+// A file whose size matches neither record IS refused, and the refusal
+// names the digest this function measured. A reason built only out of
+// record fields cannot tell an operator whether the file was inspected or
+// only the bookkeeping was, and in the field it was only the bookkeeping.
 func settleRecordContradiction(rec state.Record, localPath string, onDisk int64, contradiction error) localValidity {
 	if rec.Remote.Size == nil {
 		// Unreachable through expectedLocalSize, which only contradicts
@@ -230,11 +266,44 @@ func settleRecordContradiction(rec state.Record, localPath string, onDisk int64,
 			localPath, onDisk, sum, remote, contradiction))
 	}
 
+	settled := fmt.Sprintf(
+		"this artifact's journal row needs repair (%v)", contradiction)
+	sizeCheck := fmt.Sprintf(
+		"the durable local copy agrees with the remote identity's recorded size (%s is %d bytes)", localPath, onDisk)
+	degradedNote := "the recorded local hash was not used, because it was recorded from the same read of the same copy as the contradicted byte count"
+
+	if rec.Remote.Hash == "" {
+		return localValidity{Verdict: localValid, Reason: fmt.Sprintf(
+			"%s; %s. No remote digest was recorded at discovery, so this copy is size-checked only and has not been content-verified; %s",
+			settled, sizeCheck, degradedNote)}
+	}
+	if !strings.EqualFold(rec.Remote.HashAlg, string(transport.SHA256)) {
+		return localValidity{Verdict: localValid, Reason: fmt.Sprintf(
+			"%s; %s. The digest recorded for the remote object at discovery is %q, which this build cannot compute, "+
+				"so this copy is size-checked only and has not been content-verified; %s",
+			settled, sizeCheck, rec.Remote.HashAlg, degradedNote)}
+	}
+
+	sum, err := sha256File(localPath)
+	if err != nil {
+		return localValidity{Verdict: localValid, Reason: fmt.Sprintf(
+			"%s; %s, but hashing it to check content against the remote digest failed (%v), so this copy is size-checked only and has not been "+
+				"content-verified; %s",
+			settled, sizeCheck, err, degradedNote)}
+	}
+	if !strings.EqualFold(sum, rec.Remote.Hash) {
+		return invalid(fmt.Sprintf(
+			"local final file %s is %d bytes, the size the remote object was recorded as at discovery, but its content hashes to %s, "+
+				"which is not the %s digest recorded for that remote object at discovery, %s; this artifact's own records also contradict "+
+				"each other (%v), so the copy was checked against the remote identity, the one operand the local read-back could not have written",
+			localPath, onDisk, sum, rec.Remote.HashAlg, rec.Remote.Hash, contradiction))
+	}
+
 	return localValidity{Verdict: localValid, Reason: fmt.Sprintf(
-		"this artifact's journal row needs repair (%v), and the durable local copy was checked against the remote identity instead: "+
-			"%s is %d bytes, exactly the size the remote object was recorded as at discovery. "+
-			"The recorded local hash was not used, because it was recorded from the same read of the same copy as the contradicted byte count",
-		contradiction, localPath, onDisk)}
+		"%s, and the durable local copy was checked against the remote identity instead: %s, and its content hashes to %s, the %s digest "+
+			"recorded for that remote object at discovery, so this copy is content-verified against the one operand the local read-back could "+
+			"not have written; %s",
+		settled, sizeCheck, sum, rec.Remote.HashAlg, degradedNote)}
 }
 
 // describeMediumPlacements names each medium copy and the verification
