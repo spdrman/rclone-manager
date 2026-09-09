@@ -405,7 +405,7 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         # container): `status` reports HEALTHY for a freshly landed,
         # known-good backup, run inside the SAME container the script
         # started - not a hand-built one.
-        status = _sh("docker", "exec", container_id, "/backup-manager", "status")
+        status = _sh("docker", "exec", container_id, "/rbm", "status")
         self.assertEqual(status.returncode, 0, f"status: {status.stdout}\n{status.stderr}")
         self.assertIn("HEALTHY", status.stdout)
 

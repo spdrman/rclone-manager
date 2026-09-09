@@ -23,7 +23,7 @@
 // one binary, rather than two separate binaries or images, is the same
 // "one canonical image, vary command" principle already applied to
 // `/rbm` vs. `/rbm-web` themselves. Those two are the real files as of
-// 0.3.3; `/backup-manager` and `/backup-manager-web` are still there as
+// 0.3.3; `/rbm` and `/rbm-web` are still there as
 // symlinks beside them, and the compose files this repo ships name the
 // old paths on purpose, because they are the only ones that also resolve
 // on the releases already on the registry.
@@ -200,7 +200,7 @@ commands:
               only one of the two meant to have a published port.
   healthcheck make a single HTTP GET against --url and exit 0 on a 2xx/3xx
               response, 1 otherwise - serve-ui's own HEALTHCHECK, since
-              it has no state database to run backup-manager status
+              it has no state database to run rbm status
               against the way the engine container does.
   auth create-admin --username U --password-stdin [--auth-store PATH]
               provision the first Web UI administrator directly in the
@@ -836,7 +836,7 @@ func cmdAuthCreateAdmin(args []string) int {
 		return exitUsage
 	}
 	if !*passwordStdin {
-		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | backup-manager-web auth create-admin --username U --password-stdin")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | rbm-web auth create-admin --username U --password-stdin")
 		return exitUsage
 	}
 
@@ -893,7 +893,7 @@ func readPasswordFromStdin(r io.Reader) (string, error) {
 }
 
 // cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
-// no config, no state database, and no `backup-manager status` to run
+// no config, no state database, and no `rbm status` to run
 // (that binary/subcommand belongs to the engine's own container, and
 // checks REAL backup health, not "is a web server listening"), this asks
 // the one question that actually applies here: does the UI host's own
@@ -947,11 +947,11 @@ func localHealthcheckURL(listenAddr string) string {
 // a contract a supervisor branches on rather than an implementation
 // detail. Three of them have always been here; the fourth is issue #551,
 // and it is here because container/compose.yaml runs
-// `/backup-manager-web serve`, so the deployment shape that code was
+// `/rbm-web serve`, so the deployment shape that code was
 // justified by (a supervisor replacing a container while the outgoing
 // process has not let go of the serving lock yet, where waiting and
 // trying again is the right answer) is THIS binary's shape rather than
-// `backup-manager daemon`'s. Leaving it out would have published a
+// `rbm daemon`'s. Leaving it out would have published a
 // contract that holds for the binary an operator types by hand and not
 // for the one their orchestrator restarts.
 //

@@ -765,7 +765,7 @@ and that #322 was the gap. #322 landed, and it landed on the web binary rather t
 one, which is why it is easy to miss:
 
 ```bash
-printf '%s' "$PASS" | backup-manager-web auth create-admin --username admin --password-stdin
+printf '%s' "$PASS" | rbm-web auth create-admin --username admin --password-stdin
 ```
 
 It calls `local.CreateAdmin` and writes the record straight to the auth store, with no HTTP
@@ -907,9 +907,9 @@ OCI image and the same Compose topology, and the differences between them are ho
 metadata formats. `container/compose.yaml` is that topology, and
 [`docs/deployment.md`](docs/deployment.md) is the reasoning behind every setting in it.
 
-Two services, one image. `rclone-manager` runs `/backup-manager-web serve`: the core
+Two services, one image. `rclone-manager` runs `/rbm-web serve`: the core
 service, the scheduler, local authentication and `/api/v1`, in one process on one shutdown
-context, with **no published port at all**. `web-ui` runs `/backup-manager-web serve-ui`:
+context, with **no published port at all**. `web-ui` runs `/rbm-web serve-ui`:
 the static UI plus a reverse proxy to the engine, and it is the only service with a
 LAN-facing port. They meet on a private project-scoped bridge network, which is what makes
 the engine's isolation a topology rather than a convention. The same image also carries

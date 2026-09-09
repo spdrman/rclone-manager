@@ -29,7 +29,7 @@ import (
 // which is what makes a disagreement between the three surfaces something
 // this test can actually catch.
 //
-// `backup-manager retention` is the CLI read used because it is the only
+// `rbm retention` is the CLI read used because it is the only
 // command that renders the whole FR-18/FR-19 policy observably: each
 // verdict lists the tier names that claimed an artifact (upper-cased by
 // internal/retention), and the trailing last-known-good line states
@@ -238,7 +238,7 @@ func TestSettingsWriteIsVisibleToASubsequentCLIRead(t *testing.T) {
 // A hand edit is one way that happens and is the one this test drives,
 // because it is the only one that needs a restart to be seen, which is
 // FR-5's documented model and is what service.Open here stands in for.
-// It is no longer the only way. `backup-manager retention`'s override
+// It is no longer the only way. `rbm retention`'s override
 // flags are still preview-only and never persisted (that command's own
 // doc), but `settings patch --policy-file` writes the deployment's whole
 // chain and `backup-set retention` writes one set's, both through the

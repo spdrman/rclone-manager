@@ -3438,7 +3438,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `backup-manager backup-set patch --ssh-key-id` takes."
+            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `rbm backup-set patch --ssh-key-id` takes."
           },
           "algorithm": {
             "type": "string",

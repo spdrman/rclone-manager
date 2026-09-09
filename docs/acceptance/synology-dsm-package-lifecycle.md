@@ -182,7 +182,7 @@ worker, and it is the difference between "the resource spec is wrong" and
    set pointing at the shared folder DSM created for the package.
    Confirm that shared folder exists:
    ```sh
-   ls -ld /volume*/backup-manager
+   ls -ld /volume*/rbm
    ```
 4. Start the package again.
 5. Expect: Package Center shows Running.

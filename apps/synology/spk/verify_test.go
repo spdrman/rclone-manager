@@ -145,7 +145,7 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 			build: func(t *testing.T) (string, ReleaseManifest) {
 				path, manifest := buildFixture(t, "amd64")
 				tampered := mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
-					return replaceBody(inner, PayloadBinDir+"/backup-manager-web",
+					return replaceBody(inner, PayloadBinDir+"/rbm-web",
 						fakeELF(elf.EM_X86_64, []byte("tampered")))
 				})
 				return tampered, manifest
@@ -391,7 +391,7 @@ func TestVerify_RejectsDangerousFileModes(t *testing.T) {
 
 	bad := mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
 		for i := range inner {
-			if inner[i].hdr.Name == PayloadBinDir+"/backup-manager" {
+			if inner[i].hdr.Name == PayloadBinDir+"/rbm" {
 				inner[i].hdr.Mode = 0o4755
 			}
 		}

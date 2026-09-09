@@ -215,14 +215,14 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div><span class="t">00:16:47</span> <span class="t">[engine]</span> <span class="e">could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING</span></div>
       <div><span class="t">00:16:55</span> <span class="t">[engine]</span> <span class="i">cycle finished with 2 failures</span></div>
       <div><span class="t">00:17:02</span> <span class="g">[you]</span> <span class="i">patch /backup-sets/{source}/{set}</span></div>
-      <div><span class="i">$ backup-manager backup-set patch cicd-pipeline/var-backups --stale-after 48h</span></div>
+      <div><span class="i">$ rbm backup-set patch cicd-pipeline/var-backups --stale-after 48h</span></div>
       <div><span class="t">00:17:14</span> <span class="g">[you]</span> <span class="i">post /backup-sets/test-connection</span></div>
       <div><span class="i"># no backup-manager equivalent yet · POST /api/v1/backup-sets/test-connection</span></div>
       <div><span class="i">#   there is no verb that tests a connection on its own</span></div>
       <div><span class="t">00:17:31</span> <span class="w">[admin]</span> <span class="w">post /operations refused: DESTRUCTIVE_OPERATIONS_DISABLED</span></div>
       <div><span class="w">  destructive operations are disabled until the trusted-proxy gate has been verified · nothing was changed</span></div>
       <div><span class="i"># no backup-manager equivalent yet · POST /api/v1/operations</span></div>
-      <div><span class="i">#   `backup-manager run` starts a cycle in your own shell, not in this engine</span><span class="cur"></span></div>
+      <div><span class="i">#   `rbm run` starts a cycle in your own shell, not in this engine</span><span class="cur"></span></div>
     </div>
   </section>
 </div>

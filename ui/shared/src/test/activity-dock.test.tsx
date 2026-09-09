@@ -383,11 +383,11 @@ describe("the panel itself", () => {
       dockApi([
         reading({
           sets: [],
-          deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backup-manager starting" })])
+          deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })])
         })
       ])
     );
-    expect(await screen.findByText(/backup-manager starting/)).toBeInTheDocument();
+    expect(await screen.findByText(/rbm starting/)).toBeInTheDocument();
     expect(screen.getByText("[engine]")).toBeInTheDocument();
   });
 
@@ -405,7 +405,7 @@ describe("the panel itself", () => {
       dockApi([
         reading({
           deployment: deployment([
-            event(1, { scope: "deployment", event: "startup", message: "backup-manager starting" }),
+            event(1, { scope: "deployment", event: "startup", message: "rbm starting" }),
             event(2, { scope: "deployment", event: "error", level: "error", message: "error", fields: { error: "the source refused the connection" } })
           ])
         })
@@ -473,8 +473,8 @@ describe("the panel itself", () => {
   });
 
   it("draws the environment header at the top of the scrollback, from this page's own origin", async () => {
-    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backup-manager starting" })]) })]));
-    await screen.findByText(/backup-manager starting/);
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })]) })]));
+    await screen.findByText(/rbm starting/);
     const header = screen.getByText(/^export BACKUP_MANAGER_API_URL=/);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_URL=" + window.location.origin);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_PASSWORD=<your password>");

@@ -9,7 +9,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdFetch is `backup-manager fetch --source S --backup-set B [--dry-run]`:
+// cmdFetch is `rbm fetch --source S --backup-set B [--dry-run]`:
 // an operator-triggered, on-demand run of exactly one configured backup
 // set's cycle share. See internal/app.Service.Fetch's doc for exactly what
 // --dry-run does and does not do (it never touches the journal at all;

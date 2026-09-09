@@ -115,7 +115,7 @@ func writeFixture(t *testing.T) (dir, configPath string) {
 	return dir, configPath
 }
 
-// cliVerdictRe parses one line of `backup-manager retention --dry-run`.
+// cliVerdictRe parses one line of `rbm retention --dry-run`.
 var cliVerdictRe = regexp.MustCompile(`^\s+(KEEP|DELETE)\s+(\S+)\s+tiers=`)
 
 func cliRetentionVerdicts(t *testing.T, bin, configPath string) []verdict {
@@ -123,7 +123,7 @@ func cliRetentionVerdicts(t *testing.T, bin, configPath string) []verdict {
 	cmd := exec.Command(bin, "retention", "--dry-run", "--config", configPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("backup-manager retention --dry-run: %v\n%s", err, out)
+		t.Fatalf("rbm retention --dry-run: %v\n%s", err, out)
 	}
 	var got []verdict
 	for _, line := range strings.Split(string(out), "\n") {
@@ -306,7 +306,7 @@ func TestCLIAndAPIAgreeOnEveryRetentionVerdict(t *testing.T) {
 	// in first.
 	fetch := exec.Command(bin, "fetch", "--source", "production", "--backup-set", "pg", "--config", configPath)
 	if out, err := fetch.CombinedOutput(); err != nil {
-		t.Fatalf("backup-manager fetch: %v\n%s", err, out)
+		t.Fatalf("rbm fetch: %v\n%s", err, out)
 	}
 
 	// Sequential, not parallel: the state journal takes an exclusive

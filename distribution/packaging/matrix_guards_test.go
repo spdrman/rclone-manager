@@ -271,8 +271,8 @@ func TestTheManifestKeyTranslationIsTheOnlyThingBridgingTheTwoNames(t *testing.T
 
 		// The old paths still resolve inside the image, so they are still
 		// legible here, and they were always the manifest's own keys.
-		{"/backup-manager", "backup-manager"},
-		{"/backup-manager-web", "backup-manager-web"},
+		{"/rbm", "backup-manager"},
+		{"/rbm-web", "backup-manager-web"},
 
 		// Anything else keeps its own name and therefore fails the lookup,
 		// which is the whole point: an invented binary must be reported
@@ -420,7 +420,7 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 	// bridge flag would notice.
 	wrong := SelectUIBundle(&Service{
 		Name:        "backup-manager-ui",
-		Command:     []string{"/backup-manager-web", "serve-ui", "--profile=truenas"},
+		Command:     []string{"/rbm-web", "serve-ui", "--profile=truenas"},
 		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
 	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
 	if wrong.Provider != "truenas" {
@@ -630,7 +630,7 @@ func TestRoleMountsRefusesAMountWithNoKnownRole(t *testing.T) {
 	write(t, filepath.Join(dir, "compose.yaml"), `services:
   backup-manager:
     image: `+canonical.Image.Reference+`
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     volumes:
       - /srv/app/state:/data/state
       - /srv/app/backups:/data/backups

@@ -26,7 +26,7 @@ import (
 //     access key, which is what a provider's console shows and what the
 //     wizard's step 2 collects.
 //   - ValidateImportedMediumCredentials takes shared-credentials TEXT,
-//     which is what `backup-manager medium import-credentials --stdin`
+//     which is what `rbm medium import-credentials --stdin`
 //     reads and what an operator who already has a file will paste.
 //
 // Both end at the same bytes on disk, and both refuse by the SHAPE of the

@@ -10,9 +10,9 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// cmdSettings is `backup-manager settings` (report the live retention and
+// cmdSettings is `rbm settings` (report the live retention and
 // capacity settings FR-18/FR-19/FR-21 are currently deciding with) and
-// `backup-manager settings patch [flags]` (change one of them in place).
+// `rbm settings patch [flags]` (change one of them in place).
 // Issue #277's own investigation confirmed this is not fully covered by
 // "edit config.yaml and validate", the answer that already covers
 // creating a backup set: GET is a discovery surface a config file has no

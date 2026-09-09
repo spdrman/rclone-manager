@@ -660,13 +660,14 @@ export function ActivityDock() {
            * `minWidth: 0` is what actually makes it shrink. A flex
            * child's default min-width is its content, so `flex: 1` on a
            * row of eight chips does not shrink at all and overflows its
-           * parent no matter what overflow says. The scrollbar chrome is
-           * hidden by the class rather than shown, because a classic
-           * horizontal scrollbar is about 15px and the bar is 32 with
-           * 24px buttons in it: drawing one would clip the chips it was
-           * there to rescue. The row still scrolls by wheel and trackpad,
-           * and tabbing to a chip scrolls it into view, so every chip
-           * stays reachable by both. */
+           * parent no matter what overflow says. The class draws a 4px
+           * scrollbar rather than hiding it. Hiding it read better and
+           * measured worse: a plain vertical wheel moves this row 0px,
+           * because it only overflows horizontally, so the ways across
+           * were shift+wheel, a trackpad swipe or tabbing, and none of
+           * those tells you there is anything to reach. 4px of a 32px bar
+           * still clears the 24px buttons, and on macOS overlay
+           * scrollbars it takes no layout space at all. */
           <span
             role="group"
             aria-label="Filter the terminal"

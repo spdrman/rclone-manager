@@ -200,7 +200,7 @@ func TestTheContractVersionAgreesWithTheCanonicalMetadata(t *testing.T) {
 // derive.go can hold four metadata formats to it, and every adapter
 // declares it again. Nothing compared the first two. #167 changed the
 // canonical definition to a liveness probe in a late review commit and
-// left canonical.json saying `backup-manager status`, so for three work
+// left canonical.json saying `rbm status`, so for three work
 // packages the nine adapters derived a start gate that a fresh install
 // cannot pass while every suite in the tree stayed green.
 //

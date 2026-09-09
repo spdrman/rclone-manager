@@ -178,7 +178,7 @@ func TestARoutedWriteRefusesWhenNeitherSideCanNameItsDeployment(t *testing.T) {
 // deploymentcheck.go promises the near side is read and never minted, and
 // setup.go broke it two calls later: openConfigWriteRoute calls
 // service.Open, which ran the startup sequence, which minted. `backup-set
-// create` is enough, and so is `backup-manager status`, which writes
+// create` is enough, and so is `rbm status`, which writes
 // nothing and is what somebody runs first when a deployment looks wrong.
 //
 // The engine here is holding the identity it read when it started, so a

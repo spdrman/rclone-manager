@@ -6,9 +6,9 @@
 //
 // This lives under apps/generic/, not core/, even though half of it
 // (TestHealthCheckTracksStatusExitCode, TestDaemonStaysRunningWithValidConfig)
-// only exercises the plain /backup-manager binary core/ alone produces:
+// only exercises the plain /rbm binary core/ alone produces:
 // container/Dockerfile's frontend-build and build-web stages COPY apps/
-// and ui/shared/ to build /backup-manager-web, so a test package that
+// and ui/shared/ to build /rbm-web, so a test package that
 // builds this Dockerfile at all cannot live inside core/'s own module
 // without breaking "core/ builds and its full test suite passes with
 // apps/ deleted entirely" (§7.1, WP1.1's own acceptance criterion,
@@ -254,7 +254,7 @@ func TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure(t *testing.T) {
 
 // degradedConfig writes a config whose one backup set has never had an
 // artifact discovered for it: internal/health's own decideState (see that
-// package's doc) reports this as DEGRADED, and `backup-manager status`
+// package's doc) reports this as DEGRADED, and `rbm status`
 // (cmd/backup-manager/status.go) exits 1 for anything short of HEALTHY.
 // This is real backup-set evidence, not a synthetic health override, so
 // it exercises exactly what a container healthcheck would see in
@@ -358,7 +358,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 		// ENTRYPOINT can only ever prefix one of them - see that file's
 		// own doc comment), so `command:`/`docker run` args are the whole
 		// argv, exactly as container/compose.yaml's own `command:` does.
-		image, "/backup-manager", "daemon", "--config", "/etc/backup-manager/config",
+		image, "/rbm", "daemon", "--config", "/etc/backup-manager/config",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -415,9 +415,9 @@ func healthStatus(t *testing.T, name string, timeout time.Duration) string {
 
 // TestHealthCheckTracksStatusExitCode is this issue's RED/GREEN pivot:
 // against container/Dockerfile as EPIC A left it, HEALTHCHECK runs
-// `backup-manager version`, which exits 0 unconditionally, so a container
+// `rbm version`, which exits 0 unconditionally, so a container
 // whose one backup set is DEGRADED still reports "healthy" — the bug this
-// issue's item 1 fixes. Once HEALTHCHECK runs `backup-manager status`
+// issue's item 1 fixes. Once HEALTHCHECK runs `rbm status`
 // instead, the same DEGRADED backup set makes it report "unhealthy".
 func TestHealthCheckTracksStatusExitCode(t *testing.T) {
 	image := buildImage(t)
@@ -433,7 +433,7 @@ func TestHealthCheckTracksStatusExitCode(t *testing.T) {
 	// up reporting Docker health "unhealthy", which would make this
 	// assertion pass for entirely the wrong reason - a false positive
 	// that proves nothing about whether HEALTHCHECK actually tracks
-	// `backup-manager status`'s exit code. Requiring State.Running is
+	// `rbm status`'s exit code. Requiring State.Running is
 	// what makes "unhealthy" mean "the DEGRADED backup set was detected
 	// by a live container", not "the container is not there to be
 	// healthy or not".
@@ -448,7 +448,7 @@ func TestHealthCheckTracksStatusExitCode(t *testing.T) {
 
 	if got != "unhealthy" {
 		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
-		t.Errorf("container health status = %q, want %q (backup-manager status must exit non-zero for a DEGRADED backup set, and HEALTHCHECK must run status, not version); logs:\n%s", got, "unhealthy", logs)
+		t.Errorf("container health status = %q, want %q (rbm status must exit non-zero for a DEGRADED backup set, and HEALTHCHECK must run status, not version); logs:\n%s", got, "unhealthy", logs)
 	}
 }
 
@@ -481,7 +481,7 @@ func TestDaemonStaysRunningWithValidConfig(t *testing.T) {
 // TestServeCommandExposesTheEngineAPIOnly is the Docker CLI-level
 // regression check for the engine half of the two-container split
 // (project-owner requirement folded into issue #82/B4.1 before merge):
-// `/backup-manager-web serve`, run standalone in a real container exactly
+// `/rbm-web serve`, run standalone in a real container exactly
 // as `rclone-manager`'s own compose `command` does, exposes the
 // versioned API unauthenticated-refused, and serves NO static UI at all
 // - that is `web-ui`'s job now (see
@@ -502,7 +502,7 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
-		image, "/backup-manager-web", "serve", "--config", "/etc/backup-manager/config", "--listen", ":8080",
+		image, "/rbm-web", "serve", "--config", "/etc/backup-manager/config", "--listen", ":8080",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -620,7 +620,7 @@ func TestComposeConfig_EngineHasNoPublishedPortWebUIDoes(t *testing.T) {
 // workingRemoteConfig is like degradedConfig, but seeds a real, matching
 // artifact into the remote directory before the container ever starts,
 // so the very first scheduled cycle finds a genuine, fresh backup and
-// `backup-manager status` reports HEALTHY - required here because
+// `rbm status` reports HEALTHY - required here because
 // container/compose.yaml's `web-ui` service has
 // `depends_on: rclone-manager: condition: service_healthy`, so
 // TestComposeStack_WebUIProxiesToTheEngineEndToEnd's stack would never

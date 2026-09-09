@@ -24,7 +24,7 @@
 // Render yet either: cmd/backup-manager has no subcommand to serve it from
 // (issues #25, #26), the same position internal/health, internal/obs and
 // internal/capacity are already in. Wiring this in later, a
-// "backup-manager status --prometheus" flag, an HTTP handler, or both, is
+// "rbm status --prometheus" flag, an HTTP handler, or both, is
 // meant to be a few lines calling Render, not a redesign.
 //
 // # Format

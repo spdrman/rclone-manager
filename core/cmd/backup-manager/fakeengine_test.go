@@ -81,7 +81,7 @@ type fakeEngine struct {
 // configPath names, opens a BackupService over it, and serves it.
 //
 // Announce first, then open, which is the order backup-manager-web and
-// `backup-manager daemon` use and which is now load-bearing rather than
+// `rbm daemon` use and which is now load-bearing rather than
 // tidy: core/service mints a deployment identity in AnnounceServing and
 // nowhere else (#555 as #559 left it), so an engine that opened first
 // would cache an empty identity and every routed write against it would

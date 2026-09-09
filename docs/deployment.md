@@ -11,7 +11,7 @@ than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `rbm-web`, and inside the image those are the two real binaries at `/rbm` and `/rbm-web`.
 Everything in this file, in `container/compose.yaml` and in every adapter now names them.
 
-Nothing you already run breaks. `/backup-manager` and `/backup-manager-web` are still
+Nothing you already run breaks. `/rbm` and `/rbm-web` are still
 there and still resolve, as symlinks to the two binaries above, so an existing compose
 file, `docker run` line, cron entry or wrapper script keeps working with no edit at all.
 Upgrading to 0.3.3 is a tag bump and nothing else. `container/Dockerfile` carries the
@@ -54,7 +54,7 @@ defaults to the real long-running process (`/rbm-web serve`, see "The generic
 Web host" below) and `container/Dockerfile`'s `HEALTHCHECK` tracks `rbm
 status`'s real exit code (HEALTHY vs DEGRADED/STALE/FAILING), not just process liveness
 (issue #82/B4.1). Headless-only deployment (no web listener at all) is still available
-by overriding `command` to `["/backup-manager", "daemon"]`.
+by overriding `command` to `["/rbm", "daemon"]`.
 
 ## rclone is compiled in, not shelled out to
 
@@ -70,7 +70,7 @@ $ echo $?
 
 Exit 1 means zero matches, checked case-insensitively against the full file listing of
 the exported image filesystem (1447 entries: the distroless base's certs/tzdata/passwd
-plus exactly one executable, `/backup-manager`, which 0.3.3 renamed to `/rbm`).
+plus exactly one executable, `/rbm`, which 0.3.3 renamed to `/rbm`).
 There's no file named `rclone`, no
 `rclone` directory, nothing.
 
@@ -276,7 +276,7 @@ non-root uid) needs any capability at all.
 ## Restart policy
 
 `restart: unless-stopped`: come back after a crash or a NAS reboot, stay down if an
-operator deliberately stops it. `command: ["/backup-manager-web", "serve"]` is a real
+operator deliberately stops it. `command: ["/rbm-web", "serve"]` is a real
 long-running process (the generic Web host's HTTP server plus the backup scheduler, see
 below), so this policy now does what it says rather than looping a container that exits
 immediately. For a one-shot check instead, use `docker compose run --rm rclone-manager
@@ -318,7 +318,7 @@ stale backup set, or a fresh install, keeps the UI from ever coming up, which is
 moment to lose the page you would fix it from. Backup freshness stays what it was built to
 be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it, and so does the
 headless `daemon` command, which serves no HTTP and has no liveness endpoint to ask), the
-alerts block, and `docker compose exec rclone-manager /backup-manager status`.
+alerts block, and `docker compose exec rclone-manager /rbm status`.
 
 Every packaged adapter declares the same start gate, and has to (issue #206). The image's
 instruction and the canonical start gate are now deliberately different commands, so an

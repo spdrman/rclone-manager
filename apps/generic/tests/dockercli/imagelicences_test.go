@@ -237,7 +237,7 @@ func createContainer(t *testing.T, image string) string {
 	out, err := exec.Command("docker", "create",
 		"--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		image, "/backup-manager", "version",
+		image, "/rbm", "version",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("docker create: %v\n%s", err, out)

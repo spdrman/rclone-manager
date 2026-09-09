@@ -181,7 +181,7 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 // set, in config order. A per-set error is returned immediately (unlike
 // the processing cycle's own per-backup-set error isolation): retention
 // classification has no partial-progress concept worth continuing past,
-// and an operator running `backup-manager retention` wants to know
+// and an operator running `rbm retention` wants to know
 // immediately if any one backup set's classification could not be
 // computed, not have it silently missing from the printed report.
 func (s *Service) RetentionPreviewAll(ctx context.Context) ([]RetentionSetReport, error) {

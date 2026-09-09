@@ -12,7 +12,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// cmdRetentionApply is `backup-manager retention apply
+// cmdRetentionApply is `rbm retention apply
 // <source/backup-set> --acknowledge`: FR-20's deletion, from a terminal
 // (issue #602).
 //

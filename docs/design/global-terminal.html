@@ -176,10 +176,10 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">refused: host key for 10.0.0.14:22 does not match known_hosts</span></div>
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">  offered SHA256:aTx9&#8230; recorded SHA256:pQ71&#8230; &#183; nothing was changed</span></div>
           <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="i">Saved stale_after on api-server / var-backups</span></div>
-          <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">backup-manager backup-set patch api-server/var-backups --stale-after 48h</span></div>
+          <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">rbm backup-set patch api-server/var-backups --stale-after 48h</span></div>
           <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="i">Run all due sets &#8594; accepted as operation op_4d19</span></div>
           <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap"># no backup-manager equivalent yet &#183; POST /api/v1/operations run_cycle</span></div>
-          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap">#   `backup-manager run` starts a cycle in your shell, not in this engine</span></div>
+          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap">#   `rbm run` starts a cycle in your shell, not in this engine</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="w">validation failed: dpkg.status.1.gz (md5 differs from source)</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="e">quarantined: dpkg.status.1.gz</span></div>
           <div class="rule rule--warn">engine restarted at 14:02:41 &#183; everything above belongs to a process that has gone</div>
@@ -204,7 +204,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       gets commands instead of a description of which buttons were pressed. The <code>#</code> lines are the
       point rather than an omission: an action with no command to name is a CLI parity gap, and this makes it
       visible the first time somebody uses the feature instead of at some later audit. Note the second one.
-      <code>backup-manager run</code> exists, but it runs a cycle in the operator's own shell rather than
+      <code>rbm run</code> exists, but it runs a cycle in the operator's own shell rather than
       asking this engine to run one, so it is not the equivalent of the button and the terminal declines to
       pretend it is.
     </p>
@@ -254,7 +254,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
         <div><span class="t">13:59:40</span> <span class="src--you">[you]</span> <span class="i">Probe host key &#8594; 10.0.0.14:22</span></div>
         <div><span class="t">13:59:41</span> <span class="src--you">[you]</span> <span class="g">host key SHA256:pQ71&#8230; (ssh-ed25519), first time seen</span></div>
         <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="i">Create backup set &#8594; cicd-pipeline / var-backups</span></div>
-        <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">backup-manager backup-set create cicd-pipeline/var-backups --host 10.0.0.14 --user backups \</span></div>
+        <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">rbm backup-set create cicd-pipeline/var-backups --host 10.0.0.14 --user backups \</span></div>
         <div><span class="t">        </span> <span class="src--you">     </span> <span class="cmd">    --remote-path /var/backups --local-path /srv/backups --ssh-key-id key_7f21 \</span></div>
         <div><span class="t">        </span> <span class="src--you">     </span> <span class="cmd">    --known-hosts-line &lt;the line you accepted above&gt; --completion-strategy stable</span></div>
         <div><span class="t">14:00:02</span> <span class="src--you">[you]</span> <span class="e">refused: this deployment has no configuration file to persist to</span></div>
