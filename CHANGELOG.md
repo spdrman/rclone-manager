@@ -37,6 +37,22 @@
   `retry` can no longer take away a recovery option and leave the artifact as
   stuck as before. The FR-12 collision refusal itself is unchanged.
 
+- **A converged commit no longer certifies a damaged file, and no longer
+  risks leaving an artifact without a recovery manifest to make that
+  refusal** (#662, #663). Re-running `Commit` against an artifact already
+  `COMMITTED` re-measures the file and rewrites the sidecar recovery
+  manifest so a crash between the `COMMITTED` journal write and that write
+  can never leave the manifest missing forever. When the file no longer
+  matches the record, the manifest is now written from the record instead
+  of from the disagreeing measurement — the record was itself measured
+  from the file at commit time, so it is the trustworthy side of a
+  convergence-time disagreement, not the file underneath it — and the
+  disagreement is still reported as an error rather than being discarded.
+  `measureCommitted`'s corrective re-hash also now refuses to pair a size
+  from one read with a digest from a shorter one, instead of stamping
+  `verification_class: "content"` on a hash that describes fewer bytes
+  than the size beside it.
+
 ### Changed
 
 - `rbm status` names the artifacts that need intervention and the commands

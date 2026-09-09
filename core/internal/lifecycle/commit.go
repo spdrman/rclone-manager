@@ -228,8 +228,8 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// re-ensuring the recovery manifest exists (see writeRecoveryManifest's
 		// doc: a process killed after COMMITTED landed but before the
 		// manifest was ever written must not leave it missing forever) --
-		// and only while the file still matches the record, which is what
-		// the refusal below is for.
+		// written from the record below regardless of what a fresh
+		// measurement of the file finds, for the reason given there.
 		if committing.Record.LocalPath != final {
 			return state.Outcome{}, fmt.Errorf(
 				"lifecycle: commit %s: already COMMITTED at %q, not the final path %q this LocalDir computes",
@@ -239,37 +239,59 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		if err != nil {
 			return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
 		}
-		// A disagreement found HERE is refused, where the same
-		// disagreement found on the fresh path above is recorded. The
-		// asymmetry is the whole reason the two branches differ, and it
-		// is a difference in the cost of refusing, not in the standard of
-		// honesty (see measureCommitted's doc).
+		// A disagreement found HERE is handled differently from the same
+		// disagreement found on the fresh path above, and the difference is
+		// deliberate: whichever way this comes out, the manifest below is
+		// written from a measurement built from the RECORD, never from
+		// converged.
 		//
-		// On the fresh path, refusing leaves the artifact at COMMITTING
-		// over a file that already occupies its final name, so the next
-		// attempt meets FR-12's collision guard: issue #662's own loop,
-		// one step earlier, over a copy that is provably good. Here the
-		// artifact is ALREADY COMMITTED. Refusing changes no state,
-		// strands nothing, deletes nothing and leaves the durable copy
-		// exactly where it is; the only thing it withholds is a
-		// certificate.
+		// On the fresh path the file is ground truth and the transport's
+		// own report of what it sent is the suspect: the bytes have just
+		// been fsynced and linked into their final name, and what is still
+		// in the manager's gift is whether the record describes them, so
+		// the record is corrected to match the file (see measureCommitted's
+		// doc). Here the relationship is the exact inverse. committing.Record
+		// was itself measured from this same file by that same fixed
+		// Commit, at commit time -- it did not arrive as a transport's
+		// unverified claim. Whatever measureCommitted finds now is a fresh
+		// look at a file that has had time to change SINCE the commit that
+		// produced the record, so on this branch the record is the
+		// trustworthy side of any disagreement and the file underneath it
+		// is the suspect one.
+		//
+		// That is why converged is consulted only for its Fault, to decide
+		// whether to also report a disagreement, and its Size/Hash/Alg are
+		// discarded even when there is nothing to report: the record
+		// already carries the answer a fresh measurement would just be
+		// re-deriving from the same unchanged file.
 		//
 		// Two alternatives were considered and rejected. (a) Record the
 		// correction here too, as the fresh path does: impossible, the
-		// COMMITTED transition is already written and this branch holds
-		// no second idempotency key to write another, which is precisely
-		// why the fault had nowhere to go and was discarded. (b) Write
-		// the manifest from the fresh measurement anyway and report the
-		// fault alongside it: that is what this code did, and it means
-		// the sidecar -- the record a rebuild trusts when the journal is
-		// gone -- is overwritten to certify the damage, while the journal
-		// keeps the true row. A rebuild reads the file, not the return
-		// value.
+		// COMMITTED transition is already written and this branch holds no
+		// second idempotency key to write another. (b) Skip
+		// writeRecoveryManifest entirely on a disagreement and return only
+		// the error: a COMMITTED row is never routed back to commitOne
+		// (internal/app/pipeline.go only reaches it for VERIFIED/COMMITTING),
+		// so this branch is reachable only as crash recovery inside one
+		// attempt key, and skipping the write would leave that artifact
+		// with no sidecar manifest permanently -- reversing
+		// writeRecoveryManifest's own reason to exist, which is exactly the
+		// process-killed-before-the-manifest-was-ever-written case this
+		// branch is for.
 		if converged.Fault != "" {
+			// The manifest is still written, and written from the RECORD:
+			// this branch exists so a crash between COMMITTED and the
+			// manifest cannot leave it missing forever, and that guarantee
+			// must not depend on the file still being intact. But it is not
+			// written from the measurement, because a manifest is what a
+			// rebuild trusts when the journal is gone, and these bytes are
+			// the suspect side of the disagreement, not the trusted one.
+			if err := writeRecoveryManifest(in.LocalDir, committing.Record, recordMeasurement(committing.Record)); err != nil {
+				return state.Outcome{}, err
+			}
 			return state.Outcome{}, fmt.Errorf(
 				"lifecycle: commit %s: converging on an already-COMMITTED artifact, but %s no longer matches the record: %s; "+
-					"refusing to re-stamp the recovery manifest from the file, because this call cannot record a correction "+
-					"and a manifest written from damaged bytes is what a rebuild would trust",
+					"the recovery manifest was left describing the bytes this artifact was committed with, not what is at that path now",
 				in.Artifact, final, converged.Fault)
 		}
 		if err := writeRecoveryManifest(in.LocalDir, committing.Record, converged); err != nil {
@@ -432,6 +454,24 @@ func measureCommitted(final string, rec state.Record) (commitMeasurement, error)
 	return m, nil
 }
 
+// recordMeasurement builds a commitMeasurement from a journal row rather
+// than from a fresh look at the file. It exists for the already-COMMITTED
+// convergence branch above, for the case where a fresh measurement
+// disagrees with the record: see the comment at that call site for why the
+// record, not the file, is the trustworthy side of a convergence-time
+// disagreement.
+//
+// It never carries a Fault. The fault it exists to route around is
+// reported through that branch's own returned error, not smuggled back
+// into a value that is about to be written as a certificate.
+func recordMeasurement(rec state.Record) commitMeasurement {
+	return commitMeasurement{
+		Size: rec.Transfer.BytesTransferred,
+		Hash: rec.LocalHash,
+		Alg:  rec.LocalHashAlg,
+	}
+}
+
 // orNone renders an unrecorded field as a word rather than as an empty gap
 // in the middle of a sentence an operator is meant to act on.
 func orNone(s string) string {
@@ -517,23 +557,25 @@ func localPlacementFor(m commitMeasurement, final string) *state.PlacementUpdate
 // Rewriting it on that later converged call overwrites the same bytes it
 // would have written the first time, and the thing that makes that true
 // is named rather than assumed, because it is no longer a property of
-// this function. Since issue #662 the manifest's size and checksum come
-// from a measurement of the file rather than from the record, and a
-// measurement taken at convergence time is a fresh look at a file that
-// may have changed since the commit -- so a converged call CAN now derive
-// different bytes. What keeps it from writing them is the converged
-// branch's own refusal: it compares the measurement against the record
-// and returns an error without reaching this function when they disagree,
-// so the only manifest this function is ever asked to write on that path
-// is one whose measurement matched the record that produced the first
-// one.
+// this function on its own. Since issue #662 the manifest's size and
+// checksum come from a measurement rather than from the record on the
+// fresh path -- but the already-converged branch never passes this
+// function a fresh measurement of the file. It passes one built from the
+// SAME record that produced the manifest the first time (recordMeasurement,
+// used whenever a fresh look at the file disagrees with that record; see
+// the comment at that call site for why the record, not the file, is the
+// trustworthy side of a convergence-time disagreement). A fresh
+// measurement is still taken at convergence, but only to decide whether to
+// also report a disagreement -- its own Size/Hash/Alg never reach this
+// function, so the bytes this function writes on that branch are the same
+// on every call regardless of what has happened to the file since.
 //
-// The consequence is worth stating plainly, because it is the price of
-// that refusal: an artifact whose committed file has drifted keeps
-// whatever manifest it already had, and if it never had one it stays
-// without one until the drift is resolved. A missing certificate is a
-// gap a rebuild can see; a certificate describing bytes that are not
-// there is one it cannot.
+// The consequence is worth stating plainly: an artifact whose committed
+// file has drifted since commit still gets a manifest, but the manifest
+// describes the bytes it was committed with, not whatever is at that path
+// now. A rebuild that trusts this file is trusting what the commit
+// actually verified, not a stranger's measurement of drift nobody asked it
+// to certify.
 func writeRecoveryManifest(localDir string, rec state.Record, measured commitMeasurement) error {
 	m := recovery.Manifest{
 		FormatVersion:      recovery.CurrentFormatVersion,
