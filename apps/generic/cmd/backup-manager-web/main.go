@@ -1,11 +1,20 @@
-// Command backup-manager-web is the generic Web host's own executable
-// (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside
-// cmd/backup-manager (core/cmd/backup-manager, unchanged by this issue)
-// inside the same canonical OCI image, and adds what that binary does
-// not have: `serve` (the engine - core service/scheduler, local
-// authentication, and the versioned /api/v1 API, sharing one process and
-// one shutdown context per §9.3) and `serve-ui` (the shared static UI
-// plus a reverse proxy to the engine).
+// Command rbm-web is the generic Web host's own executable
+// (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside the
+// CLI (core/cmd/backup-manager, unchanged by this issue) inside the same
+// canonical OCI image, and adds what that binary does not have: `serve`
+// (the engine - core service/scheduler, local authentication, and the
+// versioned /api/v1 API, sharing one process and one shutdown context per
+// §9.3) and `serve-ui` (the shared static UI plus a reverse proxy to the
+// engine).
+//
+// It is `rbm-web` to an operator and this directory is still
+// cmd/backup-manager-web, for the same reason `rbm` lives in
+// cmd/backup-manager: the image symlinks the old name beside the new one,
+// and a Go package path is not something anybody types. Every name this
+// binary prints for itself comes from core/cliecho.WebBinary, and the
+// whole of that argument is in core/cliecho/cliname.go. selfname_test.go
+// beside this file is what keeps it that way, and says why the paths
+// under /etc and the image reference deliberately do not follow.
 //
 // These two run as SEPARATE CONTAINERS in production
 // (container/compose.yaml), from the SAME image: `serve` has no
@@ -14,7 +23,7 @@
 // with a LAN-facing published port. Splitting them into two commands of
 // one binary, rather than two separate binaries or images, is the same
 // "one canonical image, vary command" principle already applied to
-// `/backup-manager` vs. `/backup-manager-web` themselves.
+// `/rbm` vs. `/rbm-web` themselves.
 //
 // Every other execution mode (`run`, `daemon`, `check`, `status`, ...)
 // stays on cmd/backup-manager: this binary is deliberately narrow rather
@@ -60,6 +69,7 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -161,20 +171,44 @@ func run(args []string) int {
 	case "auth":
 		return cmdAuth(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown command %q\n\n", args[0])
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": unknown command %q\n\n", args[0])
 		usage()
 		return exitUsage
 	}
 }
 
-// usage writes the command surface an operator reads. The text below is
-// pinned byte for byte by the compatibility corpus (FR-35 clause 4): a
-// reworded line here is a change to something somebody already has in a
-// runbook, so it is a deliberate act with a recorded reason rather than an
-// edit. Adding a command means adding a line, and a test asserts every
-// mode this binary carries appears here.
+// usage writes the command surface an operator reads. A reworded line
+// here is a change to something somebody already has in a runbook, so it
+// is a deliberate act with a recorded reason rather than an edit, and
+// adding a command means adding a line: TestUsageDocumentsEveryModeTheBinaryCarries
+// asserts every mode this binary carries appears here, and
+// TestUsageIntroducesThisBinaryByName asserts the first line names it.
+//
+// It is NOT pinned byte for byte by the compatibility corpus, and this
+// comment said it was until 0.3.3. FR-35 clause 4 is core/tests/compat,
+// which builds ./cmd/backup-manager from the core module and runs THAT;
+// it has never built this binary and cannot, because core may not reach
+// into apps/. So the runbook promise above is held by the two tests named
+// beside this file and by nothing else, which is worth knowing before
+// relying on it: a wrong sentence about what guards a block is how a
+// rename crossed five pull requests without touching the block it was
+// about.
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: backup-manager-web <command> [flags]
+	// Fprintf over ONE raw literal, rather than the name concatenated into
+	// it at each of the three places this block spells a command.
+	//
+	// The three are unavoidable: the first line is this binary's own name,
+	// the healthcheck entry says which CLI command it stands in for, and
+	// the auth entry shows the invocation an operator types. Splicing a
+	// constant into any of them would close the literal there, and #648
+	// already paid for what that costs: distribution/packaging reads the
+	// CLI's command index straight out of its usage(), took the first
+	// backticked string, and a splice on the FIRST line made it read a list
+	// of zero commands. Nothing parses this block today, and the hazard is
+	// not that it does; it is that a splice below the command index would
+	// truncate a future reader silently rather than loudly. A literal with
+	// verbs in it stays one chunk however anybody reads it.
+	fmt.Fprintf(os.Stderr, `usage: %s <command> [flags]
 
 commands:
   serve       run the engine: local authentication, the versioned
@@ -187,8 +221,8 @@ commands:
               only one of the two meant to have a published port.
   healthcheck make a single HTTP GET against --url and exit 0 on a 2xx/3xx
               response, 1 otherwise - serve-ui's own HEALTHCHECK, since
-              it has no state database to run backup-manager status
-              against the way the engine container does.
+              it has no state database to run %s status against the way
+              the engine container does.
   auth create-admin --username U --password-stdin [--auth-store PATH]
               provision the first Web UI administrator directly in the
               local-auth store (apps/common/auth/local.CreateAdmin), with
@@ -324,9 +358,9 @@ auth create-admin flags:
   --password-stdin     read the administrator password from stdin
                        (required; nothing else reads it, so it never
                        appears in this process's own argument list -
-                       e.g. echo -n "$PASS" | backup-manager-web auth
-                       create-admin --username admin --password-stdin)
-`)
+                       e.g. echo -n "$PASS" | %s auth create-admin
+                       --username admin --password-stdin)
+`, cliecho.WebBinary, cliecho.Binary, cliecho.WebBinary)
 }
 
 // cmdServe runs the engine: the API, the local-auth service, the backend
@@ -379,22 +413,22 @@ func cmdServe(args []string) int {
 	// message harder to read.
 	runtimeProfile, err := profile.Lookup(*profileName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitUsage
 	}
 	if *legacyTrustedGateway != "" {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: serve does not take --trusted-gateway. The two hops trust different peers: --trusted-upstream (TRUSTED_UPSTREAM_CIDRS) is this container's own peer, the reverse proxy in front of it, while --trusted-gateway (TRUSTED_GATEWAY_CIDRS) names the platform gateway and belongs to serve-ui. A single value for both is the one configuration that cannot be correct.")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": serve does not take --trusted-gateway. The two hops trust different peers: --trusted-upstream (TRUSTED_UPSTREAM_CIDRS) is this container's own peer, the reverse proxy in front of it, while --trusted-gateway (TRUSTED_GATEWAY_CIDRS) names the platform gateway and belongs to serve-ui. A single value for both is the one configuration that cannot be correct.")
 		return exitUsage
 	}
 	if *trustedUpstream != "" {
 		if runtimeProfile.Gateway == nil {
-			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-upstream was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
+			fmt.Fprintf(os.Stderr, cliecho.WebBinary+": --trusted-upstream was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
 			return exitUsage
 		}
 		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedUpstream)
 	}
 	if err := checkAuthMode(*authMode, runtimeProfile); err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitUsage
 	}
 	// Fail closed before anything opens a file or a listener. A gateway
@@ -403,7 +437,7 @@ func cmdServe(args []string) int {
 	// none, where every identity header on the LAN is believed.
 	if runtimeProfile.Gateway != nil {
 		if _, err := runtimeProfile.Gateway.Compile(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q: %v\n", runtimeProfile.ID, err)
+			fmt.Fprintf(os.Stderr, cliecho.WebBinary+": profile %q: %v\n", runtimeProfile.ID, err)
 			return exitUsage
 		}
 	}
@@ -474,7 +508,7 @@ func cmdServe(args []string) int {
 		// all), so PrintBootstrapNotice prints just the raw token in that
 		// case, per its own doc, rather than a clickable but wrong link.
 		if err := authSvc.PrintBootstrapNotice(os.Stdout, *publicBaseURL); err != nil {
-			fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
+			fmt.Fprintln(os.Stderr, cliecho.WebBinary+": printing bootstrap notice:", err)
 		}
 		authRoutes = authSvc.Handler()
 		localAuth = authSvc.Authenticator()
@@ -487,10 +521,10 @@ func cmdServe(args []string) int {
 	// build.
 	platformAdapter, err := runtimeProfile.Adapter(profile.AdapterConfig{LocalAuth: localAuth})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitUsage
 	}
-	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q (%s), authentication: %s\n",
+	fmt.Fprintf(os.Stderr, cliecho.WebBinary+": runtime profile %q (%s), authentication: %s\n",
 		runtimeProfile.ID, runtimeProfile.DisplayName, authModeOf(runtimeProfile))
 
 	engineConfig := serve.EngineConfig{
@@ -540,7 +574,7 @@ func cmdServe(args []string) int {
 	// the announcement can really be made. core/service's FirstRunServing
 	// has the whole argument, including which failures still stop a start.
 	if blocked := serving.Blocked(); blocked != nil {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: this deployment's state directory cannot be used yet, so nothing has been announced and the setup flow will refuse to complete until it can be: %v\n", blocked)
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": this deployment's state directory cannot be used yet, so nothing has been announced and the setup flow will refuse to complete until it can be: %v\n", blocked)
 	}
 
 	backend, cleanup, err := service.Open(ctx, *configPath)
@@ -558,9 +592,9 @@ func cmdServe(args []string) int {
 		// different things to a reader of these logs afterwards (FR-23).
 		defer func() {
 			if closeErr := cleanup(); closeErr != nil {
-				fmt.Fprintln(os.Stderr, "backup-manager-web: closing the backup service:", closeErr)
+				fmt.Fprintln(os.Stderr, cliecho.WebBinary+": closing the backup service:", closeErr)
 			}
-			fmt.Fprintln(os.Stderr, "backup-manager-web: shutdown complete, the backup service is closed")
+			fmt.Fprintln(os.Stderr, cliecho.WebBinary+": shutdown complete, the backup service is closed")
 		}()
 		enableAlerts(backend, platformAdapter)
 		engineConfig.Backend = backend
@@ -574,7 +608,7 @@ func cmdServe(args []string) int {
 		// finish the job in the web UI they installed it to reach. A
 		// config file that EXISTS and does not validate falls to the
 		// default branch below and is still fatal.
-		fmt.Fprintf(os.Stderr, "backup-manager-web: no configuration at %s yet; serving the first-run setup flow\n", *configPath)
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": no configuration at %s yet; serving the first-run setup flow\n", *configPath)
 
 		firstRun, frErr := service.NewFirstRun(service.FirstRunDefaults{
 			ConfigPath:    *configPath,
@@ -632,9 +666,9 @@ func cmdServe(args []string) int {
 		// already been configured.
 		defer func() {
 			if closeErr := engine.Close(); closeErr != nil {
-				fmt.Fprintln(os.Stderr, "backup-manager-web: closing the first-run engine:", closeErr)
+				fmt.Fprintln(os.Stderr, cliecho.WebBinary+": closing the first-run engine:", closeErr)
 			}
-			fmt.Fprintln(os.Stderr, "backup-manager-web: shutdown complete, the backup service is closed")
+			fmt.Fprintln(os.Stderr, cliecho.WebBinary+": shutdown complete, the backup service is closed")
 		}()
 		// The same value is both the HTTP surface and the scheduler: it
 		// serves setup now, the application after activation, and its
@@ -674,9 +708,9 @@ func cmdServe(args []string) int {
 // through exactly this wiring with no further change.
 func enableAlerts(backend *service.BackupService, platformAdapter capabilities.PlatformAdapter) {
 	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": proactive alerting is off:", err)
 	} else if !backend.EnableAlerts(sink) {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": proactive alerting is off: the configuration has not set alerts.enabled")
 	}
 }
 
@@ -701,7 +735,7 @@ func cmdServeUI(args []string) int {
 
 	runtimeProfile, err := profile.Lookup(*profileName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitUsage
 	}
 
@@ -718,17 +752,17 @@ func cmdServeUI(args []string) int {
 	// operator debugging the wrong thing for an afternoon.
 	edgeGateway, err := compileEdgeGateway(runtimeProfile, *trustedGateway)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitUsage
 	}
 
 	upstreamURL, err := url.Parse(*upstream)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: invalid --upstream %q: %v\n", *upstream, err)
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": invalid --upstream %q: %v\n", *upstream, err)
 		return exitUsage
 	}
 	if upstreamURL.Scheme == "" || upstreamURL.Host == "" {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: --upstream %q must be an absolute URL (e.g. http://rclone-manager:8080)\n", *upstream)
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": --upstream %q must be an absolute URL (e.g. http://rclone-manager:8080)\n", *upstream)
 		return exitUsage
 	}
 
@@ -738,7 +772,7 @@ func cmdServeUI(args []string) int {
 		// webui/dist directory: this can only fail if that package was
 		// edited to embed something else without updating this constant,
 		// a programmer error to notice loudly, not a runtime condition.
-		panic(fmt.Sprintf("backup-manager-web: webui.Assets has no \"dist\" subtree: %v", err))
+		panic(fmt.Sprintf(cliecho.WebBinary+": webui.Assets has no \"dist\" subtree: %v", err))
 	}
 
 	// Issue #180, owned by #167. The bundle is chosen HERE, at run time,
@@ -756,7 +790,7 @@ func cmdServeUI(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q, UI bundle %s (%s)\n",
+	fmt.Fprintf(os.Stderr, cliecho.WebBinary+": runtime profile %q, UI bundle %s (%s)\n",
 		runtimeProfile.ID, bundle.Origin, bundle.Detail)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -782,14 +816,14 @@ func cmdServeUI(args []string) int {
 // would collide across subcommands.
 func cmdAuth(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: auth requires a subcommand (create-admin)")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth requires a subcommand (create-admin)")
 		return exitUsage
 	}
 	switch args[0] {
 	case "create-admin":
 		return cmdAuthCreateAdmin(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown auth subcommand %q (only create-admin exists)\n", args[0])
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": unknown auth subcommand %q (only create-admin exists)\n", args[0])
 		return exitUsage
 	}
 }
@@ -819,11 +853,11 @@ func cmdAuthCreateAdmin(args []string) int {
 		return exitUsage
 	}
 	if *username == "" {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --username is required")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --username is required")
 		return exitUsage
 	}
 	if !*passwordStdin {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | backup-manager-web auth create-admin --username U --password-stdin")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | "+cliecho.WebBinary+" auth create-admin --username U --password-stdin")
 		return exitUsage
 	}
 
@@ -849,7 +883,7 @@ func cmdAuthCreateAdmin(args []string) int {
 	// os.Stdout like this one, which is this command's actual
 	// machine/operator-facing output rather than a log line - so its
 	// error is checked explicitly rather than silently ignored.
-	if _, err := fmt.Fprintf(os.Stdout, "backup-manager-web: administrator %q created in %s. Start the server normally - it will see this account already exists and will not print or accept an enrollment bootstrap token.\n",
+	if _, err := fmt.Fprintf(os.Stdout, cliecho.WebBinary+": administrator %q created in %s. Start the server normally - it will see this account already exists and will not print or accept an enrollment bootstrap token.\n",
 		admin.Username, *authStorePath); err != nil {
 		return fail(fmt.Errorf("auth create-admin: writing confirmation: %w", err))
 	}
@@ -880,7 +914,7 @@ func readPasswordFromStdin(r io.Reader) (string, error) {
 }
 
 // cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
-// no config, no state database, and no `backup-manager status` to run
+// no config, no state database, and no `rbm status` to run
 // (that binary/subcommand belongs to the engine's own container, and
 // checks REAL backup health, not "is a web server listening"), this asks
 // the one question that actually applies here: does the UI host's own
@@ -897,13 +931,13 @@ func cmdHealthcheck(args []string) int {
 	client := &http.Client{Timeout: healthcheckTimeout}
 	resp, err := client.Get(*target)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: healthcheck:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": healthcheck:", err)
 		return exitFailure
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: healthcheck: %s returned status %d\n", *target, resp.StatusCode)
+		fmt.Fprintf(os.Stderr, cliecho.WebBinary+": healthcheck: %s returned status %d\n", *target, resp.StatusCode)
 		return exitFailure
 	}
 	return exitOK
@@ -934,11 +968,11 @@ func localHealthcheckURL(listenAddr string) string {
 // a contract a supervisor branches on rather than an implementation
 // detail. Three of them have always been here; the fourth is issue #551,
 // and it is here because container/compose.yaml runs
-// `/backup-manager-web serve`, so the deployment shape that code was
+// `/rbm-web serve`, so the deployment shape that code was
 // justified by (a supervisor replacing a container while the outgoing
 // process has not let go of the serving lock yet, where waiting and
 // trying again is the right answer) is THIS binary's shape rather than
-// `backup-manager daemon`'s. Leaving it out would have published a
+// `rbm daemon`'s. Leaving it out would have published a
 // contract that holds for the binary an operator types by hand and not
 // for the one their orchestrator restarts.
 //
@@ -986,7 +1020,7 @@ const (
 // process shares a container log with the engine and the UI host, so a
 // line without it is a line an operator cannot attribute.
 func fail(err error) int {
-	fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+	fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 	return exitFailure
 }
 
@@ -1003,7 +1037,7 @@ func fail(err error) int {
 // branch on is the number, which is the whole reason this exists.
 func failServing(err error) int {
 	if errors.Is(err, service.ErrAlreadyServing) {
-		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+":", err)
 		return exitEngineHoldsDeployment
 	}
 	return fail(err)

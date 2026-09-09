@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // The composition root: everything this package's doc comment lays out,
@@ -234,6 +235,21 @@ func (s *Service) NeedsEnrollment() (bool, error) {
 // method is for: a caller (the generic host's serve command) calls it
 // once, right after constructing the Service, against the process's own
 // stdout - the container's own log, exactly as the spec names it.
+//
+// That is also why the line is prefixed with the web host's own name
+// rather than this package's. It lands in the same log as every other
+// line the process writes, and it is usually the FIRST line a new
+// deployment shows anybody, so a prefix nothing else in the image uses is
+// the worst one to have. It said `backup-manager` until 0.3.3, which was
+// already the wrong half of the pair (the CLI never prints this), and
+// the rename made it a name the product no longer answers to at all. It
+// reads core/cliecho.WebBinary now, the one place that name is spelled.
+//
+// The web host is the only caller today. Should a second provider host
+// grow one, the prefix becomes a Config field rather than a constant
+// here: a shared package hard-coding one caller's name is exactly the
+// drift this is fixing, and it is worth saying that out loud before
+// somebody copies the pattern.
 func (s *Service) PrintBootstrapNotice(w io.Writer, baseURL string) error {
 	needsEnrollment, err := s.NeedsEnrollment()
 	if err != nil {
@@ -255,11 +271,11 @@ func (s *Service) PrintBootstrapNotice(w io.Writer, baseURL string) error {
 
 	if baseURL != "" {
 		_, err = fmt.Fprintf(w,
-			"backup-manager: no administrator account exists yet. Open %s/enroll?token=%s to create one (valid 30 minutes, single use).\n",
+			cliecho.WebBinary+": no administrator account exists yet. Open %s/enroll?token=%s to create one (valid 30 minutes, single use).\n",
 			baseURL, token)
 	} else {
 		_, err = fmt.Fprintf(w,
-			"backup-manager: no administrator account exists yet. Enrollment bootstrap token: %s (valid 30 minutes, single use).\n",
+			cliecho.WebBinary+": no administrator account exists yet. Enrollment bootstrap token: %s (valid 30 minutes, single use).\n",
 			token)
 	}
 	return err

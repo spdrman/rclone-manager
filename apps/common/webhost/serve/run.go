@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // The process lifecycle: one HTTP server, optionally one scheduler, and
@@ -176,7 +178,13 @@ func RunEngine(ctx context.Context, httpServer *http.Server, scheduler Scheduler
 				exitErr = fmt.Errorf("scheduler: %w", err)
 			}
 		case <-time.After(shutdownGrace):
-			_, _ = fmt.Fprintln(warnings, "backup-manager-web: timed out waiting for the scheduler loop to stop")
+			// The prefix is the web host's own name rather than this
+			// package's, because it goes to the same container log as
+			// every other line the process writes and an operator
+			// reading `docker compose logs` has no way to tell one
+			// module from another. cliecho.WebBinary is the one place
+			// that name is spelled (core/cliecho/cliname.go).
+			_, _ = fmt.Fprintln(warnings, cliecho.WebBinary+": timed out waiting for the scheduler loop to stop")
 		}
 	}
 
