@@ -1,6 +1,6 @@
 # Source code and the written offer
 
-Backup Manager, `com.iasbuilt.backupmanager`. This is the source and
+Backup Manager, `com.iasbuilt.rclonemanager`. This is the source and
 source-offer material §73 Work Package 5.2 requires, and it is what the
 `source-offer` link in `distribution/packaging/compliance.json` resolves to.
 
@@ -162,7 +162,7 @@ licence, this offer and the machine-readable inventory the other two point at,
 without needing this repository, which is private. The image also says so to
 `docker inspect`, which is the only question you can ask it without opening it:
 `org.opencontainers.image.licenses` is the licence id and
-`com.iasbuilt.backupmanager.licenses.path` is `/licenses`.
+`com.iasbuilt.rclonemanager.licenses.path` is `/licenses`.
 
 The image has no shell, so read them from outside it. `docker create` needs a
 command named because this image sets no `ENTRYPOINT` and no `CMD` on purpose,
