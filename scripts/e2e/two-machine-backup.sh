@@ -987,14 +987,11 @@ run_case() {
   local reported
   reported="$(bm "$mgr" "$prefix" version)"
   echo "$reported" | sed 's/^/       /'
-  # Either spelling of the binary's own name, because `version` prints
-  # argv[0]'s idea of it and this line is about the VERSION, not the name
-  # (the 0.3.3 CLI rename). The command is `rbm` now; the binary still
-  # answers to /rbm through the image's compatibility symlink,
-  # and core/'s own suite is what pins which of the two the banner says.
-  # Anchored and alternated rather than dropped so a banner that says
-  # neither still fails here.
-  echo "$reported" | grep -qE "^(rbm|backup-manager) $version\$" \
+  # This line is about the VERSION, not the name, but it stays anchored on
+  # the name so a banner that says something else still fails here. 0.3.3
+  # is a clean cut: the image carries /rbm and nothing else, so there is no
+  # second spelling to allow for any more.
+  echo "$reported" | grep -qE "^rbm $version\$" \
     || die "the installed engine reports a different version from the one that was installed." \
            "asked for: $version" \
            "reported:  $(echo "$reported" | head -1)" \
