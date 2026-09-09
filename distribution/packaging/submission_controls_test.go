@@ -324,7 +324,7 @@ const canonicalCompose = `
 services:
   backup-manager:
     image: ghcr.io/spdrman/backup-manager:0.3.3
-    command: ["/rbm-web", "serve"]
+    command: ["/backup-manager-web", "serve"]
     user: "568:568"
     read_only: true
     privileged: false
@@ -341,7 +341,7 @@ services:
       - "/host/known_hosts:/etc/backup-manager/known_hosts:ro"
   backup-manager-ui:
     image: ghcr.io/spdrman/backup-manager:0.3.3
-    command: ["/rbm-web", "serve-ui"]
+    command: ["/backup-manager-web", "serve-ui"]
     user: "568:568"
     read_only: true
     privileged: false
@@ -352,7 +352,7 @@ services:
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
     ports:
       - "8080:8080"
 `
@@ -416,7 +416,7 @@ func TestEveryDriftElementFailsOnADeliberateMismatch(t *testing.T) {
 			capability: "drift-health-check",
 			provider:   "truenas",
 			mutate: func(s string) string {
-				return strings.Replace(s, `["CMD", "/rbm-web", "healthcheck"]`, `["CMD", "true"]`, 1)
+				return strings.Replace(s, `["CMD", "/backup-manager-web", "healthcheck"]`, `["CMD", "true"]`, 1)
 			},
 			wants: "healthcheck",
 		},

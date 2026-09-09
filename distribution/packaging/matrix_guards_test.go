@@ -420,7 +420,7 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 	// bridge flag would notice.
 	wrong := SelectUIBundle(&Service{
 		Name:        "backup-manager-ui",
-		Command:     []string{"/rbm-web", "serve-ui", "--profile=truenas"},
+		Command:     []string{"/backup-manager-web", "serve-ui", "--profile=truenas"},
 		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
 	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
 	if wrong.Provider != "truenas" {
@@ -630,7 +630,7 @@ func TestRoleMountsRefusesAMountWithNoKnownRole(t *testing.T) {
 	write(t, filepath.Join(dir, "compose.yaml"), `services:
   backup-manager:
     image: `+canonical.Image.Reference+`
-    command: ["/rbm-web", "serve"]
+    command: ["/backup-manager-web", "serve"]
     volumes:
       - /srv/app/state:/data/state
       - /srv/app/backups:/data/backups

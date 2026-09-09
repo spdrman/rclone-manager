@@ -425,9 +425,14 @@ func CheckArgv(rel string, argv []string) []Violation {
 	if len(argv) == 0 {
 		return []Violation{{rel, RuleNonCanonicalCommand, "empty command"}}
 	}
-	if !contains(canonical.Binaries, argv[0]) {
+	// CommandNames, not Binaries: the image ships /backup-manager and
+	// /backup-manager-web as symlinks beside the two real binaries, and a
+	// profile naming one of those is naming a real entrypoint. The shipped
+	// compose files do exactly that on purpose, because those are the only
+	// paths that also resolve on the releases already on the registry.
+	if !contains(canonical.CommandNames, argv[0]) {
 		return []Violation{{rel, RuleNonCanonicalCommand,
-			fmt.Sprintf("%q is not one of the canonical image's binaries %v", argv[0], canonical.Binaries)}}
+			fmt.Sprintf("%q is not one of the canonical image's entrypoints %v", argv[0], canonical.CommandNames)}}
 	}
 	for _, arg := range argv {
 		for _, meta := range shellMetacharacters {
