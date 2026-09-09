@@ -107,6 +107,37 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # excluded by .dockerignore from ever reaching the build context for these
 # paths.
 #
+# THIS LIST IS EXPLICIT ON PURPOSE, AND IT HAS A STATIC GUARD. A new
+# top-level package under core/ that the CLI imports is invisible to this
+# stage until a line is added for it, and from inside core/ everything
+# looks fine: `go build`, `go vet` and `go test` all pass, because a
+# checkout has the whole module and only the build CONTEXT is narrowed.
+# The image build is what dies, with "cannot find module providing
+# package".
+#
+# It does not take a Docker daemon to catch that, and the belief that it
+# does is worth correcting here because it is the belief that makes
+# somebody work around the list instead of adding to it.
+# distribution/packaging's
+# TestEveryFirstPartyPackageTheBinariesImportIsCopiedIntoTheImage runs
+# `go list -deps` over each shipped binary, folds every first-party
+# import to the directory granularity these lines copy at, and names the
+# exact `COPY <dir>/` to add. It needs no daemon, it runs in the gate,
+# and its own control removes the core/cliecho line below and requires
+# the check to report that one directory and no other. So:
+#
+#     cd distribution && GOWORK=off go test ./packaging/ \
+#       -run TestEveryFirstPartyPackageTheBinariesImportIsCopiedIntoTheImage
+#
+# answers "did my new package need a line here?" in a couple of seconds,
+# from a module that is not core/.
+#
+# The list stays a list rather than becoming `COPY core/ ./`, for the
+# reason the paragraph below already gives: it keeps a `git status`-dirty
+# scratch file out of the build context, and it keeps the context to what
+# the binary actually needs. Two packages have been added to it this way
+# so far, apicontract and cliecho, and both of their notes are below.
+#
 # apicontract is on this list because the CLI now speaks to a running
 # engine (#543): core/internal/apiclient resolves every path, status and
 # error code out of core/apicontract, so leaving it out builds a tree in
