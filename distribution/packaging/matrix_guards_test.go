@@ -92,7 +92,7 @@ func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	good := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager-web": sha256Of(binary)}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of(binary)}},
 		},
 	}
 
@@ -105,7 +105,7 @@ func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	corrupted := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager-web": sha256Of([]byte("a different build"))}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of([]byte("a different build"))}},
 		},
 	}
 	ok, detail := coreBinaryHashParity(p, corrupted)
@@ -141,8 +141,8 @@ func TestCoreBinaryHashParity_RefusesEveryProviderThatShipsNoBinary(t *testing.T
 // directions.
 func TestArchitectureParity_IsPerProvider(t *testing.T) {
 	manifest := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "x", "backup-manager-web": "x"}},
-		{Architecture: "arm64", BinarySHA256: map[string]string{"backup-manager": "x", "backup-manager-web": "x"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
+		{Architecture: "arm64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
 	}}
 
 	p, dir := tempProvider(t, "fictional")
@@ -233,13 +233,13 @@ func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.
 // hash-completeness half.
 func TestReleaseManifest_RecordsEveryBinary(t *testing.T) {
 	full := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "a", "backup-manager-web": "b"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
 	}}
 	if ok, detail := full.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); !ok {
 		t.Fatalf("a complete manifest must be accepted, got: %s", detail)
 	}
 	partial := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "a"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a"}},
 	}}
 	if ok, _ := partial.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); ok {
 		t.Errorf("a manifest missing one binary's hash must be refused")
@@ -250,29 +250,26 @@ func TestReleaseManifest_RecordsEveryBinary(t *testing.T) {
 	}
 }
 
-// TestTheManifestKeyTranslationIsTheOnlyThingBridgingTheTwoNames pins the
-// one place canonical.json's binary paths and
-// container/release-manifest.json's keys are allowed to differ.
+// TestTheManifestKeyCannotPairAHashWithTheWrongBinary pins the mapping
+// between canonical.json's binary paths and
+// container/release-manifest.json's keys.
 //
-// The test above would pass on a map that returned "backup-manager" for
-// absolutely everything, and so would every provider row in the matrix,
-// because the manifest happens to record exactly those two keys. That is
-// the shape worth refusing: a translation nobody constrained turns "this
-// binary is not in the manifest" into "some binary is", which is the
-// architecture-parity and artifact-provenance columns reporting a hash
-// that was never asked for. So the fall-through is checked from the other
-// side, on a name the map must NOT know.
-func TestTheManifestKeyTranslationIsTheOnlyThingBridgingTheTwoNames(t *testing.T) {
+// There is nothing to translate any more: 0.3.3 moved the manifest's keys
+// onto the binaries' own names, so this is the path minus its leading
+// slash. The guard still earns its place, because the risk never came
+// from the translation being wrong, it came from a mapping nobody
+// constrained. A function that returned one of the two recorded keys for
+// absolutely everything would satisfy every provider row in the matrix,
+// and it would turn "this binary is not in the manifest" into "some
+// binary is", which is the architecture-parity and artifact-provenance
+// columns reporting a hash nobody asked for. So it is checked from the
+// side that matters: on names the map must NOT recognise.
+func TestTheManifestKeyCannotPairAHashWithTheWrongBinary(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"/rbm", "backup-manager"},
-		{"rbm", "backup-manager"},
-		{"/rbm-web", "backup-manager-web"},
-		{"rbm-web", "backup-manager-web"},
-
-		// The old paths still resolve inside the image, so they are still
-		// legible here, and they were always the manifest's own keys.
-		{"/rbm", "backup-manager"},
-		{"/rbm-web", "backup-manager-web"},
+		{"/rbm", "rbm"},
+		{"rbm", "rbm"},
+		{"/rbm-web", "rbm-web"},
+		{"rbm-web", "rbm-web"},
 
 		// Anything else keeps its own name and therefore fails the lookup,
 		// which is the whole point: an invented binary must be reported
@@ -290,7 +287,7 @@ func TestTheManifestKeyTranslationIsTheOnlyThingBridgingTheTwoNames(t *testing.T
 	// binary the manifest does not record has to come back refused, not
 	// translated onto one it does.
 	m := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "a", "backup-manager-web": "b"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
 	}}
 	if ok, detail := m.RecordsEveryBinary([]string{"/rbm", "/rbm-web", "/rbm-sidecar"}); ok {
 		t.Errorf("a binary with no hash of its own was accepted: %s", detail)

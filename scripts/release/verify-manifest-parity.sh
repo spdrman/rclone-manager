@@ -136,17 +136,14 @@ for arch in $arches; do
 
   cid=$(docker create --platform "linux/${arch}" "$tag" /rbm version)
   tmp=$(mktemp -d)
-  # The real binaries, not the compatibility symlinks beside them (the
-  # 0.3.3 CLI rename): `docker cp` without -L copies /rbm as a
-  # link to /rbm, which is dead on the host, and the comparison below
-  # would then fail on a missing file rather than on a real mismatch.
-  # The names on THIS side stay as they were, because they are the
-  # binary_sha256 keys $MANIFEST records under.
+  # /rbm and /rbm-web are the only executables in the image as of 0.3.3,
+  # and they are also the binary_sha256 keys $MANIFEST records under, so
+  # the name is the same on both sides of this comparison.
   docker cp "${cid}:/rbm" "${tmp}/rbm" >&2
   docker cp "${cid}:/rbm-web" "${tmp}/rbm-web" >&2
   docker rm "$cid" >/dev/null
 
-  for binary in backup-manager backup-manager-web; do
+  for binary in rbm rbm-web; do
     want="$(recorded "$arch" "$binary")"
     got="$(sha256_of "${tmp}/${binary}")"
     if [ -z "$want" ]; then
