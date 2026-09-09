@@ -11,7 +11,16 @@ server over SFTP, verifies them, commits them durably, and only then deletes the
 copy.
 
 It is a standalone Go binary that **embeds pinned rclone Go packages**. It does not fork
-rclone, and it does not shell out to the `rclone` CLI for normal data movement.
+rclone, and it does not shell out to the `rclone` CLI for normal data movement. There are
+two surfaces over the same engine: `rbm` at a terminal, and a web UI on the LAN. Everything
+an operator can DO in the browser has an equivalent command, and that is a gate rather than
+an intention: a route with neither a command behind it nor a written reason there is none
+fails the build.
+
+**If you just want to run it:** [Installing it](#installing-it) is two containers and a
+Compose file, or one command from
+[`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) on a
+machine you have SSH on.
 
 **If you're here because a backup didn't arrive and it's 3am:** skip to
 [Recovery](#recovery-when-a-backup-did-not-arrive) below, or go straight to
@@ -22,7 +31,37 @@ rclone, and it does not shell out to the `rclone` CLI for normal data movement.
 > A remote backup artifact MUST NOT be deleted until a verified and durably committed NAS
 > copy exists. If state is uncertain, preserve the remote copy.
 
-Every section below is either explaining how that rule is enforced or admitting where the
+Since EPIC E that rule has a second half, because a durable copy no longer has to be a file
+on the NAS. FR-30 in plain words: **at no instant may a completed backup have no confirmed
+readable copy.** Not "usually", not "except during a move". A relocation from local disk to
+a bucket copies first, proves what arrived, records that proof durably, and only then
+removes what it came from, and the ordering is a table of legal transitions rather than a
+convention somebody could write a function around. Where the answer is genuinely unknown,
+the copy stays.
+
+Three consequences worth having in your head before reading anything else here.
+
+**It refuses rather than guesses.** A remote delete whose identity check comes back merely
+plausible is declined, and against the hardened SFTP account this project's own setup guide
+recommends that is the normal outcome rather than an edge case. A retention apply whose
+inventory moved since the plan was printed is declined with nothing deleted. A
+configuration write that cannot reach the process actually serving this deployment is
+declined with the file left byte for byte as it was. Every one of those is a refusal you
+can read, with an exit code you can branch on.
+
+**It will not lean on a connection nobody has proved.** There are two of those, the SSH
+connection to a source and the connection to a storage destination, and until 0.3.3 only
+one of them was checked. Both are now proved before the product relies on them, both refuse
+on failure, both spell the escape hatch `--no-verify`, and both mark what was written under
+it as unverified until a passing check clears the mark. See
+[Proving a connection before anything depends on it](#proving-a-connection-before-anything-depends-on-it).
+
+**It says what it is doing while it does it.** Every operator-visible action reports a
+start and a completion carrying a real outcome, on one feed that the terminal docked to the
+browser window, each backup set's own page and `rbm activity --follow` are three readings
+of. See [What the browser actually gives you](#what-the-browser-actually-gives-you).
+
+Every section below is either explaining how those rules are enforced or admitting where the
 enforcement doesn't exist yet.
 
 ## Status: what actually runs today
@@ -35,10 +74,17 @@ machine can decide into tests rather than sentences (see
 
 ### The engine and the CLI are real
 
-`core/` is a working backup engine with a working command line. `backup-manager` registers
-nineteen commands, and the list below is checked against the dispatch table in
+`core/` is a working backup engine with a working command line. `rbm` registers twenty
+commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
+
+**The command is called `rbm` as of 0.3.3, and `backup-manager` still works.** That is the
+one thing to know before upgrading, and it is the whole of it: the old name is kept as an
+alias rather than deprecated, so a cron entry, a Compose healthcheck or a provisioning
+script written against `backup-manager` runs unchanged and keeps running. Every example in
+this document uses the new name because that is what a new operator should be typing, and
+nothing below is a second surface: one binary, two names for it.
 
 <!-- BEGIN CLI-COMMANDS -->
 
@@ -49,19 +95,21 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). Both prove the source connection before anything is written and refuse when they cannot; `--no-verify` writes it anyway, says in so many words that nothing was proven, and leaves the set marked unverified until a test passes (issue #624). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
+| `backup-set` | `backup-set test-connection <source/backup-set>` proves one configured set's source and prints six named outcomes rather than one verdict: resolve the host, connect, check its host key against what this set trusts, offer the configured key, authenticate, and list the remote folder, with a non-zero exit when any of them fails. Beside a serving engine the check is made BY that engine, so its steps reach the live feed rather than only this terminal. A pass clears the unverified mark a `--no-verify` create or patch left behind; `preflight` is the same verb under the name the destination side spells it (issues #596, #624) |
+| `backup-set` | `backup-set edit-hold <source/backup-set> [--release]` reports whether a set is held for editing, what taking the hold stopped and when the lease expires, and gives it back so the scheduler may run the set again rather than waiting for it to lapse. A hold lives in the memory of the process serving this deployment and does not survive it, so this needs a route to that process. There is deliberately no verb that TAKES one: a hold protects an editing session, and a CLI edit is one `backup-set patch` that either runs or does not (issues #350, #600) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set`. `--backup-set` takes the `source/backup-set` id `sources`, `status` and `retention` name a backup set by, and a plain set name where one source configures it. Not this list's own first column, which is the whole artifact id and a field longer; a name two sources share is refused with both ids rather than answered for one of them (issue #569) |
 | `fetch` | run one backup set's cycle on demand |
-| `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides
-| `activity` | read the durable lifecycle log, newest first, filtered by `--backup-set` and `--severity`. `--follow` streams the live feed from the process serving this deployment instead, until interrupted, so a terminal beside a running cycle shows what it is doing rather than what it did (issues #598, #599) | |
+| `retention` | preview GFS and last-known-good retention decisions, over every configured set or over the one you name, with per-run policy overrides. `--tier` replaces the whole chain for that preview and `--tier-medium NAME=MEDIUM_ID` says where one of those tiers' copies go, so a supplied chain is previewed against the destinations it names rather than silently against the local backup root (issue #595). `retention apply <source/backup-set> --acknowledge` is the one that actually deletes: it prints the plan, applies exactly that plan through the same preview/apply pair the API uses, and refuses with nothing deleted if the set's inventory, configuration or civil date moved in between (issue #602) |
+| `activity` | read the durable lifecycle log, newest first, filtered by `--backup-set` and `--severity`, with `--json` emitting the wire objects unchanged. `--follow` streams the live feed from the process serving this deployment instead, until interrupted, so a terminal beside a running cycle shows what it is doing rather than what it did; it needs a route to that process and refuses without one rather than quietly reading the journal. `--scope deployment` narrows the live feed to the log that names no backup set, a cycle starting, a capacity check, what somebody just clicked, which is the whole feed on a deployment with nothing configured yet (issues #593, #598, #599) |
 | `reconcile` | run FR-17 reconciliation for every backup set |
 | `validate` | re-check one artifact's durable copy, wherever it is. A copy on a storage medium is checked at the strongest verification class that costs nothing; `--content` downloads it and re-hashes it, which costs egress, so FR-31 makes that something an operator asks for (issue #435) |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
-| `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
+| `settings` | report the live retention/capacity settings, or `settings patch` to change one in place, hot-reloaded with no restart. `--policy-file` replaces the deployment's whole retention chain from a file holding the contents of a `retention:` block (`-` reads standard input), and `--tier-medium NAME=MEDIUM_ID` points one tier at a storage destination and leaves the rest of the chain exactly as it is, which is the command the picker under a tier in the web UI echoes. Sending a tier somewhere other than local for the first time needs `--acknowledge-medium-disclosure` (issues #277, #595, #622) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
-| `medium` | `medium preflight <medium-id>` proves one declared storage medium actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically (issue #443) |
+| `medium` | declare and prove storage destinations without editing `config.yaml`. `medium list` and `medium show <medium-id>` report what is declared and what the journal says is on it, reporting no credential and not even which of the three sources one reads. `medium import-credentials --stdin` is the only command on this surface that ever holds a secret and it takes it on standard input, because there is deliberately no `--access-key-id` flag anywhere here. `medium add`, `edit` and `remove` are the writes, and `add` VERIFIES FIRST and writes nothing when verification fails. `medium test-connection <medium-id>` (`medium preflight` is the same verb under the older name, kept so anything scripted against it goes on working) proves one destination actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. It answers for `local` too, telling a missing path, an unwritable directory and a full filesystem apart. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically. `medium preflight --candidate` runs the same checks against a destination that is not declared, so a setup flow can prove one before writing it down, and `medium default <medium-id>` moves the destination a newly created retention tier starts on (issues #443, #622, #636) |
 | `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
@@ -72,24 +120,28 @@ Every command except `version` takes `--config`, defaulting to
 `/etc/backup-manager/config/config.yaml`. That default is a file inside the config
 DIRECTORY rather than a file mounted on its own, because #196 made the directory the
 writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
-pass the directory and it resolves `config.yaml` inside it. `backup-manager` with no
-arguments prints that same list and exits 2.
+pass the directory and it resolves `config.yaml` inside it. `rbm` with no arguments prints
+that same list and exits 2.
 
-**Eight invocations in that table reach the API now, and only when there is an engine to
-reach.** Four of them change the configuration through it, `backup-set create`, `patch` and
-`remove` and `settings patch`, and four put their own question to it before they print
-anything, `status`, `sources`, `artifacts` and `retention`. Which of three things a
-configuration write does is a property of the deployment rather than of a flag, and the
-command says which one it did on a `mode:` line. With nothing serving,
-`backup-manager` opens its own service over the same `config.yaml` and state database an engine
-uses, writes, and exits; an engine started afterwards reads the new file when it starts. With
-something serving this deployment and an address for it, `backup-set create`, `patch` and
-`remove` and `settings patch` hand the change to that process over its own API, so it is made
-by the engine that will go on serving it and there is nothing to restart. With something
-serving and no address, the write is refused with nothing written and exit 3, naming
-what was found and where the change can be made instead: there is still no config watcher and
-no SIGHUP reload in this build, so a change left in the file is one the serving process would
-never read.
+**Two families of invocation reach the API now, and only when there is an engine to reach.**
+Every configuration write goes that way: `backup-set create`, `patch` and `remove`,
+`settings patch`, and `medium import-credentials`, `add`, `edit` and `remove`. So does
+`medium preflight --candidate`, because it is the check `medium add` runs before it writes
+and it has to happen where the write will, and so does `backup-set test-connection`, because
+a passing check clears an unverified mark and that is a write. And four reads put their own
+question to the engine before they print anything: `status`, `sources`, `artifacts` and
+`retention`.
+
+Which of three things a configuration write does is a property of the deployment rather
+than of a flag, and the command says which one it did on a `mode:` line. With nothing
+serving, `rbm` opens its own service over the same `config.yaml` and state database an
+engine uses, writes, and exits; an engine started afterwards reads the new file when it
+starts. With something serving this deployment and an address for it, the write is handed
+to that process over its own API, so it is made by the engine that will go on serving it
+and there is nothing to restart. With something serving and no address, the write is
+refused with nothing written and exit 3, naming what was found and where the change can be
+made instead: there is still no config watcher and no SIGHUP reload in this build, so a
+change left in the file is one the serving process would never read.
 
 Exit 3 is that refusal and nothing else (issue #551). It is the one failure this binary has
 that is expected rather than broken, so a script that provisions backup sets can branch on 3
@@ -105,12 +157,12 @@ one a route. Both are 3, only the first one gets better by waiting, and the mess
 tells them apart.
 
 1 is an ordinary failure, and it is also where the two route mistakes land: an address that
-did not answer, and an address that answered for a *different* deployment. Neither improves by
-being retried. 2 is nothing having run at all, which covers a wrong command line and a help
-request alike: `backup-manager check -h` is a correct command line, an answered request and an
+did not answer, and an address that answered for a *different* deployment. Neither improves
+by being retried. 2 is nothing having run at all, which covers a wrong command line and a
+help request alike: `rbm check -h` is a correct command line, an answered request and an
 exit 2, because every subcommand returns the same status for whatever `flag` hands back and
-`flag.ErrHelp` is one of those. `backup-manager` with no arguments prints the whole table, and
-exits 2 for the same reason.
+`flag.ErrHelp` is one of those. `rbm` with no arguments prints the whole table, and exits 2
+for the same reason.
 
 Two writes have no route and are refused beside a serving engine. A `backup-set retention`
 that sets or clears a policy is one, and the API is not what stops it: the endpoints for
@@ -180,7 +232,7 @@ it was given turns out to be serving a *different deployment*, or it answers the
 question differently. Any of the three prints nothing at all and exits non-zero, because an
 answer from here would describe a deployment nobody is running, or somebody else's.
 
-Nine invocations announce a mode, those four reads and the five configuration writes. The rest
+Every one of those announces a mode, the four reads and the configuration writes alike. The rest
 say nothing about one and are ordinary beside a live engine: `run`, `fetch`, `check`, `validate`
 and the others, with the `settings` read and a `backup-set retention` that only reports among
 them. The one command a running engine refuses is a second `daemon`, or a second web host,
@@ -234,11 +286,12 @@ outright with "The backup service returned an unexpected response." Every suite 
 repository stayed green while that was true, for the reason the next paragraph gives.
 
 Four of those were the wrong path for an operation that existed, and are now the right one.
-The other ten are real surfaces, added spec-first (contract, regenerate, then handlers) over
-reads core has always computed and `backup-manager artifacts`, `status` and `catalog`
-already print: the backups list and one backup, the activity feed over the append-only
-lifecycle record, quarantine plus its revalidate, retry and reinstate actions, the operations list,
-enabling and disabling a backup set, the FR-24 health verdict, and catalog scan and rebuild.
+The other ten are real surfaces, added spec-first (contract, regenerate, then handlers)
+over reads core has always computed and `rbm artifacts`, `status` and `catalog` already
+print: the backups list and one backup, the activity feed over the append-only lifecycle
+record, quarantine plus its revalidate, retry and reinstate actions, the operations list,
+enabling and disabling a backup set, the FR-24 health verdict, and catalog scan and
+rebuild.
 
 **What keeps it that way is a check, not this paragraph.**
 `scripts/api/check-client-paths.sh` reads `ui/shared/src/api/client.ts` statically, reduces
@@ -270,6 +323,18 @@ top of them. #211 closed the fourteen paths and `scripts/api/check-client-paths.
 holds them closed; the suite is still the only thing here that watches a browser talk to a
 real backend, so it stays in the gate rather than being retired now that it is green.
 
+**The mock can also be wrong about the product, and #633 is what that costs.** Its candidate
+storage-destination check passed the negation of what the by-id check passes, so against the
+mock a candidate on `STANDARD` failed at `deliverable` and one on `DEEP_ARCHIVE` passed. The
+wizard gates Save on that report, so in the browser no ordinary destination could be saved at
+all, and the one storage class `config.Validate` refuses a retention tier for was the one the
+wizard would have let through: a verify-before-save gate teaching an operator the opposite of
+the rule the engine enforces. Nothing caught it because the wizard's own component test
+rendered against its own stub rather than against `createMockApi`, and the browser suite had
+never driven the wizard past the credentials step, so the mock's projection of a submitted
+spec was on nobody's path. It was found by writing browser coverage for a different issue.
+A fixture is product surface when a gate is built on top of it.
+
 **Every destructive operation over HTTP is refused, by construction, in every deployment
 that exists today.** `apps/common/webhost/gate.go`'s `NotYetImplementedGate` is the only
 `DestructiveGate` this repository ships, its `Passed()` returns `false` unconditionally,
@@ -281,11 +346,123 @@ it: `POST /operations`, `POST /backup-sets/{source}/{set}/retention/apply`, and
 run. All three answer 403 `DESTRUCTIVE_OPERATIONS_DISABLED` no matter how the deployment is
 configured, and opening them is #92's job and #92's alone.
 
-The consequence worth spelling out is that `POST /operations` is where a restore, a cycle
-and a retry are submitted, so **the HTTP restore is written and unreachable**, and the CLI
-is the only surface that can actually run one today. That asymmetry is worth reading twice
-before treating the two surfaces as equals: the CLI has no such gate, because it talks to
-`config.yaml` and the journal directly rather than to a server.
+The consequence worth spelling out is that `POST /operations` is where a restore, a cycle,
+a retry and one backup set's run are submitted, so **all four are written and unreachable
+over HTTP**, and the CLI is the only surface that can actually perform any of them today.
+That asymmetry is worth reading twice before treating the two surfaces as equals: the CLI
+has no such gate, because it talks to `config.yaml` and the journal directly rather than to
+a server. What EPIC G added on that path is not a way through it. The run controls in the
+browser are wired to the route that ships and their refusal is now visible and specific,
+which is the honest half of a button that cannot work yet: before #597 the dashboard's own
+run button had no handler at all, so it failed by doing nothing.
+
+### What the browser actually gives you
+
+The section above is about the contract between the client and the server. This one is
+about what an operator sees, because EPIC G and EPIC H rebuilt most of it and the previous
+version of this document described none of it.
+
+**A terminal is docked to the bottom of the browser window, and it names the `rbm` command
+for every action taken in the UI.** It is fixed to the viewport rather than sitting at the
+end of the page (#617), so it stays put while the page scrolls, shows one line when it is
+minimised, and the content column reserves exactly the height it is currently occupying, so
+the last row of a long table can still be scrolled clear of it. It mounts in the shell
+rather than inside the routed content, so the buffer, the cursor, the scroll position and
+the collapsed state all survive every navigation in the session.
+
+The command echo is the part worth understanding, because it is a parity mechanism and not
+a convenience. `core/cliecho` composes the equivalent command inside the ENGINE, beside the
+flag definitions and inside the redactor, rather than in a table next to the frontend that
+nothing compiles against. Three tests hold it: `apps/common/webhost`'s
+`TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap` walks the registered route table and
+requires every route to carry either a builder or an explicit no-equivalent entry with a
+reason, so a route added with neither fails the build; `TestEveryEchoedCommandParses` feeds
+every command the package can emit through the real dispatcher and requires it not to be a
+usage error, so a renamed flag fails here rather than in the hands of somebody who pasted
+it; and `TestNoGapClaimsAVerbThisBinaryShips` fails a gap sentence that names a verb the
+binary actually dispatches, which had happened five times. The practical effect is that a
+UI-only feature announces itself the first time anybody uses it, and that "send me what the
+terminal said" produces commands rather than a description of which buttons were pressed.
+
+**Every backup set has its own activity view on its own page**, and there are three
+readings of one feed rather than three feeds. The dashboard strip (#573) answers "which of
+my sets is doing something", read at a glance across a row. The docked terminal (#599)
+answers "what has this deployment done, most recently, including the thing I just clicked".
+The per-set panel (#596) is where you look once you know which set is in trouble, and it
+narrows through a query parameter the route already takes and renders the same component
+the dashboard does, so an export pasted into an issue does not depend on which screen it
+came from. `rbm activity --follow` reads the same live feed from a terminal, and `--scope
+deployment` narrows it to the lines that name no backup set.
+
+**A completion says how it went, on the wire.** The live activity line carries a `result`
+stated by the engine, rather than a tone the renderer re-derives from event names and
+lifecycle states across about eight rules with anything unrecognised silently staying
+neutral (#625). It also carries what pairs a start with its completion, structurally, so
+"this announced itself and then went quiet" is something a surface can say instead of
+something an operator would have to notice by remembering which starts they had seen. There
+is deliberately no `success` severity: a level is an ordering every reader treats as a
+threshold, so how an operation WENT is a separate field from how loudly to say it.
+
+**A connection test reports named steps rather than one verdict.** A source runs six,
+`credentials`, `resolve`, `connect`, `host_key`, `authenticate` and `list`, each one
+passed, failed or skipped, with a machine-readable category and a sentence the engine
+composed. Skipped is a first-class answer: a surface that draws a skipped authentication as
+anything but "this was never tried" has told an operator their credentials are fine on the
+strength of a step that never ran. A destination runs its own list, and it is deliberately
+the same shape, so a preflight table and a connection-test table are two renderings of one
+idea. What that buys is that a typo'd hostname, an unauthorised key, a rotated host key and
+a remote path that does not exist stop reading identically, which they did when the whole
+check was one boolean and one sentence.
+
+**The SSH wizard offers the keys this machine already has.** It replaced two write-only
+text boxes, one asking for the id of an imported key (a uuid the product showed exactly
+once, in the response to the import that created it) and one asking for a `known_hosts`
+line. Now the wizard lists the keys this deployment already holds and the key files the
+host already carries, which on a default install is the one the installer generated under
+`<prefix>/secrets` and Compose mounts read-only. Choosing one of those sends an opaque
+handle and no key material at all, which is why it is its own operation rather than a
+second mode of the paste. Pasting is still there, as the last option rather than the only
+one. The host-key step goes THROUGH the refusal rather than around it: it probes, shows the
+fingerprint on record beside the fingerprint being offered, and the only way past a
+mismatch is ticking an acknowledgement scoped to the fingerprint that was shown, so a later
+probe returning something else clears it. A wizard is exactly the shape of thing that
+quietly acquires a trust-on-first-use default in the name of being friendly, and this one
+does not.
+
+**Dark mode works on native controls, which it did not.** Nothing declared `color-scheme`,
+so the browser assumed light for every `input`, `textarea`, `select` and `button` whatever
+the theme said, and any control not given an explicit colour fell back to black text (#618).
+That is a defect that looks perfect in light mode, where the user-agent default happens to
+match. The fix is in two places on purpose: `color-scheme` is declared for both themes, and
+bare native controls get a themed colour at low specificity, so the next component that
+styles a control inline cannot land back on the user-agent default.
+
+**Every banner can be closed.** There are thirty-five of them and none had a way out, so an
+operator who had read one was stuck looking at it (#620). The control is a real
+`<button type="button">` with visually hidden text rather than an `aria-label`, so Tab
+reaches it and it survives translation. Two rules keep it from becoming a way to make a
+problem look handled: dismissing is a viewer-side act that changes no server state and the
+banner returns when the condition renders again or when the sentence it carries changes, so
+putting away "could not log in to nas-01" cannot hide "the SSH host key for nas-01 has
+changed" arriving in its place; and a banner can opt OUT, which nine of them do, either
+because the banner IS the surface and carries the only way back, or because its words are
+the only thing standing between an operator and a misunderstanding.
+
+**It works with no route off the LAN.** Both halves of that were broken and neither said so.
+The icons were Unicode geometric code points rendered in whatever the operator's system font
+decided, so a tick and a cross were one filled shape apart at 13px; they are Font Awesome
+Free artwork now, fourteen of them, as inline SVG paths rather than a package, about 4.7 KB
+of path data before compression (#621). The typeface was fetched from Google Fonts on every
+page load, which on an isolated NAS fails silently, falls back to a system font and leaves
+every measurement the design makes against IBM Plex wrong with nothing reporting it; the
+seven faces are vendored and served from the image now, with a real non-Plex fallback after
+each one and `font-display: swap` so a face that never arrives does not hold the paint
+(#631). Both are attribution licences and both are recorded rather than merely used:
+[`docs/compliance/bundled-icon-artwork.md`](docs/compliance/bundled-icon-artwork.md) for
+CC BY 4.0, [`docs/compliance/bundled-webfonts.md`](docs/compliance/bundled-webfonts.md) for
+SIL OFL 1.1, both also in [`NOTICE`](NOTICE). The checks refuse any absolute URL in a
+subresource attribute rather than only the two Google hosts by name, because the next CDN
+somebody adds will not be called `fonts.googleapis.com`.
 
 ### What is built but not exposed
 
@@ -296,7 +473,7 @@ before treating the two surfaces as equals: the CLI has no such gate, because it
   backup back onto the machine it came from.
   [Recovery](#recovery-when-a-backup-did-not-arrive) below is the manual procedure, and it
   is the whole of it. This bullet used to say there is no `restore` command and no restore
-  endpoint, and that has been wrong since #241: `backup-manager restore` and
+  endpoint, and that has been wrong since #241: `rbm restore` and
   `POST /api/v1/operations` with `action: restore_placement` both exist, and both mean
   something narrower than the sentence above. They ask a storage provider to make an
   ARCHIVED copy readable again, which is a precondition for the manual procedure rather
@@ -344,7 +521,7 @@ saying what to back up over SSH with no browser anywhere, and "edit a YAML file 
 the absence of a command written as though it were a feature.
 
 ```bash
-backup-manager backup-set create production/postgres \
+rbm backup-set create production/postgres \
     --host db.example.internal --user backup \
     --ssh-key-file ./id_ed25519 --trust-host-key \
     --remote-path /srv/backups --local-path /volume1/backups/postgres \
@@ -365,9 +542,9 @@ tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, examp
 However the file got written, the same loop checks it:
 
 ```bash
-backup-manager check --config ./config.yaml      # validates the file and the state database
-backup-manager sources --config ./config.yaml    # renders what was actually understood
-backup-manager fetch --config ./config.yaml --source S --backup-set B --dry-run
+rbm check --config ./config.yaml      # validates the file and the state database
+rbm sources --config ./config.yaml    # renders what was actually understood
+rbm fetch --config ./config.yaml --source S --backup-set B --dry-run
                                                   # proves it really reaches the host (see below)
 ```
 
@@ -379,7 +556,7 @@ was the same file edit, which meant opening an editor on the NAS itself. `backup
 is what replaces that:
 
 ```bash
-backup-manager backup-set --config ./config.yaml patch production/postgres-primary \
+rbm backup-set --config ./config.yaml patch production/postgres-primary \
   --remote-path /var/backups/postgresql --include "*.dump,*.tar.zst"
 ```
 
@@ -396,14 +573,14 @@ goes through at boot and written through the same atomic replace.
 One thing to be plain about, because it is the same for `settings patch` and is easy to
 assume otherwise: the hot reload is in-process. A change made through the API takes effect
 immediately in the engine that served it, because that engine is also the thing running the
-schedule. A separate `backup-manager backup-set patch` invocation is a different process, and
-there is no config watcher and no SIGHUP reload in this build, so a `daemon` already running
-would never see what that process wrote into the file. Which is why it does not write into the
-file while one is serving. Given `BACKUP_MANAGER_API_URL` it sends the patch to that process
-instead, and the hot reload is then the serving engine's own; without one it is refused,
-`config.yaml` is left byte for byte as it was, and the command says so. With nothing serving,
-it writes the file, reloads its own view of it, exits, and an engine started afterwards reads
-the new file at startup.
+schedule. A separate `rbm backup-set patch` invocation is a different process, and there is
+no config watcher and no SIGHUP reload in this build, so a `daemon` already running would
+never see what that process wrote into the file. Which is why it does not write into the
+file while one is serving. Given `BACKUP_MANAGER_API_URL` it sends the patch to that
+process instead, and the hot reload is then the serving engine's own; without one it is
+refused, `config.yaml` is left byte for byte as it was, and the command says so. With
+nothing serving, it writes the file, reloads its own view of it, exits, and an engine
+started afterwards reads the new file at startup.
 
 A set's name and source are deliberately not patchable: they key every journal row, artifact
 id and recovery manifest the set has ever produced, so renaming one is a migration rather
@@ -475,9 +652,9 @@ actually landed, and that is what gets checked.
 stay on storage and stay in the journal, which is exactly right for undoing a removal and
 exactly wrong for pretending nothing happened: those artifacts are now governed by no
 retention policy at all, because the configuration that carried one no longer names them.
-`backup-manager unconfigured` lists the sets the journal remembers and the configuration no
-longer names, what they still hold on storage, and the policy governing them, which is
-none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a
+`rbm unconfigured` lists the sets the journal remembers and the configuration no longer
+names, what they still hold on storage, and the policy governing them, which is none.
+`unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a
 removal stranded mid-transfer and ends the journal rows nothing will ever advance; without
 `--acknowledge` it prints what it would do. It never touches a retained backup, so it is
 not a way to delete anything you would want back.
@@ -517,11 +694,11 @@ prints `status=enabled` or `status=disabled` for exactly this field.
 
 **Testing a connection is `backup-set test-connection`, and it is no longer a
 work-around.** This entry used to send an operator to `fetch --dry-run`, because `POST
-/backup-sets/test-connection` had no verb at all: the six-step check that route answers with
-(#596) could only be reached from a browser. Issue #624 gave it one. `backup-manager
-backup-set test-connection <source/backup-set>` resolves the host, connects, checks its host
-key against what the set trusts, offers the configured key, authenticates and lists the
-remote folder, and prints all six outcomes with a non-zero exit when any of them fails.
+/backup-sets/test-connection` had no verb at all: the six-step check that route answers
+with (#596) could only be reached from a browser. Issue #624 gave it one. `rbm backup-set
+test-connection <source/backup-set>` resolves the host, connects, checks its host key
+against what the set trusts, offers the configured key, authenticates and lists the remote
+folder, and prints all six outcomes with a non-zero exit when any of them fails.
 `preflight` is the same verb under the name the storage-destination side spells it.
 
 Beside a serving engine this command has a route to, the check is made BY that engine, so
@@ -540,7 +717,7 @@ it cannot.
 
 **Provisioning an SSH key and capturing a host key are already fully documented, in
 `docs/ssh-setup.md`, and this is the missing cross-reference.** `POST /ssh-keys` exists so a
-browser, which cannot write a file to the NAS's own disk, can hand backup-manager a pasted
+browser, which cannot write a file to the NAS's own disk, can hand this manager a pasted
 private key over HTTP; an operator with a shell already has filesystem access and does not
 need that indirection; `docs/ssh-setup.md`'s ["Generate a dedicated SSH key
 pair"](docs/ssh-setup.md#1-generate-a-dedicated-ssh-key-pair) section is the CLI-native
@@ -554,32 +731,33 @@ with already.
 
 **Quarantine actions and settings were the two gaps #277 found real, and both now have a
 command.** See [Quarantine](#quarantine) above for `quarantine revalidate`, `quarantine
-retry` and `quarantine reinstate`. `backup-manager settings` reports the live, resolved
-FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
-table above has both), and `backup-manager settings patch [flags]` changes one in place,
-hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
-replacement of the *deployment's* policy used to stay a config-file edit; since G2.3 (#595)
-it is `settings patch --policy-file`, spelled exactly the way `backup-set retention` spells
-it, because a chain now names where the copies go and "edit the file" is not an equal-power
-route beside a serving process, which refuses a file write outright. Every retention and
-capacity field is reachable through `settings patch` without a restart.
+retry` and `quarantine reinstate`. `rbm settings` reports the live, resolved FR-18/FR-19
+retention policy and FR-21 capacity settings (the
+[CLI-COMMANDS](#status-what-actually-runs-today) table above has both), and `rbm settings
+patch [flags]` changes one in place, hot-reloaded the same way `PATCH /api/v1/settings`
+already is. A full retention tier-chain replacement of the *deployment's* policy used to
+stay a config-file edit; since G2.3 (#595) it is `settings patch --policy-file`, spelled
+exactly the way `backup-set retention` spells it, because a chain now names where the
+copies go and "edit the file" is not an equal-power route beside a serving process, which
+refuses a file write outright. Every retention and capacity field is reachable through
+`settings patch` without a restart.
 
-**A backup set's own retention policy is not a config-file edit either (issue #333).**
-`backup-manager backup-set retention` shows which policy a set is retained under, gives the
-set a whole policy of its own, and `--inherit` takes it back off. It is the same three
-operations `GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` expose and the
-same three the Web UI draws, all through one method in `core/service`. See [One backup set
-on its own retention policy](#one-backup-set-on-its-own-retention-policy).
+**A backup set's own retention policy is not a config-file edit either (issue #333).** `rbm
+backup-set retention` shows which policy a set is retained under, gives the set a whole
+policy of its own, and `--inherit` takes it back off. It is the same three operations
+`GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` expose and the same three
+the Web UI draws, all through one method in `core/service`. See [One backup set on its own
+retention policy](#one-backup-set-on-its-own-retention-policy).
 
-**What is not covered by `backup-manager`: authentication and account management.**
-`/auth/enroll`, `/auth/login` and `/auth/password` are genuinely out of scope for the engine
-CLI, not merely undocumented. They are `apps/common/auth/local`'s
-session/cookie/CSRF/rate-limit subsystem, constructed fresh inside the running web server
-process (the single-use enrollment token itself lives in that process's memory, not on
-disk), so there is no config file or already-open state database a separate
-`backup-manager` invocation could act on the way every command above does. An operator who
-never intends to use the Web UI never needs any of this, since the CLI talks to
-`config.yaml` and the state database directly and never makes an HTTP request at all.
+**What is not covered by `rbm`: authentication and account management.** `/auth/enroll`,
+`/auth/login` and `/auth/password` are genuinely out of scope for the engine CLI, not
+merely undocumented. They are `apps/common/auth/local`'s session/cookie/CSRF/rate-limit
+subsystem, constructed fresh inside the running web server process (the single-use
+enrollment token itself lives in that process's memory, not on disk), so there is no config
+file or already-open state database a separate `rbm` invocation could act on the way every
+command above does. An operator who never intends to use the Web UI never needs any of
+this, since the CLI talks to `config.yaml` and the state database directly and never makes
+an HTTP request at all.
 
 The one piece of it that used to need a browser no longer does. This paragraph said, for a
 long time, that provisioning the first administrator meant opening a browser at least once
@@ -620,6 +798,20 @@ exact `chmod`, and the remote delete declined because the deletion-safety delay 
 elapsed. [`docs/install.md`](docs/install.md) is the installer, and #263 carries the
 verbatim evidence.
 
+**A second machine-hour, and it is where EPIC H came from.** A 0.3.3 build was installed on
+that same UGREEN NAS and driven by hand, and everything EPIC H (#623) contains came out of
+that session rather than out of a review. That is worth reading as evidence about the method
+as much as about the release. Three of the six things it found are presentation defects that
+passed every unit test in this repository: the docked terminal rode the end of the page
+instead of the window, dark mode drew black text on every native control, and a banner had no
+way to go away. All three read correctly in the arrangement they were built in and break in
+the one an operator actually has, none would have been caught by looking harder at the code,
+and all three were obvious inside a minute of real use. The standing answer is that every one
+of those is now verified end to end in a browser against two containers on an isolated
+network, because a terminal that stays put while a page scrolls, a theme with no
+black-on-dark text anywhere and a banner that dismisses are all things a browser driving a
+real deployment can assert.
+
 **Not one of the provider acceptance procedures in
 [`docs/acceptance/`](docs/acceptance/) has been executed**, because nobody working on this
 repository has a TrueNAS, Unraid, OpenMediaVault, Synology, Proxmox VE, CasaOS, ZimaOS,
@@ -639,14 +831,14 @@ about how any of these platforms behaves.
 
 The image is published, which is the other thing this section used to deny, and the
 version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
-`ghcr.io/spdrman/backup-manager`, v0.3.0 followed them there, all three are still
-keyless-signed with the SBOM attested beside them, and `0.3.0`'s image index is
-`sha256:95e0bd37`. `0.3.3` is cut and not pushed, which is what a release looks like
+`ghcr.io/spdrman/backup-manager`, and v0.3.0, v0.3.1 and v0.3.2 followed them there, every
+one of them keyless-signed with the SBOM attested beside it. `0.3.2`'s image index is
+`sha256:e657370c`. `0.3.3` is cut and not pushed, which is what a release looks like
 between the cut and the push: `distribution/packaging/canonical.json` records
 `published: false` and `container/release-manifest.json` is back to a null `index_digest`
 and a null `registry_digest` per architecture. That flag and those digests move together,
 and a test refuses either one without the other, because a flag with no digest is a
-half-truth. So until the push lands, run 0.3.0 or build your own: every acceptance
+half-truth. So until the push lands, run 0.3.2 or build your own: every acceptance
 procedure keeps its step 0 for a deployment that cannot reach ghcr.io, and every profile
 keeps the reference substitutable.
 
@@ -664,11 +856,18 @@ version is that nobody has gone back and captured any, per provider or otherwise
 it cannot be done. Provider logos are a separate question and a trademark one, so they are
 the project owner's call rather than mine.
 
+[`docs/design/`](docs/design/) is not the exception it looks like. EPIC G designed its
+surfaces as standalone HTML mockups first, and the PNGs beside them are renders of those
+files rather than pictures of the running product. They were how the arrangement got agreed
+before anything was built, they are worth reading for that, and they are not evidence that
+any of it looks that way on a real deployment.
+
 ### What is left, and what each of them is waiting on
 
-Three epics have closed: #1, the engine itself; #81, the multi-NAS support model; and #232,
-alternative storage mediums. Three are open, and each is open for a reason worth stating
-rather than leaving to be inferred from a quiet section.
+Five epics have closed: #1, the engine itself; #81, the multi-NAS support model; #232,
+alternative storage mediums; #590, making the work visible and setup something a new operator
+can do; and #623, what running 0.3.3 on real hardware found. Three are open, and each is open
+for a reason worth stating rather than leaving to be inferred from a quiet section.
 
 **EPIC C (UGOS platform runtime boundary) and EPIC D (UGOS UPK artifact lifecycle) both
 need real UGREEN hardware and neither has had it.** #92 is the UGOS authentication and
@@ -708,13 +907,13 @@ OCI image and the same Compose topology, and the differences between them are ho
 metadata formats. `container/compose.yaml` is that topology, and
 [`docs/deployment.md`](docs/deployment.md) is the reasoning behind every setting in it.
 
-Two services, one image. `rclone-manager` runs `/backup-manager-web serve`: the core service,
-the scheduler, local authentication and `/api/v1`, in one process on one shutdown context,
-with **no published port at all**. `web-ui` runs `/backup-manager-web serve-ui`: the static
-UI plus a reverse proxy to the engine, and it is the only service with a LAN-facing port.
-They meet on a private project-scoped bridge network, which is what makes the engine's
-isolation a topology rather than a convention. `/backup-manager` (no `-web`) is the same
-image's headless binary for a deployment that wants no web listener at all.
+Two services, one image. `rclone-manager` runs `/backup-manager-web serve`: the core
+service, the scheduler, local authentication and `/api/v1`, in one process on one shutdown
+context, with **no published port at all**. `web-ui` runs `/backup-manager-web serve-ui`:
+the static UI plus a reverse proxy to the engine, and it is the only service with a
+LAN-facing port. They meet on a private project-scoped bridge network, which is what makes
+the engine's isolation a topology rather than a convention. The same image also carries
+`rbm` itself, the headless CLI, for a deployment that wants no web listener at all.
 
 ```bash
 cd container
@@ -855,7 +1054,7 @@ quarantine, and reconciliation after a crash.
 rclone:
     move bytes reliably
 
-backup-manager:
+rbm:
     decide what those bytes mean,
     when they are safe,
     when the source may be destroyed,
@@ -932,8 +1131,8 @@ does not ship.
 
 If you need to confirm what's actually registered in a built binary rather than trust this
 paragraph: `go mod why github.com/rclone/rclone/backend/crypt` shows the chain, and
-`go version -m ./backup-manager | grep rclone/rclone` reads the exact linked rclone version
-back out of a compiled binary, which is a faster sanity check than trusting whatever
+`go version -m` over the built CLI binary, piped through `grep rclone/rclone`, reads the exact
+linked rclone version back out of it, which is a faster sanity check than trusting whatever
 `core/go.mod` said at build time actually got shipped.
 
 ### Upgrading the pin
@@ -974,6 +1173,74 @@ downgraded into a weaker check. See [Verification](#verification) and
 [TOCTOU protection on delete](#toctou-protection-on-delete) below for what that means in
 practice, but the short version is: against the recommended deployment, remote deletes are
 usually refused, and that's not a bug.
+
+## Proving a connection before anything depends on it
+
+There are two connections this product relies on: the SSH connection to a backup source, and
+the connection to a storage destination. Neither may be relied on until it has been proven.
+That is one invariant, and until 0.3.3 only half of it was true, which is why it is worth a
+section of its own rather than a line in two other ones.
+
+**The destination side got there first, and had a hole in it.** `rbm medium add` has
+verified by default since #443 and the S3 wizard has kept Save disabled until the check
+comes back ok, so a destination nobody proved was something an operator had to ask for on
+purpose. Except that the check lived in two first-party clients rather than in the engine,
+so `POST /api/v1/storage-mediums` accepted an unverified destination, answered 201, and
+left nothing on any surface that could tell it apart from one checked against a real bucket
+(#636). The engine runs the check itself now, in front of every create and in front of
+every edit that changes what the destination IS (endpoint, region, bucket, prefix,
+credentials reference), and refuses with `MEDIUM_CONNECTION_NOT_PROVEN`.
+
+**The source side had none of it.** `backup-set` creation ran no check at all and had no flag
+to skip, because there was nothing to skip. The wizard was stronger and still short of it:
+Save was gated on a pinned `known_hosts` line and an imported key, which establishes the
+host's identity and says nothing about whether the key authenticates, whether the account can
+read the remote folder, or whether anything the pipeline needs actually works. And the
+six-step check that WOULD prove those things was reachable only from a backup set that
+already existed, so the order was backwards: create the set, rely on it, then find out
+(#624). The check now runs inside `CreateBackupSet` and inside any edit that changes a
+connection field, and refuses with `BACKUP_SET_CONNECTION_NOT_PROVEN`.
+
+Both halves are now spelled the same way, deliberately, rather than as two shapes for one
+idea:
+
+| | source | destination |
+|---|---|---|
+| proved on create | yes, refused on failure | yes, refused on failure |
+| proved on edit | when a connection field changes | when a connection field changes |
+| the escape hatch | `--no-verify`, `skip_connection_check` | `--no-verify`, `skip_connection_check` |
+| what the escape hatch leaves | `connection_unverified` until a check passes | `connection_unverified` until a check passes |
+| the check on its own | `rbm backup-set test-connection` | `rbm medium test-connection` |
+| the check before it exists | `POST /backup-sets/test-connection` | `rbm medium preflight --candidate` |
+
+Four things about that table are worth reading rather than skimming.
+
+**The escape hatch is an escape hatch and not a hole.** `--no-verify` has a legitimate use,
+building configuration offline against a host this machine cannot currently reach, and the
+command says in so many words that nothing was proven. What #624 and #636 added is that the
+sentence the command printed is no longer the only thing standing between an unproven
+connection and an operator who did not type it: the mark is persisted, it shows on every
+surface, and only a passing check clears it. A failing check leaves it exactly where it is.
+
+**Clearing the mark is a configuration write, so the check goes where the writes go.**
+Beside a serving engine, the check is made BY that engine, which is also what puts its
+steps on the live feed the docked terminal and `rbm activity --follow` are reading rather
+than only in the terminal that asked for it. With nothing serving, it is made in the
+invoking process against the same `config.yaml` that process would write.
+
+**The candidate forms exist so a setup flow can prove something before writing it down.**
+Neither of them writes anything whatever the report says, which is what lets the wizards gate
+Save on a real result rather than on the operator's confidence.
+
+**One thing this cannot prove, on either side.** A check is a statement about the moment it
+ran. A key rotated an hour later, a bucket policy narrowed next week, a host rebuilt with a
+new key: none of those is visible here, and the product's answer to all three is the same one
+it gives everywhere else, which is to refuse the next operation rather than to assume the
+last check still holds.
+
+[Proving a medium before a real backup depends on it](#proving-a-medium-before-a-real-backup-depends-on-it)
+is the destination half in full, including what each of its steps costs and the two things it
+cannot answer.
 
 ## An artifact is identified by its basename, and that has a consequence
 
@@ -1163,10 +1430,10 @@ right now, for every scenario FR-17 names:
 | changed identity | final | delete pending    | refuse delete; investigate         |
 
 The last two rows are why `QUARANTINED_LOST` exists: the original FR-17 table had no row
-for "remote already gone and the local copy is bad," and that case can't be treated the same
-as "remote still there, local copy is bad," because there's nothing left to re-fetch from.
-Every reconciliation transition is idempotency-keyed so a crash mid-reconciliation is safe
-to retry. `backup-manager reconcile` runs it for every configured backup set, and `run` and
+for "remote already gone and the local copy is bad," and that case can't be treated the
+same as "remote still there, local copy is bad," because there's nothing left to re-fetch
+from. Every reconciliation transition is idempotency-keyed so a crash mid-reconciliation is
+safe to retry. `rbm reconcile` runs it for every configured backup set, and `run` and
 `daemon` run it for each backup set before touching that set (`core/internal/app/cycle.go`
 is the ordering).
 
@@ -1192,16 +1459,16 @@ phases, and the crash harness cannot spell a phase at all.
 Quarantine is a state, not a place. There is no quarantine directory and no file gets
 moved; only the `artifacts.state` column changes, to `QUARANTINED` or `QUARANTINED_LOST`.
 The file stays exactly where it was, its `.partial` path if quarantined before commit, or
-its final committed path if quarantined afterward by reconciliation. See
-[The lifecycle](#the-lifecycle) above for the states themselves. `core/internal/quarantine`
-turns those rows into a countable, actionable picture, and `backup-manager quarantine` is
-how an operator acts on one by hand, in one of three ways (issue #277):
+its final committed path if quarantined afterward by reconciliation. See [The
+lifecycle](#the-lifecycle) above for the states themselves. `core/internal/quarantine`
+turns those rows into a countable, actionable picture, and `rbm quarantine` is how an
+operator acts on one by hand, in one of three ways (issue #277):
 
 - `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-copy checks and
   reports the verdict, moving nothing either way. Where the durable copy is an object on a
   storage medium rather than a local file, that is where it looks (issue #435), at the
   strongest verification class that costs nothing. **This is not `validate` under
-  a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
+  a new name.** `rbm validate` only ever re-checks a *healthy* restore point
   (`COMMITTED`, `REMOTE_DELETE_PENDING`, `COMPLETE` or `REMOTE_RETAINED`) and refuses a
   `QUARANTINED` or `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
   only ever accepts one of those two.
@@ -1269,8 +1536,8 @@ sources:
 scalars is refused, not merged: `daily_days: 120` on its own would resolve weekly and
 monthly to the product defaults (3 and 12) rather than to the 24 and 60 three lines up the
 file, which is a set retaining four years less than the operator who wrote the deployment's
-policy believes. So a set-level block names either a `tiers:` list or all three scalars, and
-`backup-manager check` says which one is missing if it does not.
+policy believes. So a set-level block names either a `tiers:` list or all three scalars,
+and `rbm check` says which one is missing if it does not.
 
 **Everything that is not the chain is inherited.** `timezone`, `week_starts_on` and
 `protect_last_known_good` come from the deployment's resolved policy when the set-level
@@ -1285,29 +1552,28 @@ it, `retention: null`, `retention: ~`). An empty block (`retention: {}`) is refu
 than read as either, because "wrote nothing" and "wrote an empty policy" should not resolve
 to the same thing.
 
-`backup-manager retention` marks a set that decides for itself and names the chain it
-decided with; a set with no marker inherited the deployment's. The
-`backup-manager retention` override flags (`-tier`, `-daily-days` and the rest) override
-the *deployment's* policy for that one invocation, so they move every inheriting set and
-leave a set that declares its own alone.
+`rbm retention` marks a set that decides for itself and names the chain it decided with; a
+set with no marker inherited the deployment's. The `rbm retention` override flags (`-tier`,
+`-daily-days` and the rest) override the *deployment's* policy for that one invocation, so
+they move every inheriting set and leave a set that declares its own alone.
 
 **None of this needs a config-file edit any more (issue #333).** The three operations are
 show, set and clear, and they are the same three on every surface:
 
 ```bash
-backup-manager backup-set retention production/scratch-analytics
+rbm backup-set retention production/scratch-analytics
 # which policy is in force, where it came from, and (for a set that overrides)
 # the deployment's policy beside it, so you can see what clearing returns you to
 
-backup-manager backup-set retention production/scratch-analytics \
+rbm backup-set retention production/scratch-analytics \
     --daily-days 3 --weekly-months 1 --monthly-months 1
 
-backup-manager backup-set retention production/scratch-analytics --policy-file ./policy.yaml
+rbm backup-set retention production/scratch-analytics --policy-file ./policy.yaml
 # the contents of a retention: block, key omitted; the only way to name a tiers chain,
 # because a compact command-line grammar for one would be a second spelling of something
 # this project already spells exactly one way. "-" reads standard input.
 
-backup-manager backup-set retention production/scratch-analytics --inherit
+rbm backup-set retention production/scratch-analytics --inherit
 # back to the deployment's policy, with no residue of the chain it declared
 ```
 
@@ -1439,16 +1705,16 @@ when it first saw the file. (Note that the recovery sidecar's own `received_time
 is a different instant: that one is when the artifact finished committing locally. The
 field matching the discovery timestamp is `retention_timestamp`.)
 
-Two ways to see what a policy would do before it does it:
-`backup-manager retention --dry-run`, over every configured set or over the one you name
-(`backup-manager retention <source/backup-set> --dry-run`, which refuses an id that names
-no configured set rather than answering about a different one), and which also takes
-per-run overrides for the timezone, the week start and each tier so you can compare
-policies without editing config; and
-`GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
-counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
+Two ways to see what a policy would do before it does it: `rbm retention --dry-run`, over
+every configured set or over the one you name (`rbm retention <source/backup-set>
+--dry-run`, which refuses an id that names no configured set rather than answering about a
+different one), and which also takes per-run overrides for the timezone, the week start and
+each tier so you can compare policies without editing config; and `GET
+/api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
+counterpart refuses a plan that has gone stale rather than silently recomputing a wider
+one.
 
-And one way to make it happen from a terminal: `backup-manager retention apply
+And one way to make it happen from a terminal: `rbm retention apply
 <source/backup-set> --acknowledge` (issue #602). It prints the plan it is about to apply,
 applies exactly that plan through the same preview/apply pair the API uses, and refuses
 with nothing deleted if the set's inventory, configuration or civil date moved in between.
@@ -1514,6 +1780,60 @@ tier in chain order that currently selects it**, which gives chain order a secon
 order still never changes WHICH artifacts are kept, because `KEEP` is the union of every
 tier's selections, but it now decides WHERE a multiply-selected one lives.
 
+### The local drive is a destination too, and one destination is the default
+
+Until #622 the local backup root was not a destination on any surface. It was what a tier
+meant when it named nothing, so the settings card listed declared S3 mediums only, the one
+destination every deployment actually has appeared nowhere, and the only way to point a
+retention tier at a bucket was to edit `config.yaml` by hand. Three things changed.
+
+**The local drive has an entry, and it has a real connection test.** The argument against
+one was that no network is involved so there is nothing to test, and that is wrong in the
+way that matters: a local destination breaks in exactly the shapes a remote one does, minus
+the credential. The path can be gone, which is what an unmounted NAS volume looks like
+right up to the first write. It can be there and unwritable by the uid this service runs
+as, which is what a bind mount owned by the host user looks like. The filesystem can be
+full, which is the one failure that arrives while everything is configured perfectly. `rbm
+medium test-connection local` reports those as three different problems, because they have
+three different fixes, and it reports them in the same shape an S3 check reports, so one
+renderer draws both. Where a step cannot mean anything locally it is SKIPPED rather than
+quietly passed: `credentials` because a directory reads none, `storage_class` because a
+filesystem has no classes.
+
+**A retention tier picks its destination from a picker, in both places a tier is edited**,
+in global settings and in a backup set's own custom retention policy. `rbm settings patch
+--tier-medium NAME=MEDIUM_ID` is the command that picker echoes, and it points one tier and
+leaves the rest of the chain exactly as it is; `MEDIUM_ID` is a declared destination or
+`local`, which is how a tier comes back. Sending a tier somewhere other than local for the
+first time needs `--acknowledge-medium-disclosure`, and without it the refusal carries the
+disclosure rather than only naming the flag.
+
+**One destination is the default, and it governs exactly one thing:** where a NEWLY CREATED
+retention tier starts. It never moves a backup that is already somewhere, and a tier that
+already names a destination goes on naming it, which is what makes moving the default safe
+to put behind one click. `rbm medium default <medium-id>` moves it, `local` is a legal id
+there, so a deployment that has chosen a bucket can go back. Three invariants hold the set
+together and all three are enforced in the engine rather than only in the picker: the
+default cannot be removed, there are never zero destinations (which the local entry makes
+mostly self-enforcing, though the rule is stated and tested rather than left as a side
+effect), and a removal that would leave exactly one makes that one the default. The
+pre-existing refusal stands beside them rather than being replaced: a destination any copy
+still names is refused with `MEDIUM_IN_USE`, and `GET /storage-mediums/{id}/usage` lists
+what is on it. The two refusals want different fixes, which is why they are two codes:
+`MEDIUM_IS_DEFAULT` means move the default first, and nothing is necessarily stored there.
+
+The FR-35 promise survives all of it, and the mechanism is worth knowing because it is the
+same one twice. `medium: undefined` on a tier still means the local backup root, and empty is
+still the ONLY spelling of local: `default_storage_medium: local` is REFUSED rather than
+accepted as a synonym. That is not pedantry. `core/service` rewrites the whole `Config` on
+every settings save, so a resolved value written back into the struct would inject a key into
+the configuration of a deployment that never chose one, and a build from before the feature
+refuses an unknown key outright. So the resolution lives in an accessor
+(`Config.EffectiveDefaultStorageMedium`, `RetentionTier.EffectiveMedium`) and never in the
+file. A value naming no declared destination is a validation error rather than a quiet
+fall-back to local, because silently starting a new tier somewhere other than where the
+operator wrote is the wrong direction on the one decision the field exists to make.
+
 ### The verification ladder, and why it is not a boolean
 
 Off local disk, "is this copy good" stops being one question with one answer. Reading a
@@ -1563,12 +1883,12 @@ flight has none, and neither does a copy this deployment has released. That is w
 surface tell "there is no copy here" apart from "there is a copy here nobody can confirm",
 which is what the access and verification-class fields are for.
 
-`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
-with its location, status, access, storage class, the class it was verified as and when,
-the class it could be checked at right now, and whether reading it back is billed. It
-prints nothing at all when the artifact has one ordinary local copy and nothing else, which
-is every artifact in every deployment that has not configured a medium. Over HTTP the same
-facts are on the artifact surface rather than on a route of their own.
+`rbm artifacts <source/backup-set/name>` prints a `copy:` block per placement with its
+location, status, access, storage class, the class it was verified as and when, the class
+it could be checked at right now, and whether reading it back is billed. It prints nothing
+at all when the artifact has one ordinary local copy and nothing else, which is every
+artifact in every deployment that has not configured a medium. Over HTTP the same facts are
+on the artifact surface rather than on a route of their own.
 
 ### Moving a copy is three phases and a journal
 
@@ -1618,8 +1938,8 @@ content-verified for the whole copy phase, so the staging file is never itself a
 
 Every reason a move did not happen is visible without reading logs: a cycle in which
 artifacts were due to move and none arrived says so on the last-run panel, in the operation
-record the activity feed reads, in the FR-23 event stream under `op=move`, and in
-`backup-manager run`'s exit status, which becomes 1 with the reason on stderr.
+record the activity feed reads, in the FR-23 event stream under `op=move`, and in `rbm
+run`'s exit status, which becomes 1 with the reason on stderr.
 
 ### Archive classes, and asking for a copy back
 
@@ -1647,7 +1967,7 @@ you want if you already hold objects on `DEEP_ARCHIVE`, because the manager can 
 and restore them and will never write there.
 
 ```bash
-backup-manager restore production/postgres/backup.dump --medium offsite_s3 --days 7 --acknowledge
+rbm restore production/postgres/backup.dump --medium offsite_s3 --days 7 --acknowledge
 ```
 
 `--acknowledge` is required rather than a `--force` to skip, which is the opposite way
@@ -1677,16 +1997,16 @@ disk: a wrong region, a bucket that is not there, a credentials file the daemon 
 read, a policy that denies `PutObject`, every one of them discovered by the operation that
 needed it to work.
 
-`backup-manager medium preflight <medium-id>` (and the button beside the medium on the
-settings form, and `POST /api/v1/storage-mediums/{id}/preflight`) is
-`core/internal/mediumcheck`, and it does what a move needs rather than what feels like
-enough: credentials and reach answered separately, because obtaining a credential is a
-question for the host and reaching a bucket with it is a question for the provider, then
-deliverable, write, read back byte for byte, the storage class the endpoint really reports
-against the one the configuration claims, the declared verification class asked live, and
-the probe object confirmed deleted. An archive class is refused at `deliverable` with
-nothing written at all, because an object there is billed for a minimum duration measured
-in months and that is not a thing to discover empirically.
+`rbm medium preflight <medium-id>` (and the button beside the medium on the settings form,
+and `POST /api/v1/storage-mediums/{id}/preflight`) is `core/internal/mediumcheck`, and it
+does what a move needs rather than what feels like enough: credentials and reach answered
+separately, because obtaining a credential is a question for the host and reaching a bucket
+with it is a question for the provider, then deliverable, write, read back byte for byte,
+the storage class the endpoint really reports against the one the configuration claims, the
+declared verification class asked live, and the probe object confirmed deleted. An archive
+class is refused at `deliverable` with nothing written at all, because an object there is
+billed for a minimum duration measured in months and that is not a thing to discover
+empirically.
 
 `medium add` has verified by default since #443 and the wizard's Save button has been
 gated on the same check, and until #636 that was the whole of it: the check lived in two
@@ -1755,12 +2075,12 @@ rclone version is embedded) and backup-set health, one of four states:
 - **FAILING** – checked first, unconditionally: any `QUARANTINED_LOST` artifact, or a
   `FAILED` artifact with no retry scheduled.
 
-`backup-manager status` renders all of it, including the `QuarantinedCount` and
-`QuarantinedLostCount` aggregates FR-24 asks for, and exits non-zero unless every configured
-set reports HEALTHY, which is what makes it the container healthcheck the image bakes in
-rather than only something to read. It is deliberately not what any container START waits on:
-a fresh install has backed nothing up, so the verdict is negative and gating on it would keep
-the web UI from ever coming up. The packaged runtime definitions ask `/health/live` for that
+`rbm status` renders all of it, including the `QuarantinedCount` and `QuarantinedLostCount`
+aggregates FR-24 asks for, and exits non-zero unless every configured set reports HEALTHY,
+which is what makes it the container healthcheck the image bakes in rather than only
+something to read. It is deliberately not what any container START waits on: a fresh
+install has backed nothing up, so the verdict is negative and gating on it would keep the
+web UI from ever coming up. The packaged runtime definitions ask `/health/live` for that
 instead. The API side is `GET /health/live` and `GET /health/ready` on the engine,
 deliberately outside `/api/v1` and outside authentication. What does not exist is a
 `/metrics` endpoint, as [Status](#status-what-actually-runs-today) says above.
@@ -1777,7 +2097,7 @@ This is the section to read under pressure. The fuller version, with more of the
 branches, is [`docs/recovery.md`](docs/recovery.md); this is the part you shouldn't have to
 click through to get.
 
-Start with `backup-manager status --config <path>` and `backup-manager artifacts --config
+Start with `rbm status --config <path>` and `rbm artifacts --config
 <path> --backup-set <source/backup-set>`, which is faster than a query and does not need you
 to know the schema. The set name on its own works too, as long as only one source configures
 it: where two hosts follow one naming convention, name the whole id, since the same name
@@ -1804,20 +2124,19 @@ already has, and a read-only backup set working exactly as declared reaches it a
 reaches `COMPLETE` at all. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`,
 `QUARANTINED`, `QUARANTINED_LOST`, or any `.partial` file you find sitting on disk
 regardless of what the journal says, is not a restore point. Take the newest row in one of
-the four good states;
-its `local_path` is the file, already fsynced and atomically committed (see
-[Durable commit](#durable-commit)). Copy it wherever you're restoring to. Nothing here
-copies it back for you and nothing is meant to: restore execution is out of scope, so the
-last step is yours. `backup-manager restore` is a different thing despite the name, and the
-next paragraph is when you need it.
+the four good states; its `local_path` is the file, already fsynced and atomically
+committed (see [Durable commit](#durable-commit)). Copy it wherever you're restoring to.
+Nothing here copies it back for you and nothing is meant to: restore execution is out of
+scope, so the last step is yours. `rbm restore` is a different thing despite the name, and
+the next paragraph is when you need it.
 
-**If the copy is not on local disk, find out where it is before planning anything.**
-`backup-manager artifacts <source/backup-set/name>` prints a `copy:` block per placement
-(nothing at all when the only copy is an ordinary local file, so silence here is an
-answer). Read `access` first: `immediate` means read it now, `requires_restore` means the
-copy is on an archive class and is durable, intact and hours away, `restoring` means
-somebody already asked, and `unreachable` means the medium did not answer, which is a
-different problem from the copy being gone. For `requires_restore`, `backup-manager restore
+**If the copy is not on local disk, find out where it is before planning anything.** `rbm
+artifacts <source/backup-set/name>` prints a `copy:` block per placement (nothing at all
+when the only copy is an ordinary local file, so silence here is an answer). Read `access`
+first: `immediate` means read it now, `requires_restore` means the copy is on an archive
+class and is durable, intact and hours away, `restoring` means somebody already asked, and
+`unreachable` means the medium did not answer, which is a different problem from the copy
+being gone. For `requires_restore`, `rbm restore
 <source/backup-set/artifact> --medium M --days N --acknowledge` asks the provider to make it
 readable again; it is billed, it takes hours, and there is no progress number because S3
 does not serve one. See
@@ -1832,19 +2151,20 @@ needs the data, not as something to retry.
 If the newest row is `FAILED`: an attempt did not finish, which is a different finding from
 quarantine. Quarantine is a positive statement about the content; `FAILED` is a statement
 about the mechanics of an attempt, and health treats a `FAILED` artifact with no retry
-scheduled as `FAILING`. `backup-manager retry <source/backup-set/artifact> [--note T]` puts
-it back into the pipeline. Nothing does that automatically, deliberately: a blind
-re-transfer of gigabytes for a cause nothing has classified is a cost this manager will not
-take on its own, so somebody has to look first and then say so.
+scheduled as `FAILING`. `rbm retry <source/backup-set/artifact> [--note T]` puts it back
+into the pipeline. Nothing does that automatically, deliberately: a blind re-transfer of
+gigabytes for a cause nothing has classified is a cost this manager will not take on its
+own, so somebody has to look first and then say so.
 
-If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this can self-heal.
-`backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
+If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this can
+self-heal. `rbm reconcile` and the next `run` or `daemon` cycle against that backup set are
 what try automatically. To act on it yourself right now, without waiting for a cycle, see
 [Quarantine](#quarantine) above: `quarantine revalidate <source/backup-set/artifact>`
-re-checks the durable copy, wherever it is, and reports the verdict without moving anything,
-`quarantine retry` re-enters the pipeline from a fresh fetch, and `quarantine reinstate`
-trusts the local copy again in place. (`backup-manager validate` is a different command: it
-only ever re-checks a *healthy* restore point and refuses a `QUARANTINED` artifact outright.)
+re-checks the durable copy, wherever it is, and reports the verdict without moving
+anything, `quarantine retry` re-enters the pipeline from a fresh fetch, and `quarantine
+reinstate` trusts the local copy again in place. (`rbm validate` is a different command: it
+only ever re-checks a *healthy* restore point and refuses a `QUARANTINED` artifact
+outright.)
 
 If a row has been sitting at `REMOTE_DELETE_PENDING` for longer than you'd expect, look at
 its `remote_delete_error` column before assuming something is stuck. Given the deployment
@@ -1855,9 +2175,9 @@ just not pruned. Left unattended, that also means the remote source disk isn't b
 freed by this project on that backup set; monitor it directly rather than assuming pruning
 is happening in the background.
 
-If the state database itself is gone or corrupt, `backup-manager catalog rebuild --dry-run`
-reports what it could reconstruct from the sidecar recovery manifests sitting next to the
-committed artifacts, and dropping `--dry-run` does it.
+If the state database itself is gone or corrupt, `rbm catalog rebuild --dry-run` reports
+what it could reconstruct from the sidecar recovery manifests sitting next to the committed
+artifacts, and dropping `--dry-run` does it.
 
 ## Toolchain
 
@@ -2117,6 +2437,26 @@ which side of the package clause it sits on, because a `//go:build` line is a co
 scanner and a build constraint to the toolchain: a header moved across one changes which
 platforms compile the file while the token stream stays byte-identical.
 
+**And the performance baseline is a fourth version of the same shape, found in #635.** The
+gate runs `scripts/perf/check-baseline.sh` without `--compare`, so its step asks whether a
+complete baseline exists for the designated benchmark host and whether its own failure path
+still works. It compares nothing to it. That is the right arrangement, because a comparison
+needs a freshly captured candidate and the timing half of one is measured badly on a machine
+simultaneously running the rest of this script, but it means six of the seven metrics are
+enforced only when somebody chooses to capture. Nobody had for a while, and by the time
+anybody looked, `image_size_bytes` had drifted 1.59x against a `max_ratio` of 1.05 on a tree
+where nothing recently did anything of the sort. A gate nobody has run in a while is not the
+same as a gate that passes, and the first person to find that out should not be finding it
+out mid-release.
+
+The seventh metric is the one that needed no quiet machine, so it stopped waiting for one.
+`image_size_bytes` is enforced on every full run by `apps/generic/tests/dockercli`'s
+`TestTheBuiltImageIsInsideTheRecordedSizeBudget`, in a package that already builds the image,
+and the gate's own step label names it rather than leaving the ledger to say "baseline
+present" (#643). The baseline itself was re-captured on the pinned host, which is a
+measurement rather than an edit: `check-baseline.sh` refuses a record captured anywhere else,
+on the grounds that comparing across machines reports the machine rather than the change.
+
 ### Which tier a test belongs on
 
 Which tests get a container is a rule, not a habit (#447). A test belongs to the tier of
@@ -2207,15 +2547,15 @@ with whatever failed. `.husky/pre-commit` allows 3 and says so out loud, so the 
 iteration loop still commits; nothing that merges on this gate's word may accept anything
 but 0.
 
-Playwright e2e used to be the qualification on `ok`: it was not in the gate at all, so
-`ok` meant every check the gate invoked, which did not include the browser. It is in the
-gate now (#197), from outside the repository. The suite moved to
+Playwright e2e used to be the qualification on `ok`: it was not in the gate at all, so `ok`
+meant every check the gate invoked, which did not include the browser. It is in the gate
+now (#197), from outside the repository. The suite moved to
 [`spdrman/rclone-manager-tests`](https://github.com/spdrman/rclone-manager-tests) in #158,
 and a non-FAST run checks that repository out at the sha in `scripts/e2e/tests-repo.pin`
 and runs two things against the working tree: its CLI contract smoke slice, 55 black-box
-cases against a `backup-manager` built from this tree, and its browser suite, 165 tests
-against this tree's `ui/shared`. About half a minute together. A red spec exits nonzero,
-this script is `set -e`, so the commit is refused.
+cases against an `rbm` built from this tree, and its browser suite, 165 tests against this
+tree's `ui/shared`. About half a minute together. A red spec exits nonzero, this script is
+`set -e`, so the commit is refused.
 
 On a machine with no Playwright browser the step refuses and names the install command;
 `CI_LOCAL_SKIP_E2E=1` is the out-loud opt-out that ledgers the skip, so that run ends
@@ -2302,7 +2642,7 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 ```text
 core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
-  apiclient/     the CLI's client for a running engine's own /api/v1 (built, and no command calls it yet)
+  apiclient/     the CLI's client for a running engine's own /api/v1, which nine invocations now reach it through
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
@@ -2422,6 +2762,8 @@ lives here instead; nothing in the design depended on the location.
 - [`distribution/README.md`](distribution/README.md) – the distribution layer: what makes an adapter an adapter, and where the rest of that layer still lives
 - [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
 - [`docs/compliance/`](docs/compliance/) – the store-facing compliance materials: privacy policy, support, and the written offer of source
+- [`docs/compliance/bundled-icon-artwork.md`](docs/compliance/bundled-icon-artwork.md) – the Font Awesome Free artwork this UI draws, and the CC BY 4.0 attribution using it requires
+- [`docs/compliance/bundled-webfonts.md`](docs/compliance/bundled-webfonts.md) – the IBM Plex faces served from the image, which weights ship and why, and the SIL OFL 1.1 terms that travel with them
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
 - [`docs/EPIC-B-multi-nas.md`](docs/EPIC-B-multi-nas.md) – the multi-NAS provider architecture, the support tiers, and the Phase 6 refactor
 
