@@ -172,13 +172,13 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
           <div><span class="t">14:01:49</span> <span class="src">[api-server/var-backups]</span> <span class="g">verified dpkg.status.2.gz (md5 matched source)</span></div>
           <div><span class="t">14:01:52</span> <span class="src">[api-server/var-backups]</span> <span class="g">committed dpkg.status.2.gz</span></div>
           <div><span class="t">14:02:04</span> <span class="src--you">[you]</span> <span class="i">Test connection &#8594; cicd-pipeline / var-backups</span></div>
-          <div><span class="t">14:02:04</span> <span class="src--you">[you]</span> <span class="gap"># no backup-manager equivalent yet &#183; POST /api/v1/backup-sets/test-connection</span></div>
+          <div><span class="t">14:02:04</span> <span class="src--you">[you]</span> <span class="gap"># no rbm equivalent yet &#183; POST /api/v1/backup-sets/test-connection</span></div>
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">refused: host key for 10.0.0.14:22 does not match known_hosts</span></div>
           <div><span class="t">14:02:06</span> <span class="src--you">[you]</span> <span class="e">  offered SHA256:aTx9&#8230; recorded SHA256:pQ71&#8230; &#183; nothing was changed</span></div>
           <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="i">Saved stale_after on api-server / var-backups</span></div>
           <div><span class="t">14:02:11</span> <span class="src--you">[you]</span> <span class="prompt">$</span> <span class="cmd">rbm backup-set patch api-server/var-backups --stale-after 48h</span></div>
           <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="i">Run all due sets &#8594; accepted as operation op_4d19</span></div>
-          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap"># no backup-manager equivalent yet &#183; POST /api/v1/operations run_cycle</span></div>
+          <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap"># no rbm equivalent yet &#183; POST /api/v1/operations run_cycle</span></div>
           <div><span class="t">14:02:19</span> <span class="src--you">[you]</span> <span class="gap">#   `rbm run` starts a cycle in your shell, not in this engine</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="w">validation failed: dpkg.status.1.gz (md5 differs from source)</span></div>
           <div><span class="t">14:02:20</span> <span class="src">[cicd-pipeline/var-backups]</span> <span class="e">quarantined: dpkg.status.1.gz</span></div>
@@ -199,7 +199,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     </p>
     <p class="caption" style="margin-top:var(--space-3)">
       <strong>And every action names the command that would have done the same thing.</strong> The
-      <code>$</code> lines are copy-pasteable <code>backup-manager</code> invocations, built from the very
+      <code>$</code> lines are copy-pasteable <code>rbm</code> invocations, built from the very
       request the browser sent, so a new operator learns the CLI by using the UI and a support conversation
       gets commands instead of a description of which buttons were pressed. The <code>#</code> lines are the
       point rather than an omission: an action with no command to name is a CLI parity gap, and this makes it

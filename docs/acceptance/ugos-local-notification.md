@@ -34,7 +34,7 @@ narrow, and so nobody executes it expecting it to prove more than it does.
 ## What this procedure decides
 
 One question: does a UGOS `Notifier` implementation actually put a
-backup-manager alert in front of an administrator who is not looking at
+rclone-manager alert in front of an administrator who is not looking at
 the app, and does it survive the conditions that matter (app in the
 background, browser closed, container restarted)?
 
@@ -151,7 +151,7 @@ notification actually appeared, where, and for whom.
 
 Repeat step 1 under each of these, one at a time:
 
-1. The backup-manager UI closed, no browser open to the NAS at all.
+1. The rclone-manager UI closed, no browser open to the NAS at all.
 2. The administrator logged out of UGOS.
 3. Immediately after an engine container restart.
 4. On a second administrator account that never opened the app.

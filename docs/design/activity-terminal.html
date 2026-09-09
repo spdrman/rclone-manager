@@ -194,7 +194,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     <h1 style="margin-top:var(--space-4)">The terminal, docked to the bottom of every page</h1>
     <p class="sub">Every line above belongs to one set. These belong to none of them, and this is the only
       place they appear: a cycle&#8217;s own brackets, a capacity check, an error nothing could attribute, and
-      every action somebody took in the browser with the <code>backup-manager</code> command that would have
+      every action somebody took in the browser with the <code>rbm</code> command that would have
       done the same thing. Copy it, save it, or filter it to the commands and save a script of what you just
       did.</p>
   </div>
@@ -217,11 +217,11 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div><span class="t">00:17:02</span> <span class="g">[you]</span> <span class="i">patch /backup-sets/{source}/{set}</span></div>
       <div><span class="i">$ rbm backup-set patch cicd-pipeline/var-backups --stale-after 48h</span></div>
       <div><span class="t">00:17:14</span> <span class="g">[you]</span> <span class="i">post /backup-sets/test-connection</span></div>
-      <div><span class="i"># no backup-manager equivalent yet · POST /api/v1/backup-sets/test-connection</span></div>
+      <div><span class="i"># no rbm equivalent yet · POST /api/v1/backup-sets/test-connection</span></div>
       <div><span class="i">#   there is no verb that tests a connection on its own</span></div>
       <div><span class="t">00:17:31</span> <span class="w">[admin]</span> <span class="w">post /operations refused: DESTRUCTIVE_OPERATIONS_DISABLED</span></div>
       <div><span class="w">  destructive operations are disabled until the trusted-proxy gate has been verified · nothing was changed</span></div>
-      <div><span class="i"># no backup-manager equivalent yet · POST /api/v1/operations</span></div>
+      <div><span class="i"># no rbm equivalent yet · POST /api/v1/operations</span></div>
       <div><span class="i">#   `rbm run` starts a cycle in your own shell, not in this engine</span><span class="cur"></span></div>
     </div>
   </section>

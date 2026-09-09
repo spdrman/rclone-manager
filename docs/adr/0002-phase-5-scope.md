@@ -76,9 +76,9 @@ the property a snapshot-based recovery story needs, and it required no new code 
 
 **Recommendation: not now, and not really this codebase's to build.** The actionable
 version of this candidate is operational guidance (point the configured local backup root
-at a snapshot-capable volume, schedule snapshots independently of `backup-manager`), which
+at a snapshot-capable volume, schedule snapshots independently of `rclone-manager`), which
 belongs in deployment documentation, not in `internal/`. Revisit only if a requirement
-appears for `backup-manager` itself to trigger a snapshot (e.g. shell out to a NAS vendor
+appears for `rclone-manager` itself to trigger a snapshot (e.g. shell out to a NAS vendor
 API right after a `COMPLETE` transition). At that point the trigger, the specific
 snapshot mechanism, and its failure modes all need to be named before it's a design, not
 just a feature checkbox.

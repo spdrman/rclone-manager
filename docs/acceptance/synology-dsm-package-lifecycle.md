@@ -131,11 +131,11 @@ A result on one architecture says nothing about the other.
    ```sh
    ls -l /var/packages/BackupManager/target/bin/
    ```
-   Expect `backup-manager` and `backup-manager-web`, both executable.
+   Expect `rbm` and `rbm-web`, both executable.
 6. Confirm the packaged binaries are byte-identical to the release ones:
    ```sh
-   sha256sum /var/packages/BackupManager/target/bin/backup-manager \
-             /var/packages/BackupManager/target/bin/backup-manager-web
+   sha256sum /var/packages/BackupManager/target/bin/rbm \
+             /var/packages/BackupManager/target/bin/rbm-web
    ```
    Compare against `container/release-manifest.json` for this
    architecture. This is acceptance criterion "SPK contains the exact
@@ -203,7 +203,7 @@ worker, and it is the difference between "the resource spec is wrong" and
 8. Record the uid the daemons actually run as, and whether they could
    write at all:
    ```sh
-   ps -eo user,pid,args | grep backup-manager-web
+   ps -eo user,pid,args | grep rbm-web
    ls -ln /var/packages/BackupManager/var/log/engine.log \
           /var/packages/BackupManager/var/run/engine.pid
    ```
@@ -217,7 +217,7 @@ worker, and it is the difference between "the resource spec is wrong" and
    sudo reboot
    # after it comes back, before touching anything else:
    cat /var/packages/BackupManager/var/run/engine.pid
-   ps -eo pid,args | grep backup-manager-web
+   ps -eo pid,args | grep rbm-web
    ```
    `var/` survives a reboot, so the pid file that comes back names the
    pid space that existed before it. Expect: Package Center shows the

@@ -64,7 +64,7 @@ asks for a URI to the licence rather than for its text.
 The licence text reaches the image through `ui/shared/public/`, which Vite
 copies into every bundle, rather than through a `COPY` line in
 `container/Dockerfile`. That is deliberate: the image carries six copies
-of the bundle (one compiled into `backup-manager-web`, five under
+of the bundle (one compiled into `rbm-web`, five under
 `/ui/bundles` for the adapters that have no other carrier), and a
 Dockerfile line would have put the licence beside one of them.
 
@@ -114,7 +114,7 @@ measured rather than derived. The built bundle grew from 538,914 bytes to
 `container/Dockerfile` on the same host, one either side of the change,
 put the image at 68,502,297 and 69,366,042 bytes, so the change costs
 863,745: about 730 KB in the `/ui/bundles` layer for the five adapter
-bundles and about 130 KB in `backup-manager-web` for the one compiled into
+bundles and about 130 KB in `rbm-web` for the one compiled into
 the binary. The complete faces rather than the Latin1 subsets would have
 been roughly three times that, about 2.5 MB, against 2,084,902 bytes of
 headroom in the last recorded measurement. So the subsetting is what keeps

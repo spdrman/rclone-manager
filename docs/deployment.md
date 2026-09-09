@@ -5,25 +5,34 @@ This documents the container packaging for `core/cmd/backup-manager` (A3.9): wha
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
-## The command is `rbm`, and `backup-manager` still works
+## The command is `rbm`, and `backup-manager` stops working
 
 0.3.3 renamed the command an operator types. The engine CLI is `rbm` and the web host is
 `rbm-web`, and inside the image those are the two real binaries at `/rbm` and `/rbm-web`.
 Everything in this file, in `container/compose.yaml` and in every adapter now names them.
 
-Nothing you already run breaks. `/rbm` and `/rbm-web` are still
-there and still resolve, as symlinks to the two binaries above, so an existing compose
-file, `docker run` line, cron entry or wrapper script keeps working with no edit at all.
-Upgrading to 0.3.3 is a tag bump and nothing else. `container/Dockerfile` carries the
-reasoning under "THE OLD NAMES", including why they are links rather than a second copy:
-two more copies of roughly 64 MB of Go binary would fail the image-size gate #643 added
-on the first run, and the distroless runtime has no shell to make the links in, so they
-are made in a builder stage and copied in.
+Read the next sentence before you bump the tag, because things you already run do break.
+0.3.3 is a clean cut: `/backup-manager` and `/backup-manager-web` are not in an image
+built from 0.3.3 onwards, as files or as links or as anything else, so a compose file,
+`docker run` line, `docker exec`, cron entry or wrapper script naming either one stops
+working the moment the tag moves. Move each of them onto `rbm` or `rbm-web` in the same
+change as the bump. `container/Dockerfile` says the same from the image's side, under
+"THE BINARY NAMES".
 
-One thing to know if you script against the image rather than run it: `docker cp` copies
-a symlink as a symlink unless you pass `-L`, so anything pulling the binaries OUT of the
-image has to name `/rbm` and `/rbm-web`. `scripts/release/record-release-hashes.sh` and
-`scripts/release/verify-manifest-parity.sh` both do.
+Mixing the two halves is the failure worth naming, because it reads like a broken image
+rather than a version mistake. `/rbm` and `/rbm-web` exist in images built from 0.3.3
+onwards and in no image published before it, and 0.3.0, 0.3.1 and 0.3.2 are all still on
+the registry, so pointing a 0.3.3 compose file at one of those gives you two containers
+that die with `exec /rbm-web: no such file or directory`. Use the compose file that
+shipped with the version you are installing. `scripts/install/install_docker_host.py`
+refuses `--release` below 0.3.3 for exactly that reason, so the one path that could have
+produced that combination on its own no longer can.
+
+One thing to know if you script against the image rather than run it: `/rbm` and
+`/rbm-web` are the only executables in there, so anything pulling the binaries OUT of the
+image has those two names and nothing else to choose from. Both
+`scripts/release/record-release-hashes.sh` and `scripts/release/verify-manifest-parity.sh`
+name them directly.
 
 What did NOT change is everything that names the project rather than the command: the
 image reference `ghcr.io/spdrman/backup-manager`, the `rclone-manager` and `web-ui`
@@ -70,9 +79,8 @@ $ echo $?
 
 Exit 1 means zero matches, checked case-insensitively against the full file listing of
 the exported image filesystem (1447 entries: the distroless base's certs/tzdata/passwd
-plus exactly one executable, `/rbm`, which 0.3.3 renamed to `/rbm`).
-There's no file named `rclone`, no
-`rclone` directory, nothing.
+plus exactly one executable, `/backup-manager`, which 0.3.3 renamed to `/rbm`). There's
+no file named `rclone`, no `rclone` directory, nothing.
 
 The flip side, that rclone's packages are genuinely compiled into that one binary rather
 than the manager silently doing nothing useful, is also checked directly:
@@ -417,7 +425,7 @@ would be a further hardening step beyond what this issue asked for.
 enrollment link straight to its own container log:
 
 ```
-backup-manager: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
+rbm-web: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
 ```
 
 `rclone-manager` has no published port of its own (see above), so its own `--listen`

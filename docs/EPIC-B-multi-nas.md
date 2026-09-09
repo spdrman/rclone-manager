@@ -175,7 +175,7 @@ They further agree that this EPIC is not implementation-ready unless all of the 
 
 # 1. Purpose
 
-Build a **provider-neutral backup-manager core** and a family of thin NAS-platform application layers.
+Build a **provider-neutral rclone-manager core** and a family of thin NAS-platform application layers.
 
 The core SHALL remain independent of UGOS, Synology DSM, TrueNAS, Unraid, OpenMediaVault, Proxmox VE, or any other NAS/hypervisor UI.
 
@@ -410,7 +410,7 @@ Provider-native authentication may replace local auth only after its trust bound
 The canonical release primitive SHALL be the provider-neutral Go binary per architecture:
 
 ```text
-backup-manager binary
+rclone-manager binary
        │
        ├── canonical OCI image
        │      ├── Generic Docker
@@ -897,7 +897,7 @@ The core SHALL contain no provider SDK dependencies.
 
 Produce a provider-neutral React/TypeScript application under `ui/shared/`.
 
-It SHALL contain normal backup-manager product UI.
+It SHALL contain normal rclone-manager product UI.
 
 Provider-specific bootstrap code SHALL not live here.
 
@@ -1343,7 +1343,7 @@ Reason:
 - native UGOS desktop-window experience;
 - JSSDK support;
 - UGOS login/session integration;
-- no separate backup-manager password database.
+- no separate rclone-manager password database.
 
 The application SHOULD initially support the UGOS `pc` client target.
 
@@ -1830,7 +1830,7 @@ Recovery metadata SHOULD preserve enough information to reconstruct safely:
 - checksum(s);
 - validation result summary;
 - retention-relevant timestamp;
-- backup-manager format version.
+- rclone-manager format version.
 
 Recovery metadata MUST NOT contain:
 
@@ -2618,7 +2618,7 @@ services:
     restart: unless-stopped
 
     command:
-      - backup-manager
+      - rbm
       - daemon
 
     volumes:
@@ -3895,7 +3895,7 @@ Keep filtering and diagnostics intentionally simple for v1.
 
 ### Phase 2 Exit Gate
 
-An administrator can install/open the app and perform normal backup-manager configuration and monitoring without using a terminal.
+An administrator can install/open the app and perform normal rclone-manager configuration and monitoring without using a terminal.
 
 ---
 
@@ -4379,7 +4379,7 @@ In addition to functional completion, every applicable child issue SHALL demonst
 
 This EPIC is complete when:
 
-- [ ] the predecessor backup-manager core remains the only lifecycle engine;
+- [ ] the predecessor rclone-manager core remains the only lifecycle engine;
 - [ ] one canonical provider-neutral core binary exists per release/architecture;
 - [ ] container-based providers use the canonical OCI image built from that core binary;
 - [ ] Synology SPK proves the embedded core binary hash;
@@ -4585,7 +4585,7 @@ ADR-UGOS-009
 Require test-driven development and safety-specification tests for all implementation work
 
 ADR-PLATFORM-001
-Keep backup-manager core provider-neutral; all NAS OS integrations live under apps/<provider>
+Keep rclone-manager core provider-neutral; all NAS OS integrations live under apps/<provider>
 
 ADR-PLATFORM-002
 Use one shared provider-neutral React UI with thin provider bridges
@@ -4642,7 +4642,7 @@ Do not paper over an unresolved security-sensitive question with an assumption.
 # 81. Recommended Implementation Sequence
 
 ```text
-Parent backup-manager core behavior
+Parent rclone-manager core behavior
         ↓
 Phase 1 — Extract provider-neutral core/shared UI + prove UGOS adapter
         ↓
