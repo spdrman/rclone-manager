@@ -117,8 +117,16 @@ var commands = map[string]func([]string) int{
 // a status a wrapper script branches on is a contract, and a contract read
 // off setup.go by whoever thought to look is not one.
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: `+cliecho.Binary+` <command> [flags]
-
+	// The first line names the command and is therefore the one line of
+	// this block that is not a literal. It is printed on its own rather
+	// than spliced into the raw string below, so that the index of
+	// commands stays one uninterrupted backticked chunk: readers of this
+	// file include distribution/packaging's README-parity test, which
+	// pulls the command list straight out of the source, and a raw string
+	// broken in half by a concatenation is a list it silently reads as
+	// empty.
+	fmt.Fprintf(os.Stderr, "usage: %s <command> [flags]\n", cliecho.Binary)
+	fmt.Fprint(os.Stderr, `
 commands:
   run                                            perform one processing cycle and exit
   daemon                                         repeat the processing cycle at poll_interval. One engine per
