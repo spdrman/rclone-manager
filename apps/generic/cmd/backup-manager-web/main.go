@@ -180,9 +180,10 @@ func run(args []string) int {
 // usage writes the command surface an operator reads. A reworded line
 // here is a change to something somebody already has in a runbook, so it
 // is a deliberate act with a recorded reason rather than an edit, and
-// adding a command means adding a line: TestUsageDocumentsEveryModeTheBinaryCarries
-// asserts every mode this binary carries appears here, and
-// TestUsageIntroducesThisBinaryByName asserts the first line names it.
+// adding a command means adding a line. Two tests hold that:
+// TestUsageDocumentsEveryModeTheBinaryCarries requires every mode this
+// binary carries to appear here, and TestUsageIntroducesThisBinaryByName
+// requires the first line to name it.
 //
 // It is NOT pinned byte for byte by the compatibility corpus, and this
 // comment said it was until 0.3.3. FR-35 clause 4 is core/tests/compat,
@@ -914,10 +915,10 @@ func readPasswordFromStdin(r io.Reader) (string, error) {
 }
 
 // cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
-// no config, no state database, and no `rbm status` to run
-// (that binary/subcommand belongs to the engine's own container, and
-// checks REAL backup health, not "is a web server listening"), this asks
-// the one question that actually applies here: does the UI host's own
+// no config, no state database, and no `rbm status` to run (that
+// binary/subcommand belongs to the engine's own container, and checks
+// REAL backup health, not "is a web server listening"), this asks the
+// one question that actually applies here: does the UI host's own
 // HTTP server answer at all. distroless has no shell and no curl/wget,
 // so this exists specifically to give HEALTHCHECK's exec-form CMD
 // something to invoke.
@@ -967,14 +968,13 @@ func localHealthcheckURL(listenAddr string) string {
 // The exit statuses this binary promises, in one place, because they are
 // a contract a supervisor branches on rather than an implementation
 // detail. Three of them have always been here; the fourth is issue #551,
-// and it is here because container/compose.yaml runs
-// `/rbm-web serve`, so the deployment shape that code was
-// justified by (a supervisor replacing a container while the outgoing
-// process has not let go of the serving lock yet, where waiting and
-// trying again is the right answer) is THIS binary's shape rather than
-// `rbm daemon`'s. Leaving it out would have published a
-// contract that holds for the binary an operator types by hand and not
-// for the one their orchestrator restarts.
+// and it is here because container/compose.yaml runs `/rbm-web serve`,
+// so the deployment shape that code was justified by (a supervisor
+// replacing a container while the outgoing process has not let go of the
+// serving lock yet, where waiting and trying again is the right answer)
+// is THIS binary's shape rather than `rbm daemon`'s. Leaving it out would
+// have published a contract that holds for the binary an operator types
+// by hand and not for the one their orchestrator restarts.
 //
 // # Why the numbers are written twice
 //
