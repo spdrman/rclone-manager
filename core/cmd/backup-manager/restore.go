@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -57,7 +58,7 @@ func cmdRestore(args []string) int {
 		return usageError("restore: expected <source/backup-set/artifact>")
 	}
 	if *medium == "" {
-		return usageError("restore: --medium is required; `backup-manager artifacts %s` lists this backup's copies and the medium each one is on", operands[0])
+		return usageError("restore: --medium is required; `"+cliecho.Binary+" artifacts %s` lists this backup's copies and the medium each one is on", operands[0])
 	}
 	if !*acknowledge {
 		return usageError("restore: --acknowledge is required. A restore is billed by the storage provider and takes hours to finish, and neither shows up in your shell history afterwards, so this asks once rather than assuming")
@@ -121,5 +122,5 @@ func printRestoreSubmission(sub service.RestoreSubmission) {
 	if sub.Billing != "" {
 		fmt.Printf("cost:                %s\n", sub.Billing)
 	}
-	fmt.Printf("check on it with:    backup-manager status, or GET /api/v1/operations/%s\n", sub.Operation.ID)
+	fmt.Printf("check on it with:    "+cliecho.Binary+" status, or GET /api/v1/operations/%s\n", sub.Operation.ID)
 }

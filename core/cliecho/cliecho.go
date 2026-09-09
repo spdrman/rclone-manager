@@ -1,5 +1,5 @@
-// Package cliecho names the `backup-manager` command that would have done
-// the same thing as an action taken in the Web UI (issue #599).
+// Package cliecho names the command (Binary, `rbm`) that would have done the
+// same thing as an action taken in the Web UI (issue #599).
 //
 // # Why this exists at all
 //
@@ -200,7 +200,7 @@ func (l Line) Shell() string {
 
 // gapNoEquivalent is the one wording every gap line uses, so an operator
 // and a grep only ever have one string to know.
-const gapNoEquivalent = "no backup-manager equivalent yet"
+const gapNoEquivalent = "no " + Binary + " equivalent yet"
 
 // Echo names the command for one action, or the gap where there is none.
 //
@@ -405,7 +405,7 @@ type cmd struct {
 }
 
 func newCmd(words ...string) *cmd {
-	return &cmd{argv: append([]string{"backup-manager"}, words...)}
+	return &cmd{argv: append([]string{Binary}, words...)}
 }
 
 // flag appends --name value.

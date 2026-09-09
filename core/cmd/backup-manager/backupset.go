@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -594,7 +595,7 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 	// without a check, so the sentence stays true.
 	if *f.noVerify && namesAConnectionField(f.fs) {
 		fmt.Println("not verified: --no-verify was given, so this edit is written without the connection being proven")
-		fmt.Printf("  prove it afterwards with: backup-manager backup-set test-connection %s\n", id)
+		fmt.Printf("  prove it afterwards with: "+cliecho.Binary+" backup-set test-connection %s\n", id)
 	}
 
 	updated, err := route.UpdateBackupSet(ctx, id, req)
@@ -711,9 +712,9 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 	// into a non-zero exit. Same reasoning as setup.go's cycle summary.
 	_, _ = fmt.Fprintf(out, "removed the configuration for %s\n", id)
 	if kept < 0 {
-		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage; they are still there, and `backup-manager artifacts` lists them\n")
+		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage; they are still there, and `"+cliecho.Binary+" artifacts` lists them\n")
 	} else {
-		_, _ = fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
+		_, _ = fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `"+cliecho.Binary+" artifacts`\n", kept)
 	}
 	_, _ = fmt.Fprintf(out, "creating %s again takes all of them back\n", id)
 	return 0
@@ -745,7 +746,7 @@ func createIntoExistingConfig(ctx context.Context, configPath, keyFile string, t
 	// After the key and the trust anchor are settled and before anything
 	// is written, because those two are what the check needs and the write
 	// is what it is there to stop (issue #624).
-	if code := proveSourceConnection(ctx, route, noVerify, connectionTestFor(req), "backup-manager backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
+	if code := proveSourceConnection(ctx, route, noVerify, connectionTestFor(req), cliecho.Binary+" backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
 		return code
 	}
 
@@ -774,7 +775,7 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 		// Saying so is better than accepting the flag and doing nothing
 		// with it: an operator who asked for a run and got silence has
 		// been told the backup started.
-		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `backup-manager run`")
+		return usageError("backup-set create: --run cannot be honoured while writing the first configuration, because there is no running service to submit a cycle to yet. Create the set, then `" + cliecho.Binary + " run`")
 	}
 
 	// This path writes a configuration without ever going through
@@ -828,7 +829,7 @@ func createFirstConfig(ctx context.Context, configFile, stateDatabase, keyFile s
 	// flow in a browser. There is no engine to route to here by
 	// construction (this branch was taken because there is no config.yaml
 	// at all), so this is the durable path in the only world it has.
-	if code := proveSourceConnection(ctx, firstRun, noVerify, connectionTestFor(req), "backup-manager backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
+	if code := proveSourceConnection(ctx, firstRun, noVerify, connectionTestFor(req), cliecho.Binary+" backup-set test-connection "+req.SourceName+"/"+req.Name); code != 0 {
 		return code
 	}
 
@@ -1114,7 +1115,7 @@ func printBackupSet(s service.BackupSet) {
 	if s.StaleAfter > 0 {
 		fmt.Printf("  stale_after: %s\n", s.StaleAfter)
 	} else {
-		fmt.Printf("  stale_after: not reported (the engine that answered serves no stale_after; `backup-manager sources` reads it from the configuration)\n")
+		fmt.Printf("  stale_after: not reported (the engine that answered serves no stale_after; `" + cliecho.Binary + " sources` reads it from the configuration)\n")
 	}
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
@@ -1130,6 +1131,6 @@ func printBackupSet(s service.BackupSet) {
 	// So it says the one thing it knows and stays quiet about the one it
 	// does not, which is the same call the detail page's banner makes.
 	if s.ConnectionUnverified {
-		fmt.Println("  connection: not verified (nothing has proven this source; `backup-manager backup-set test-connection " + s.ID + "` clears this)")
+		fmt.Println("  connection: not verified (nothing has proven this source; `" + cliecho.Binary + " backup-set test-connection " + s.ID + "` clears this)")
 	}
 }

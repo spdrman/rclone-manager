@@ -218,8 +218,24 @@ func commandsFromTable(regionText string) []string {
 var (
 	commandsMapBlock = regexp.MustCompile(`(?s)var commands = map\[string\]func\(\[\]string\) int\{(.*?)\n\}`)
 	commandsMapKey   = regexp.MustCompile(`(?m)^\s*"([a-z-]+)":`)
-	usageBlock       = regexp.MustCompile("(?s)func usage\\(\\) \\{.*?`(.*?)`")
-	usageCommand     = regexp.MustCompile(`(?m)^  ([a-z][a-z-]*)(?:\s|$)`)
+	// The WHOLE body of usage(), not the first backticked string in it.
+	//
+	// This used to stop at the first raw literal, which was fine while the
+	// block was one, and stopped being fine the moment a line of it needed
+	// a constant: `usage: ` + cliecho.Binary + ` <command>` closes the
+	// literal on the first line, so this read a command list of exactly
+	// zero and blamed the dispatch table for it (the CLI rename, 0.3.3).
+	//
+	// The half worth worrying about is the other one. Had that splice
+	// landed BELOW the command index rather than above it, this would have
+	// gone on passing while reading a truncated list, and a verb added
+	// after the split would have been invisible to a check whose whole job
+	// is to see it. Reading the body and letting usageCommand pick the
+	// entry lines out of it cannot be truncated that way: Go source is tab
+	// indented, so nothing outside the printed text starts with the two
+	// spaces an entry line does.
+	usageBlock   = regexp.MustCompile("(?s)func usage\\(\\) \\{\n(.*?)\n\\}")
+	usageCommand = regexp.MustCompile(`(?m)^  ([a-z][a-z-]*)(?:\s|$)`)
 )
 
 // registeredCommands reads the dispatch table in main.go: the one place

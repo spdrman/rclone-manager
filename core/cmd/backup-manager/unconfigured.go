@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
@@ -111,7 +112,7 @@ func printUnconfiguredSet(u app.UnconfiguredSet) {
 		fmt.Printf("  %d quarantined artifact(s) cannot be revalidated, retried or reinstated while the set is unconfigured.\n", u.Quarantined)
 	}
 	if u.Stranded > 0 {
-		fmt.Printf("  %d row(s) were left mid-acquisition and no cycle will advance them: `backup-manager unconfigured clear %s`\n", u.Stranded, u.Set)
+		fmt.Printf("  %d row(s) were left mid-acquisition and no cycle will advance them: `"+cliecho.Binary+" unconfigured clear %s`\n", u.Stranded, u.Set)
 	}
 }
 

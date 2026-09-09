@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -84,7 +85,7 @@ func cmdRetentionApply(args []string) int {
 		return usageError("retention apply: %q is not a backup set id; a backup set id is exactly source/name", operands[1])
 	}
 	if !*acknowledge {
-		return usageError("retention apply: --acknowledge is required. This deletes the local copy of every backup no retention tier keeps, and a deleted restore point is not recoverable from here, so this asks once rather than assuming. `backup-manager retention %s` prints what it would delete", operands[1])
+		return usageError("retention apply: --acknowledge is required. This deletes the local copy of every backup no retention tier keeps, and a deleted restore point is not recoverable from here, so this asks once rather than assuming. `"+cliecho.Binary+" retention %s` prints what it would delete", operands[1])
 	}
 
 	ctx := context.Background()
@@ -184,11 +185,11 @@ func failRetentionApply(err error) int {
 	switch {
 	case errors.Is(err, service.ErrRetentionPlanStale):
 		fmt.Fprintf(os.Stderr,
-			"backup-manager: this backup set changed between the preview above and the apply, so nothing was deleted. That is the guard working: what would run is no longer what was printed. Run the command again to decide against what it holds now (%v)\n", err)
+			cliecho.Binary+": this backup set changed between the preview above and the apply, so nothing was deleted. That is the guard working: what would run is no longer what was printed. Run the command again to decide against what it holds now (%v)\n", err)
 		return exitFailure
 	case errors.Is(err, service.ErrRetentionApplyBusy):
 		fmt.Fprintf(os.Stderr,
-			"backup-manager: this deployment is running a cycle right now, so nothing was deleted. A cycle writes the journal rows a retention decision is made from, so an apply waits for it rather than deciding against a moving inventory. Try again once it is finished (%v)\n", err)
+			cliecho.Binary+": this deployment is running a cycle right now, so nothing was deleted. A cycle writes the journal rows a retention decision is made from, so an apply waits for it rather than deciding against a moving inventory. Try again once it is finished (%v)\n", err)
 		return exitFailure
 	default:
 		return fail(err)

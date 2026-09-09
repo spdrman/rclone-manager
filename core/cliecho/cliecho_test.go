@@ -41,7 +41,7 @@ func TestTheLineFormat(t *testing.T) {
 	if gap.Shell() != "" || len(gap.Command) != 0 {
 		t.Errorf("a gap carries the command %q", gap.Shell())
 	}
-	if got, want := gap.Gap, "no backup-manager equivalent yet"; got != want {
+	if got, want := gap.Gap, "no "+Binary+" equivalent yet"; got != want {
 		t.Errorf("a gap says %q, want %q; an operator and a grep only ever have one string to know", got, want)
 	}
 	if got, want := gap.Route, "POST /api/v1/backup-sets/test-connection"; got != want {
@@ -56,7 +56,7 @@ func TestTheLineFormat(t *testing.T) {
 		Params: map[string]string{"source": "api-server", "set": "var-backups"},
 		Body:   []byte(`{"stale_after_seconds":172800}`),
 	})
-	if got, want := patch.Shell(), "backup-manager backup-set patch api-server/var-backups --stale-after 48h"; got != want {
+	if got, want := patch.Shell(), Binary+" backup-set patch api-server/var-backups --stale-after 48h"; got != want {
 		t.Errorf("a patch prints\n  %s\nwant\n  %s", got, want)
 	}
 
@@ -92,7 +92,7 @@ func TestCreateSkipsTheFieldsTheRequestDidNotCarry(t *testing.T) {
 		Method: "POST", Route: "/backup-sets",
 		Body: []byte(`{"source_name":"api-server","name":"var-backups","host":"10.0.0.14"}`),
 	})
-	if got, want := partial.Shell(), "backup-manager backup-set create api-server/var-backups --host 10.0.0.14"; got != want {
+	if got, want := partial.Shell(), Binary+" backup-set create api-server/var-backups --host 10.0.0.14"; got != want {
 		t.Errorf("a create missing every field but the host prints\n  %s\nwant\n  %s", got, want)
 	}
 	if strings.Contains(partial.Shell(), "''") {
@@ -161,14 +161,14 @@ func TestAStorageMediumWriteEchoesTheSkipOnlyWhenItWasAskedFor(t *testing.T) {
 func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {
 	line := Echo(Action{Method: "POST", Route: "/operations", Body: []byte(`{"action":"` + apicontract.ActionRunCycle + `","config_revision":"r1"}`)})
 	if len(line.Command) != 0 {
-		t.Fatalf("run_cycle printed the command %v; `backup-manager run` opens the service in the operator's own process and runs a cycle THERE, so it is a different act against a different process",
+		t.Fatalf("run_cycle printed the command %v; `"+Binary+" run` opens the service in the operator's own process and runs a cycle THERE, so it is a different act against a different process",
 			line.Command)
 	}
 	if line.Route != "POST /api/v1/operations" {
 		t.Errorf("the gap does not name the route that needs a verb: %q", line.Route)
 	}
 	if !strings.Contains(line.GapDetail, "not in this engine") {
-		t.Errorf("the gap does not say why `backup-manager run` is not the answer: %q", line.GapDetail)
+		t.Errorf("the gap does not say why `"+Binary+" run` is not the answer: %q", line.GapDetail)
 	}
 
 	// The same route with a restore on it DOES have a verb, which is what
@@ -176,7 +176,7 @@ func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {
 	// route.
 	restore := Echo(Action{Method: "POST", Route: "/operations",
 		Body: []byte(`{"action":"` + apicontract.ActionRestorePlacement + `","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)})
-	if got, want := restore.Shell(), "backup-manager restore api-server/var-backups/dump.tar --medium offsite_s3 --days 7 --acknowledge"; got != want {
+	if got, want := restore.Shell(), Binary+" restore api-server/var-backups/dump.tar --medium offsite_s3 --days 7 --acknowledge"; got != want {
 		t.Errorf("a restore prints\n  %s\nwant\n  %s", got, want)
 	}
 }

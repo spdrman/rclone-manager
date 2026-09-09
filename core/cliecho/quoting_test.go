@@ -138,7 +138,7 @@ func TestAMarkedPlaceholderIsStillRenderedWithoutQuotes(t *testing.T) {
 	line := Echo(Action{Method: "PUT", Route: "/backup-sets/{source}/{set}/retention",
 		Params: map[string]string{"source": "api-server", "set": "var-backups"},
 		Body:   []byte(`{"tiers":[{"name":"daily","granularity":"day","keep":7}]}`)})
-	const want = "backup-manager backup-set retention api-server/var-backups --policy-file <a file holding this whole retention: block>"
+	const want = Binary + " backup-set retention api-server/var-backups --policy-file <a file holding this whole retention: block>"
 	if got := line.Shell(); got != want {
 		t.Errorf("a placeholder renders as\n  %s\nwant\n  %s", got, want)
 	}

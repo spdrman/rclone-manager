@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -54,12 +55,12 @@ import (
 // build cache and left a binary behind in the system temp directory on
 // every run, which is a bad trade.
 func buildCLI(coreRoot, outDir string) (string, error) {
-	bin := filepath.Join(outDir, "backup-manager")
+	bin := filepath.Join(outDir, cliecho.Binary)
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
 	cmd.Dir = coreRoot
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("building backup-manager: %w\n%s", err, out)
+		return "", fmt.Errorf("building "+cliecho.Binary+": %w\n%s", err, out)
 	}
 	return bin, nil
 }
@@ -440,7 +441,7 @@ func runCLI(ctx context.Context, bin string, args []string, root string, extra .
 		code = exitErr.ExitCode()
 	}
 
-	label := "backup-manager " + strings.Join(redactArgs(args, root), " ")
+	label := cliecho.Binary + " " + strings.Join(redactArgs(args, root), " ")
 	lines := []string{fmt.Sprintf("$ %s -> exit %d", label, code)}
 	for _, l := range splitStream(stdout.String(), root) {
 		lines = append(lines, "  out| "+l)
