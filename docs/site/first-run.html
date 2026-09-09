@@ -134,7 +134,7 @@
     <pre><code>docker compose logs rclone-manager | grep enroll</code></pre>
     <p>What comes back looks like this:</p>
     <pre><code><span class="cm">rbm-web: no administrator account exists yet. Open</span>
-<span class="cm">http://localhost:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
+<span class="cm">http://192.168.0.10:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
 <span class="cm">(valid 30 minutes, single use).</span></code></pre>
 
     <table class="fields">
@@ -142,8 +142,8 @@
       <tbody>
         <tr>
           <td><strong>The host in the link</strong></td>
-          <td>localhost:8080</td>
-          <td>The shipped Compose file sets <code>PUBLIC_BASE_URL</code> to <code>http://localhost:${LISTEN_PORT}</code>, and <code>localhost</code> only resolves correctly if you open the link <em>on the NAS itself</em>. <span class="does">From a laptop, swap the host for the NAS address and keep the token exactly as printed.</span> Set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to your NAS address to get a link that is correct next time.</td>
+          <td>this machine's own address</td>
+          <td><code>install_docker_host.py</code> reads the address this machine's default route leaves by and writes it into <code>PUBLIC_BASE_URL</code>, so the link works from the laptop you are reading it on. <span class="does">Open it as printed, token and all.</span> If you wrote the Compose file yourself instead, the shipped default is <code>http://localhost:${LISTEN_PORT}</code>, which only resolves on the NAS: swap the host for the NAS address, keep the token exactly as printed, and set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to get a correct link next time.</td>
         </tr>
         <tr>
           <td><strong>The token</strong></td>
