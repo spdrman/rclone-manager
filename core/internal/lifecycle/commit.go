@@ -227,7 +227,9 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// without touching the filesystem or the journal again, other than
 		// re-ensuring the recovery manifest exists (see writeRecoveryManifest's
 		// doc: a process killed after COMMITTED landed but before the
-		// manifest was ever written must not leave it missing forever).
+		// manifest was ever written must not leave it missing forever) --
+		// and only while the file still matches the record, which is what
+		// the refusal below is for.
 		if committing.Record.LocalPath != final {
 			return state.Outcome{}, fmt.Errorf(
 				"lifecycle: commit %s: already COMMITTED at %q, not the final path %q this LocalDir computes",
@@ -236,6 +238,39 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		converged, err := measureCommitted(final, committing.Record)
 		if err != nil {
 			return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
+		}
+		// A disagreement found HERE is refused, where the same
+		// disagreement found on the fresh path above is recorded. The
+		// asymmetry is the whole reason the two branches differ, and it
+		// is a difference in the cost of refusing, not in the standard of
+		// honesty (see measureCommitted's doc).
+		//
+		// On the fresh path, refusing leaves the artifact at COMMITTING
+		// over a file that already occupies its final name, so the next
+		// attempt meets FR-12's collision guard: issue #662's own loop,
+		// one step earlier, over a copy that is provably good. Here the
+		// artifact is ALREADY COMMITTED. Refusing changes no state,
+		// strands nothing, deletes nothing and leaves the durable copy
+		// exactly where it is; the only thing it withholds is a
+		// certificate.
+		//
+		// Two alternatives were considered and rejected. (a) Record the
+		// correction here too, as the fresh path does: impossible, the
+		// COMMITTED transition is already written and this branch holds
+		// no second idempotency key to write another, which is precisely
+		// why the fault had nowhere to go and was discarded. (b) Write
+		// the manifest from the fresh measurement anyway and report the
+		// fault alongside it: that is what this code did, and it means
+		// the sidecar -- the record a rebuild trusts when the journal is
+		// gone -- is overwritten to certify the damage, while the journal
+		// keeps the true row. A rebuild reads the file, not the return
+		// value.
+		if converged.Fault != "" {
+			return state.Outcome{}, fmt.Errorf(
+				"lifecycle: commit %s: converging on an already-COMMITTED artifact, but %s no longer matches the record: %s; "+
+					"refusing to re-stamp the recovery manifest from the file, because this call cannot record a correction "+
+					"and a manifest written from damaged bytes is what a rebuild would trust",
+				in.Artifact, final, converged.Fault)
 		}
 		if err := writeRecoveryManifest(in.LocalDir, committing.Record, converged); err != nil {
 			return state.Outcome{}, err
@@ -348,10 +383,16 @@ type commitMeasurement struct {
 // is reported on the transition an operator reads, rather than the
 // artifact being stranded to make the same point.
 //
-// A hash that cannot be computed IS refused, and that is not an
-// inconsistency: there the manager has no measurement to record, and
-// writing "verification_class: content" over bytes nothing measured is
-// precisely what #662 caught.
+// That argument is about the COMMITTING path, and only about it: it is an
+// argument from the cost of refusing, and the cost is what differs at
+// Commit's other call site. Converging on an artifact that is already
+// COMMITTED refuses instead, because refusing there strands nothing. The
+// reasoning is at that call site, not repeated here.
+//
+// A hash that cannot be computed IS refused, and so is one that could not
+// be read whole, and that is not an inconsistency: there the manager has
+// no measurement to record, and writing "verification_class: content"
+// over bytes nothing measured is precisely what #662 caught.
 func measureCommitted(final string, rec state.Record) (commitMeasurement, error) {
 	info, err := os.Stat(final)
 	if err != nil {
@@ -363,11 +404,24 @@ func measureCommitted(final string, rec state.Record) (commitMeasurement, error)
 		return m, nil
 	}
 
-	_, sum, err := readAndHashLocal(final)
+	n, sum, err := readAndHashLocal(final)
 	if err != nil {
 		return commitMeasurement{}, fmt.Errorf(
 			"the transfer of %s reported %d bytes for a file that measures %d, and re-hashing the file to record what is actually there failed: %w",
 			final, rec.Transfer.BytesTransferred, info.Size(), err)
+	}
+	// io.Copy reports a nil error on a short read, and this fallback runs
+	// precisely when the environment has already demonstrated that it lies
+	// about read-backs: it is reached ONLY because the recorded byte count
+	// contradicted os.Stat. So Size comes from one source and Hash from
+	// another, and localPlacementFor stamps verification_class: content on
+	// whatever pair it is handed. Two numbers that disagree about the same
+	// file are not a measurement (issue #662).
+	if n != info.Size() {
+		return commitMeasurement{}, fmt.Errorf(
+			"re-hashing %s to record what is actually there read %d bytes of a file that measures %d, "+
+				"so the digest describes neither; refusing to record verification_class content over a partial read",
+			final, n, info.Size())
 	}
 	m.Hash, m.Alg = sum, string(transport.SHA256)
 	m.Fault = fmt.Sprintf(
@@ -458,11 +512,28 @@ func localPlacementFor(m commitMeasurement, final string) *state.PlacementUpdate
 // journal write landed but before the manifest was ever written must
 // still get one written on the very next call with the same
 // CommittingKey/CommittedKey, via the already-converged branch, rather
-// than silently staying without recovery metadata forever. Since the
-// manifest's content is derived deterministically from the journal record
-// and a fresh measurement of a file that is not being changed any more,
-// writing it again on a later converged call is always safe: it overwrites
-// the same bytes it would have written the first time.
+// than silently staying without recovery metadata forever.
+//
+// Rewriting it on that later converged call overwrites the same bytes it
+// would have written the first time, and the thing that makes that true
+// is named rather than assumed, because it is no longer a property of
+// this function. Since issue #662 the manifest's size and checksum come
+// from a measurement of the file rather than from the record, and a
+// measurement taken at convergence time is a fresh look at a file that
+// may have changed since the commit -- so a converged call CAN now derive
+// different bytes. What keeps it from writing them is the converged
+// branch's own refusal: it compares the measurement against the record
+// and returns an error without reaching this function when they disagree,
+// so the only manifest this function is ever asked to write on that path
+// is one whose measurement matched the record that produced the first
+// one.
+//
+// The consequence is worth stating plainly, because it is the price of
+// that refusal: an artifact whose committed file has drifted keeps
+// whatever manifest it already had, and if it never had one it stays
+// without one until the drift is resolved. A missing certificate is a
+// gap a rebuild can see; a certificate describing bytes that are not
+// there is one it cannot.
 func writeRecoveryManifest(localDir string, rec state.Record, measured commitMeasurement) error {
 	m := recovery.Manifest{
 		FormatVersion:      recovery.CurrentFormatVersion,
