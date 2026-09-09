@@ -11,8 +11,8 @@
  * action goes into the export, because "send me what the terminal said"
  * is half the reason the echo exists.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
@@ -25,10 +25,13 @@ import {
   dockPrefix,
   dockText,
   environmentPreamble,
+  foldBrowserNotices,
   foldReading,
   restartRule
 } from "@shared/components/ActivityDock";
 import type { DockEntry } from "@shared/components/ActivityDock";
+import { clearBrowserNoticesForTests, emitBrowserNotice } from "@shared/state/browserNotices";
+import { resetGraphForTests } from "@shared/state/graph";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import type { DeploymentActivity, LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
@@ -210,7 +213,7 @@ describe("the text an operator takes away", () => {
             actor: "alice",
             route: "PATCH /api/v1/backup-sets/{source}/{set}",
             // Bare on the wire: the prompt is this panel's to draw.
-            command: "backup-manager backup-set patch api-server/var-backups --stale-after 48h"
+            command: "rbm backup-set patch api-server/var-backups --stale-after 48h"
           }
         })
       },
@@ -221,7 +224,7 @@ describe("the text an operator takes away", () => {
     const lines = text.split("\n");
     expect(lines[0]).toContain("[api-server/var-backups]");
     expect(lines[1]).toContain("[you]");
-    expect(text).toContain("\n$ backup-manager backup-set patch api-server/var-backups --stale-after 48h");
+    expect(text).toContain("\n$ rbm backup-set patch api-server/var-backups --stale-after 48h");
     expect(lines[lines.length - 1]).toContain("engine restarted");
   });
 
@@ -236,13 +239,13 @@ describe("the text an operator takes away", () => {
           event: event(1, {
             event: "api_action",
             scope: "deployment",
-            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backup-manager catalog rebuild" }
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "rbm catalog rebuild" }
           })
         }
       ],
       "alice"
     );
-    expect(text).toContain("\n$ backup-manager catalog rebuild");
+    expect(text).toContain("\n$ rbm catalog rebuild");
     expect(text).not.toContain("$ $");
   });
 
@@ -257,7 +260,7 @@ describe("the text an operator takes away", () => {
             fields: {
               actor: "alice",
               route: "PUT /api/v1/backup-sets/{source}/{set}/retention",
-              command: "backup-manager backup-set retention api-server/var-backups --policy-file <a file holding these tiers as a retention: block>",
+              command: "rbm backup-set retention api-server/var-backups --policy-file <a file holding these tiers as a retention: block>",
               command_runnable: "false"
             }
           })
@@ -265,7 +268,7 @@ describe("the text an operator takes away", () => {
       ],
       "alice"
     );
-    expect(text).toContain("$ backup-manager backup-set retention");
+    expect(text).toContain("$ rbm backup-set retention");
     expect(text).toContain("#   not runnable as printed");
     // And the control: a runnable command does not carry the note.
     const runnable = dockText(
@@ -275,7 +278,7 @@ describe("the text an operator takes away", () => {
           event: event(2, {
             event: "api_action",
             scope: "deployment",
-            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backup-manager catalog rebuild" }
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "rbm catalog rebuild" }
           })
         }
       ],
@@ -296,15 +299,15 @@ describe("the text an operator takes away", () => {
             fields: {
               actor: "alice",
               route: "POST /api/v1/operations",
-              command_gap: "no backup-manager equivalent yet",
-              command_gap_detail: "`backup-manager run` starts a cycle in your own shell, not in this engine"
+              command_gap: "no rbm equivalent yet",
+              command_gap_detail: "`rbm run` starts a cycle in your own shell, not in this engine"
             }
           })
         }
       ],
       "alice"
     );
-    expect(text).toContain("# no backup-manager equivalent yet · POST /api/v1/operations");
+    expect(text).toContain("# no rbm equivalent yet · POST /api/v1/operations");
     expect(text).toContain("not in this engine");
   });
 
@@ -326,7 +329,7 @@ describe("the text an operator takes away", () => {
     expect(environmentPreamble("http://nas.local:8080", "the admin")).toContain("BACKUP_MANAGER_API_USERNAME='the admin'");
 
     const text = dockText(
-      [{ kind: "event", event: event(1, { event: "api_action", scope: "deployment", fields: { actor: "alice", command: "backup-manager catalog rebuild" } }) }],
+      [{ kind: "event", event: event(1, { event: "api_action", scope: "deployment", fields: { actor: "alice", command: "rbm catalog rebuild" } }) }],
       "alice",
       preamble
     );
@@ -449,19 +452,19 @@ describe("the panel itself", () => {
               scope: "deployment",
               event: "api_action",
               message: "patch /settings",
-              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "backup-manager settings patch --timezone Europe/Berlin" }
+              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "rbm settings patch --timezone Europe/Berlin" }
             })
           ])
         })
       ])
     );
-    await screen.findByText(/backup-manager settings patch/);
+    await screen.findByText(/rbm settings patch/);
     await act(async () => {
       await user.click(screen.getByRole("button", { name: /^copy$/i }));
     });
     expect(writeText).toHaveBeenCalledTimes(1);
     const copied = writeText.mock.calls[0][0] as string;
-    expect(copied).toContain("$ backup-manager settings patch --timezone Europe/Berlin");
+    expect(copied).toContain("$ rbm settings patch --timezone Europe/Berlin");
     // The first line of what is copied is the environment the command
     // needs, built from this page's own origin, so what is pasted is
     // runnable under it.
@@ -531,5 +534,239 @@ describe("where the dock sits (issue #617)", () => {
     await waitFor(() =>
       expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(DOCK_BAR_HEIGHT + "px")
     );
+  });
+});
+
+/**
+ * The lines this BROWSER wrote, in the global terminal.
+ *
+ * state/browserNotices is the seam G1.4 built and its own doc names two
+ * readers: the per-set terminal (G1.3) and this one (G1.2). Only the
+ * per-set one was ever wired to it, so on every build that has shipped
+ * the dock, the "This browser" chip filtered a log that could not
+ * contain a browser line and rendered nothing, every time, on every
+ * deployment. A deployment-wide run announced itself in a banner and
+ * nowhere else, which is EPIC H's standing rule (the terminal echoes the
+ * equivalent command for every action taken in the web UI) half done.
+ *
+ * These cases are written so the banner cannot satisfy them: each one
+ * asserts against the real ActivityDock, and two of them assert through a
+ * FILTER, which is the half that had no lines to filter.
+ */
+describe("what this browser wrote reaches the global terminal", () => {
+  beforeEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* a browser with site data blocked */
+    }
+  });
+
+  // cleanup() first, and it has to be first: clearing the ring is a
+  // commit, a commit wakes every subscriber, and a dock still mounted
+  // would be re-rendered by it after the test's own providers have gone.
+  afterEach(() => {
+    cleanup();
+    clearBrowserNoticesForTests();
+    resetGraphForTests();
+  });
+
+  /** A deployment with two sets and one engine line, which is what the
+   *  chips and the "is the engine line still there" controls need. */
+  function twoSets() {
+    return dockApi([
+      reading({
+        sets: [set("api-server/var-backups", []), set("media/weekly-archive", [])],
+        deployment: deployment([event(1, { scope: "deployment", event: "cycle_start", message: "cycle starting" })])
+      })
+    ]);
+  }
+
+  /** A refusal of a deployment-wide run, exactly as useRunControls writes
+   *  one: every enabled set named, because every one of them is a set the
+   *  operator just asked to have backed up and did not. */
+  function refuseTheRun() {
+    act(() => {
+      emitBrowserNotice({
+        outcome: "refused",
+        code: "DESTRUCTIVE_OPERATIONS_DISABLED",
+        message: "This deployment will not start a backup run.",
+        remediation: "Run rbm run from a shell on this host instead.",
+        backupSetIds: ["api-server/var-backups", "media/weekly-archive"],
+        command: "rbm run"
+      });
+    });
+  }
+
+  it("draws a refusal the engine never saw, which no reading of its feed can carry", async () => {
+    renderDock(twoSets());
+    await screen.findByText("cycle started");
+
+    refuseTheRun();
+
+    // The whole class of failure #597 is about: the destructive gate, a
+    // CSRF check and a dead connection all refuse in FRONT of the engine,
+    // so there is nothing on the server that could have logged them and a
+    // terminal drawing only the engine's feed shows nothing at all for
+    // exactly the presses that need explaining.
+    expect(await screen.findByText(/This deployment will not start a backup run/)).toBeInTheDocument();
+    expect(screen.getByText(/rbm run/)).toBeInTheDocument();
+  });
+
+  it("shows it under This browser, the chip that rendered an empty log on every build that shipped", async () => {
+    const user = (await import("@testing-library/user-event")).default;
+    renderDock(twoSets());
+    await screen.findByText("cycle started");
+    refuseTheRun();
+    await screen.findByText(/This deployment will not start a backup run/);
+
+    await user.click(screen.getByRole("button", { name: "This browser" }));
+
+    expect(screen.getByText(/This deployment will not start a backup run/)).toBeInTheDocument();
+    // The control: the chip is a filter and not a second feed, so the
+    // engine's own line has to be gone from what is drawn.
+    await waitFor(() => expect(screen.queryByText("cycle started")).not.toBeInTheDocument());
+  });
+
+  it("puts a deployment-wide refusal under every set it names, the way the per-set terminal already does", async () => {
+    const user = (await import("@testing-library/user-event")).default;
+    renderDock(twoSets());
+    await screen.findByText("cycle started");
+    refuseTheRun();
+    await screen.findByText(/This deployment will not start a backup run/);
+
+    // A line belongs to a set by NAMING it (noticesForBackupSet's rule).
+    // Somebody looking at one set's traffic after pressing "Run all
+    // enabled sets" is looking for the answer about that set.
+    await user.click(screen.getByRole("button", { name: "media/weekly-archive" }));
+    expect(screen.getByText(/This deployment will not start a backup run/)).toBeInTheDocument();
+
+    // And the Engine chip is the one place it must NOT appear: a line
+    // this browser wrote is the one thing here the engine never saw.
+    await user.click(screen.getByRole("button", { name: "Engine" }));
+    await waitFor(() => expect(screen.queryByText(/This deployment will not start a backup run/)).not.toBeInTheDocument());
+    expect(screen.getByText("cycle started")).toBeInTheDocument();
+  });
+
+  it("carries it into the export, because send me what the terminal said is half of why the echo exists", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const user = (await import("@testing-library/user-event")).default;
+    renderDock(twoSets());
+    await screen.findByText("cycle started");
+    refuseTheRun();
+    await screen.findByText(/This deployment will not start a backup run/);
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /^copy$/i }));
+    });
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("[you]");
+    expect(copied).toContain("This deployment will not start a backup run.");
+    expect(copied).toContain("rbm run");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the browser's line in the order it happened, between the engine's own", async () => {
+    // Ordered by TIME, which is the only thing the two sides share: a
+    // notice is written in a browser with no access to the engine's
+    // sequence counter (foldNotices makes the same argument for the
+    // per-set panel).
+    const entries: DockEntry[] = [
+      { kind: "event", event: event(1, { at: "2026-09-07T14:02:01Z", scope: "deployment", event: "cycle_start" }) },
+      { kind: "event", event: event(2, { at: "2026-09-07T14:02:09Z", scope: "deployment", event: "cycle_end" }) }
+    ];
+    const folded = foldBrowserNotices(entries, [
+      {
+        id: "n1",
+        at: Date.parse("2026-09-07T14:02:05Z"),
+        outcome: "refused",
+        code: "unknown",
+        message: "the browser's own line",
+        backupSetIds: []
+      }
+    ]);
+    expect(folded).toHaveLength(3);
+    expect(folded[1].kind === "notice" && folded[1].notice.message).toBe("the browser's own line");
+    // And the engine's own two keep the order the engine sent them in,
+    // which is by sequence: re-sorting the whole list by second-resolution
+    // timestamps would be the panel making up an order of its own.
+    expect(folded.filter((e) => e.kind === "event").map((e) => (e.kind === "event" ? e.event.sequence : 0))).toEqual([1, 2]);
+  });
+});
+
+/**
+ * The filter chips have to fit the bar they are in.
+ *
+ * Found while recording the documentation GIFs: the chips are a wrapping
+ * flex row inside a bar whose height is pinned at DOCK_BAR_HEIGHT, so the
+ * second row is drawn outside the bar and clipped by the section's own
+ * maxHeight. Four backup sets at 1280px is enough to do it, and more sets
+ * does it at any width. The recording was taken at 1440px to dodge it,
+ * which is a documentation page working around a defect rather than
+ * showing the product.
+ *
+ * The bar's height is not free to grow: AppShell reserves
+ * dockReservedHeight() under the content column from this exact constant
+ * (#617), so a bar that got taller would put the last row of a long table
+ * behind the terminal again. So the chips stay on one line and scroll,
+ * and these cases pin that rather than the pixels.
+ */
+describe("the filter chips fit the bar", () => {
+  beforeEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* a browser with site data blocked */
+    }
+  });
+
+  // The four ids are real-shaped rather than "a/b": a chip is labelled
+  // with the full source/backup-set id, so the label lengths ARE the
+  // measurement. These four plus the four fixed chips come to about
+  // 108 characters of label, which is past what is left of 1280px once
+  // the toggle, the line count, Copy and Save have taken their share.
+  const FOUR_SETS = [
+    "production/postgres-primary",
+    "production/billing-mysql",
+    "production/auth-config",
+    "media/weekly-archive"
+  ];
+
+  it("keeps every chip on the bar's one line and scrolls them, rather than wrapping out of it", async () => {
+    renderDock(dockApi([reading({ sets: FOUR_SETS.map((id) => set(id, [])) })]));
+    const strip = await screen.findByRole("group", { name: "Filter the terminal" });
+
+    // One line, always: a wrap is a second row drawn outside a bar whose
+    // height is fixed, which is the clip itself.
+    expect(strip.style.flexWrap).toBe("nowrap");
+    // Reachable rather than merely present: with nowrap and no scroll the
+    // chips past the fold would be cut off instead of stacked, which is
+    // the same defect turned sideways.
+    expect(strip.style.overflowX).toBe("auto");
+    // The one that actually makes it shrink. A flex child's default
+    // min-width is its content, so `flex: 1` on a row of eight chips does
+    // not shrink at all and overflows its parent no matter what overflow
+    // says.
+    // jsdom normalises a unitless zero, which is the same declaration.
+    expect(strip.style.minWidth).toBe("0");
+
+    for (const id of FOUR_SETS) {
+      expect(within(strip).getByRole("button", { name: id })).toBeInTheDocument();
+    }
+    expect(within(strip).getByRole("button", { name: "This browser" })).toBeInTheDocument();
+    expect(within(strip).getByRole("button", { name: "Commands only" })).toBeInTheDocument();
+  });
+
+  it("leaves the bar exactly one line tall, which is what the shell reserves", async () => {
+    renderDock(dockApi([reading({ sets: FOUR_SETS.map((id) => set(id, [])) })]));
+    const strip = await screen.findByRole("group", { name: "Filter the terminal" });
+    const bar = strip.parentElement as HTMLElement;
+
+    // The alternative fix, letting the bar grow, breaks this: the shell
+    // reserves DOCK_BAR_HEIGHT under the content column and the panel's
+    // own maxHeight is computed from it, so a taller bar is #617 again.
+    expect(bar.style.height).toBe(DOCK_BAR_HEIGHT + "px");
+    expect(dockReservedHeight(false, 240)).toBe(DOCK_BAR_HEIGHT);
   });
 });

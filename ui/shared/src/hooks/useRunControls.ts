@@ -40,6 +40,12 @@
  * (G1.2) and the per-set terminal (G1.3) read. A deployment-wide refusal
  * names every enabled set, because every one of them is a set the
  * operator just asked to have backed up and did not.
+ *
+ * That sentence was half true for two releases: the per-set terminal read
+ * the seam and the global one did not, so a press answered here reached a
+ * banner and nothing else. Both read it now, and ActivityDock's own tests
+ * assert a browser line through the dock's filters, which is what makes
+ * this paragraph a claim something can fail on rather than a description.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 

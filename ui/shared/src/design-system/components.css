@@ -294,6 +294,16 @@ input, select, textarea, button {
   font: inherit; font-size: var(--text-xs); cursor: pointer;
 }
 .activity-toolbar__button:hover { background: var(--surface-3); color: var(--text); }
+/* The terminal's filter chips, on one scrolling line.
+
+   Only the scrollbar chrome is here; the layout is inline in ActivityDock
+   because it is the thing under test and the argument for each property
+   is written beside it. A classic horizontal scrollbar is about 15px and
+   this bar is 32 with 24px buttons in it, so drawing one would clip the
+   chips it exists to rescue. The row still scrolls by wheel and trackpad,
+   and tabbing to a chip scrolls it into view. */
+.activity-toolbar__filters { scrollbar-width: none; -ms-overflow-style: none; }
+.activity-toolbar__filters::-webkit-scrollbar { display: none; }
 
 .activity-spinner {
   width: 11px; height: 11px; flex: none;
