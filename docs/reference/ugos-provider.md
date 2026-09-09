@@ -289,7 +289,7 @@ Do not create a separate native UGOS backend unless a later architecture review 
 
 This model provides the strongest alignment between:
 
-- the existing containerized backup-manager deployment;
+- the existing containerized rclone-manager deployment;
 - the requested terminal Docker package;
 - amd64/arm64 release builds;
 - reproducible builds;
@@ -324,7 +324,7 @@ UGOS .UPK
       │
       └── backup-manager:<exact-version>
             │
-            ├── Go backup-manager
+            ├── Go rclone-manager
             ├── embedded rclone
             ├── SQLite support
             ├── HTTP API
@@ -839,7 +839,7 @@ MUST remain explicit.
 
 # 8. Single Runtime / Dual Distribution Rule
 
-For each release and architecture there SHALL be exactly one production backup-manager executable and one canonical container image.
+For each release and architecture there SHALL be exactly one production rclone-manager executable and one canonical container image.
 
 The UGOS and terminal distributions SHALL therefore share:
 
@@ -938,7 +938,7 @@ Reason:
 - native UGOS desktop-window experience;
 - JSSDK support;
 - UGOS login/session integration;
-- no separate backup-manager password database.
+- no separate rclone-manager password database.
 
 The application SHOULD initially support the UGOS `pc` client target.
 
@@ -962,7 +962,7 @@ static assets
 Go //go:embed
       │
       ▼
-single backup-manager executable
+single rclone-manager executable
 ```
 
 The production UGOS container SHALL NOT require Node.js.
@@ -1395,7 +1395,7 @@ Recovery metadata SHOULD preserve enough information to reconstruct safely:
 - checksum(s);
 - validation result summary;
 - retention-relevant timestamp;
-- backup-manager format version.
+- rclone-manager format version.
 
 Recovery metadata MUST NOT contain:
 
@@ -2173,7 +2173,7 @@ services:
     restart: unless-stopped
 
     command:
-      - backup-manager
+      - rbm
       - daemon
 
     volumes:
@@ -3781,7 +3781,7 @@ In addition to functional completion, every applicable child issue SHALL demonst
 
 This EPIC is complete when:
 
-- [ ] The predecessor backup-manager core remains the only lifecycle engine.
+- [ ] The predecessor rclone-manager core remains the only lifecycle engine.
 - [ ] The UI communicates only through the application service/API.
 - [ ] The UGOS edition is packaged as a Docker Application `.UPK`.
 - [ ] The headless Docker edition is separately consumable.
@@ -4021,7 +4021,7 @@ Do not paper over an unresolved security-sensitive question with an assumption.
 Dependency order:
 
 ```text
-Parent backup-manager core complete/stable enough
+Parent rclone-manager core complete/stable enough
         ↓
 Phase 0 UGOS PoC/security gate
         ↓
@@ -4383,6 +4383,6 @@ Docker provides the portable runtime.
 
 The UI provides visibility and safe administrative workflows.
 
-The predecessor backup-manager core remains the authority for whether a remote backup may be deleted and which local restore points must survive.
+The predecessor rclone-manager core remains the authority for whether a remote backup may be deleted and which local restore points must survive.
 
 The test suite is part of that authority: safety-critical behavior is specified in failing tests before implementation and remains permanently regression-protected.

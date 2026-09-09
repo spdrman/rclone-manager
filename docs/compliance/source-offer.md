@@ -83,7 +83,7 @@ rclone's `s3` backend through `github.com/IBM/go-sdk-core/v5`, which
 `backend/s3`'s `ibm_signer.go` imports with no build tag, so registering the
 backend and not linking them is not something this project can choose. They are
 genuinely in the binaries and not only in `go.mod`: `go tool nm` on a
-linux/amd64 `backup-manager` finds 17 `go-retryablehttp` symbols and one
+linux/amd64 `rbm` finds 17 `go-retryablehttp` symbols and one
 `go-cleanhttp` symbol surviving dead-code elimination, `NewClient`,
 `DefaultRetryPolicy`, `DefaultBackoff` and `DefaultPooledTransport` among them.
 
@@ -118,10 +118,10 @@ corresponding source is the module archive upstream published, served
 immutably and without an account:
 
 - `github.com/hashicorp/go-cleanhttp@v0.5.2` (MPL-2.0), linked into
-  `backup-manager` and `backup-manager-web`:
+  `rbm` and `rbm-web`:
   <https://proxy.golang.org/github.com/hashicorp/go-cleanhttp/@v/v0.5.2.zip>
 - `github.com/hashicorp/go-retryablehttp@v0.7.8` (MPL-2.0), linked into
-  `backup-manager` and `backup-manager-web`:
+  `rbm` and `rbm-web`:
   <https://proxy.golang.org/github.com/hashicorp/go-retryablehttp/@v/v0.7.8.zip>
 
 Two things make those addresses an answer rather than a gesture. They are

@@ -51,7 +51,7 @@ Remote Server
 embedded rclone SFTP backend
     │
     ▼
-backup-manager
+rclone-manager
     │
     ├── lifecycle journal (SQLite)
     ├── verification/validation
@@ -93,7 +93,7 @@ version**.
 Conceptually:
 
 ``` text
-backup-manager
+rclone-manager
 │
 ├── cmd/
 ├── config/
@@ -1663,7 +1663,7 @@ Preferred deployment:
 ``` text
 UGREEN NAS
 ┌─────────────────────────────────────────────────────┐
-│ backup-manager container                            │
+│ rclone-manager container                            │
 │                                                     │
 │ Single Go executable                               │
 │  ├── manager logic                                 │
@@ -2173,7 +2173,7 @@ lifecycle management.
 rclone:
     move bytes reliably
 
-backup-manager:
+rclone-manager:
     decide what those bytes mean,
     when they are safe,
     when the source may be destroyed,

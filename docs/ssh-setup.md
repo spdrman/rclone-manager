@@ -50,7 +50,7 @@ backup job and nothing else, so it can be rotated or revoked without touching
 anything unrelated:
 
 ```bash
-ssh-keygen -t ed25519 -f /etc/backup-manager/ssh/backup_key -C "backup-manager" -N ""
+ssh-keygen -t ed25519 -f /etc/backup-manager/ssh/backup_key -C "rclone-manager" -N ""
 ```
 
 The empty `-N ""` means no passphrase. That's deliberate, not an oversight:

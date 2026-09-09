@@ -113,7 +113,7 @@ strength of that alone; you don't need to re-verify it before copying it out, th
 re-running whatever validator the backup set's config names is never wrong if the stakes
 are high enough to justify the time.
 
-Copy it wherever the restore actually needs to happen. There is no `backup-manager restore`
+Copy it wherever the restore actually needs to happen. There is no `rbm restore`
 command to do this for you; a plain `cp`, `scp`, or whatever your restore target needs is
 the entire remaining procedure once you have the right path.
 
@@ -212,7 +212,7 @@ That's a real operational consequence, not a cosmetic one:
   producer side, manual cleanup, a shorter retention window configured at the source), it
   will fill up on a long enough timeline, in every deployment that follows this project's
   own hardening advice. Monitor remote disk usage independently of this project; don't
-  assume `backup-manager` is freeing space on the source just because backups keep landing
+  assume `rclone-manager` is freeing space on the source just because backups keep landing
   successfully on the NAS.
 - If you need remote pruning to actually happen in this deployment shape, the honest options
   are: relax the SFTP account's hardening to allow a remote hash command (trading delete-
@@ -296,7 +296,7 @@ Three shapes come up most:
 Then put it back into the pipeline:
 
 ```
-backup-manager retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
+rbm retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
 ```
 
 That moves the row from `FAILED` to `DISCOVERED` and the next cycle picks it up like any
@@ -321,7 +321,7 @@ recovery path reaches. Create a backup set with the same source and name first.
 |---|---|---|
 | Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`/`REMOTE_RETAINED`, recent | Healthy | Nothing |
 | No good row inside `stale_after` | Stale | Investigate why new backups aren't landing |
-| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backup-manager retry <id>` (Step 7) |
+| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `rbm retry <id>` (Step 7) |
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |
 | Newest good row is `QUARANTINED` | Content suspect, source may still exist | Manual re-fetch or re-run reconciliation yourself |
 | `REMOTE_DELETE_PENDING` stuck, `remote_delete_error` set | Expected refusal under a hardened SFTP account | Monitor remote disk directly; this is not corrupting anything |
