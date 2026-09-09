@@ -344,7 +344,7 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
     case "api_action": {
       // Something somebody did through the API rather than something the
       // cycle did (issue #599). The engine composes the summary, the
-      // refusal's own words and the `backup-manager` command line; this
+      // refusal's own words and the `rbm` command line; this
       // lays them out. Rendering it here rather than only in the dock is
       // what gives a set's own strip, and every export, the same lines:
       // logText is built on this function.

@@ -62,7 +62,7 @@ function tierLabel(tier: string): string {
  *  it means (issue #218).
  *
  *  The word is the same one the CLI's per-artifact line prints, so an
- *  operator moving between `backup-manager retention --dry-run` and this
+ *  operator moving between `rbm retention --dry-run` and this
  *  dialog reads one vocabulary rather than two. PROTECTION is absent on
  *  purpose: FR-19's term is not a placement, and a parenthesised word
  *  after "Protected" would read as one. An unrecognised value still

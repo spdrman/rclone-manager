@@ -68,7 +68,7 @@ export type RunScope = { kind: "all" } | { kind: "set"; id: string };
  *  form. On an install that moved it, the command still names the right
  *  work and would need the flag added by hand. */
 export function commandFor(scope: RunScope): string {
-  return scope.kind === "all" ? "backup-manager run" : "backup-manager fetch --backup-set " + scope.id;
+  return scope.kind === "all" ? "rbm run" : "rbm fetch --backup-set " + scope.id;
 }
 
 /** How a refusal reads to an operator, chosen by the service's own typed

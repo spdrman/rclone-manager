@@ -107,7 +107,7 @@ describe("the Backups list says which backups nothing will ever delete", () => {
     // "Unconfigured" and "No retention policy" are both true and both
     // leave the operator to work out what follows. What follows is that
     // this file is never going away on its own, which is the sentence
-    // `backup-manager artifacts` prints and the one that gets read on a
+    // `rbm artifacts` prints and the one that gets read on a
     // page of four hundred rows.
     expect(within(row).queryByText(/unconfigured/i)).toBeNull();
     expect(within(row).getByText(/nothing will delete/i)).toBeTruthy();

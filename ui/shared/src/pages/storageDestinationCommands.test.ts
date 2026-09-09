@@ -12,7 +12,7 @@ import type { StorageMediumSpec } from "@shared/api/contracts";
 
 /**
  * EPIC G's standing rule is that every action taken in the browser prints
- * the `backup-manager` command that would do the same thing. A wizard is
+ * the `rbm` command that would do the same thing. A wizard is
  * the hardest case for that rule and the case where it pays best: an
  * operator who configured one destination by clicking has, by the end,
  * read the exact command that configures the next fifty.
@@ -42,7 +42,7 @@ const SPEC: StorageMediumSpec = {
   credentials: { credentialsId: "9b41c7e2" }
 };
 
-describe("the echoed backup-manager command", () => {
+describe("the echoed rbm command", () => {
   it("names the credential by reference and never carries material", () => {
     const printed = [
       importCredentialsCommand(),
@@ -56,7 +56,7 @@ describe("the echoed backup-manager command", () => {
 
     // The positive control. Without it a renderer that returned empty
     // strings would pass every assertion below for the wrong reason.
-    expect(printed).toContain("backup-manager medium add offsite_s3");
+    expect(printed).toContain("rbm medium add offsite_s3");
 
     for (const forbidden of [CANARY_SECRET, CANARY_KEY_ID, "--access-key-id", "--secret-access-key", "--secret"]) {
       expect(printed).not.toContain(forbidden);
@@ -64,12 +64,12 @@ describe("the echoed backup-manager command", () => {
   });
 
   it("takes the material on stdin, so it is not in the process table", () => {
-    expect(importCredentialsCommand()).toBe("backup-manager medium import-credentials --stdin");
+    expect(importCredentialsCommand()).toBe("rbm medium import-credentials --stdin");
   });
 
   it("renders the whole add, so what is printed is what actually works", () => {
     expect(addCommand(SPEC)).toBe(
-      "backup-manager medium add offsite_s3 --type s3 --region us-east-1 " +
+      "rbm medium add offsite_s3 --type s3 --region us-east-1 " +
         "--bucket nas-backups --prefix monthly --storage-class STANDARD_IA " +
         "--upload-verification readback --credentials-id 9b41c7e2"
     );
@@ -77,13 +77,13 @@ describe("the echoed backup-manager command", () => {
 
   it("omits the flags that were not filled in rather than printing empty ones", () => {
     expect(addCommand({ id: "minimal", type: "s3", bucket: "b", credentials: { credentialsId: "c" } })).toBe(
-      "backup-manager medium add minimal --type s3 --bucket b --credentials-id c"
+      "rbm medium add minimal --type s3 --bucket b --credentials-id c"
     );
   });
 
   it("spells the candidate test connection as the same flags the add takes", () => {
     expect(testConnectionCandidateCommand(SPEC)).toBe(
-      "backup-manager medium test-connection --candidate offsite_s3 --type s3 --region us-east-1 " +
+      "rbm medium test-connection --candidate offsite_s3 --type s3 --region us-east-1 " +
         "--bucket nas-backups --prefix monthly --storage-class STANDARD_IA " +
         "--upload-verification readback --credentials-id 9b41c7e2"
     );
@@ -107,9 +107,9 @@ describe("the echoed backup-manager command", () => {
   });
 
   it("prints the settings-list buttons as the commands they are", () => {
-    expect(testConnectionCommand("offsite_s3")).toBe("backup-manager medium test-connection offsite_s3");
-    expect(setDefaultCommand("offsite_s3")).toBe("backup-manager medium default offsite_s3");
-    expect(removeCommand("offsite_s3")).toBe("backup-manager medium remove offsite_s3");
+    expect(testConnectionCommand("offsite_s3")).toBe("rbm medium test-connection offsite_s3");
+    expect(setDefaultCommand("offsite_s3")).toBe("rbm medium default offsite_s3");
+    expect(removeCommand("offsite_s3")).toBe("rbm medium remove offsite_s3");
   });
 
   // The picker under a tier (#622). The acknowledgment rides along only
@@ -119,10 +119,10 @@ describe("the echoed backup-manager command", () => {
   // moving back is not.
   it("appends the disclosure acknowledgment only when the tier is leaving local disk", () => {
     expect(tierMediumCommand("monthly", "offsite_s3")).toBe(
-      "backup-manager settings patch --tier-medium monthly=offsite_s3 --acknowledge-medium-disclosure"
+      "rbm settings patch --tier-medium monthly=offsite_s3 --acknowledge-medium-disclosure"
     );
     expect(tierMediumCommand("monthly", "local")).toBe(
-      "backup-manager settings patch --tier-medium monthly=local"
+      "rbm settings patch --tier-medium monthly=local"
     );
   });
 });
