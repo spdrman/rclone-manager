@@ -1302,6 +1302,16 @@ def render_cli_wrapper(args) -> str:
     depends on, and `rbm status` would silently become `rbm status` plus a
     deployment somebody did not ask to start.
 
+    The guard on an empty invocation is the awkward part, and it is not
+    defensive padding. `docker compose run` cannot express "no command":
+    given none it runs what the compose file says the service runs, which
+    on a CLI-only deployment is `/rbm daemon`. So a bare `rbm` would have
+    become `/rbm /rbm daemon`, and the operator would have read `unknown
+    command "/rbm"` naming something they did not type. rbm answers a bare
+    invocation with its own usage and exit 2, and there is no argv that
+    reproduces that through compose, so the wrapper says it itself and
+    exits the same 2 rather than letting the fall-through happen.
+
     Rewritten on every run of the installer, like everything else it
     stages, which is why it says so at the top rather than inviting edits.
     """
@@ -1312,8 +1322,23 @@ def render_cli_wrapper(args) -> str:
         "# Rewritten on every run of the installer, so keep your own edits elsewhere.\n"
         "#\n"
         "# Every rbm subcommand: `rbm status`, `rbm sources`, `rbm run`,\n"
-        "# `rbm backup-set create ...`. Run it with no arguments for the list.\n"
+        "# `rbm backup-set create ...`.\n"
         "set -e\n"
+        "\n"
+        "# docker compose run cannot express \"no command\": given none it runs\n"
+        "# what the compose file says this service runs, which here is\n"
+        "# `/rbm daemon`. A bare `rbm` would become `/rbm /rbm daemon` and\n"
+        "# report an unknown command nobody typed, so it stops here instead,\n"
+        "# with the same exit code rbm itself uses for a missing command.\n"
+        "if [ \"$#\" -eq 0 ]; then\n"
+        "  echo \"usage: rbm <command> [flags]\" >&2\n"
+        "  echo \"\" >&2\n"
+        "  echo \"This runs rbm inside the engine's own container and needs a\" >&2\n"
+        "  echo \"command to run. 'rbm status' is a safe first one; every command\" >&2\n"
+        "  echo \"is listed at https://spdrman.github.io/rclone-manager/reference.html\" >&2\n"
+        "  exit 2\n"
+        "fi\n"
+        "\n"
         "exec " + quoted + " \\\n"
         "  run --rm --no-deps --entrypoint /rbm " + ENGINE_SERVICE + " \"$@\"\n"
     )

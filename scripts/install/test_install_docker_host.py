@@ -40,6 +40,7 @@ import io
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -4992,6 +4993,56 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         self.assertIn("run --rm", body,
                       "exec would need a running container, and the first command anybody needs "
                       "is the one that runs before anything is started")
+
+    def _staged_wrapper_and_stub_docker(self):
+        """A CLI-only install staged for real, with a docker on PATH that
+        records what it was asked and does nothing.
+
+        Driven by RUNNING the wrapper rather than by reading it, because
+        the defect this covers is invisible in the text: the script says
+        `run ... "$@"` either way, and what goes wrong is what docker
+        compose does when "$@" is empty.
+        """
+        fx = Fixture(self)
+        args = fx.args("--cli-only", command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        stub_dir = args.prefix / "stubbin"
+        stub_dir.mkdir()
+        log = args.prefix / "docker-calls.log"
+        stub = stub_dir / "docker"
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "' + str(log) + '"\nexit 0\n',
+                        encoding="utf-8")
+        os.chmod(stub, 0o755)
+        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}")
+        return args.prefix / "bin" / "rbm", log, env
+
+    def test_the_wrapper_refuses_an_empty_invocation_instead_of_falling_through(self):
+        """`docker compose run` given no command runs the service's own
+        command, which on a CLI-only deployment is `/rbm daemon`. Without
+        the guard a bare `rbm` became `/rbm /rbm daemon` and reported an
+        unknown command nobody typed, so the guard is the behaviour and
+        docker must not be reached at all."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(proc.returncode, 2,
+                         "a missing command is exit 2 in rbm itself, and the wrapper standing in "
+                         "for it has to agree rather than invent a third answer")
+        self.assertIn("usage: rbm", proc.stderr)
+        self.assertFalse(log.exists(),
+                         "docker was invoked for an invocation that names no command; that is the "
+                         "fall-through this guard exists to stop")
+
+    def test_the_wrapper_passes_a_real_command_straight_through(self):
+        """The positive control. Without it, "refuses an empty invocation"
+        is also satisfied by a wrapper that refuses everything."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper), "status"], capture_output=True, text=True,
+                              env=env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(log.exists(), "docker was never invoked for a real command")
+        called = log.read_text(encoding="utf-8")
+        self.assertIn("run --rm --no-deps --entrypoint /rbm rclone-manager status", called)
 
     def test_a_full_install_stages_no_second_way_in(self):
         fx = Fixture(self)
