@@ -96,7 +96,6 @@ import type {
   BackupSetPatch,
   CapacitySettings,
   CatalogScanPreview,
-  ConnectionCheck,
   ConnectionTestOutcome,
   StorageMedium,
   StorageMediumSpec,
@@ -647,8 +646,8 @@ function fromWireConnectionTestOutcome(r: WireTestConnectionResponse): Connectio
     ok: r.ok,
     ...(r.message ? { message: r.message } : {}),
     checks: (r.checks ?? []).map((c) => ({
-      step: c.step as ConnectionCheck["step"],
-      outcome: c.outcome as ConnectionCheck["outcome"],
+      step: c.step,
+      outcome: c.outcome,
       ...(c.category ? { category: c.category } : {}),
       detail: c.detail ?? "",
       ...(c.duration_ms === undefined ? {} : { durationMs: c.duration_ms })
@@ -880,8 +879,8 @@ function fromWireMediumPreflight(r: WireMediumPreflightResponse): MediumPrefligh
     medium: r.medium,
     ok: r.ok,
     checks: r.checks.map((c) => ({
-      step: c.step as MediumPreflight["checks"][number]["step"],
-      outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
+      step: c.step,
+      outcome: c.outcome,
       category: c.category ?? "",
       detail: c.detail
     }))

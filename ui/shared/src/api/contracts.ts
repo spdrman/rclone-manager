@@ -20,7 +20,7 @@
  * alone cannot say "the server rejects this combination".
  */
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
-import type { ApiErrorCode } from "./generated/contract";
+import type { ApiErrorCode, WireConnectionCheck, WireMediumPreflightCheck } from "./generated/contract";
 import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -619,8 +619,13 @@ export interface ConnectionTestOutcome {
  * never an underlying transport error's text.
  */
 export interface ConnectionCheck {
-  step: "credentials" | "resolve" | "connect" | "host_key" | "authenticate" | "list";
-  outcome: "passed" | "failed" | "skipped";
+  /** Both taken from the generated contract rather than restated (issue
+   *  #633). The same interface's medium-preflight twin had already gone
+   *  stale as a hand-written copy, and there is nothing about this pair
+   *  that made it less likely to: a step added to a connection test would
+   *  arrive here as a value this UI's types say cannot exist. */
+  step: WireConnectionCheck["step"];
+  outcome: WireConnectionCheck["outcome"];
   category?: string;
   detail: string;
   /**
@@ -873,24 +878,35 @@ export interface StorageMediumUsage {
  * manager's log instead.
  */
 export interface MediumPreflightCheck {
-  /** What this step proves. `credentials` is whether the credential the
-   *  medium declares can be obtained at all, which is a question for the
-   *  host; `reach` is whether the endpoint answers and holds the bucket
-   *  with that credential, which is a question for the provider. */
-  step:
-    | "credentials"
-    | "reach"
-    | "deliverable"
-    | "write"
-    | "read_back"
-    | "storage_class"
-    | "verification"
-    | "delete";
+  /**
+   * What this step proves. `credentials` is whether the credential the
+   * medium declares can be obtained at all, which is a question for the
+   * host; `reach` is whether the endpoint answers and holds the bucket
+   * with that credential, which is a question for the provider.
+   *
+   * Taken from the generated contract rather than spelled out again here
+   * (issue #633, found while fixing the mock's candidate check). It was
+   * spelled out again, and it had already gone stale: #622 gave the drive
+   * on this machine a report of its own with a ninth step, `space`, which
+   * the engine emits (mediumcheck.LocalSteps) and the contract carries,
+   * and this copy never got it. So the one report shape this UI could not
+   * describe was the one every deployment has, and the renderer's own doc
+   * saying it draws "however many the engine sent" was making a promise
+   * the types here could not keep. Consuming the wire union is the same
+   * argument the error-code registry above makes, and
+   * contract.conformance.test.ts holds both ends of it.
+   */
+  step: WireMediumPreflightCheck["step"];
   /** `skipped` is a real answer and not a quiet pass: an earlier step
    *  failed in a way that makes this one meaningless. Rendering a skipped
    *  write as anything but "this was never tried" tells an operator their
-   *  bucket is writable on the strength of a credential nobody obtained. */
-  outcome: "passed" | "failed" | "skipped";
+   *  bucket is writable on the strength of a credential nobody obtained.
+   *
+   *  From the contract for the same reason `step` above is: it sat five
+   *  lines under the union that had already drifted, restated the same
+   *  way, and the only thing keeping it honest was that nobody had added
+   *  an outcome yet. */
+  outcome: WireMediumPreflightCheck["outcome"];
   /** The transport category a failure classified as, absent when the step
    *  did not fail. Branch on this, never on `detail`. */
   category?: string;
