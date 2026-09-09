@@ -53,8 +53,8 @@ const (
 
 	// PayloadBinDir is where the two release binaries live inside
 	// package.tgz. DSM extracts that archive to
-	// /var/packages/<pkg>/target, so "bin/backup-manager" lands at
-	// /var/packages/BackupManager/target/bin/backup-manager.
+	// /var/packages/<pkg>/target, so "bin/rbm" lands at
+	// /var/packages/BackupManager/target/bin/rbm.
 	//
 	// Member names carry no "./" prefix, matching what the toolkit's own
 	// pkg_make_inner_tarball produces: it pipes `ls <dir>` into `tar -C
@@ -130,7 +130,7 @@ const (
 // CoreBinaries are the two provider-neutral executables the canonical
 // release produces and this package wraps unchanged. They are also the
 // keys container/release-manifest.json records a SHA-256 under.
-var CoreBinaries = []string{"backup-manager", "backup-manager-web"}
+var CoreBinaries = []string{"rbm", "rbm-web"}
 
 // LifecycleScriptNames is the full set of lifecycle scripts the documented
 // structure allows. This package ships all of them, including the ones

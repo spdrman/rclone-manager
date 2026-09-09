@@ -120,7 +120,7 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 				return path, manifest
 			},
 			wantOK:        false,
-			wantSubstring: "backup-manager",
+			wantSubstring: "rbm",
 		},
 		{
 			// A subtler control: the package is right, but it is checked
@@ -151,7 +151,7 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 				return tampered, manifest
 			},
 			wantOK:        false,
-			wantSubstring: "backup-manager-web",
+			wantSubstring: "rbm-web",
 		},
 	}
 
@@ -401,7 +401,7 @@ func TestVerify_RejectsDangerousFileModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	requireFail(t, rep, CheckFileModes, "backup-manager")
+	requireFail(t, rep, CheckFileModes, "rbm")
 }
 
 // TestVerify_ScansShellAnywhereInThePackage covers the two holes in the
